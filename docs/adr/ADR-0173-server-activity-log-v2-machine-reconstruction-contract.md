@@ -158,12 +158,11 @@ root: `~/.local/state/keiko/control` on Linux,
 `~/Library/Application Support/Keiko/control` on macOS, and
 `%USERPROFILE%\AppData\Local\Keiko\control` on Windows. Environment variables cannot redirect this
 root. The command resolves existing symlinks before use and refuses when the control root and
-selected target contain one another in either direction. A refusal that cannot trust or open the
-primary root uses the independent failure root `~/.cache/keiko/control-failures` on Linux,
-`~/Library/Caches/Keiko/control-failures` on macOS, or
-`%USERPROFILE%\AppData\Local\KeikoControlFailures` on Windows. That fallback is opened only after it
-is proved non-overlapping with the selected target; a canonicalization failure falls back to a
-conservative lexical conflict check and otherwise remains fail-closed.
+selected target contain one another in either direction. It never opens a second durable log. A
+control-root overlap or canonicalization failure exits non-zero with a body-free terminal refusal
+before any sink is opened: no durable path can simultaneously stay outside an arbitrarily selected
+protected target and preserve the single-log contract. Once isolation has been proved, a transient
+open failure is retried only through the established control-state log.
 
 This is a placement rule, not a second logging system. The control root receives the existing
 `ServerLogSink` at `logs/server.log`, so D1-D13, correlation, redaction, rotation, retention, and
@@ -171,7 +170,8 @@ the generated op vocabulary apply unchanged. Install-layout normalization is per
 before a corrected internal path is consumed, and its correlation id joins the complete command
 lifecycle. Audit records start and completion/failure without writing into the audited tree.
 Uninstall records start, forced-stop activity, and completion/failure without losing the record when
-target state is removed; this includes dry runs and scripts-only operations. Events identify selected
+target state is removed; this includes dry runs and scripts-only operations. Package read and parse
+failures are terminal failures, never successful zero-removal outcomes. Events identify selected
 state and package targets only by SHA-256, and completion records whether state was absent, removed,
 retained, or would be removed/retained plus body-free affected/retained counts.
 

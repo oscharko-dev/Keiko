@@ -7,7 +7,6 @@ import {
 } from "@oscharko-dev/keiko-security";
 import {
   createCliSecurityLogSink,
-  createIsolatedCliFailureSink,
   emitCliWindowsSystemFailure,
   type CliWindowsSystemSurface,
 } from "./security-log.js";
@@ -66,55 +65,6 @@ describe("createCliSecurityLogSink", () => {
     sink?.write({ category: "diagnostic", op: "cli.audit.started" });
 
     expect(events).toEqual([expect.objectContaining({ op: "cli.audit.started", correlationId })]);
-  });
-});
-
-describe("createIsolatedCliFailureSink", () => {
-  it("refuses an overlapping failure root before the factory can mutate the target", () => {
-    let factoryCalls = 0;
-    const sink = createIsolatedCliFailureSink(
-      "/target",
-      "/target/control-failures",
-      () => {
-        factoryCalls += 1;
-        return { write: (): void => undefined };
-      },
-      "00000000-0000-4000-8000-000000000001",
-    );
-
-    expect(sink).toBeUndefined();
-    expect(factoryCalls).toBe(0);
-  });
-
-  it("refuses a target nested below the failure root before opening the factory", () => {
-    let factoryCalls = 0;
-    const sink = createIsolatedCliFailureSink(
-      "/control-failures/logs",
-      "/control-failures",
-      () => {
-        factoryCalls += 1;
-        return { write: (): void => undefined };
-      },
-      "00000000-0000-4000-8000-000000000001",
-    );
-
-    expect(sink).toBeUndefined();
-    expect(factoryCalls).toBe(0);
-  });
-
-  it("preserves the invocation correlation when the failure root is isolated", () => {
-    const events: SecurityLogEvent[] = [];
-    const correlationId = "00000000-0000-4000-8000-000000000001";
-    const sink = createIsolatedCliFailureSink(
-      "/target",
-      "/control-failures",
-      () => ({ write: (event): void => void events.push(event) }),
-      correlationId,
-    );
-
-    sink?.write({ category: "diagnostic", op: "cli.audit.failed" });
-
-    expect(events).toEqual([expect.objectContaining({ correlationId })]);
   });
 });
 

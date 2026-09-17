@@ -42,7 +42,6 @@ import {
 import {
   cliControlStateConflictsWithTarget,
   cliTargetIdentitySha256,
-  resolveCliControlFailureStateDir,
   resolveCliControlStateDir,
 } from "./cli-control-state.js";
 import type { CliIo } from "./runner.js";
@@ -77,11 +76,7 @@ import {
   type RuntimeStateScan,
   type StateRootInspection,
 } from "./state-paths.js";
-import {
-  createCliSecurityLogSink,
-  createIsolatedCliFailureSink,
-  type CliSecurityLogSinkFactory,
-} from "./security-log.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
 
 const USAGE = `Usage:
@@ -135,7 +130,6 @@ export interface UninstallCliDeps {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
   readonly activityStateDir?: string | undefined;
-  readonly failureActivityStateDir?: string | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
 }
 
@@ -329,6 +323,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+class UninstallPackageReadError extends Error {
+  constructor(packagePath: string, options: ErrorOptions) {
+    super(`package.json at ${packagePath} is not readable; no scripts were changed.`, options);
+    this.name = "UninstallPackageReadError";
+  }
+}
+
+class UninstallPackageParseError extends Error {
+  constructor(packagePath: string, options: ErrorOptions) {
+    super(`package.json at ${packagePath} is not valid JSON; no scripts were changed.`, options);
+    this.name = "UninstallPackageParseError";
+  }
+}
+
 function pruneKeikoScripts(
   scripts: Record<string, unknown>,
   io: CliIo,
@@ -362,20 +370,14 @@ function removeScriptsStep(opts: UninstallOptions, io: CliIo): number {
   let raw: string;
   try {
     raw = readFileSync(opts.packagePath, "utf8");
-  } catch {
-    io.err(
-      `keiko uninstall: package.json at ${opts.packagePath} is not readable; skipping scripts.\n`,
-    );
-    return 0;
+  } catch (error) {
+    throw new UninstallPackageReadError(opts.packagePath, { cause: error });
   }
   let pkg: unknown;
   try {
     pkg = JSON.parse(raw);
-  } catch {
-    io.err(
-      `keiko uninstall: package.json at ${opts.packagePath} is not valid JSON; skipping scripts.\n`,
-    );
-    return 0;
+  } catch (error) {
+    throw new UninstallPackageParseError(opts.packagePath, { cause: error });
   }
   const scripts = isRecord(pkg) ? pkg.scripts : undefined;
   if (!isRecord(pkg) || !isRecord(scripts)) {
@@ -651,9 +653,7 @@ type PreparedUninstallActivity =
   | { readonly kind: "refused" };
 
 interface UninstallActivityContext {
-  readonly stateDir: string;
   readonly activityStateDir: string;
-  readonly failureStateDir: string;
   readonly factory: CliSecurityLogSinkFactory | undefined;
   readonly correlationId: string | undefined;
   readonly targetSha256: string;
@@ -662,7 +662,6 @@ interface UninstallActivityContext {
 
 interface UninstallActivityComposition {
   readonly activityStateDir: string | undefined;
-  readonly failureStateDir: string | undefined;
   readonly factory: CliSecurityLogSinkFactory | undefined;
 }
 
@@ -671,9 +670,8 @@ function emitUninstallPreparationFailure(
   errorKind: string,
   reason: string,
 ): void {
-  const sink = createIsolatedCliFailureSink(
-    context.stateDir,
-    context.failureStateDir,
+  const sink = createCliSecurityLogSink(
+    context.activityStateDir,
     context.factory,
     context.correlationId,
   );
@@ -696,16 +694,12 @@ function resolveUninstallActivityContext(
   env: EnvSource,
   deps: ResolvedDeps,
   activityStateDirOverride: string | undefined,
-  failureStateDirOverride: string | undefined,
   factory: CliSecurityLogSinkFactory | undefined,
 ): UninstallActivityContext {
   const layoutEvidence = installLayoutOverrideEvidence(env);
   return {
-    stateDir,
     activityStateDir:
       activityStateDirOverride ?? resolveCliControlStateDir(deps.platform, deps.homedir()),
-    failureStateDir:
-      failureStateDirOverride ?? resolveCliControlFailureStateDir(deps.platform, deps.homedir()),
     factory,
     correlationId: layoutEvidence?.correlationId,
     targetSha256: cliTargetIdentitySha256(stateDir),
@@ -778,32 +772,30 @@ function prepareUninstallActivity(
     env,
     deps,
     composition.activityStateDir,
-    composition.failureStateDir,
     composition.factory,
   );
+  let controlStateValidated = false;
   try {
     if (
       (opts.scopes.state || opts.scopes.launchers) &&
       cliControlStateConflictsWithTarget(context.activityStateDir, stateDir)
     ) {
-      emitUninstallPreparationFailure(
-        context,
-        "UninstallControlStateOverlapError",
-        "control-state-overlap",
-      );
       io.err(
         "keiko uninstall: refusing to run because the reserved CLI control state overlaps the " +
           "selected state tree. Select a different --state-dir.\n",
       );
       return { kind: "refused" };
     }
+    controlStateValidated = true;
     return openUninstallActivity(opts, env, io, context);
   } catch (error) {
-    emitUninstallPreparationFailure(
-      context,
-      securityErrorKind(error),
-      "control-state-validation-failed",
-    );
+    if (controlStateValidated) {
+      emitUninstallPreparationFailure(
+        context,
+        securityErrorKind(error),
+        "activity-log-open-failed",
+      );
+    }
     io.err("keiko uninstall: the reserved CLI control state could not be validated or opened.\n");
     return { kind: "refused" };
   }
@@ -875,11 +867,11 @@ function reportUninstallException(
   io: CliIo,
   activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
 ): number {
-  emitUninstallFailure(
-    activity,
-    securityErrorKind(error),
-    error instanceof LauncherError ? "launcher-error" : "operation-error",
-  );
+  let reason = "operation-error";
+  if (error instanceof LauncherError) reason = "launcher-error";
+  if (error instanceof UninstallPackageReadError) reason = "package-read-failed";
+  if (error instanceof UninstallPackageParseError) reason = "package-parse-failed";
+  emitUninstallFailure(activity, securityErrorKind(error), reason);
   if (error instanceof LauncherError) {
     io.err(`${error.message}\n`);
     return 1;
@@ -907,7 +899,6 @@ export async function runUninstallCli(
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
   const activity = prepareUninstallActivity(opts, stateDir, env, io, resolved, {
     activityStateDir: deps.activityStateDir,
-    failureStateDir: deps.failureActivityStateDir,
     factory: deps.securityLogSinkFactory,
   });
   if (activity.kind === "refused") return 1;

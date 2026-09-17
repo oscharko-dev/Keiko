@@ -10,7 +10,6 @@ import {
 import {
   cliControlStateConflictsWithTarget,
   cliTargetIdentitySha256,
-  resolveCliControlFailureStateDir,
   resolveCliControlStateDir,
 } from "./cli-control-state.js";
 import {
@@ -18,11 +17,7 @@ import {
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
-import {
-  createCliSecurityLogSink,
-  createIsolatedCliFailureSink,
-  type CliSecurityLogSinkFactory,
-} from "./security-log.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 
 // `keiko audit local-state` — the at-rest self-verification the local-at-rest contract
 // (docs/local-runtime-state-contract.md) names as its compensating control, reachable from a real
@@ -147,7 +142,6 @@ export interface AuditCliDeps {
   readonly homedir?: () => string;
   readonly platform?: NodeJS.Platform;
   readonly activityStateDir?: string;
-  readonly failureActivityStateDir?: string;
   readonly activityLogSinkFactory?: CliSecurityLogSinkFactory;
 }
 
@@ -378,22 +372,19 @@ type PreparedAuditActivity =
   | { readonly kind: "refused" };
 
 interface AuditActivityContext {
-  readonly stateDir: string;
   readonly activityStateDir: string;
-  readonly failureStateDir: string;
   readonly targetSha256: string;
   readonly correlationId: string | undefined;
   readonly factory: CliSecurityLogSinkFactory | undefined;
 }
 
-function refuseAuditActivity(
+function emitAuditPreparationFailure(
   context: AuditActivityContext,
   errorKind: string,
   reason: string,
-): PreparedAuditActivity {
-  const sink = createIsolatedCliFailureSink(
-    context.stateDir,
-    context.failureStateDir,
+): void {
+  const sink = createCliSecurityLogSink(
+    context.activityStateDir,
     context.factory,
     context.correlationId,
   );
@@ -404,7 +395,6 @@ function refuseAuditActivity(
     errorKind,
     extra: { reason, targetSha256: context.targetSha256 },
   });
-  return { kind: "refused" };
 }
 
 function resolveAuditActivityContext(
@@ -416,10 +406,7 @@ function resolveAuditActivityContext(
   const platform = deps.platform ?? process.platform;
   const layoutEvidence = installLayoutOverrideEvidence(env);
   return {
-    stateDir,
     activityStateDir: deps.activityStateDir ?? resolveCliControlStateDir(platform, home),
-    failureStateDir:
-      deps.failureActivityStateDir ?? resolveCliControlFailureStateDir(platform, home),
     targetSha256: cliTargetIdentitySha256(stateDir),
     correlationId: layoutEvidence?.correlationId,
     factory: deps.activityLogSinkFactory,
@@ -438,7 +425,11 @@ function openAuditActivity(
     env,
   );
   if (pendingLayoutEvidence && !layoutEvidenceWritten) {
-    refuseAuditActivity(context, "AuditActivityLogUnavailableError", "activity-log-unavailable");
+    emitAuditPreparationFailure(
+      context,
+      "AuditActivityLogUnavailableError",
+      "activity-log-unavailable",
+    );
     io.err(
       "keiko audit: refusing to consume a normalized install path because durable activity " +
         "logging is unavailable.\n",
@@ -466,18 +457,21 @@ function prepareAuditActivity(
   deps: AuditCliDeps,
 ): PreparedAuditActivity {
   const context = resolveAuditActivityContext(stateDir, env, deps);
+  let controlStateValidated = false;
   try {
     if (cliControlStateConflictsWithTarget(context.activityStateDir, stateDir)) {
-      refuseAuditActivity(context, "AuditControlStateOverlapError", "control-state-overlap");
       io.err(
         "keiko audit: refusing to run because the reserved CLI control state overlaps the " +
           "audited tree. Select a different --state-dir.\n",
       );
       return { kind: "refused" };
     }
+    controlStateValidated = true;
     return openAuditActivity(context, env, io);
   } catch (error) {
-    refuseAuditActivity(context, securityErrorKind(error), "control-state-validation-failed");
+    if (controlStateValidated) {
+      emitAuditPreparationFailure(context, securityErrorKind(error), "activity-log-open-failed");
+    }
     io.err("keiko audit: the reserved CLI control state could not be validated or opened.\n");
     return { kind: "refused" };
   }

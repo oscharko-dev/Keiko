@@ -474,10 +474,9 @@ describe("runUninstallCli — apply", () => {
     expect(existsSync(stateDir)).toBe(false);
   });
 
-  it("logs a control-root overlap refusal through the separate failure root", async () => {
+  it("refuses without opening a sink when state contains the control root", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
-    const failureActivityStateDir = join(root, "control-failures");
     const correlationId = "00000000-0000-4000-8000-000000000001";
     const sinkRoots: string[] = [];
     const events: SecurityLogEvent[] = [];
@@ -495,7 +494,6 @@ describe("runUninstallCli — apply", () => {
           cwd: root,
           homedir: () => root,
           activityStateDir: stateDir,
-          failureActivityStateDir,
           securityLogSinkFactory: (sinkRoot) => {
             sinkRoots.push(sinkRoot);
             return { write: (event): void => void events.push(event) };
@@ -505,15 +503,8 @@ describe("runUninstallCli — apply", () => {
     ).resolves.toBe(1);
     expect(existsSync(stateDir)).toBe(true);
     expect(c.err()).toContain("overlaps the selected state tree");
-    expect(sinkRoots).toEqual([failureActivityStateDir]);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      op: "cli.uninstall.failed",
-      correlationId,
-      errorKind: "UninstallControlStateOverlapError",
-    });
-    expect(extraOf(events[0]).reason).toBe("control-state-overlap");
-    expect(extraOf(events[0]).targetSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(sinkRoots).toEqual([]);
+    expect(events).toEqual([]);
   });
 
   it("refuses before opening a control sink that contains the selected state tree", async () => {
@@ -521,7 +512,6 @@ describe("runUninstallCli — apply", () => {
     const activityStateDir = join(root, "control-state");
     const stateDir = join(activityStateDir, ".keiko");
     mkdirSync(stateDir, { recursive: true });
-    const failureActivityStateDir = join(root, "control-failures");
     const sinkRoots: string[] = [];
     const events: SecurityLogEvent[] = [];
 
@@ -534,7 +524,6 @@ describe("runUninstallCli — apply", () => {
           cwd: root,
           homedir: () => root,
           activityStateDir,
-          failureActivityStateDir,
           securityLogSinkFactory: (sinkRoot) => {
             sinkRoots.push(sinkRoot);
             return { write: (event): void => void events.push(event) };
@@ -543,42 +532,39 @@ describe("runUninstallCli — apply", () => {
       ),
     ).resolves.toBe(1);
     expect(existsSync(stateDir)).toBe(true);
-    expect(sinkRoots).toEqual([failureActivityStateDir]);
-    expect(events).toEqual([
-      expect.objectContaining({
-        op: "cli.uninstall.failed",
-        errorKind: "UninstallControlStateOverlapError",
-      }),
-    ]);
+    expect(sinkRoots).toEqual([]);
+    expect(events).toEqual([]);
   });
 
-  it("uses the refusal log when opening the primary control sink fails", async () => {
+  it("retries a transient open failure only at the established control log", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
     const activityStateDir = join(root, "control-state");
-    const failureActivityStateDir = join(root, "control-failures");
     const events: SecurityLogEvent[] = [];
     const layoutEnv = {
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
       [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
     };
+    let openAttempts = 0;
 
     await expect(
       runUninstallCli(["--state"], makeIo().io, layoutEnv, {
         cwd: root,
         homedir: () => root,
         activityStateDir,
-        failureActivityStateDir,
         securityLogSinkFactory: (sinkRoot) => {
-          if (sinkRoot === activityStateDir) throw new Error("primary unavailable");
+          expect(sinkRoot).toBe(activityStateDir);
+          openAttempts += 1;
+          if (openAttempts === 1) throw new Error("primary unavailable");
           return { write: (event): void => void events.push(event) };
         },
       }),
     ).resolves.toBe(1);
     expect(existsSync(stateDir)).toBe(true);
+    expect(openAttempts).toBe(2);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ op: "cli.uninstall.failed", errorKind: "Error" });
-    expect(extraOf(events[0]).reason).toBe("control-state-validation-failed");
+    expect(extraOf(events[0]).reason).toBe("activity-log-open-failed");
   });
 
   it("removes state, keiko scripts (keeping custom), and prints guidance", async () => {
@@ -716,14 +702,58 @@ describe("runUninstallCli — scripts edge cases", () => {
     expect(c.out()).toContain("package.json not found");
   });
 
-  it("skips an invalid package.json with a stderr note", async () => {
+  it("fails with structured evidence when package.json is invalid", async () => {
     const root = makeRoot();
     writeFileSync(join(root, "package.json"), "{not json", "utf8");
     const c = makeIo();
+    const events: SecurityLogEvent[] = [];
     await expect(
-      runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root }),
-    ).resolves.toBe(0);
+      runUninstallCli(
+        ["--scripts"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir: join(root, "control-state"),
+          securityLogSinkFactory: () => ({
+            write: (event): void => void events.push(event),
+          }),
+        },
+      ),
+    ).resolves.toBe(1);
     expect(c.err()).toContain("not valid JSON");
+    expect(events.map(({ op }) => op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
+    expect(events[1]).toMatchObject({ errorKind: "UninstallPackageParseError" });
+    expect(extraOf(events[1]).reason).toBe("package-parse-failed");
+  });
+
+  it("fails with structured evidence when package.json cannot be read", async () => {
+    const root = makeRoot();
+    const packageDirectory = join(root, "package-directory");
+    mkdirSync(packageDirectory);
+    const c = makeIo();
+    const events: SecurityLogEvent[] = [];
+
+    await expect(
+      runUninstallCli(
+        ["--scripts", "--package", packageDirectory],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir: join(root, "control-state"),
+          securityLogSinkFactory: () => ({
+            write: (event): void => void events.push(event),
+          }),
+        },
+      ),
+    ).resolves.toBe(1);
+    expect(c.err()).toContain("not readable");
+    expect(events.map(({ op }) => op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
+    expect(events[1]).toMatchObject({ errorKind: "UninstallPackageReadError" });
+    expect(extraOf(events[1]).reason).toBe("package-read-failed");
   });
 
   it("reports when there are no keiko scripts to remove", async () => {

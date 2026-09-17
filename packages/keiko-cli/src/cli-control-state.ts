@@ -23,25 +23,6 @@ export function resolveCliControlStateDir(
   return join(home, ".local", "state", "keiko", "control");
 }
 
-/**
- * Independent fallback for a refusal that cannot safely use the primary control tree.
- *
- * Keeping this on a separate platform location lets an overlap refusal remain reconstructable
- * without writing into the audit/uninstall target that caused the refusal.
- */
-export function resolveCliControlFailureStateDir(
-  platform: NodeJS.Platform = process.platform,
-  home: string = homedir(),
-): string {
-  if (platform === "win32") {
-    return win32.join(home, "AppData", "Local", "KeikoControlFailures");
-  }
-  if (platform === "darwin") {
-    return join(home, "Library", "Caches", "Keiko", "control-failures");
-  }
-  return join(home, ".cache", "keiko", "control-failures");
-}
-
 /** Stable body-free identity for an operator-selected filesystem target. */
 export function cliTargetIdentitySha256(targetDir: string): string {
   return createHash("sha256").update(resolve(targetDir), "utf8").digest("hex");
@@ -65,34 +46,6 @@ function isAtOrBelow(candidate: string, target: string): boolean {
     fromTarget === "" ||
     (fromTarget !== ".." && !fromTarget.startsWith(`..${sep}`) && !isAbsolute(fromTarget))
   );
-}
-
-/** Conservative lexical fallback used only when canonical target validation itself failed. */
-export function cliControlStateLexicallyWouldMutateTarget(
-  controlStateDir: string,
-  targetDir: string,
-): boolean {
-  return isAtOrBelow(resolve(controlStateDir), resolve(targetDir));
-}
-
-/** Conservative lexical conflict check used when canonical validation cannot complete. */
-export function cliControlStateLexicallyConflictsWithTarget(
-  controlStateDir: string,
-  targetDir: string,
-): boolean {
-  const control = resolve(controlStateDir);
-  const target = resolve(targetDir);
-  return isAtOrBelow(control, target) || isAtOrBelow(target, control);
-}
-
-/** True when writing the control log would write at or below the selected target tree. */
-export function cliControlStateWouldMutateTarget(
-  controlStateDir: string,
-  targetDir: string,
-): boolean {
-  const control = canonicalizeWithMissingTail(controlStateDir);
-  const target = canonicalizeWithMissingTail(targetDir);
-  return isAtOrBelow(control, target);
 }
 
 /** True when either the control state or selected target contains the other. */

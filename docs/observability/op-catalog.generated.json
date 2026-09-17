@@ -24,31 +24,31 @@
     {
       "op": "cli.audit.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/audit.ts:330",
+      "site": "packages/keiko-cli/src/audit.ts:324",
       "package": "keiko-cli"
     },
     {
       "op": "cli.audit.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/audit.ts:319",
+      "site": "packages/keiko-cli/src/audit.ts:313",
       "package": "keiko-cli"
     },
     {
       "op": "cli.audit.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/audit.ts:403",
+      "site": "packages/keiko-cli/src/audit.ts:394",
       "package": "keiko-cli"
     },
     {
       "op": "cli.audit.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/audit.ts:520",
+      "site": "packages/keiko-cli/src/audit.ts:514",
       "package": "keiko-cli"
     },
     {
       "op": "cli.audit.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/audit.ts:456",
+      "site": "packages/keiko-cli/src/audit.ts:447",
       "package": "keiko-cli"
     },
     {
@@ -84,25 +84,25 @@
     {
       "op": "cli.uninstall.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:859",
+      "site": "packages/keiko-cli/src/uninstall.ts:851",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:683",
+      "site": "packages/keiko-cli/src/uninstall.ts:681",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:820",
+      "site": "packages/keiko-cli/src/uninstall.ts:812",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:748",
+      "site": "packages/keiko-cli/src/uninstall.ts:742",
       "package": "keiko-cli"
     },
     {
@@ -144,49 +144,49 @@
     {
       "op": "security.windows-launcher.system-binary-missing",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/security-log.ts:84",
+      "site": "packages/keiko-cli/src/security-log.ts:80",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-launcher.system-root-refused",
       "category": "security",
-      "site": "packages/keiko-cli/src/security-log.ts:39",
+      "site": "packages/keiko-cli/src/security-log.ts:35",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-lifecycle-opener.system-binary-missing",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/security-log.ts:108",
+      "site": "packages/keiko-cli/src/security-log.ts:104",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-lifecycle-opener.system-root-refused",
       "category": "security",
-      "site": "packages/keiko-cli/src/security-log.ts:63",
+      "site": "packages/keiko-cli/src/security-log.ts:59",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-portable-alert.system-binary-missing",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/security-log.ts:100",
+      "site": "packages/keiko-cli/src/security-log.ts:96",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-portable-alert.system-root-refused",
       "category": "security",
-      "site": "packages/keiko-cli/src/security-log.ts:55",
+      "site": "packages/keiko-cli/src/security-log.ts:51",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-portable-legacy-launcher.system-binary-missing",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/security-log.ts:92",
+      "site": "packages/keiko-cli/src/security-log.ts:88",
       "package": "keiko-cli"
     },
     {
       "op": "security.windows-portable-legacy-launcher.system-root-refused",
       "category": "security",
-      "site": "packages/keiko-cli/src/security-log.ts:47",
+      "site": "packages/keiko-cli/src/security-log.ts:43",
       "package": "keiko-cli"
     },
     {

@@ -5,11 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cliControlStateConflictsWithTarget,
-  cliControlStateLexicallyConflictsWithTarget,
-  cliControlStateLexicallyWouldMutateTarget,
-  cliControlStateWouldMutateTarget,
   cliTargetIdentitySha256,
-  resolveCliControlFailureStateDir,
   resolveCliControlStateDir,
 } from "./cli-control-state.js";
 
@@ -25,38 +21,19 @@ describe("resolveCliControlStateDir", () => {
       String.raw`C:\Users\alice\AppData\Local\Keiko\control`,
     );
   });
-
-  it("uses a separate fixed location for control-root refusal evidence", () => {
-    expect(resolveCliControlFailureStateDir("linux", "/home/alice")).toBe(
-      "/home/alice/.cache/keiko/control-failures",
-    );
-    expect(resolveCliControlFailureStateDir("darwin", "/Users/alice")).toBe(
-      "/Users/alice/Library/Caches/Keiko/control-failures",
-    );
-    expect(resolveCliControlFailureStateDir("win32", String.raw`C:\Users\alice`)).toBe(
-      String.raw`C:\Users\alice\AppData\Local\KeikoControlFailures`,
-    );
-  });
-
-  it("provides a conservative lexical check when canonical validation cannot complete", () => {
-    expect(cliControlStateLexicallyWouldMutateTarget("/state/control", "/state")).toBe(true);
-    expect(cliControlStateLexicallyWouldMutateTarget("/control", "/state")).toBe(false);
-    expect(cliControlStateLexicallyConflictsWithTarget("/state", "/state/logs")).toBe(true);
-    expect(cliControlStateLexicallyConflictsWithTarget("/control", "/state")).toBe(false);
-  });
 });
 
-describe("cliControlStateWouldMutateTarget", () => {
-  it("detects direct and canonicalized descendant overlap", () => {
+describe("cliControlStateConflictsWithTarget", () => {
+  it("detects when the control root is directly or canonically below the target", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-control-overlap-"));
     const target = join(root, "target");
     const alias = join(root, "alias");
     mkdirSync(target);
     symlinkSync(target, alias, "dir");
     try {
-      expect(cliControlStateWouldMutateTarget(join(target, "control"), target)).toBe(true);
-      expect(cliControlStateWouldMutateTarget(join(alias, "control"), target)).toBe(true);
-      expect(cliControlStateWouldMutateTarget(join(root, "control"), target)).toBe(false);
+      expect(cliControlStateConflictsWithTarget(join(target, "control"), target)).toBe(true);
+      expect(cliControlStateConflictsWithTarget(join(alias, "control"), target)).toBe(true);
+      expect(cliControlStateConflictsWithTarget(join(root, "control"), target)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

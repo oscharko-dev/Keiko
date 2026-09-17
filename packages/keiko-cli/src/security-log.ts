@@ -7,10 +7,6 @@ import {
   WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
 } from "@oscharko-dev/keiko-security";
-import {
-  cliControlStateConflictsWithTarget,
-  cliControlStateLexicallyConflictsWithTarget,
-} from "./cli-control-state.js";
 
 /** Builds the existing activity-log sink for the state directory selected by one CLI command. */
 export type CliSecurityLogSinkFactory = (stateDir: string) => SecurityLogSink;
@@ -158,24 +154,4 @@ export function createCliSecurityLogSink(
       downstream.write({ ...event, correlationId: invocationCorrelationId });
     },
   };
-}
-
-/**
- * Build a refusal sink only when its control root is provably outside the protected target.
- *
- * Canonical containment is authoritative. If canonicalization itself fails, the lexical check is
- * the conservative fallback: an ambiguous overlapping path must never be opened for evidence.
- */
-export function createIsolatedCliFailureSink(
-  targetDir: string,
-  failureStateDir: string,
-  factory: CliSecurityLogSinkFactory | undefined,
-  invocationCorrelationId: string | undefined,
-): SecurityLogSink | undefined {
-  try {
-    if (cliControlStateConflictsWithTarget(failureStateDir, targetDir)) return undefined;
-  } catch {
-    if (cliControlStateLexicallyConflictsWithTarget(failureStateDir, targetDir)) return undefined;
-  }
-  return createCliSecurityLogSink(failureStateDir, factory, invocationCorrelationId);
 }

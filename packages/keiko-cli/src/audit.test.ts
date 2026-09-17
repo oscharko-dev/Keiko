@@ -254,20 +254,18 @@ describe("runAuditCli", () => {
     }
   });
 
-  it("logs a structured refusal outside a target that contains the primary control state", async () => {
+  it("refuses without opening a sink when the audited target contains the control state", async () => {
     const c = makeIo();
     const root = mkdtempSync(join(tmpdir(), "keiko-audit-overlap-"));
     const stateDir = join(root, "forensic-copy");
     mkdirSync(stateDir);
     const sinkRoots: string[] = [];
     const events: SecurityLogEvent[] = [];
-    const failureActivityStateDir = join(root, "control-failures");
     let auditorLoaded = false;
     try {
       expect(
         await runAuditCli(["local-state", "--state-dir", stateDir], c.io, env, {
           activityStateDir: join(stateDir, "control"),
-          failureActivityStateDir,
           activityLogSinkFactory: (sinkRoot) => {
             sinkRoots.push(sinkRoot);
             return { write: (event): void => void events.push(event) };
@@ -278,16 +276,10 @@ describe("runAuditCli", () => {
           },
         }),
       ).toBe(1);
-      expect(sinkRoots).toEqual([failureActivityStateDir]);
+      expect(sinkRoots).toEqual([]);
       expect(auditorLoaded).toBe(false);
       expect(c.err()).toContain("overlaps the audited tree");
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        op: "cli.audit.failed",
-        errorKind: "AuditControlStateOverlapError",
-      });
-      expect(extraOf(events[0])).toMatchObject({ reason: "control-state-overlap" });
-      expect(extraOf(events[0]).targetSha256).toMatch(/^[0-9a-f]{64}$/u);
+      expect(events).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -298,7 +290,6 @@ describe("runAuditCli", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-audit-parent-overlap-"));
     const activityStateDir = join(root, "control");
     const stateDir = join(activityStateDir, "logs");
-    const failureActivityStateDir = join(root, "control-failures");
     mkdirSync(stateDir, { recursive: true });
     const sinkRoots: string[] = [];
     const events: SecurityLogEvent[] = [];
@@ -307,7 +298,6 @@ describe("runAuditCli", () => {
       expect(
         await runAuditCli(["local-state", "--state-dir", stateDir], c.io, env, {
           activityStateDir,
-          failureActivityStateDir,
           activityLogSinkFactory: (sinkRoot) => {
             sinkRoots.push(sinkRoot);
             return { write: (event): void => void events.push(event) };
@@ -318,14 +308,9 @@ describe("runAuditCli", () => {
           },
         }),
       ).toBe(1);
-      expect(sinkRoots).toEqual([failureActivityStateDir]);
+      expect(sinkRoots).toEqual([]);
       expect(auditorLoaded).toBe(false);
-      expect(events).toEqual([
-        expect.objectContaining({
-          op: "cli.audit.failed",
-          errorKind: "AuditControlStateOverlapError",
-        }),
-      ]);
+      expect(events).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -357,10 +342,9 @@ describe("runAuditCli", () => {
     }
   });
 
-  it("uses the refusal log when opening the primary control sink fails", async () => {
+  it("retries a transient open failure only at the established control log", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-audit-control-failure-"));
     const activityStateDir = join(root, "control");
-    const failureActivityStateDir = join(root, "control-failures");
     const events: SecurityLogEvent[] = [];
     const layoutEnv = {
       ...env,
@@ -368,14 +352,16 @@ describe("runAuditCli", () => {
       [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
     };
     let auditorLoaded = false;
+    let openAttempts = 0;
     try {
       await expect(
         runAuditCli(["local-state"], makeIo().io, layoutEnv, {
           cwd: root,
           activityStateDir,
-          failureActivityStateDir,
           activityLogSinkFactory: (sinkRoot) => {
-            if (sinkRoot === activityStateDir) throw new Error("primary unavailable");
+            expect(sinkRoot).toBe(activityStateDir);
+            openAttempts += 1;
+            if (openAttempts === 1) throw new Error("primary unavailable");
             return { write: (event): void => void events.push(event) };
           },
           loadAuditor: () => {
@@ -385,9 +371,10 @@ describe("runAuditCli", () => {
         }),
       ).resolves.toBe(1);
       expect(auditorLoaded).toBe(false);
+      expect(openAttempts).toBe(2);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ op: "cli.audit.failed", errorKind: "Error" });
-      expect(extraOf(events[0]).reason).toBe("control-state-validation-failed");
+      expect(extraOf(events[0]).reason).toBe("activity-log-open-failed");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
