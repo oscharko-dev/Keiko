@@ -751,7 +751,13 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
     // Body-free: exactly the three evidence fields — never the command, argv, or cwd. `childPid`
     // (not the reserved `pid`) so the child identity survives the real redactor — pinned against
     // redactLogFields in command-runner.test.ts.
-    expect(Object.keys(extra).sort()).toEqual(["childPid", "reason", "windowsTreeKill"]);
+    expect(Object.keys(extra).sort()).toEqual([
+      "childPid",
+      "completeness",
+      "loss",
+      "reason",
+      "windowsTreeKill",
+    ]);
   });
 
   it("rejects when MAX_CONCURRENT_EXECUTIONS is reached (D9 cap of 8)", async () => {

@@ -1576,7 +1576,7 @@ describe("UpdateSessionManager", () => {
         sessionId: "session-3405-0123456789abcdef",
         candidateId: "candidate-0.2.12",
         targetVersion: "0.2.12",
-        phase: "confirmed",
+        phase: "preparing",
         cancellationCutoff: "not-reached",
         eventKind: "started",
         completedBytes: 0,

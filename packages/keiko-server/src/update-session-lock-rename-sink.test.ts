@@ -64,7 +64,12 @@ describe("update-session-lock atomic rename sink", () => {
       expect.objectContaining({
         op: "security.fs.atomic-rename-retried",
         correlationId: "session-retry",
-        extra: { attempts: 2 },
+        extra: {
+          attempts: 2,
+          completeness: "complete",
+          failureKind: "EPERM",
+          loss: "none",
+        },
       }),
     );
   });
@@ -88,7 +93,12 @@ describe("update-session-lock atomic rename sink", () => {
       expect.objectContaining({
         op: "security.fs.atomic-rename-failed",
         correlationId: UNKNOWN_CORRELATION_ID,
-        extra: { attempts: 3 },
+        extra: {
+          attempts: 3,
+          completeness: "complete",
+          failureKind: "EPERM",
+          loss: "none",
+        },
       }),
     );
   });

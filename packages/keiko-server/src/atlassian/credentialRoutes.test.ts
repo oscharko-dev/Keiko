@@ -353,7 +353,11 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     expect(rejection?.category).toBe("security");
     expect(rejection?.errorKind).toBe("rate-limited");
     expect(rejection?.status).toBe(429);
-    expect(rejection?.extra).toEqual({ reason: "credential-limit-exceeded" });
+    expect(rejection?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "credential-limit-exceeded",
+    });
     // Nothing about the request body — mirror the response-body no-secret check on the sink.
     expectNoSecretBytes(JSON.stringify(activityEvents));
   });

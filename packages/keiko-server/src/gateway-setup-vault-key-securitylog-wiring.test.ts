@@ -154,7 +154,7 @@ describe("gateway-setup.ts — provider-credential vault wires resolveLocalVault
           category: "security",
           op: "security.vault.key-resolved",
           correlationId: "corr-gw-vaultkey-1",
-          extra: { source: "env" },
+          extra: { completeness: "complete", loss: "none", source: "env" },
         }),
       );
       expect(JSON.stringify(sink.events)).not.toContain("plaintext-wiring-secret");

@@ -136,7 +136,13 @@ describe("V32 upgrades the original journey outcome table", () => {
       expect(write).toHaveBeenCalledWith({
         category: "setup",
         op: "store.journey-outcomes.migration",
-        extra: { storeSchemaVersion: 32, stage: "prepared", migratedCount: 1 },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          storeSchemaVersion: 32,
+          stage: "prepared",
+          migratedCount: 1,
+        },
       });
       expect(JSON.stringify(write.mock.calls)).not.toContain(outcome.binding.repository);
     } finally {
