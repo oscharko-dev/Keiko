@@ -7,9 +7,13 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isAbsolute } from "node:path";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { describeError } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
@@ -45,6 +49,151 @@ const MAX_HISTORY_CATCH_UP_ATTEMPTS = 4;
 const MAX_STREAM_RECONNECTS = 3;
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
+
+const CODING_RUNTIME_READINESS_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.readiness.failed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeAdapter.startRuntime",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "target-attestation",
+        "config-materialization",
+        "endpoint",
+        "authenticated-health",
+        "authenticated-health-version",
+        "unauthenticated-health",
+        "openapi-digest",
+        "gateway-challenge",
+        "tool-facade-challenge",
+        "sse-history-reconciliation",
+        "session-echo",
+      ],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: true,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-readiness"],
+  proofIds: ["coding-runtime.readiness.failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_READINESS_PHASE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.readiness.phase",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeAdapter.recordReadinessPhase",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "target-attestation",
+        "config-materialization",
+        "endpoint",
+        "authenticated-health",
+        "authenticated-health-version",
+        "unauthenticated-health",
+        "openapi-digest",
+        "gateway-challenge",
+        "tool-facade-challenge",
+        "sse-history-reconciliation",
+        "session-echo",
+      ],
+    },
+    dependencyInstallPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["offline"],
+    },
+    contextWindowTokens: { type: "integer", dataClass: "count", required: false },
+    maxInputTokens: { type: "integer", dataClass: "count", required: false },
+    maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+    compactionAuto: { type: "boolean", dataClass: "closed-enum", required: false },
+    compactionPrune: { type: "boolean", dataClass: "closed-enum", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-runtime-readiness"],
+  proofIds: ["coding-runtime.readiness.phase.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_COMPACTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.compaction",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeAdapter.recordCompactionActivity",
+  fields: {
+    event: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["started", "tail-retained", "completed", "failed"],
+    },
+    compactionIdSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    tailStartIdSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    auto: { type: "boolean", dataClass: "closed-enum", required: false },
+    overflow: { type: "boolean", dataClass: "closed-enum", required: false },
+    retainedTail: { type: "boolean", dataClass: "closed-enum", required: false },
+    compactionErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 64,
+    },
+    finishReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["content-filter", "error", "length", "unknown"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-runtime-compaction"],
+  proofIds: ["coding-runtime.compaction.emitted-line"],
+  releaseImpact: "patch",
+});
 
 /**
  * The generated plugin client's timeout for a tool the catalog settles at `settlementBudgetMs`. A
@@ -582,14 +731,17 @@ async function startAdapter(
     }
     return { ok: true, endpoint, sessionId, configDigest: readiness.configDigest };
   } catch (error) {
-    (ports.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      level: "error",
-      op: "coding-runtime.readiness.failed",
-      correlationId: correlationIdOrUnknown(ports.correlationId),
-      errorKind: "internal",
-      extra: { phase, ...describeError(error) },
-    });
+    (ports.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_READINESS_FAILED_OPERATION,
+        {
+          level: "error",
+          correlationId: correlationIdOrUnknown(ports.correlationId),
+          errorKind: "internal",
+        },
+        { phase, frames: keikoStackFrames(error), causeChain: causeChain(error) },
+      ),
+    );
     return fail(phase);
   }
 }
@@ -598,29 +750,29 @@ function recordReadinessPhase(
   ports: OpenCodeRuntimeAdapterPorts,
   phase: OpenCodeReadinessPhase,
 ): OpenCodeReadinessPhase {
-  (ports.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    level: "info",
-    op: "coding-runtime.readiness.phase",
-    correlationId: correlationIdOrUnknown(ports.correlationId),
-    extra: {
-      phase,
-      ...(phase === "config-materialization"
-        ? {
-            dependencyInstallPolicy: "offline",
-            ...(ports.contextGeometry === undefined
-              ? {}
-              : {
-                  contextWindowTokens: ports.contextGeometry.contextWindowTokens,
-                  maxInputTokens: ports.contextGeometry.maxInputTokens,
-                  maxOutputTokens: ports.contextGeometry.maxOutputTokens,
-                  compactionAuto: true,
-                  compactionPrune: true,
-                }),
-          }
-        : {}),
-    },
-  });
+  (ports.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_READINESS_PHASE_OPERATION,
+      { level: "info", correlationId: correlationIdOrUnknown(ports.correlationId) },
+      {
+        phase,
+        ...(phase === "config-materialization"
+          ? {
+              dependencyInstallPolicy: "offline",
+              ...(ports.contextGeometry === undefined
+                ? {}
+                : {
+                    contextWindowTokens: ports.contextGeometry.contextWindowTokens,
+                    maxInputTokens: ports.contextGeometry.maxInputTokens,
+                    maxOutputTokens: ports.contextGeometry.maxOutputTokens,
+                    compactionAuto: true,
+                    compactionPrune: true,
+                  }),
+            }
+          : {}),
+      },
+    ),
+  );
   return phase;
 }
 
@@ -736,20 +888,24 @@ function recordCompactionActivity(
     const activity = projection.compaction;
     if (activity === undefined) continue;
     const failure = activity.event === "failed";
-    activityLog.write({
-      category: "process",
-      level: failure ? "error" : "info",
-      op: "coding-runtime.compaction",
-      correlationId: correlationIdOrUnknown(ports.correlationId),
-      ...(failure ? { errorKind: activity.errorKind } : {}),
-      extra: failure
-        ? {
-            event: activity.event,
-            compactionIdSha256: activity.compactionIdSha256,
-            finishReason: activity.finishReason,
-          }
-        : activity,
-    });
+    activityLog.write(
+      activityLogEvent(
+        CODING_RUNTIME_COMPACTION_OPERATION,
+        {
+          level: failure ? "error" : "info",
+          correlationId: correlationIdOrUnknown(ports.correlationId),
+          ...(failure ? { errorKind: "internal" } : {}),
+        },
+        failure
+          ? {
+              event: activity.event,
+              compactionIdSha256: activity.compactionIdSha256,
+              compactionErrorKind: activity.errorKind,
+              finishReason: activity.finishReason,
+            }
+          : activity,
+      ),
+    );
   }
 }
 

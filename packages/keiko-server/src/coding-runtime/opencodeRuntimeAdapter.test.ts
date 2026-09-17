@@ -557,7 +557,8 @@ describe("OpenCode runtime adapter readiness", () => {
       errorKind: "internal",
       extra: {
         phase: "sse-history-reconciliation",
-        errorClass: "TypeError",
+        frames: expect.any(Array) as unknown,
+        causeChain: expect.any(Array) as unknown,
       },
     });
     expect(JSON.stringify(events)).not.toContain(SECRET);
@@ -1122,20 +1123,22 @@ describe("OpenCode runtime adapter readiness", () => {
       expect.objectContaining({
         level: "error",
         correlationId: "run-native-compaction",
-        errorKind: "ContextOverflowError",
+        errorKind: "internal",
         extra: {
           event: "failed",
           compactionIdSha256: failedCompactionIdSha256,
+          compactionErrorKind: "ContextOverflowError",
           finishReason: "error",
         },
       }),
       expect.objectContaining({
         level: "error",
         correlationId: "run-native-compaction",
-        errorKind: "ContextOverflowError",
+        errorKind: "internal",
         extra: {
           event: "failed",
           compactionIdSha256: createHash("sha256").update("msg_compaction_no_finish").digest("hex"),
+          compactionErrorKind: "ContextOverflowError",
           finishReason: "error",
         },
       }),
