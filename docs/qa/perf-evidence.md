@@ -96,8 +96,10 @@ Commit the resulting document as the final change that moves the workspace measu
 This target measures the shipped tool-catalog producer through its built package. It covers the
 legacy native profile and a 300-tool synthetic profile, the largest stable fixture below the
 producer's 262,144-byte catalog bound. A separate 320-tool fixture must be rejected with
-`input-bound`. Each case retains two warmups and then thirty samples. Lookup work is bounded by
-6,000 comparisons per sample, so the normal pull-request gate proves complete work without using a
+`input-bound`. Each case discards twenty startup samples before retaining thirty steady-state
+samples. The longer unretained phase keeps fresh-process V8 optimization and initial garbage
+collection out of the p95 without excluding any retained outlier. Lookup work is bounded by 6,000
+comparisons per sample, so the normal pull-request gate proves complete work without using a
 host-dependent timeout as a performance threshold.
 
 The committed calibration and candidate use the same percentile and budget policy as the native

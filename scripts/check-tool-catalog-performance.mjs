@@ -57,7 +57,11 @@ import { loadToolCatalogProducer } from "./check-tool-catalog-conformance.mjs";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 export const TOOL_CATALOG_PERFORMANCE_PROCEDURE = Object.freeze({
-  warmups: CODING_PERFORMANCE_PROCEDURE.warmups,
+  // Fresh measurement processes need enough unretained work for V8 optimization and the first
+  // major collection to settle. Two samples left a repeatable 10-12-sample startup tail in the
+  // retained candidate while the identical calibration was already warm, producing false p95
+  // regressions. Twenty remains bounded and leaves the thirty retained samples untouched.
+  warmups: 20,
   batches: CODING_PERFORMANCE_PROCEDURE.batches,
   samplesPerBatch: CODING_PERFORMANCE_PROCEDURE.samplesPerBatch,
   freshCatalogPerSample: true,

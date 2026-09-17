@@ -43,6 +43,7 @@ import {
   recalibrateToolCatalogPerformance,
   ratchetToolCatalogPerformanceBudgets,
   toolCatalogPerformanceBudgets,
+  TOOL_CATALOG_PERFORMANCE_PROCEDURE,
   TOOL_CATALOG_PERFORMANCE_FILES,
   TOOL_CATALOG_OVERFLOW_TOOL_COUNT,
   TOOL_CATALOG_SYNTHETIC_TOOL_COUNT,
@@ -229,6 +230,14 @@ describe("closeout enforcement", () => {
   });
 });
 describe("compiler measurements reuse the existing sample and percentile convention", () => {
+  it("discards a bounded startup phase before retaining thirty steady-state samples", () => {
+    expect(TOOL_CATALOG_PERFORMANCE_PROCEDURE).toMatchObject({
+      warmups: 20,
+      batches: 3,
+      samplesPerBatch: 10,
+    });
+  });
+
   // CI head 02785dbd (run 33983984303): 30 real compile/lookup samples across both the
   // legacy-native and largest-synthetic-catalog cases (~6.5-7s locally) was timing out at the
   // shared 15s default on GitHub's slower/shared runners. Bounded by real OPERATION counts, never
