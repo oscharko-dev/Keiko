@@ -2,16 +2,22 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createInMemoryEvidenceStore,
@@ -25,8 +31,29 @@ import {
 } from "@oscharko-dev/keiko-server";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
-import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
+import {
+  parseSupportArgs,
+  resolveOutPath,
+  runSupportCli,
+  supportPublicationErrorKind,
+  supportPublicationContext,
+  type SupportCliDeps,
+} from "./support.js";
 import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
+
+const BUILT_CLI_ENTRY = fileURLToPath(new URL("../../../dist/cli/index.js", import.meta.url));
+
+function runBuiltSupportCli(
+  cwd: string,
+  stateDir: string,
+  nodeArgs: readonly string[] = [],
+): SpawnSyncReturns<string> {
+  return spawnSync(
+    process.execPath,
+    [...nodeArgs, BUILT_CLI_ENTRY, "support", "export", "--state-dir", stateDir],
+    { cwd, encoding: "utf8", env: { ...process.env, KEIKO_HOME: dirname(stateDir) } },
+  );
+}
 
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
   const outChunks: string[] = [];
@@ -251,8 +278,16 @@ describe("runSupportCli export", () => {
   });
 
   afterEach(() => {
+    vi.doUnmock("node:fs");
+    vi.doUnmock("@oscharko-dev/keiko-security/fs-hardening");
+    vi.resetModules();
     rmSync(stateDir, { recursive: true, force: true });
     rmSync(outDir, { recursive: true, force: true });
+  });
+
+  it("maps non-primitive publication failures to the closed unknown kind", () => {
+    const error = Object.assign(new Error("private path /customer/report.jsonl"), { code: "EIO" });
+    expect(supportPublicationErrorKind(error)).toBe("unknown");
   });
 
   it("writes a bundle whose first line is the manifest and whose remaining lines are the log content, verbatim", async () => {
@@ -310,6 +345,305 @@ describe("runSupportCli export", () => {
     // "default vs. override" without the absolute path.
     expect(manifest.auditSummary).toEqual({ ok: HEALTHY_AUDIT.ok, classes: HEALTHY_AUDIT.classes });
     expect(written).not.toContain(HEALTHY_AUDIT.stateDir);
+  });
+
+  it("publishes a fresh default report on two normal built-CLI runs", () => {
+    const first = runBuiltSupportCli(outDir, stateDir);
+    expect(first.status).toBe(0);
+    const firstReports = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
+    expect(firstReports).toHaveLength(1);
+    writeFileSync(
+      join(stateDir, "logs", "server.log"),
+      `${JSON.stringify({ op: "between-built-runs", correlationId: "built-proof" })}\n`,
+    );
+
+    const second = runBuiltSupportCli(outDir, stateDir);
+    expect(second.status).toBe(0);
+    const secondReports = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
+    expect(secondReports).toHaveLength(2);
+    expect(new Set(secondReports).size).toBe(2);
+    expect(second.stdout).toContain("Wrote ");
+    expect(readdirSync(outDir).filter((name) => name.endsWith(".consumed"))).toHaveLength(1);
+  });
+
+  it("recovers exact built-CLI bytes after death before acknowledgement", () => {
+    const preload = join(outDir, "crash-before-ack.mjs");
+    writeFileSync(
+      preload,
+      `
+        const originalWrite = process.stdout.write.bind(process.stdout);
+        process.stdout.write = (chunk, ...args) => {
+          const result = originalWrite(chunk, ...args);
+          if (String(chunk).startsWith("Wrote ")) process.kill(process.pid, "SIGKILL");
+          return result;
+        };
+      `,
+    );
+    const interrupted = runBuiltSupportCli(outDir, stateDir, ["--import", preload]);
+    expect(interrupted.status).not.toBe(0);
+    const [reportName] = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
+    expect(reportName).toBeDefined();
+    if (reportName === undefined) throw new Error("expected interrupted report");
+    const reportPath = join(outDir, reportName);
+    const priorBytes = readFileSync(reportPath);
+    expect(readdirSync(outDir).filter((name) => name.endsWith(".complete"))).toHaveLength(1);
+    writeFileSync(
+      join(stateDir, "logs", "server.log"),
+      `${JSON.stringify({ op: "after-built-crash", correlationId: "built-proof" })}\n`,
+    );
+
+    const resumed = runBuiltSupportCli(outDir, stateDir);
+    expect(resumed.status).toBe(0);
+    expect(resumed.stdout).toContain("Recovered support report at ");
+    expect(readdirSync(outDir).filter((name) => name.endsWith(".jsonl"))).toEqual([reportName]);
+    expect(readFileSync(reportPath).equals(priorBytes)).toBe(true);
+    expect(readdirSync(outDir).filter((name) => name.endsWith(".consumed"))).toHaveLength(1);
+  });
+
+  it("refuses to replace a pre-existing support report or create its integrity sidecar", async () => {
+    const outPath = join(outDir, "existing-report.jsonl");
+    writeFileSync(outPath, "operator-owned\n", { mode: 0o640 });
+    chmodSync(outPath, 0o640);
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(1);
+    expect(readFileSync(outPath, "utf8")).toBe("operator-owned\n");
+    expect(existsSync(`${outPath}.sha256`)).toBe(false);
+    expect(c.err()).toContain("could not write the bundle: target-exists");
+    expect(c.err()).not.toContain(outPath);
+    const failure = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((record) => record.op === "support.export.publication");
+    expect(failure).toMatchObject({
+      errorKind: "target-exists",
+      publicationArtifactClass: "support-report",
+      publicationPersistenceStatus: "failed",
+      publicationCompleteness: "unknown",
+      publicationLoss: "publication-unavailable",
+      visibleArtifactCount: "unknown",
+      failedArtifactClass: "support-report",
+    });
+    expect(String(failure?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("refuses unsafe report targets without changing their victim", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const victim = join(outDir, "victim.txt");
+    writeFileSync(victim, "operator-owned\n", { mode: 0o640 });
+    chmodSync(victim, 0o640);
+
+    for (const kind of ["symlink", "hard-link", "fifo"] as const) {
+      const outPath = join(outDir, `${kind}.jsonl`);
+      if (kind === "symlink") symlinkSync(victim, outPath);
+      else if (kind === "hard-link") linkSync(victim, outPath);
+      else execFileSync("mkfifo", [outPath]);
+      const c = makeIo();
+
+      const code = await runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        c.io,
+        AUDIT_ENV,
+        { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+      );
+
+      expect(code).toBe(1);
+      expect(readFileSync(victim, "utf8")).toBe("operator-owned\n");
+      expect(statSync(victim).mode & 0o777).toBe(0o640);
+      expect(existsSync(`${outPath}.sha256`)).toBe(false);
+      expect(c.err()).toContain("could not write the bundle: target-exists");
+      expect(c.err()).not.toContain(outPath);
+      rmSync(outPath);
+    }
+  });
+
+  it("does not publish a report when the integrity destination already exists", async () => {
+    const outPath = join(outDir, "sidecar-conflict.jsonl");
+    const sidecarPath = `${outPath}.sha256`;
+    writeFileSync(sidecarPath, "operator-integrity\n", { mode: 0o600 });
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(1);
+    expect(existsSync(outPath)).toBe(false);
+    expect(readFileSync(sidecarPath, "utf8")).toBe("operator-integrity\n");
+    expect(c.err()).toContain("could not write the bundle: target-exists");
+  });
+
+  it("refuses hostile integrity destinations without touching their victim or report", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const victim = join(outDir, "integrity-victim");
+    writeFileSync(victim, "operator-integrity\n", { mode: 0o640 });
+    chmodSync(victim, 0o640);
+
+    for (const kind of ["symlink", "hard-link", "fifo"] as const) {
+      const outPath = join(outDir, `${kind}-sidecar.jsonl`);
+      const sidecarPath = `${outPath}.sha256`;
+      if (kind === "symlink") symlinkSync(victim, sidecarPath);
+      else if (kind === "hard-link") linkSync(victim, sidecarPath);
+      else execFileSync("mkfifo", [sidecarPath]);
+      const c = makeIo();
+
+      expect(
+        await runSupportCli(
+          ["export", "--state-dir", stateDir, "--out", outPath],
+          c.io,
+          AUDIT_ENV,
+          { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+        ),
+      ).toBe(1);
+      expect(existsSync(outPath)).toBe(false);
+      expect(readFileSync(victim, "utf8")).toBe("operator-integrity\n");
+      expect(statSync(victim).mode & 0o777).toBe(0o640);
+      expect(readdirSync(outDir).some((name) => name.endsWith(".intent"))).toBe(false);
+      expect(c.err()).toContain("could not write the bundle: target-exists");
+      rmSync(sidecarPath);
+    }
+  });
+
+  it("recovers the durable prior report before reading a changed clock or activity log", async () => {
+    const outPath = join(outDir, "recoverable-report.jsonl");
+    const context = supportPublicationContext(outDir, outPath);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./support.js");
+    const firstIo = makeIo();
+
+    expect(
+      await interrupted.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        firstIo.io,
+        AUDIT_ENV,
+        {
+          cwd: outDir,
+          now: () => new Date("2026-09-01T01:02:03.000Z"),
+          auditDeps: healthyAuditDeps(),
+          evidenceStore: createInMemoryEvidenceStore(),
+        },
+      ),
+    ).toBe(1);
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.sha256`)).toBe(true);
+    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(true);
+
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    writeFileSync(
+      join(stateDir, "logs", "server.log"),
+      `${JSON.stringify({ op: "post-interruption-log", correlationId: "post-interruption" })}\n`,
+      { flag: "a" },
+    );
+    const resumed = await import("./support.js");
+    const secondIo = makeIo();
+    expect(
+      await resumed.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        secondIo.io,
+        AUDIT_ENV,
+        {
+          cwd: outDir,
+          now: () => {
+            throw new Error("recovery must precede clock access");
+          },
+          auditDeps: healthyAuditDeps(),
+          evidenceStore: createInMemoryEvidenceStore(),
+        },
+      ),
+    ).toBe(0);
+
+    const report = readFileSync(outPath, "utf8");
+    expect(report).not.toContain("post-interruption-log");
+    expect(secondIo.out()).toContain(`Recovered support report at ${outPath}`);
+    expect(readdirSync(context.root).filter((name) => name.includes(context.slot))).toEqual([
+      `.keiko-publish-${context.slot}.consumed`,
+    ]);
+    const expectedDigest = createHash("sha256").update(report).digest("hex");
+    expect(readFileSync(`${outPath}.sha256`, "utf8").trim()).toBe(expectedDigest);
+    const evidence = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.op === "support.export.publication")
+      .at(-1);
+    expect(evidence).toMatchObject({
+      publicationPersistenceStatus: "recovered",
+      publicationStatus: "recovered",
+      recoveryState: "recovered",
+      reportBytes: Buffer.byteLength(report),
+      reportSha256: expectedDigest,
+      publicationCompleteness: "complete",
+      publicationLoss: "none",
+    });
+  });
+
+  it("recovers the default output slot without consulting a replacement clock", async () => {
+    const firstNow = new Date("2026-09-02T03:04:05.000Z");
+    const outPath = resolveOutPath(outDir, undefined, firstNow);
+    const context = supportPublicationContext(outDir, undefined);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./support.js");
+    expect(
+      await interrupted.runSupportCli(["export", "--state-dir", stateDir], makeIo().io, AUDIT_ENV, {
+        cwd: outDir,
+        now: () => firstNow,
+        auditDeps: healthyAuditDeps(),
+        evidenceStore: createInMemoryEvidenceStore(),
+      }),
+    ).toBe(1);
+    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(true);
+
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    const resumed = await import("./support.js");
+    const resumedIo = makeIo();
+    expect(
+      await resumed.runSupportCli(["export", "--state-dir", stateDir], resumedIo.io, AUDIT_ENV, {
+        cwd: outDir,
+        now: () => {
+          throw new Error("default recovery must precede clock access");
+        },
+        auditDeps: healthyAuditDeps(),
+        evidenceStore: createInMemoryEvidenceStore(),
+      }),
+    ).toBe(0);
+    expect(existsSync(outPath)).toBe(true);
+    expect(resumedIo.out()).toContain(`Recovered support report at ${outPath}`);
+    expect(readdirSync(context.root).filter((name) => name.includes(context.slot))).toEqual([
+      `.keiko-publish-${context.slot}.consumed`,
+    ]);
   });
 
   // Regression pin: `redactLogFields`'s field-NAME denylist matches only an exact normalized
@@ -575,9 +909,8 @@ describe("runSupportCli export", () => {
     );
 
     expect(code).toBe(1);
-    // The fs error's `code` (ENOENT here — the parent directory does not exist), never its
-    // `constructor.name` (always just "Error" for a Node fs error, so it told an operator nothing).
-    expect(c.err()).toContain("keiko support export: could not write the bundle: ENOENT");
+    // The hardened publisher classifies the missing trusted parent without exposing its path.
+    expect(c.err()).toContain("keiko support export: could not write the bundle: unsafe-ancestor");
     expect(c.err()).not.toContain(badOutPath);
     expect(existsSync(badOutPath)).toBe(false);
   });
@@ -824,6 +1157,94 @@ describe("runSupportCli export", () => {
     expect(existsSync(sidecarPath)).toBe(true);
     const expectedDigest = createHash("sha256").update(readFileSync(outPath)).digest("hex");
     expect(readFileSync(sidecarPath, "utf8").trim()).toBe(expectedDigest);
+    if (process.platform !== "win32") {
+      expect(statSync(outPath).mode & 0o777).toBe(0o600);
+      expect(statSync(sidecarPath).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("records body-free support publication evidence with correlation and assurance", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "evidence.jsonl");
+
+    expect(
+      await runSupportCli(["export", "--state-dir", stateDir, "--out", outPath], c.io, AUDIT_ENV, {
+        auditDeps: healthyAuditDeps(),
+        evidenceStore: createInMemoryEvidenceStore(),
+      }),
+    ).toBe(0);
+
+    const report = readFileSync(outPath);
+    const reportSha256 = createHash("sha256").update(report).digest("hex");
+    const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const publication = records.find((record) => record.op === "support.export.publication");
+    expect(publication).toMatchObject({
+      category: "diagnostic",
+      publicationArtifactClass: "support-report",
+      artifactCount: 2,
+      publicationPersistenceStatus: "published",
+      publicationStatus: "published",
+      permissionAssurance: process.platform === "win32" ? "platform-inherited" : "verified-private",
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
+      publicationCompleteness: "complete",
+      publicationLoss: "none",
+      visibleArtifactCount: 2,
+      reportBytes: report.length,
+      reportSha256,
+    });
+    expect(String(publication?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.stringify(publication)).not.toContain(outPath);
+  });
+
+  it("records acknowledgement failure as the sole terminal publication evidence", async () => {
+    vi.resetModules();
+    vi.doMock("@oscharko-dev/keiko-security/fs-hardening", async () => {
+      const actual = await vi.importActual<
+        typeof import("@oscharko-dev/keiko-security/fs-hardening")
+      >("@oscharko-dev/keiko-security/fs-hardening");
+      return {
+        ...actual,
+        acknowledgeSafeArtifactFileSet: (): never => {
+          throw new actual.SafeArtifactFileError("manifest", "durability-failed");
+        },
+      };
+    });
+    const isolated = await import("./support.js");
+    const c = makeIo();
+    const outPath = join(outDir, "ack-failure.jsonl");
+
+    expect(
+      await isolated.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        c.io,
+        AUDIT_ENV,
+        { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+      ),
+    ).toBe(1);
+    expect(c.out()).toContain("Wrote ");
+    expect(c.err()).toContain("could not acknowledge publication: durability-failed");
+    const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.op === "support.export.publication");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      level: "error",
+      errorKind: "durability-failed",
+      publicationPersistenceStatus: "acknowledgement-failed",
+      publicationStatus: "published",
+      receiptState: "acknowledgement-uncertain",
+      publicationCompleteness: "complete",
+      publicationLoss: "none",
+      visibleArtifactCount: 2,
+      failedArtifactClass: "manifest",
+    });
+    expect(String(records[0]?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.stringify(records[0])).not.toContain(outPath);
   });
 
   // `readUiLogContentOrUndefined`'s catch path: BOTH consent flags are given, but no ui.log file

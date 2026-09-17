@@ -130,6 +130,24 @@
       "package": "keiko-cli"
     },
     {
+      "op": "support.export.publication",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support.ts:614",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "support.export.publication",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support.ts:631",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "support.export.publication",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support.ts:640",
+      "package": "keiko-cli"
+    },
+    {
       "op": "update.runtime.legacy-import-deferred",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/ui.ts:1311",
@@ -4400,6 +4418,7 @@
     "store.journey-outcomes.migration",
     "store.messages.grounded-preview-citations.read",
     "store.opened",
+    "support.export.publication",
     "task-workspace.identity.creation-time-probe",
     "task-workspace.lifecycle",
     "task-workspace.reconcile.startup",

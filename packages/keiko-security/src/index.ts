@@ -39,20 +39,28 @@ export type {
   SafeArtifactPublicationEntry,
   SafeArtifactPublicationOptions,
   SafeArtifactPublicationResult,
+  SafeArtifactRecoveryOptions,
+  SafeArtifactRecoveryResult,
+  SafeArtifactReceiptOptions,
 } from "./fs-hardening.js";
 export {
   DIR_MODE,
   FILE_MODE,
+  MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES,
+  MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
   SAFE_ARTIFACT_CLASSES,
   SAFE_ARTIFACT_FILE_FAILURE_KINDS,
   SafeArtifactFileError,
+  acknowledgeSafeArtifactFileSet,
   ensureDirHardened,
   chmodIfPresent,
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
   replaceSafeArtifactFile,
   safeArtifactContainmentAssurance,
   safeArtifactPermissionAssurance,
+  safeArtifactPublicationSlot,
   verifySafeArtifactFileDescriptor,
 } from "./fs-hardening.js";
 

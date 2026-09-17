@@ -75,6 +75,12 @@ levels.
 | `.keiko/evidence/`       | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                                                                                                                                                  |
 | `~/.keiko/keiko-ui.db`   | Local UI state database. User-scoped, not project-scoped.                                                                                                                                                                                                                                                                                                                    |
 
+`keiko support export` exclusively creates its report and integrity sidecar; it never replaces an
+existing destination. After an interrupted export, rerun with the same explicit `--out` path. For
+the default output, rerun from the same working directory. Keiko resolves the one bounded recovery
+slot before reading a new clock or activity-log snapshot. A conflicting target, intent, stage,
+symlink, hard link, or non-regular file fails closed and is not removed or replaced.
+
 To capture verbose output for a single command run, invoke the CLI in the
 foreground and redirect both streams to a file you control. For example:
 
