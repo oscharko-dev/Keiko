@@ -49,6 +49,14 @@ reported in `legacyDiscovery`; they can neither register nor authorize a product
 Producers move into the authoritative array operation by operation, without adding a second
 catalog or treating heuristic inference as contract truth.
 
+Each authoritative entry defines the exact flattened fields a producer may emit, including their
+primitive types, maximum lengths/counts, closed values and safe data classes. It also records the
+causal and lifecycle role, analyzer projection, supported failure classes, executable proof ids,
+and release impact. The runtime event constructor derives its TypeScript shape from that entry and
+the physical sink validates the same contract again immediately before serialization. A caller
+therefore cannot add arbitrary metadata, widen a field after construction, or use an unregistered
+operation as an escape hatch.
+
 ## Redaction scope, stated honestly
 
 Every field this log can carry passes through `redactLogFields` before it reaches disk. That
@@ -68,14 +76,26 @@ hashes, and shapes.
 
 ## Joining lines across a request's lifecycle
 
-Every `ServerLogEvent` line carries `pid`, `instanceId` (8 hex characters, minted once per process
-start), and a process-wide, monotonically allocated `seq`. Together, `(pid, instanceId, seq)` give
+Every persisted v2 line carries `schemaVersion`, `registryVersion`, the schema and catalog SHA-256
+digests, `buildClass`, `releaseClass`, `platformClass`, `productVersion`, `compatibilityState`, and
+`writerCapability`. The central sink stamps these fields; producers cannot supply or override
+them. A current writer persists only the exact supported schema/catalog identity and records an
+explicit body-free unavailable/incomplete capability notice when validation or persistence fails.
+
+The line also carries `pid`, `instanceId` (8 hex characters, minted once per process start), and a
+process-wide, monotonically allocated `seq`. Together, `(pid, instanceId, seq)` give
 a **total order over persisted lines within one process lifetime**. The sequence may contain gaps
 when an opening or write attempt fails, and the failure notice provides the closed classification;
 there is no true cross-process global order. Two different process lifetimes
 each count `seq` from their own start, so a `seq` value from one process is not orderable against
 the same `seq` value from another by the tuple alone. The wall-clock `ts` field is a best-effort
 tiebreak hint only, never a guarantee, and should not be relied on to order lines across processes.
+
+`keiko support analyze` validates the complete identity tuple. It distinguishes supported,
+legacy-supported, unsupported-version, corrupt, truncated, and incomplete evidence and reports
+sequence gaps, duplicates, decreasing/reset values, and reorder deterministically for each
+`(pid, instanceId)` lifetime. These states are evidence, not warnings to ignore: an unsupported or
+incomplete input cannot be treated as a complete reconstruction.
 
 Cross-process (and cross-request) causality is instead established through two id fields:
 

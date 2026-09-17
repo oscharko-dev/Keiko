@@ -392,20 +392,35 @@ system that exists, never beside it:
   `reportClientDiagnostic` ([`client-diagnostics.ts`](packages/keiko-ui/src/lib/client-diagnostics.ts)).
   A new package that performs work receives a port of the same shape from the server. Not
   `console.*`, not a private logger, not a second log file, not a new format.
-- **`op` is a catalog value, never a free string.** Add the literal at the call site, run
-  `npm run generate:op-catalog`, and commit the regenerated
+- **`op` is a typed registry value, never a free string.** Declare each production operation with
+  `defineActivityLogOperation` and emit it with `activityLogEvent`. The registration owns the
+  category, emitter, exact required/optional field set, primitive types, hard bounds, closed data
+  classes and vocabularies, causal/lifecycle semantics, analyzer projection, failure classes,
+  proof ids, and release impact. The generator resolves those canonical APIs through TypeScript
+  symbols; same-shaped local helpers, unresolved dynamic calls, duplicate registrations,
+  registrations without an emitter, and unregistered emitters fail closed. Run
+  `npm run generate:op-catalog` and commit the regenerated
   [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
-  `npm run check:op-catalog` fails on drift. Never hand-edit the catalog.
+  `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
+  the catalog. Its legacy literal scan is migration input only and authorizes nothing.
 - **Thread the correlation.** Every line of one logical operation carries that operation's
   `correlationId`; a background job spawned by a request carries `parentCorrelationId` pointing
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
   ([`correlation.ts`](packages/keiko-server/src/correlation.ts)) — never an ad-hoc string, never a
   silently missing id.
-- **Errors take the structured path.** §7's no-silent-failures rule, made concrete for the log
-  line: `errorKind` from the closed vocabulary, the dist-anchored Keiko-code stack (`extra.frames` /
+- **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the
+  log line: `errorKind`, completeness, loss, compatibility, and writer capability come from their
+  closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
   `extra.causeChain`) and a correlation id on every failure line. A `catch` that logs nothing, or
   logs free text, loses the defect for good; `check:error-observability` pins the named sites and
   every new failure path is held to the same shape.
+- **The persisted identity is complete or the write fails closed.** Every persisted v2 record is
+  stamped at the central sink with schema/registry versions and digests, product/build/release and
+  safe platform classes, compatibility and writer-capability states, plus
+  `(pid, instanceId, seq)`. Producers cannot set or spoof those fields. Registered events are
+  revalidated immediately before serialization, so post-construction mutation, an unknown field,
+  a wrong type or vocabulary value, or an invalid identity cannot reach JSON. Rejection evidence
+  uses a closed body-free reason and never echoes the rejected operation or value.
 - **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
   hashes, ids, route templates, byte sizes, durations — never prompts, responses, file contents,
   secrets, paths, endpoints or PII (ADR-0173 D4). New fields go into `extra` and through the
@@ -432,8 +447,11 @@ already recorded:
    `--emit-fixture <path>` writes a ready-to-paste gateway replay fixture.
 3. **Investigate from the timeline.** `keiko investigate --from-timeline <timeline.json>` turns that
    timeline into a governed investigation with persisted evidence.
-4. **Read `warnings` before trusting a seed.** The analyzer names exactly which evidence class it
-   could not reconstruct (no stack frames, no gateway call, no request line, no store fingerprint).
+4. **Read compatibility and integrity before trusting a seed.** The analyzer distinguishes
+   supported, legacy-supported, unsupported-version, corrupt, truncated, and incomplete input. It
+   reports gaps, duplicates, decreasing/reset sequence values, and reorder per
+   `(pid, instanceId)` before exposing a reconstruction. Its `warnings` also name exactly which
+   evidence class it could not reconstruct (no stack frames, no gateway call, no request line, no store fingerprint).
    A missing class is itself a finding: the surface that failed to log is part of the bug, and Rule
    1 applies to its fix.
 5. **Turn the seed into a red-then-green test** following

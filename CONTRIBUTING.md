@@ -24,6 +24,23 @@ npm run arch:check:negative
 
 See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area gate table.
 
+### Activity Log runtime changes
+
+Production runtime behavior extends the existing Activity Log; it never creates a second logger,
+event store, analyzer, or incident subsystem. Register every operation through the canonical typed
+APIs in `keiko-contracts` and emit only the registration-derived event shape. The checked-in
+`docs/observability/op-catalog.generated.json` is generated from those canonical declarations and
+emitters. Its typed registry is authoritative; the legacy literal scan is migration input only.
+
+Each registration owns exact fields, bounds, data classes and vocabularies, causal and lifecycle
+semantics, analyzer projection, failure classes, proof ids, and release impact. Unknown or dynamic
+operations, arbitrary metadata, nested objects, missing required fields, unbounded strings, and
+unknown error/loss states fail closed. Persisted v2 records also require the sink-owned version and
+digest dimensions, compatibility/writer state, and complete `(pid, instanceId, seq)` identity.
+Tests for changed behavior assert the emitted line and the support-analyzer projection. Regenerate
+and check the catalog with `npm run generate:op-catalog` and `npm run check:op-catalog`; error-path
+changes also run `npm run check:error-observability` during the verification phase.
+
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into

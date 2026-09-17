@@ -21,6 +21,13 @@ Amended by #3528 on 2026-09-17: the path-based day-rotation and retention mutati
 a same-UID ancestor substitution, so `server.log` remains append-only and emits explicit deferred
 rotation/retention evidence until #3530 supplies bounded append-only segments.
 
+Amended by #3529 on 2026-09-17: the heuristic operation inventory is now a non-authoritative
+migration view. Canonical TypeScript-resolved registrations form the versioned production registry,
+derive exact emitter types, and are revalidated at the serialization boundary. Persisted v2
+identity now includes registry/schema digests and safe build/release/platform/capability dimensions;
+readers classify compatibility and sequence integrity explicitly instead of treating every
+parseable or partially identified line as valid v2 evidence.
+
 ## Context
 
 `<stateDir>/logs/server.log` (JSON lines, `KEIKO_LOG_LEVEL`-gated, always on) shipped in #3230. It
@@ -61,7 +68,8 @@ only (positional locators, never customer field names as object keys), not imple
 
 ### D1 — Envelope v2: what is reserved, and why each field earns that status
 
-`ServerLogEvent` gains four fields, additive only — no existing field is removed or retyped:
+`ServerLogEvent` originally gained four process-ordering fields. The physical sink now stamps the
+complete v2 identity below; no producer may set or override any of it:
 
 - `schemaVersion: 2` — a literal constant, bumped only on a breaking format change to the line
   shape itself. Lets a consumer (the analyzer, or a human) branch on wire format without probing
@@ -81,10 +89,19 @@ only (positional locators, never customer field names as object keys), not imple
   restart.
   Reserved because it is the ordering primitive (D2) — if a caller could set `extra.seq`, ordering
   claims would be forgeable.
+- `registryVersion`, `schemaDigest`, `catalogDigest` — bind the record to the exact generated
+  authoritative registry and schema. The digests are lowercase SHA-256 values generated from
+  canonical data, never caller strings.
+- `buildClass`, `releaseClass`, `platformClass`, `productVersion` — bounded, body-free dimensions
+  needed to select the matching executable contract without admitting paths, endpoints, identities,
+  arbitrary environment data, or free metadata.
+- `compatibilityState`, `writerCapability` — closed states that say whether the writer is using the
+  supported contract and whether the evidence path is active, degraded, or unavailable. A current
+  persisted line is `supported`/`active`; failure notices state incomplete/unavailable explicitly.
 
-All four join the existing reserved set (`ts`, `level`, `category`, `op`) in
+All identity dimensions join the existing reserved set (`ts`, `level`, `category`, `op`) in
 `RESERVED_FIELD_NAMES`, so `redactLogFields` strips a same-named `extra` key before assignment —
-identical to how the four pre-existing reserved fields already cannot be spoofed today. This is a
+identical to how the pre-existing reserved fields already cannot be spoofed today. This is a
 structural guarantee enforced at the one physical write boundary (`formatServerLogLine`), not a
 convention producers are trusted to honor.
 
@@ -289,36 +306,31 @@ genuinely has neither a request, run, job, nor bootstrap context; it is not a bo
 boundary, and browser-supplied values are never accepted as authoritative without server-side
 validation — the same posture that already governs `correlationId`.
 
-### D6 — The op catalog is a generated, drift-tested closed vocabulary, not a compile-time union
+### D6 — The generated typed registry is the single production authority
 
-`op` stays a plain `string` at the type level: a compile-time closed union across dozens of scattered
-call sites in six-plus packages would be unmaintainable churn, and `route-template.ts` already makes
-the same choice for path segments. Closure is enforced by generation instead: a script walks every
-package's source for a literal `op: "..."` inside a category-bearing log-event object, writes a
-checked-in catalog (`op`, `category`, `package`, call site), and a drift test regenerates in memory
-and asserts exact equality against the checked-in file — the same "derive, don't hand-maintain, pin
-with a drift test" pattern `route-template.test.ts` already runs.
+Every production operation is declared through `defineActivityLogOperation` and emitted through
+`activityLogEvent`. The declaration is data-only and lives at the owning package, but it is not a
+free-form object: it names the literal operation/category, owning emitter, exact flattened fields,
+primitive types, maximum lengths/counts, closed values and data classes, correlation requirement,
+lifecycle phase, analyzer projection, supported failure classes, executable proof ids, and release
+impact. TypeScript derives the exact event field type from that declaration, including required and
+optional fields; unknown keys and wrong values are compile errors.
 
-A companion dev-time shape check asserts every extracted `op` literal matches a fixed naming
-pattern. This runs at generation/CI time **only** — never in the runtime request path. A bad `op`
-string fails the build; it never silently substitutes a marker for a real value at runtime, and it
-never adds a hot-path validation cost to logging itself.
+Generation resolves the two canonical `keiko-contracts` APIs through TypeScript declaration and
+alias symbols. A local same-shaped helper is unrelated and ignored. A non-literal or unresolved
+canonical registration/emission, a duplicate operation, a registration with no emitter, an emitter
+without its registration, or relevant compiler diagnostics is an actionable closed violation. The
+checked-in catalog and generated runtime digest constants come from those canonical declarations.
+The drift check requires both byte equality and an empty authoritative violation set.
 
-**Unresolvable `op` expressions are recorded, not treated as a build failure.** A small,
-enumerated set of positional logging helpers (`POSITIONAL_OP_HELPERS`) forward an `op` value they
-receive as a parameter one layer down into the real event call — a closure argument, a re-thrown
-failure context, a caller-supplied `ServerDiagnosticRecord.operation` — rather than minting a new
-vocabulary member of their own. The generator cannot statically resolve that kind of expression to
-a literal, and it does not guess: it records a `<dynamic>` catalog entry naming the call's own file
-and line, pinned byte-for-byte by the drift test exactly like every literal entry, so the site
-stays visible in the checked-in catalog rather than silently vanishing or being fabricated. This is
-sound only because it is paired with a closure obligation: every caller that hands such a helper an
-`op` value must itself pass a literal, which the generator resolves and catalogs at *that* call
-site — the vocabulary is closed at the literal's origin, not at the forwarding helper. A `<dynamic>`
-entry at a helper is therefore never the last word on what operation ran; it is a pointer to go read
-the actual call sites, all of which are separately, statically cataloged. Failing generation on
-these forwarding sites would make the generator unconditionally unable to run on unmodified, correct
-source, for no closure benefit the per-caller literal requirement does not already provide.
+The predecessor bracket scanner remains temporarily in the same generated file as a visibly
+non-authoritative migration input. Its `<dynamic>` and `unknown` records authorize nothing and must
+disappear as producers migrate; no second catalog or parallel runtime vocabulary exists. Runtime
+construction validates the registration-derived fields, binds the registration non-enumerably to
+the event, and the physical sink repeats validation immediately before serialization. This second
+check closes post-construction mutation and protects JavaScript callers that did not pass through
+the TypeScript checker. A rejection produces only a closed body-free rejection kind; it never
+echoes the rejected operation, field, or value and cannot recursively enter the failed sink.
 
 ### D7 — Process lifecycle events give the log a subject
 
@@ -465,6 +477,14 @@ exactly one `warnings[]` entry when that count is nonzero. This compatibility pa
 while a current file may span releases; #3530's bounded segment retention will define when those
 legacy lines age out.
 
+A partially present or invalid v2 tuple is not legacy. The analyzer classifies each input as
+supported, legacy-supported, unsupported-version, corrupt, truncated, or incomplete and validates
+schema version, positive integer pid/seq, bounded instance id, registry/schema/catalog identity,
+compatibility, and writer capability. Within each `(pid, instanceId)` lifetime it reports sequence
+gaps, duplicates, decreasing/reset values, and reorder deterministically. These machine states are
+included in human and JSON output; a line cannot become trusted v2 evidence merely because its JSON
+parsed successfully.
+
 ### D11 — `ERROR_KIND_PATTERN` consolidation (Wave 2, landed) is a relocation, not a relaxation
 
 Recorded here because AGENTS.md treats this exact class of edit as the highest-consequence mistake
@@ -508,6 +528,14 @@ protected — "these three copies never silently diverge" — is not weakened, i
 impossible to violate, because there is no longer more than one copy to diverge. It is not a
 relaxation of the pin, and no future change may cite this ADR to justify re-introducing a second
 copy without a single source of truth.
+
+The pattern remains a defense-in-depth reducer for hostile `code`/`name` properties; it no longer
+authorizes a persisted error kind. Production registrations and envelopes use the versioned closed
+`ACTIVITY_LOG_ERROR_KINDS` vocabulary. A shape-valid but unknown token maps to the closed `internal`
+fallback (or to `validation-failed` for contract rejection) and the rejected token is never echoed.
+Completeness, loss, compatibility, and writer-capability states follow the same closed-vocabulary
+rule. Extending any of them is a reviewed contract change with matching registration, analyzer, and
+proof updates, not acceptance of another arbitrary machine-shaped string.
 
 ### D13 — HTTP and SSE lifecycle detail, and a body-free browser diagnostic ingest (Wave 5, landed)
 
