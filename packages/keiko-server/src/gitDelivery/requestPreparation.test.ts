@@ -188,7 +188,7 @@ describe("prepareGitDeliveryRequest — repository-mismatch activity log line", 
           readonly causeChain?: readonly string[];
         }
       | undefined;
-    expect(extra?.failureKind).toBe("ENOTDIR");
+    expect(extra?.failureKind).toBe("GitLazyFetchGuardUnsupportedError");
     expect(Array.isArray(extra?.frames)).toBe(true);
     expect(Array.isArray(extra?.causeChain)).toBe(true);
   });
@@ -243,7 +243,13 @@ describe("gitDeliveryAuthorityContinuityGuard — one admission line per operati
     expect(guard()).toBe(false);
     expect(events.filter((event) => event.op === "git.delivery.authority.denied")).toEqual([
       expect.objectContaining({
-        extra: { operation: "push", phase: "continuity", reason: "accepted-run-unavailable" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "push",
+          phase: "continuity",
+          reason: "accepted-run-unavailable",
+        },
       }),
     ]);
   });

@@ -275,6 +275,8 @@ describe("draft delivery hard boundaries", () => {
         op: "git.draft-delivery",
         correlationId: "draft-delivery-test",
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId: "run-1",
           phase: "refused",
           reason: "operation-in-flight",

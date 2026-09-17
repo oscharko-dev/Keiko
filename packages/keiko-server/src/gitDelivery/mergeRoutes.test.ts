@@ -762,8 +762,14 @@ describe("merge execute (governed)", () => {
       level: "error",
       correlationId: "request-correlation-merge-snapshot",
     });
-    expect(typeof failed?.errorKind).toBe("string");
-    expect(failed?.extra).toEqual({ actionKind: "merge", phaseReached: "snapshot" });
+    expect(failed?.errorKind).toBe("internal");
+    expect(failed?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      actionKind: "merge",
+      phaseReached: "snapshot",
+      failureKind: "Error",
+    });
     expect(JSON.stringify(activity)).not.toContain("host path must stay private");
   });
 });

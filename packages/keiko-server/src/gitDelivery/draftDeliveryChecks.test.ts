@@ -175,6 +175,8 @@ describe("reading the delivered commit's checks (F57)", () => {
         op: "git.draft-checks",
         correlationId: "draft-checks-fixture",
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId: "run-1",
           state: "listed",
           verificationEvidenceId: EVIDENCE_ID,
@@ -210,9 +212,14 @@ describe("reading the delivered commit's checks (F57)", () => {
     expect(checks).toEqual({ status: "unavailable", reason: "receipt-missing" });
     expect(log[0]).toMatchObject({
       level: "warn",
-      extra: { state: "unavailable", reason: "receipt-missing" },
+      errorKind: "unavailable",
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        state: "unavailable",
+        reason: "receipt-missing",
+      },
     });
-    expect(log[0]).not.toHaveProperty("errorKind");
   });
   it("reports a run the store no longer holds as having no receipt", () => {
     const { checks } = read({ snapshot: undefined, lineage: receipt(), get: () => EVIDENCE });

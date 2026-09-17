@@ -558,6 +558,8 @@ describe("commit preview — read-only verification context (AC3)", () => {
       correlationId: "commit-preview-1",
       status: 200,
       extra: {
+        completeness: "complete",
+        loss: "none",
         stagedFileCount: 2,
         areaCount: 2,
         touchesTests: false,
@@ -824,7 +826,10 @@ describe("commit draft — explicit model-backed generation", () => {
       op: "git.commit.draft.completed",
       correlationId: UNKNOWN_CORRELATION_ID,
       status: 503,
+      errorKind: "unavailable",
       extra: {
+        completeness: "complete",
+        loss: "none",
         stagedFileCount: 2,
         areaCount: 2,
         touchesTests: false,
@@ -1376,11 +1381,22 @@ describe("commit approve (mints the approval execute consumes) — #3386, ADR-01
       expect.arrayContaining([
         expect.objectContaining({
           op: "git.delivery.authority.admitted",
-          extra: { operation: "commit", phase: "admission", source: "local-user" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            phase: "admission",
+            source: "local-user",
+          },
         }),
         expect.objectContaining({
           op: "git.delivery.commit.approval.minted",
-          extra: { operation: "commit", runId: "local-user-git-widget" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "local-user-git-widget",
+          },
         }),
       ]),
     );
@@ -1496,7 +1512,12 @@ describe("commit approval evidence — body-free activity-log lines (#3386)", ()
           category: "security",
           op: "git.delivery.commit.approval.minted",
           status: 200,
-          extra: { operation: "commit", runId: "test-run" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "test-run",
+          },
         }),
       ]),
     );
@@ -1518,7 +1539,12 @@ describe("commit approval evidence — body-free activity-log lines (#3386)", ()
           category: "security",
           op: "git.delivery.commit.approval.required",
           status: 200,
-          extra: { operation: "commit", runId: "test-run" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "test-run",
+          },
         }),
       ]),
     );

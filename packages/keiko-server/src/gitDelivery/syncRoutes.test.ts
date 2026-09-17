@@ -494,7 +494,7 @@ describe("fetch execute — outcomes", () => {
         op: "git.delivery.dispatch.no-spawn",
         status: 403,
         correlationId: "request-correlation-fetch-continuity",
-        extra: { operation: "fetch" },
+        extra: { completeness: "complete", loss: "none", operation: "fetch" },
       }),
     );
     expect(
@@ -1044,7 +1044,13 @@ describe("sync execute — admission redemption below autonomous-delivery", () =
       expect.objectContaining({
         op: "git.delivery.authority.admitted",
         status: 200,
-        extra: { operation: "fetch", phase: "admission", source: "local-user" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "fetch",
+          phase: "admission",
+          source: "local-user",
+        },
       }),
     );
   });

@@ -713,6 +713,8 @@ describe("local mutation routes — real specs through the route group (direct h
     expect(adapter.calls()).toEqual(["switchBranch"]);
     const admission = log.events().find((event) => event.op === "git.delivery.authority.admitted");
     expect(admission?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       operation: "branch-switch",
       phase: "admission",
       source: "local-user",

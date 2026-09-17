@@ -817,8 +817,14 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       level: "error",
       correlationId: "request-correlation-pr-snapshot",
     });
-    expect(typeof failed?.errorKind).toBe("string");
-    expect(failed?.extra).toEqual({ actionKind: "pr-create", phaseReached: "snapshot" });
+    expect(failed?.errorKind).toBe("internal");
+    expect(failed?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      actionKind: "pr-create",
+      phaseReached: "snapshot",
+      failureKind: "Error",
+    });
     expect(JSON.stringify(activity)).not.toContain("host path must stay private");
   });
 
@@ -1903,10 +1909,16 @@ describe("pr mark-ready routes (#3389)", () => {
       correlationId: "corr-ci-read",
       level: "error",
       errorKind: "internal",
-      extra: { actionKind: "pr-mark-ready", phaseReached: "readiness", failureKind: "Error" },
+      extra: expect.objectContaining({
+        completeness: "complete",
+        loss: "none",
+        actionKind: "pr-mark-ready",
+        phaseReached: "readiness",
+        failureKind: "Error",
+      }) as unknown,
     });
     expect(failure?.extra?.frames).toBeDefined();
-    expect(failure?.extra?.causeChain).toBeDefined();
+    expect(failure?.extra?.causeChain).toBeUndefined();
     expect(JSON.stringify(failure)).not.toContain("provider response contained a secret");
   });
 

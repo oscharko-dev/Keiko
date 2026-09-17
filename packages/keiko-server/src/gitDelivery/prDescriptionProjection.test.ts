@@ -3,18 +3,15 @@ import { logDescription } from "./prDescriptionProjection.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import { PrDescriptionFailure } from "./prDescriptionTypes.js";
 
-// Owner audit of PR #3394, finding b3-15 (AGENTS.md §8): every description failure logged
-// `errorKind: "internal"` unconditionally instead of deriving it from the actual thrown error the
-// way `execution.ts`'s `logGitDeliveryPreconditionFailure` already does via `errorKindOf`. A fixed
-// literal collapses every distinct failure into the same bucket in the activity log, which is
-// exactly the join key `keiko support analyze` groups `--clusters` by.
-describe("prDescriptionProjection — logDescription errorKind", () => {
+// The activity envelope uses the closed global error taxonomy while the precise body-free failure
+// class remains available in `extra.failureKind` for reconstruction and clustering.
+describe("prDescriptionProjection — logDescription failure classification", () => {
   let fixture: DescriptionFixture;
   afterEach(() => {
     fixture.close();
   });
 
-  it("derives errorKind from the actual thrown error instead of a fixed 'internal' literal", () => {
+  it("normalizes the envelope errorKind and retains the precise failure kind", () => {
     fixture = new DescriptionFixture();
     logDescription(
       fixture.options,
@@ -27,8 +24,8 @@ describe("prDescriptionProjection — logDescription errorKind", () => {
     const line = fixture.events.find((event) => event.op === "git.pr-description");
     expect(line).toBeDefined();
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("TypeError");
-    expect(line?.errorKind).not.toBe("internal");
+    expect(line?.errorKind).toBe("internal");
+    expect(line?.extra?.failureKind).toBe("TypeError");
   });
 
   it("carries a failure's closed detail code onto the line (#3390, rehearsal run-20)", () => {
@@ -42,7 +39,8 @@ describe("prDescriptionProjection — logDescription errorKind", () => {
       new PrDescriptionFailure("provider-failed", { detail: "read-invalid-response" }),
     );
     const line = fixture.events.find((event) => event.op === "git.pr-description");
-    expect(line?.errorKind).toBe("PrDescriptionFailure");
+    expect(line?.errorKind).toBe("internal");
+    expect(line?.extra?.failureKind).toBe("PrDescriptionFailure");
     expect(line?.extra?.detail).toBe("read-invalid-response");
   });
 

@@ -529,7 +529,13 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
         expect.objectContaining({
           op: "git.delivery.authority.denied",
           correlationId: "commit-boundary",
-          extra: { operation: "commit", phase: "admission", reason: "verified-commit-required" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            phase: "admission",
+            reason: "verified-commit-required",
+          },
         }),
       );
       expect(JSON.stringify(sink.events)).not.toContain("add a thing");
@@ -733,6 +739,8 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
         correlationId: "717cfe41-510a-4f53-aa43-a48c6829452d",
         status: 403,
         extra: {
+          completeness: "complete",
+          loss: "none",
           operation: "branch-switch",
           phase: "admission",
           reason: "workspace-unresolvable",

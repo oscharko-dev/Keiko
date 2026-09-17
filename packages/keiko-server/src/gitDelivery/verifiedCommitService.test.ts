@@ -1193,6 +1193,8 @@ describe("productive runtime status/diff/stage lane", () => {
         op: "git.runtime-action",
         correlationId: "verified-commit-test",
         extra: {
+          completeness: "complete",
+          loss: "none",
           phase: "stage-propose",
           runId: "run-1",
           state: "refused",
@@ -1219,7 +1221,13 @@ describe("productive runtime status/diff/stage lane", () => {
       expect.objectContaining({
         op: "git.runtime-action",
         correlationId: UNKNOWN_CORRELATION_ID,
-        extra: { phase: "status", state: "refused", reason: "run-not-live" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          phase: "status",
+          state: "refused",
+          reason: "run-not-live",
+        },
       }),
     );
   });
@@ -1251,6 +1259,8 @@ describe("productive runtime status/diff/stage lane", () => {
         op: "git.runtime-action",
         correlationId: "verified-commit-test",
         extra: {
+          completeness: "complete",
+          loss: "none",
           phase: "stage-execute",
           runId: "run-1",
           state: "refused",
@@ -1327,6 +1337,8 @@ describe("productive runtime status/diff/stage lane", () => {
         op: "git.runtime-action",
         correlationId: "verified-commit-test",
         extra: {
+          completeness: "complete",
+          loss: "none",
           phase: "stage-propose",
           runId: "run-1",
           state: "refused",
@@ -1502,7 +1514,13 @@ describe("productive runtime status/diff/stage lane", () => {
       category: "process",
       op: "git.runtime-diff.search-bounded",
       correlationId: "verified-commit-test",
-      extra: { bound: "distance", oldLines: count, newLines: count },
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        bound: "distance",
+        oldLines: count,
+        newLines: count,
+      },
     };
     expect(events.filter((event) => event.op === line.op)).toEqual([
       expect.objectContaining(line),
@@ -1739,6 +1757,8 @@ describe("productive runtime status/diff/stage lane", () => {
         op: "git.runtime-action",
         correlationId: "verified-commit-test",
         extra: {
+          completeness: "complete",
+          loss: "none",
           phase: "stage-execute",
           runId: "run-1",
           state: "refused",
