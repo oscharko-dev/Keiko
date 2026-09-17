@@ -706,7 +706,13 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       op: "git.draft-related-issues",
       correlationId: "delivery-42",
     });
-    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "unavailable", count: 0 });
+    expect(f.events.at(-1)?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      runId: "run-42",
+      state: "unavailable",
+      count: 0,
+    });
     expect(vi.mocked(resolvedLinkedIssueNumbers)).not.toHaveBeenCalled();
   });
   it("returns unavailable and logs zero count when the freshly re-read issue has drifted", async () => {
@@ -718,7 +724,13 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       op: "git.draft-related-issues",
       correlationId: "delivery-42",
     });
-    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "unavailable", count: 0 });
+    expect(f.events.at(-1)?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      runId: "run-42",
+      state: "unavailable",
+      count: 0,
+    });
     expect(vi.mocked(resolvedLinkedIssueNumbers)).not.toHaveBeenCalled();
   });
   it("returns unavailable and logs the classified failure body-free when resolution throws", async () => {
@@ -734,6 +746,8 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       errorKind: "internal",
     });
     expect(f.events.at(-1)?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       runId: "run-42",
       state: "unavailable",
       count: 0,
@@ -759,6 +773,12 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       op: "git.draft-related-issues",
       correlationId: "delivery-42",
     });
-    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "resolved", count: 2 });
+    expect(f.events.at(-1)?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      runId: "run-42",
+      state: "resolved",
+      count: 2,
+    });
   });
 });

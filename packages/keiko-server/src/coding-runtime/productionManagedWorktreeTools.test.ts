@@ -220,6 +220,8 @@ describe("production managed worktree tools", () => {
           op: "coding-runtime.tool-result",
           correlationId: "run-verification-3",
           extra: {
+            completeness: "complete",
+            loss: "none",
             actionKind: "git-stage",
             proposalId: "stage-3384",
             state: "approval-wait-settled",
@@ -1204,7 +1206,14 @@ describe("production managed worktree tools", () => {
     expect(log).toContainEqual(
       expect.objectContaining({
         op: "coding-runtime.verification",
-        extra: { state: "not-run", stepCount: 1, steps: ["typecheck:script-missing"] },
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          state: "not-run",
+          stepCount: 1,
+          steps: ["typecheck:script-missing"],
+        },
       }),
     );
   });
@@ -1315,7 +1324,19 @@ describe("production managed worktree tools", () => {
       expect(log).toContainEqual(
         expect.objectContaining({
           op: "coding-runtime.verification",
-          extra: { state: "not-run", stepCount: 1, steps: [`typecheck:${reason}`] },
+          errorKind:
+            reason === "cancelled"
+              ? "cancelled"
+              : reason === "denied"
+                ? "authority-denied"
+                : "unavailable",
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            state: "not-run",
+            stepCount: 1,
+            steps: [`typecheck:${reason}`],
+          },
         }),
       );
     },
@@ -1406,6 +1427,8 @@ describe("production managed worktree tools", () => {
         op: "coding-runtime.verification",
         correlationId: "run-verification-3",
         extra: {
+          completeness: "complete",
+          loss: "none",
           state: "target-bound",
           verifierId: "targeted-test",
           targetCount: 1,
@@ -2003,6 +2026,8 @@ describe("production managed worktree tools", () => {
       expect.objectContaining({
         op: "coding-runtime.tool-result",
         extra: {
+          completeness: "complete",
+          loss: "none",
           actionKind: "commit",
           proposalId: "commit-3390-ready",
           state: "proposal-ready",

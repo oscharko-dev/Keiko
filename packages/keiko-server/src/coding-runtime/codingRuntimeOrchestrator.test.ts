@@ -2184,6 +2184,8 @@ describe("CodingRuntimeOrchestrator", () => {
         correlationId: runId,
         errorKind: "validation-failed",
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId,
           verificationEventId: "verification-1",
           verificationKind: "targeted-test",
@@ -2201,6 +2203,8 @@ describe("CodingRuntimeOrchestrator", () => {
         op: "coding-runtime.verification-summarized",
         correlationId: runId,
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId,
           verificationEventId: "verification-2",
           verificationKind: "targeted-test",
@@ -2320,6 +2324,8 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(event.category).toBe("process");
     expect(event.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(event.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       runId: "run-1",
       revision: 5,
       requestId: "permission-7",
@@ -4018,7 +4024,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(refused).toMatchObject({
       category: "process",
       level: "warn",
-      correlationId: "run-1",
+      correlationId: UNKNOWN_CORRELATION_ID,
       extra: { runId: "run-1", stage: "admission" },
     });
     expect(JSON.stringify(captured.records)).not.toContain(ISSUE_REF);
@@ -4067,8 +4073,10 @@ describe("issue-bound runs (#3385)", () => {
     expect(attached).toEqual({
       category: "process",
       op: "coding-runtime.run.issue-context-attached",
-      correlationId: "run-1",
+      correlationId: UNKNOWN_CORRELATION_ID,
       extra: {
+        completeness: "complete",
+        loss: "none",
         runId: "run-1",
         issueNumber: 3385,
         itemCount: 1,
@@ -4133,7 +4141,7 @@ describe("issue-bound runs (#3385)", () => {
         captured.records.find((event) => event.op === "coding-runtime.run.issue-binding-refused"),
       ).toMatchObject({
         category: "process",
-        correlationId: "run-1",
+        correlationId: UNKNOWN_CORRELATION_ID,
         extra: { runId: "run-1", stage: "resolution", issueBindingFailure: failure },
       });
     },
@@ -4158,7 +4166,13 @@ describe("issue-bound runs (#3385)", () => {
     const refused = captured.records.find(
       (event) => event.op === "coding-runtime.run.issue-binding-refused",
     );
-    expect(refused?.errorKind).toBe("Error");
+    expect(refused?.errorKind).toBe("internal");
+    expect(refused?.extra).toMatchObject({
+      completeness: "complete",
+      loss: "none",
+      frames: expect.any(Array) as unknown,
+      causeChain: expect.any(Array) as unknown,
+    });
     expect(JSON.stringify(captured.records)).not.toContain("/Users/private");
   });
 
@@ -4396,7 +4410,7 @@ describe("issue-bound runs (#3385)", () => {
       captured.records.find(
         (event) =>
           event.op === "coding-runtime.run.issue-context-attached" &&
-          event.correlationId === "run-2",
+          event.extra?.runId === "run-2",
       ),
     ).toMatchObject({ extra: { runId: "run-2", issueNumber: 3385 } });
   });
@@ -4423,7 +4437,7 @@ describe("issue-bound runs (#3385)", () => {
       captured.records.find(
         (event) =>
           event.op === "coding-runtime.run.issue-context-attached" &&
-          event.correlationId === "run-2",
+          event.extra?.runId === "run-2",
       ),
     ).toBeDefined();
   });

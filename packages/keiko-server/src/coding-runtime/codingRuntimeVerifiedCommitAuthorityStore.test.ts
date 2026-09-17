@@ -7,6 +7,7 @@ import { buildBinding } from "../task-workspace/binding.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { MIGRATIONS, runMigrations } from "../store/schema.js";
@@ -182,8 +183,10 @@ describe("retained verified HEAD authority", () => {
     expect(log).toHaveBeenCalledWith(
       expect.objectContaining({
         op: "git.verified-commit.authority",
-        correlationId: "run-1",
+        correlationId: UNKNOWN_CORRELATION_ID,
         extra: {
+          completeness: "complete",
+          loss: "none",
           phase: "retained",
           runId: "run-1",
           proposalId: "commit-1",
@@ -198,7 +201,7 @@ describe("retained verified HEAD authority", () => {
     const diagnostic = log.mock.calls.at(-1)?.[0];
     expect(diagnostic).toMatchObject({
       op: "git.verified-commit.authority",
-      correlationId: "run-1",
+      correlationId: UNKNOWN_CORRELATION_ID,
       errorKind: "internal",
       extra: { phase: "read", runId: "run-1" },
     });

@@ -366,7 +366,7 @@ describe("dev-lane runtime process backend", () => {
       level: "info",
       op: "runtime.confinement.unavailable",
       correlationId: "run-2475",
-      extra: LINUX_IDENTITY,
+      extra: { ...LINUX_IDENTITY, completeness: "complete", loss: "none" },
     });
   });
 

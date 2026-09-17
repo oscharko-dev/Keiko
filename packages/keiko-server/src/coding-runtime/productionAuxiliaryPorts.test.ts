@@ -597,6 +597,8 @@ describe("approved skill discovery through the production ports (#3417)", () => 
         op: "coding-runtime.skill-discovery",
         correlationId: "run-2387",
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId: "run-2387",
           catalogRevision: 1,
           catalogDigest: catalog.digest(),

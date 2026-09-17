@@ -443,7 +443,13 @@ describe("CodingRuntimeOperationCoordinator", () => {
       level: "info",
       op: "coding-runtime.question.list-revision-rebound",
       correlationId: "question-list-correlation",
-      extra: { runId: "run-1", expectedRevision: 22, currentRevision: 23 },
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        runId: "run-1",
+        expectedRevision: 22,
+        currentRevision: 23,
+      },
     });
     expect(JSON.stringify(activityLog.events)).not.toContain("private-question-sentinel");
     await expect(

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EditorAgentSessionSnapshot, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { createNodeEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryUiStore } from "../store/index.js";
@@ -99,7 +100,7 @@ describe("production verified commit dependencies", () => {
     expect(verifiedCommitBuffersClean(deps, root, "run-1")).toBe(false);
     expect(events.at(-1)).toMatchObject({
       op: "git.delivery.buffers.checked",
-      correlationId: "run-1",
+      correlationId: UNKNOWN_CORRELATION_ID,
       level: "warn",
       extra: { state: "blocked", editorSessionCount: 1, dirtySessionCount: 1 },
     });

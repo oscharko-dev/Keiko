@@ -232,7 +232,13 @@ describe("CodingToolGovernedDelegate", () => {
           correlationId: UNKNOWN_CORRELATION_ID,
           level: "warn",
           errorKind: "authority-denied",
-          extra: { actionKind: "read", state: "discarded", reason: "authority-denied" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            actionKind: "read",
+            state: "discarded",
+            reason: "authority-denied",
+          },
         },
       ]);
       expect(redactLogFields(events[0]?.extra ?? {})).toEqual(events[0]?.extra);

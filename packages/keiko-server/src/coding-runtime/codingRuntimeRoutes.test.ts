@@ -406,11 +406,18 @@ describe("coding runtime routes", () => {
         level: "warn",
         category: "process",
         op: "coding-runtime.operation.refused",
+        errorKind: "invalid-request",
         // The fixture's context() carries no correlation id; the log line must still fall back to
         // the sanctioned UNKNOWN_CORRELATION_ID rather than silently omitting the field
         // (AGENTS.md §8 rule 1).
         correlationId: UNKNOWN_CORRELATION_ID,
-        extra: { operation: "answer", runId: "run-1", reason: "invalid-intent" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "answer",
+          runId: "run-1",
+          reason: "invalid-intent",
+        },
       }),
     ]);
   });
@@ -449,8 +456,15 @@ describe("coding runtime routes", () => {
     expect(records).toEqual([
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
+        errorKind: "rate-limited",
         correlationId: UNKNOWN_CORRELATION_ID,
-        extra: { operation: "answer", runId: "run-1", reason: "replay-cap-exhausted" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "answer",
+          runId: "run-1",
+          reason: "replay-cap-exhausted",
+        },
       }),
     ]);
   });
@@ -486,8 +500,15 @@ describe("coding runtime routes", () => {
     expect(records).toEqual([
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
+        errorKind: "authority-denied",
         correlationId: "start-corr-1",
-        extra: { operation: "start", runId: "run-9", reason: "authority-resolution-failed" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "start",
+          runId: "run-9",
+          reason: "authority-resolution-failed",
+        },
       }),
     ]);
   });
@@ -529,8 +550,11 @@ describe("coding runtime routes", () => {
     expect(records).toEqual([
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
+        errorKind: "authority-denied",
         correlationId: "retry-corr-1",
         extra: {
+          completeness: "complete",
+          loss: "none",
           operation: "retry",
           runId: "run-1-successor",
           reason: "authority-resolution-failed",
@@ -578,7 +602,12 @@ describe("coding runtime routes", () => {
     expect(records).toContainEqual(
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
-        extra: { operation: "answer", runId: "run-1", reason: "question-answer-rejected" },
+        errorKind: "invalid-request",
+        extra: expect.objectContaining({
+          operation: "answer",
+          runId: "run-1",
+          reason: "question-answer-rejected",
+        }) as unknown,
       }),
     );
     expect(JSON.stringify(records)).not.toContain("free text");
@@ -1592,8 +1621,14 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
         level: "warn",
         category: "process",
         op: "coding-runtime.operation.refused",
+        errorKind: "authority-denied",
         correlationId: "unpaired-start-correlation",
-        extra: { operation: "start", reason: "authority-resolution-failed" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "start",
+          reason: "authority-resolution-failed",
+        },
       }),
     ]);
     expect(JSON.stringify(records)).not.toContain("secret");
@@ -1642,10 +1677,16 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
           level: "warn",
           category: "process",
           op: "coding-runtime.operation.refused",
+          errorKind: "authority-denied",
           correlationId: `unpaired-${operation}-correlation`,
           // No runId: the precheck fails before a per-run identifier is resolved, matching the
           // unpaired-start log shape above.
-          extra: { operation, reason: "authority-resolution-failed" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation,
+            reason: "authority-resolution-failed",
+          },
         }),
       ]);
     },

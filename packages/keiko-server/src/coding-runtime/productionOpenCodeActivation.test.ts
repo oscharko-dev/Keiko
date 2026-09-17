@@ -152,7 +152,12 @@ describe("production OpenCode activation", () => {
         correlationId: UNKNOWN_CORRELATION_ID,
         level: "warn",
         errorKind: "unavailable",
-        extra: { lane: "dev-checkout", reason: "payload-missing" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          lane: "dev-checkout",
+          reason: "payload-missing",
+        },
       },
     ]);
   });

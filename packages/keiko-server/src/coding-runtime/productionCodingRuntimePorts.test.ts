@@ -1143,7 +1143,11 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
           category: "security",
           op: "pr-description.workbench.egress.denied",
           errorKind: "authority-denied",
-          extra: { reason: "authority-expired" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            reason: "authority-expired",
+          },
         }),
       );
     } finally {

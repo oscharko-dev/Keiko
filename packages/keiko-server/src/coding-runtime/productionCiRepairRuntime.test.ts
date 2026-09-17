@@ -443,7 +443,10 @@ describe("production CI repair accounting availability", () => {
       expect.objectContaining({
         op: "git.ci-repair.budget",
         correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: "rate-limited",
         extra: {
+          completeness: "complete",
+          loss: "none",
           phase: "admission",
           state: "blocked",
           reason: "ci-observation-required",
