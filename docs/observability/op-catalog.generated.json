@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "580584a2d5040d5b1ee5a291b2b3be612a93beab74af2714cca5b2b91436719c",
+    "catalogDigest": "9ddb99bb5ad311309574f7b9df24f9a2a50f4d693af29c6ec1cad385156eec92",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -1914,6 +1914,83 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/server.ts:470",
         "emitterSites": ["packages/keiko-server/src/server.ts:563"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "search.rerank.completed",
+        "category": "search",
+        "owner": "keiko-server",
+        "emitter": "grounded-rerank-facade.logRerankOutcome",
+        "fields": {
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["disabled", "denied", "unavailable", "invalid-response", "applied"]
+          },
+          "mode": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["none", "local-only", "provider-backed"]
+          },
+          "candidateCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "documentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "keptCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "transportLatencyMs": {
+            "type": "number",
+            "dataClass": "duration",
+            "required": false
+          },
+          "fallbackMode": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["slice-topN", "identity"]
+          },
+          "topN": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["rerank-degradation"],
+        "proofIds": ["search.rerank.completed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/grounded-rerank-facade.ts:30",
+        "emitterSites": ["packages/keiko-server/src/grounded-rerank-facade.ts:428"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -6185,7 +6262,7 @@
     {
       "op": "search.rerank.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-rerank-facade.ts:357",
+      "site": "packages/keiko-server/src/grounded-rerank-facade.ts:33",
       "package": "keiko-server"
     },
     {
