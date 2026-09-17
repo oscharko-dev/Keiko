@@ -2,12 +2,16 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -312,6 +316,88 @@ describe("runSupportCli export", () => {
     expect(written).not.toContain(HEALTHY_AUDIT.stateDir);
   });
 
+  it("refuses to replace a pre-existing support report or create its integrity sidecar", async () => {
+    const outPath = join(outDir, "existing-report.jsonl");
+    writeFileSync(outPath, "operator-owned\n", { mode: 0o640 });
+    chmodSync(outPath, 0o640);
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(1);
+    expect(readFileSync(outPath, "utf8")).toBe("operator-owned\n");
+    expect(existsSync(`${outPath}.sha256`)).toBe(false);
+    expect(c.err()).toContain("could not write the bundle: target-exists");
+    expect(c.err()).not.toContain(outPath);
+    const failure = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((record) => record.op === "support.export.publication");
+    expect(failure).toMatchObject({
+      errorKind: "target-exists",
+      publicationArtifactClass: "support-report",
+      publicationPersistenceStatus: "failed",
+      publicationCompleteness: "partial",
+      publicationLoss: "none",
+    });
+    expect(String(failure?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("refuses unsafe report targets without changing their victim", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const victim = join(outDir, "victim.txt");
+    writeFileSync(victim, "operator-owned\n", { mode: 0o640 });
+    chmodSync(victim, 0o640);
+
+    for (const kind of ["symlink", "hard-link", "fifo"] as const) {
+      const outPath = join(outDir, `${kind}.jsonl`);
+      if (kind === "symlink") symlinkSync(victim, outPath);
+      else if (kind === "hard-link") linkSync(victim, outPath);
+      else execFileSync("mkfifo", [outPath]);
+      const c = makeIo();
+
+      const code = await runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        c.io,
+        AUDIT_ENV,
+        { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+      );
+
+      expect(code).toBe(1);
+      expect(readFileSync(victim, "utf8")).toBe("operator-owned\n");
+      expect(statSync(victim).mode & 0o777).toBe(0o640);
+      expect(existsSync(`${outPath}.sha256`)).toBe(false);
+      expect(c.err()).toContain("could not write the bundle: target-exists");
+      expect(c.err()).not.toContain(outPath);
+      rmSync(outPath);
+    }
+  });
+
+  it("does not publish a report when the integrity destination already exists", async () => {
+    const outPath = join(outDir, "sidecar-conflict.jsonl");
+    const sidecarPath = `${outPath}.sha256`;
+    writeFileSync(sidecarPath, "operator-integrity\n", { mode: 0o600 });
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(1);
+    expect(existsSync(outPath)).toBe(false);
+    expect(readFileSync(sidecarPath, "utf8")).toBe("operator-integrity\n");
+    expect(c.err()).toContain("could not write the bundle: target-exists");
+  });
+
   // Regression pin: `redactLogFields`'s field-NAME denylist matches only an exact normalized
   // whole name (`log-redaction.ts`'s `DENIED_FIELD_NAMES`/`normalizeLogFieldName`). Every
   // config-snapshot field name is collected with the literal `KEIKO_` prefix still attached
@@ -575,9 +661,8 @@ describe("runSupportCli export", () => {
     );
 
     expect(code).toBe(1);
-    // The fs error's `code` (ENOENT here — the parent directory does not exist), never its
-    // `constructor.name` (always just "Error" for a Node fs error, so it told an operator nothing).
-    expect(c.err()).toContain("keiko support export: could not write the bundle: ENOENT");
+    // The hardened publisher classifies the missing trusted parent without exposing its path.
+    expect(c.err()).toContain("keiko support export: could not write the bundle: unsafe-ancestor");
     expect(c.err()).not.toContain(badOutPath);
     expect(existsSync(badOutPath)).toBe(false);
   });
@@ -824,6 +909,41 @@ describe("runSupportCli export", () => {
     expect(existsSync(sidecarPath)).toBe(true);
     const expectedDigest = createHash("sha256").update(readFileSync(outPath)).digest("hex");
     expect(readFileSync(sidecarPath, "utf8").trim()).toBe(expectedDigest);
+    if (process.platform !== "win32") {
+      expect(statSync(outPath).mode & 0o777).toBe(0o600);
+      expect(statSync(sidecarPath).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("records body-free support publication evidence with correlation and assurance", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "evidence.jsonl");
+
+    expect(
+      await runSupportCli(["export", "--state-dir", stateDir, "--out", outPath], c.io, AUDIT_ENV, {
+        auditDeps: healthyAuditDeps(),
+        evidenceStore: createInMemoryEvidenceStore(),
+      }),
+    ).toBe(0);
+
+    const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const publication = records.find((record) => record.op === "support.export.publication");
+    expect(publication).toMatchObject({
+      category: "diagnostic",
+      publicationArtifactClass: "support-report",
+      artifactCount: 2,
+      publicationPersistenceStatus: "published",
+      publicationStatus: "published",
+      permissionAssurance: process.platform === "win32" ? "platform-inherited" : "verified-private",
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
+      publicationCompleteness: "complete",
+      publicationLoss: "none",
+    });
+    expect(String(publication?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.stringify(publication)).not.toContain(outPath);
   });
 
   // `readUiLogContentOrUndefined`'s catch path: BOTH consent flags are given, but no ui.log file

@@ -26,7 +26,7 @@ import {
   writeSync,
 } from "node:fs";
 import type { BigIntStats } from "node:fs";
-import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 // Owner-only directory: rwx for the owner, nothing for group/other.
 export const DIR_MODE = 0o700;
@@ -527,6 +527,7 @@ export interface SafeArtifactPublicationEntry {
 
 export interface SafeArtifactPublicationOptions {
   readonly commitPath: string;
+  readonly publicationSlot?: string;
   readonly trustedRoot: string;
 }
 
@@ -535,6 +536,26 @@ export interface SafeArtifactPublicationResult {
   readonly permissionAssurance: SafeArtifactPermissionAssurance;
   readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
 }
+
+export interface SafeArtifactRecoveryOptions {
+  readonly publicationSlot: string;
+  readonly trustedRoot: string;
+}
+
+export type SafeArtifactRecoveryResult =
+  | { readonly status: "none" }
+  | {
+      readonly status: "recovered";
+      readonly commitPath: string;
+      readonly artifactCount: number;
+      readonly permissionAssurance: SafeArtifactPermissionAssurance;
+      readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
+    }
+  | {
+      readonly status: "rolled-back";
+      readonly permissionAssurance: SafeArtifactPermissionAssurance;
+      readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
+    };
 
 export interface ReplaceSafeArtifactFileOptions {
   readonly artifactClass: SafeArtifactClass;
@@ -547,6 +568,35 @@ interface PreparedPublicationEntry {
   readonly bytes: Buffer;
   readonly artifactClass: SafeArtifactClass;
   readonly trustedRoot: string;
+}
+
+interface PublicationIntentEntry {
+  readonly name: string;
+  readonly artifactClass: SafeArtifactClass;
+  readonly byteCount: number;
+  readonly sha256: string;
+}
+
+interface PublicationIntent {
+  readonly schemaVersion: 1;
+  readonly commitIndex: number;
+  readonly entries: readonly PublicationIntentEntry[];
+}
+
+const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
+const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+const MAX_PUBLICATION_ENTRIES = 16;
+const MAX_RECOVERY_ARTIFACT_BYTES = 256 * 1024 * 1024;
+const MAX_PUBLICATION_INTENT_BYTES = 64 * 1024;
+
+function validatePublicationSlot(slot: string, artifactClass: SafeArtifactClass): void {
+  if (!PUBLICATION_SLOT_PATTERN.test(slot)) {
+    throw safeFileError(artifactClass, "invalid-publication");
+  }
+}
+
+function intentPath(trustedRoot: string, slot: string): string {
+  return join(resolve(trustedRoot), `.keiko-publish-${slot}.intent`);
 }
 
 function publicationId(
@@ -576,13 +626,24 @@ function publicationId(
   return hash.digest("hex").slice(0, 24);
 }
 
+/** Returns a body-free stable slot identifier for one publication namespace and destination. */
+export function safeArtifactPublicationSlot(namespace: string, destinationKey: string): string {
+  return createHash("sha256")
+    .update(namespace)
+    .update("\0")
+    .update(resolve(destinationKey))
+    .digest("hex")
+    .slice(0, 24);
+}
+
 function preparePublicationEntries(
   entries: readonly SafeArtifactPublicationEntry[],
   commitPath: string,
   trustedRoot: string,
+  fixedSlot?: string,
 ): readonly PreparedPublicationEntry[] {
   const parent = dirname(resolve(commitPath));
-  const id = publicationId(entries, commitPath);
+  const id = fixedSlot ?? publicationId(entries, commitPath);
   const ordered = [...entries].sort((left, right) =>
     resolve(left.path).localeCompare(resolve(right.path)),
   );
@@ -596,6 +657,81 @@ function preparePublicationEntries(
     artifactClass: entry.artifactClass,
     trustedRoot: resolve(trustedRoot),
   }));
+}
+
+function publicationDigest(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function publicationIntent(
+  entries: readonly PreparedPublicationEntry[],
+  commitPath: string,
+): PublicationIntent {
+  const resolvedCommit = resolve(commitPath);
+  const commitIndex = entries.findIndex((entry) => entry.path === resolvedCommit);
+  return {
+    schemaVersion: 1,
+    commitIndex,
+    entries: entries.map((entry) => ({
+      name: basename(entry.path),
+      artifactClass: entry.artifactClass,
+      byteCount: entry.bytes.length,
+      sha256: publicationDigest(entry.bytes),
+    })),
+  };
+}
+
+function intentBytes(intent: PublicationIntent): Buffer {
+  return Buffer.from(`${JSON.stringify(intent)}\n`, "utf8");
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isIntentEntry(value: unknown): value is PublicationIntentEntry {
+  if (!isRecord(value)) return false;
+  const name = value.name;
+  const byteCount = value.byteCount;
+  return (
+    typeof name === "string" &&
+    name !== "." &&
+    name !== ".." &&
+    basename(name) === name &&
+    !name.startsWith(".keiko-publish-") &&
+    isSafeArtifactClass(value.artifactClass) &&
+    typeof byteCount === "number" &&
+    Number.isSafeInteger(byteCount) &&
+    byteCount >= 0 &&
+    byteCount <= MAX_RECOVERY_ARTIFACT_BYTES &&
+    typeof value.sha256 === "string" &&
+    PUBLICATION_DIGEST_PATTERN.test(value.sha256)
+  );
+}
+
+function parsedPublicationIntent(value: unknown): PublicationIntent | undefined {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.entries)) {
+    return undefined;
+  }
+  if (value.entries.length === 0 || value.entries.length > MAX_PUBLICATION_ENTRIES) return undefined;
+  if (!value.entries.every(isIntentEntry)) return undefined;
+  if (
+    typeof value.commitIndex !== "number" ||
+    !Number.isSafeInteger(value.commitIndex) ||
+    value.commitIndex < 0 ||
+    value.commitIndex >= value.entries.length
+  ) {
+    return undefined;
+  }
+  const comparisonNames = value.entries.map((entry) =>
+    filesystemComparisonPath(join("/", entry.name)),
+  );
+  if (new Set(comparisonNames).size !== comparisonNames.length) return undefined;
+  return {
+    schemaVersion: 1,
+    commitIndex: value.commitIndex,
+    entries: value.entries,
+  };
 }
 
 function filesystemComparisonPath(path: string): string {
@@ -621,6 +757,15 @@ function validatePublication(
     parents.size !== 1
   ) {
     throw safeFileError(fallbackClass, "invalid-publication");
+  }
+  if (entries.length > MAX_PUBLICATION_ENTRIES) {
+    throw safeFileError(fallbackClass, "invalid-publication");
+  }
+  if (options.publicationSlot !== undefined) {
+    validatePublicationSlot(options.publicationSlot, fallbackClass);
+    if (!sameFilesystemPath(dirname(resolvedCommit), resolve(options.trustedRoot))) {
+      throw safeFileError(fallbackClass, "invalid-publication");
+    }
   }
   for (const path of paths) containedDirectories(options.trustedRoot, path, fallbackClass);
 }
@@ -693,6 +838,80 @@ function syncDirectory(
   return assurance;
 }
 
+function createPublicationIntent(
+  path: string,
+  bytes: Buffer,
+  artifactClass: SafeArtifactClass,
+  trustedRoot: string,
+): SafeArtifactDurabilityAssurance {
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass,
+    mode: "exclusive-create",
+    trustedRoot,
+  });
+  try {
+    writeAll(descriptor, bytes, artifactClass);
+    syncArtifactDescriptor(descriptor, artifactClass);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    throw error;
+  }
+  closeArtifactDescriptor(descriptor, artifactClass);
+  return syncDirectory(dirname(path), trustedRoot, artifactClass);
+}
+
+function readPublicationIntent(path: string, trustedRoot: string): PublicationIntent {
+  const artifactClass = "manifest";
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass,
+    mode: "read",
+    trustedRoot,
+  });
+  try {
+    const stat = fstatSync(descriptor, { bigint: true });
+    if (stat.size <= 0n || stat.size > BigInt(MAX_PUBLICATION_INTENT_BYTES)) {
+      throw safeFileError(artifactClass, "recovery-conflict");
+    }
+    const buffer = Buffer.alloc(Number(stat.size) + 1);
+    const count = readIntoBuffer(descriptor, buffer, artifactClass);
+    verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
+    if (count !== Number(stat.size)) throw safeFileError(artifactClass, "recovery-conflict");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(buffer.subarray(0, count).toString("utf8")) as unknown;
+    } catch {
+      throw safeFileError(artifactClass, "recovery-conflict");
+    }
+    const intent = parsedPublicationIntent(parsed);
+    if (intent === undefined) throw safeFileError(artifactClass, "recovery-conflict");
+    return intent;
+  } finally {
+    closeArtifactDescriptor(descriptor, artifactClass);
+  }
+}
+
+function removePublicationIntent(
+  path: string,
+  trustedRoot: string,
+  artifactClass: SafeArtifactClass,
+): SafeArtifactDurabilityAssurance {
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass,
+    mode: "read",
+    trustedRoot,
+  });
+  try {
+    verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
+    unlinkSync(path);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "publish-failed");
+  }
+  closeArtifactDescriptor(descriptor, artifactClass);
+  return syncDirectory(dirname(path), trustedRoot, artifactClass);
+}
+
 function readExactPrivateFile(
   path: string,
   expected: Buffer,
@@ -732,6 +951,81 @@ function readIntoBuffer(
     return offset;
   } catch {
     throw safeFileError(artifactClass, "read-failed");
+  }
+}
+
+function recoveryStatIsSafe(stat: BigIntStats): boolean {
+  return (
+    stat.isFile() &&
+    !stat.isSymbolicLink() &&
+    (stat.nlink === 1n || stat.nlink === 2n) &&
+    permissionIsPrivate(stat.mode)
+  );
+}
+
+function recoveryPathStat(path: string, artifactClass: SafeArtifactClass): BigIntStats {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (!recoveryStatIsSafe(stat)) throw safeFileError(artifactClass, "recovery-conflict");
+    return stat;
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "recovery-conflict");
+  }
+}
+
+function openRecoveryDescriptor(path: string, artifactClass: SafeArtifactClass): number {
+  const noFollow = noFollowFlag();
+  const nonBlocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+  if (noFollow === 0) refuseSymlinkFallback(path, artifactClass);
+  try {
+    return openSync(path, constants.O_RDWR | noFollow | nonBlocking);
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "read-failed");
+  }
+}
+
+function sameRecoveryIdentity(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.nlink === right.nlink;
+}
+
+function readRecoveryBytes(
+  path: string,
+  expected: PublicationIntentEntry,
+  trustedRoot: string,
+): Buffer {
+  const guards = captureDirectoryGuards(trustedRoot, path, expected.artifactClass);
+  const before = recoveryPathStat(path, expected.artifactClass);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openRecoveryDescriptor(path, expected.artifactClass);
+    const opened = fstatSync(descriptor, { bigint: true });
+    if (!recoveryStatIsSafe(opened) || !sameRecoveryIdentity(before, opened)) {
+      throw safeFileError(expected.artifactClass, "recovery-conflict");
+    }
+    const bytes = Buffer.alloc(expected.byteCount + 1);
+    const count = readIntoBuffer(descriptor, bytes, expected.artifactClass);
+    const after = recoveryPathStat(path, expected.artifactClass);
+    const finalOpened = fstatSync(descriptor, { bigint: true });
+    if (
+      count !== expected.byteCount ||
+      publicationDigest(bytes.subarray(0, count)) !== expected.sha256 ||
+      !sameRecoveryIdentity(opened, finalOpened) ||
+      !sameRecoveryIdentity(finalOpened, after) ||
+      !guards.every(directoryGuardStillMatches)
+    ) {
+      throw safeFileError(expected.artifactClass, "recovery-conflict");
+    }
+    closeArtifactDescriptor(descriptor, expected.artifactClass);
+    descriptor = undefined;
+    closeDirectoryGuards(guards, expected.artifactClass);
+    return bytes.subarray(0, count);
+  } catch (error) {
+    if (descriptor !== undefined) closeDescriptorIgnoringErrors(descriptor);
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(expected.artifactClass, "read-failed");
   }
 }
 
@@ -1065,6 +1359,220 @@ function publicationArtifactClass(entries: readonly PreparedPublicationEntry[]):
   return entries[0]?.artifactClass ?? "manifest";
 }
 
+function completePreparedPublication(
+  prepared: readonly PreparedPublicationEntry[],
+  options: SafeArtifactPublicationOptions,
+  recovering: boolean,
+): SafeArtifactPublicationResult {
+  for (const entry of prepared) ensurePreparedStage(entry, recovering);
+  const parent = dirname(resolve(options.commitPath));
+  const preparedAssurance = syncDirectory(
+    parent,
+    options.trustedRoot,
+    publicationArtifactClass(prepared),
+  );
+  const ordered = orderedForCommit(prepared, options.commitPath);
+  for (const entry of ordered) publishPreparedEntry(entry, recovering);
+  const publishedAssurance = syncDirectory(
+    parent,
+    options.trustedRoot,
+    publicationArtifactClass(prepared),
+  );
+  const cleanupAssurance = cleanupPublishedStages(ordered, parent);
+  return {
+    status: recovering ? "recovered" : "published",
+    permissionAssurance: safeArtifactPermissionAssurance(),
+    durabilityAssurance: combineDurabilityAssurance(
+      preparedAssurance,
+      publishedAssurance,
+      cleanupAssurance,
+    ),
+  };
+}
+
+function removeIntentPublicationStages(
+  prepared: readonly PreparedPublicationEntry[],
+): SafeArtifactDurabilityAssurance {
+  const assurances: SafeArtifactDurabilityAssurance[] = [];
+  for (const entry of prepared) {
+    if (!pathExists(entry.stagePath, entry.artifactClass)) continue;
+    if (!readExactPrivateFile(entry.stagePath, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+    removeVerifiedStage(entry);
+    assurances.push("verified");
+  }
+  return combineDurabilityAssurance(...assurances);
+}
+
+function rollbackIntentPublication(
+  prepared: readonly PreparedPublicationEntry[],
+  markerPath: string,
+): SafeArtifactDurabilityAssurance {
+  if (publicationHasPath(prepared, "path")) {
+    throw safeFileError(publicationArtifactClass(prepared), "recovery-conflict");
+  }
+  const stages = removeIntentPublicationStages(prepared);
+  const marker = removePublicationIntent(
+    markerPath,
+    prepared[0]?.trustedRoot ?? dirname(markerPath),
+    publicationArtifactClass(prepared),
+  );
+  return combineDurabilityAssurance(stages, marker);
+}
+
+function publishIntentFileSet(
+  entries: readonly SafeArtifactPublicationEntry[],
+  options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
+): SafeArtifactPublicationResult {
+  const prepared = preparePublicationEntries(
+    entries,
+    options.commitPath,
+    options.trustedRoot,
+    options.publicationSlot,
+  );
+  const markerPath = intentPath(options.trustedRoot, options.publicationSlot);
+  if (pathExists(markerPath, publicationArtifactClass(prepared))) {
+    throw safeFileError(publicationArtifactClass(prepared), "recovery-conflict");
+  }
+  const markerAssurance = createPublicationIntent(
+    markerPath,
+    intentBytes(publicationIntent(prepared, options.commitPath)),
+    publicationArtifactClass(prepared),
+    options.trustedRoot,
+  );
+  let result: SafeArtifactPublicationResult;
+  try {
+    result = completePreparedPublication(prepared, options, false);
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError && error.kind === "publish-unsupported") {
+      rollbackIntentPublication(prepared, markerPath);
+    }
+    throw error;
+  }
+  const intentCleanup = removePublicationIntent(
+    markerPath,
+    options.trustedRoot,
+    publicationArtifactClass(prepared),
+  );
+  return {
+    ...result,
+    durabilityAssurance: combineDurabilityAssurance(
+      markerAssurance,
+      result.durabilityAssurance,
+      intentCleanup,
+    ),
+  };
+}
+
+function preparedRecoveryEntries(
+  intent: PublicationIntent,
+  trustedRoot: string,
+  slot: string,
+): readonly PreparedPublicationEntry[] {
+  const root = resolve(trustedRoot);
+  const targetPresence = intent.entries.map((entry) =>
+    pathExists(join(root, entry.name), entry.artifactClass),
+  );
+  const stagePresence = intent.entries.map((entry, index) =>
+    pathExists(join(root, `.keiko-publish-${slot}-${String(index)}.stage`), entry.artifactClass),
+  );
+  const allTargetsPresent = targetPresence.every(Boolean);
+  if (targetPresence.some(Boolean) && !allTargetsPresent) {
+    for (let index = 0; index < intent.entries.length; index += 1) {
+      if (!targetPresence[index] && !stagePresence[index]) {
+        throw safeFileError(intent.entries[index]?.artifactClass ?? "manifest", "recovery-conflict");
+      }
+    }
+  }
+  return intent.entries.map((entry, index) => {
+    const path = join(root, entry.name);
+    const stagePath = join(root, `.keiko-publish-${slot}-${String(index)}.stage`);
+    const hasTarget = targetPresence[index] === true;
+    const hasStage = stagePresence[index] === true;
+    if (!hasTarget && !hasStage) throw safeFileError(entry.artifactClass, "recovery-conflict");
+    if (hasTarget && hasStage && !samePathNode(path, stagePath)) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+    const bytes = readRecoveryBytes(hasStage ? stagePath : path, entry, root);
+    if (hasTarget && hasStage) readRecoveryBytes(path, entry, root);
+    return { path, stagePath, bytes, artifactClass: entry.artifactClass, trustedRoot: root };
+  });
+}
+
+function rollbackIncompleteIntent(
+  intent: PublicationIntent,
+  trustedRoot: string,
+  slot: string,
+  markerPath: string,
+): SafeArtifactDurabilityAssurance {
+  const root = resolve(trustedRoot);
+  const present = intent.entries.flatMap((entry, index) => {
+    const stagePath = join(root, `.keiko-publish-${slot}-${String(index)}.stage`);
+    if (!pathExists(stagePath, entry.artifactClass)) return [];
+    const bytes = readRecoveryBytes(stagePath, entry, root);
+    return [{ path: join(root, entry.name), stagePath, bytes, artifactClass: entry.artifactClass, trustedRoot: root }];
+  });
+  return rollbackIntentPublication(present, markerPath);
+}
+
+/** Recovers or safely rolls back the bounded transaction named by a durable publication slot. */
+export function recoverSafeArtifactFileSet(
+  options: SafeArtifactRecoveryOptions,
+): SafeArtifactRecoveryResult {
+  validatePublicationSlot(options.publicationSlot, "manifest");
+  const root = resolve(options.trustedRoot);
+  const markerPath = intentPath(root, options.publicationSlot);
+  if (!pathExists(markerPath, "manifest")) return { status: "none" };
+  const intent = readPublicationIntent(markerPath, root);
+  const targetCount = intent.entries.filter((entry) =>
+    pathExists(join(root, entry.name), entry.artifactClass),
+  ).length;
+  const stageCount = intent.entries.filter((entry, index) =>
+    pathExists(join(root, `.keiko-publish-${options.publicationSlot}-${String(index)}.stage`), entry.artifactClass),
+  ).length;
+  if (targetCount === 0 && stageCount < intent.entries.length) {
+    const durabilityAssurance = rollbackIncompleteIntent(
+      intent,
+      root,
+      options.publicationSlot,
+      markerPath,
+    );
+    return {
+      status: "rolled-back",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance,
+    };
+  }
+  const prepared = preparedRecoveryEntries(intent, root, options.publicationSlot);
+  const commit = prepared[intent.commitIndex];
+  if (commit === undefined) throw safeFileError("manifest", "recovery-conflict");
+  const result = completePreparedPublication(
+    prepared,
+    {
+      commitPath: commit.path,
+      publicationSlot: options.publicationSlot,
+      trustedRoot: root,
+    },
+    true,
+  );
+  const intentCleanup = removePublicationIntent(
+    markerPath,
+    root,
+    publicationArtifactClass(prepared),
+  );
+  return {
+    status: "recovered",
+    commitPath: commit.path,
+    artifactCount: prepared.length,
+    permissionAssurance: result.permissionAssurance,
+    durabilityAssurance: combineDurabilityAssurance(
+      result.durabilityAssurance,
+      intentCleanup,
+    ),
+  };
+}
+
 /**
  * Publishes related files without replacement; the designated commit artifact appears last.
  * Filesystems without same-directory hard links fail closed as `publish-unsupported`.
@@ -1077,38 +1585,18 @@ export function publishSafeArtifactFileSet(
   options: SafeArtifactPublicationOptions,
 ): SafeArtifactPublicationResult {
   validatePublication(entries, options);
+  if (options.publicationSlot !== undefined) {
+    return publishIntentFileSet(entries, {
+      ...options,
+      publicationSlot: options.publicationSlot,
+    });
+  }
   const prepared = preparePublicationEntries(entries, options.commitPath, options.trustedRoot);
   const recovering = publicationHasPath(prepared, "stagePath");
   if (!recovering && publicationHasPath(prepared, "path")) {
     throw safeFileError(publicationArtifactClass(prepared), "target-exists");
   }
-  for (const entry of prepared) ensurePreparedStage(entry, recovering);
-  const parent = dirname(resolve(options.commitPath));
-  const preparedAssurance = syncDirectory(
-    parent,
-    options.trustedRoot,
-    publicationArtifactClass(prepared),
-  );
-  const ordered = orderedForCommit(prepared, options.commitPath);
-  for (const entry of ordered) {
-    publishPreparedEntry(entry, recovering);
-  }
-  const publishedAssurance = syncDirectory(
-    parent,
-    options.trustedRoot,
-    publicationArtifactClass(prepared),
-  );
-  const cleanupAssurance = cleanupPublishedStages(ordered, parent);
-  const status = recovering ? "recovered" : "published";
-  return {
-    status,
-    permissionAssurance: safeArtifactPermissionAssurance(),
-    durabilityAssurance: combineDurabilityAssurance(
-      preparedAssurance,
-      publishedAssurance,
-      cleanupAssurance,
-    ),
-  };
+  return completePreparedPublication(prepared, options, recovering);
 }
 
 /**

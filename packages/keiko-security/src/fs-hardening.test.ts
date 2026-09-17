@@ -27,8 +27,10 @@ import {
   ensureDirHardened,
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
   replaceSafeArtifactFile,
   safeArtifactContainmentAssurance,
+  safeArtifactPublicationSlot,
   safeArtifactPermissionAssurance,
 } from "./fs-hardening.js";
 
@@ -549,6 +551,50 @@ describe("openSafeArtifactFile", () => {
 });
 
 describe("publishSafeArtifactFileSet", () => {
+  it("recovers a fixed publication slot without rebuilding the original contents", async () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const integrity = join(base, "support.jsonl.sha256");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const entries = [
+      { path: report, contents: "old-report", artifactClass: "support-report" as const },
+      {
+        path: integrity,
+        contents: "old-digest\n",
+        artifactClass: "integrity-artifact" as const,
+      },
+    ];
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./fs-hardening.js");
+
+    expect(() =>
+      interrupted.publishSafeArtifactFileSet(entries, {
+        commitPath: report,
+        trustedRoot: base,
+        publicationSlot: slot,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual(
+      expect.objectContaining({ status: "recovered", commitPath: report, artifactCount: 2 }),
+    );
+    expect(readFileSync(report, "utf8")).toBe("old-report");
+    expect(readFileSync(integrity, "utf8")).toBe("old-digest\n");
+    expect(publicationStages(base)).toHaveLength(0);
+  });
+
   it.each(["darwin", "win32"] as const)(
     "rejects case-folded duplicate destinations on %s before writing",
     (platform) => {

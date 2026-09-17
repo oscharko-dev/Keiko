@@ -10,11 +10,17 @@
 // selection, manifest assembly, parsing, grouping, ordering, rendering — lives in
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  SafeArtifactFileError,
+  publishSafeArtifactFileSet,
+  type SafeArtifactPublicationResult,
+} from "@oscharko-dev/keiko-security/fs-hardening";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
 import { flagValue } from "./cli-arg-parsing.js";
@@ -356,7 +362,7 @@ interface LogContent {
 }
 
 // Discovers, budget-selects, and reads the state dir's server*.log files in one pass, tolerating
-// the sink's own rotation/retention pruning at both boundaries it can race
+// concurrent removal of the current file or a compatible legacy archive at both boundaries
 // (support-export.ts's `discoverServerLogFiles`, between `readdirSync` and `statSync`, and
 // `readKeptFiles`, between selection and the actual read): `sourceLogFiles` names only the files
 // that actually contributed content; `skippedLogFiles` names every file that vanished at either
@@ -392,14 +398,88 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
 // over the EXACT bytes just written to `outPath`. A failure writing either file reports the same
 // content-free outcome and writes neither half — a bundle without its sidecar, or a sidecar for
 // bytes that were never actually persisted, are both worse than refusing the export.
-function writeBundleOrExitCode(outPath: string, contents: string, io: CliIo): number | undefined {
+type BundlePublicationOutcome =
+  | { readonly status: "published"; readonly result: SafeArtifactPublicationResult }
+  | { readonly status: "failed"; readonly errorKind: string };
+
+function supportPublicationErrorKind(error: unknown): string {
   try {
-    writeFileSync(outPath, contents, "utf8");
-    writeFileSync(sha256SidecarPath(outPath), `${bundleSha256Hex(contents)}\n`, "utf8");
-    return undefined;
+    if (error instanceof SafeArtifactFileError) return error.kind;
+  } catch {
+    return "open-failed";
+  }
+  return describeErrorKind(error);
+}
+
+function publishSupportBundle(
+  outPath: string,
+  contents: string,
+  io: CliIo,
+): BundlePublicationOutcome {
+  try {
+    const result = publishSafeArtifactFileSet(
+      [
+        { path: outPath, contents, artifactClass: "support-report" },
+        {
+          path: sha256SidecarPath(outPath),
+          contents: `${bundleSha256Hex(contents)}\n`,
+          artifactClass: "integrity-artifact",
+        },
+      ],
+      { commitPath: outPath, trustedRoot: dirname(outPath) },
+    );
+    return { status: "published", result };
   } catch (error) {
-    io.err(`keiko support export: could not write the bundle: ${describeErrorKind(error)}\n`);
-    return 1;
+    const errorKind = supportPublicationErrorKind(error);
+    io.err(`keiko support export: could not write the bundle: ${errorKind}\n`);
+    return { status: "failed", errorKind };
+  }
+}
+
+type LoadedServer = Awaited<ReturnType<typeof loadServer>>;
+
+function emitSupportPublicationEvidence(
+  server: LoadedServer,
+  stateDir: string,
+  correlationId: string,
+  outcome: BundlePublicationOutcome,
+): void {
+  const activityLog = server.createFileServerLogSink(stateDir);
+  try {
+    const common = {
+      publicationArtifactClass: "support-report",
+      artifactCount: 2,
+      persistenceStatus: outcome.status,
+      publicationPersistenceStatus: outcome.status,
+      completeness: outcome.status === "published" ? "complete" : "partial",
+      publicationCompleteness: outcome.status === "published" ? "complete" : "partial",
+      loss: "none",
+      publicationLoss: "none",
+    };
+    activityLog.write(
+      outcome.status === "published"
+        ? {
+            category: "diagnostic",
+            op: "support.export.publication",
+            correlationId,
+            extra: {
+              ...common,
+              publicationStatus: outcome.result.status,
+              permissionAssurance: outcome.result.permissionAssurance,
+              durabilityAssurance: outcome.result.durabilityAssurance,
+            },
+          }
+        : {
+            level: "error",
+            category: "diagnostic",
+            op: "support.export.publication",
+            correlationId,
+            errorKind: outcome.errorKind,
+            extra: common,
+          },
+    );
+  } finally {
+    activityLog.close?.();
   }
 }
 
@@ -654,8 +734,9 @@ async function runSupportExport(
   const sections = assembleWave6Sections(env, server, uiLog, evidenceSections);
   const lines = serializeBundleLines(manifest, sections, logContent.contentLines);
   const outPath = resolveOutPath(cwd, args.out, generatedAtDate);
-  const failureCode = writeBundleOrExitCode(outPath, bundleText(lines), io);
-  if (failureCode !== undefined) return failureCode;
+  const publication = publishSupportBundle(outPath, bundleText(lines), io);
+  emitSupportPublicationEvidence(server, stateDir, randomUUID(), publication);
+  if (publication.status === "failed") return 1;
   io.out(`Wrote ${String(lines.length)} lines to ${outPath}\n`);
   return 0;
 }
