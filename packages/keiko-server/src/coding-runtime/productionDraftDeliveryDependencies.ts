@@ -34,6 +34,7 @@ import {
   type DraftDeliveryRunContext,
   type DraftDeliveryTargetResolution,
 } from "../gitDelivery/draftDeliveryTypes.js";
+import { logDraftRelatedIssues } from "../gitDelivery/draftRelatedIssuesActivity.js";
 import {
   gitDeliveryTerminationHandler,
   resolveProjectWorkspace,
@@ -59,45 +60,6 @@ function snapshotIsDeliverable(state: string): boolean {
 }
 
 type TargetFailure = Extract<DraftDeliveryTargetResolution, { ok: false }>;
-
-const GIT_DRAFT_RELATED_ISSUES_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "git.draft-related-issues",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.productionDraftDeliveryDependencies.relatedIssues",
-  fields: {
-    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    state: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["resolved", "unavailable"],
-    },
-    count: { type: "integer", dataClass: "count", required: true },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
-  },
-  causal: "correlation",
-  lifecycle: "end",
-  analyzerProjection: "timeline",
-  failureClasses: ["git-draft-related-issues"],
-  proofIds: ["git.draft-related-issues.emitted-line"],
-  releaseImpact: "patch",
-});
 
 const GIT_DRAFT_PUSH_PREPARATION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -595,19 +557,13 @@ class DraftDeliveryFactory {
       });
       return this.relatedIssues(context, "resolved", related);
     } catch (error) {
-      this.log.write(
-        activityLogEvent(
-          GIT_DRAFT_RELATED_ISSUES_OPERATION,
-          { correlationId: context.correlationId, level: "warn", errorKind: "internal" },
-          {
-            runId: context.runId,
-            state: "unavailable",
-            count: 0,
-            frames: keikoStackFrames(error),
-            causeChain: causeChain(error),
-          },
-        ),
-      );
+      logDraftRelatedIssues(this.log, context, {
+        state: "unavailable",
+        count: 0,
+        errorKind: "internal",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      });
       return [];
     }
   }
@@ -617,15 +573,12 @@ class DraftDeliveryFactory {
     state: "resolved" | "unavailable",
     related: readonly number[],
   ): readonly number[] {
-    this.log.write(
-      activityLogEvent(
-        GIT_DRAFT_RELATED_ISSUES_OPERATION,
-        {
-          correlationId: context.correlationId,
-          ...(state === "unavailable" ? { level: "warn", errorKind: "unavailable" } : {}),
-        },
-        { runId: context.runId, state, count: related.length },
-      ),
+    logDraftRelatedIssues(
+      this.log,
+      context,
+      state === "unavailable"
+        ? { state, count: related.length, errorKind: "unavailable" }
+        : { state, count: related.length },
     );
     return related;
   }
