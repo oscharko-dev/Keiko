@@ -274,7 +274,7 @@
     "eslint-plugin-react@7.37.5": {
       "eslint": "^10.0.0"
     },
-    "@napi-rs/canvas": "1.0.8"
+    "@napi-rs/canvas": "1.0.9"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
@@ -285,7 +285,7 @@
     "@playwright/test": "^1.61.1",
     "@stryker-mutator/core": "10.0.0",
     "@stryker-mutator/vitest-runner": "10.0.0",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.5.1",
     "@types/ws": "^8.18.1",
     "@types/yauzl": "^3.4.0",
     "@typescript/native": "npm:typescript@~7.0.2",
@@ -298,7 +298,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-sonarjs": "^4.2.0",
     "fallow": "3.9.1",
-    "knip": "6.34.0",
+    "knip": "6.35.1",
     "pdfjs-dist": "^6.3.289",
     "prettier": "^3.0.0",
     "semver": "^7.8.5",
@@ -363,7 +363,6 @@
     "@oscharko-dev/keiko-cli"
   ],
   "allowScripts": {
-    "fsevents@2.3.2": true,
     "fsevents@2.3.3": true,
     "unrs-resolver": true
   }

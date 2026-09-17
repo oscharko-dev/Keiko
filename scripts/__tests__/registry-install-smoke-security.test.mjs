@@ -1506,7 +1506,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       new Map([
         [
           name,
-          new Map([["1.0.8", { manifest: stubManifest(name, "1.0.8"), name, version: "1.0.8" }]]),
+          new Map([["1.0.9", { manifest: stubManifest(name, "1.0.9"), name, version: "1.0.9" }]]),
         ],
       ]);
     try {
@@ -1523,7 +1523,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
       // A binding for a platform this host is not: still shareable, still published.
       const foreign = written(stubbed("@napi-rs/canvas-android-arm64"));
-      expect(foreign["@napi-rs/canvas-android-arm64"]?.["1.0.8"]).toBeDefined();
+      expect(foreign["@napi-rs/canvas-android-arm64"]?.["1.0.9"]).toBeDefined();
 
       // And this host's own binding, which the lockfile pins to this platform.
       const own = `@napi-rs/canvas${hostBindingSuffixes().at(-1)}`;
@@ -1669,7 +1669,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       new Map([
         [
           name,
-          new Map([["1.0.8", { manifest: stubManifest(name, "1.0.8"), name, version: "1.0.8" }]]),
+          new Map([["1.0.9", { manifest: stubManifest(name, "1.0.9"), name, version: "1.0.9" }]]),
         ],
       ]);
 
