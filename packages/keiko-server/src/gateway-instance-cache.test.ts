@@ -45,15 +45,10 @@ function capture(level: ServerLogThreshold): BufferedServerLogSink {
 // that triggers a fresh construction, so the provider-shape literal is written once, not per test.
 function configResolvedExtra(): Record<string, unknown> {
   return {
-    providers: [
-      {
-        modelId: "test-chat",
-        endpointHost: "gateway.example.com",
-        timeoutMs: 30_000,
-        maxRetries: 3,
-        retryBaseDelayMs: 500,
-      },
-    ],
+    completeness: "complete",
+    loss: "none",
+    providerConfigDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    providerCount: 1,
   };
 }
 
@@ -63,6 +58,7 @@ function configResolvedEvent(): Record<string, unknown> {
     category: "gateway",
     op: "gateway.config.resolved",
     correlationId: undefined,
+    parentCorrelationId: undefined,
     durationMs: undefined,
     status: undefined,
     errorKind: undefined,
@@ -195,10 +191,17 @@ describe("gateway instance cache activity log", () => {
         category: "gateway",
         op: "gateway.instance.reset",
         correlationId: undefined,
+        parentCorrelationId: undefined,
         durationMs: undefined,
         status: undefined,
         errorKind: undefined,
-        extra: { generation: 1, reason: "generation-changed", lifecycleReset: true },
+        extra: {
+          completeness: "complete",
+          generation: 1,
+          lifecycleReset: true,
+          loss: "none",
+          reason: "generation-changed",
+        },
       },
       configResolvedEvent(),
     ]);
@@ -224,9 +227,11 @@ describe("gateway instance cache activity log", () => {
       "gateway.config.resolved",
     ]);
     expect(sink.events[0]?.extra).toEqual({
+      completeness: "complete",
       generation: 0,
-      reason: "rebound",
       lifecycleReset: false,
+      loss: "none",
+      reason: "rebound",
     });
   });
 
@@ -267,7 +272,12 @@ describe("gateway instance cache activity log", () => {
         durationMs: undefined,
         status: undefined,
         errorKind: undefined,
-        extra: { generation: 3, reason: "config-withdrawn" },
+        extra: {
+          completeness: "complete",
+          generation: 3,
+          loss: "none",
+          reason: "config-withdrawn",
+        },
       },
     ]);
   });
@@ -287,8 +297,14 @@ describe("gateway instance cache activity log", () => {
     // Recovery discards the "unavailable" marker and constructs a fresh Gateway for the now-present
     // config — its own one-time `gateway.config.resolved` snapshot follows the reset line.
     expect(sink.events.map((event) => event.extra)).toEqual([
-      { generation: 0, reason: "unconfigured" },
-      { generation: 0, reason: "recovered", lifecycleReset: true },
+      { completeness: "complete", generation: 0, loss: "none", reason: "unconfigured" },
+      {
+        completeness: "complete",
+        generation: 0,
+        lifecycleReset: true,
+        loss: "none",
+        reason: "recovered",
+      },
       configResolvedExtra(),
     ]);
     expect(sink.events.map((event) => event.op)).toEqual([
