@@ -618,8 +618,8 @@ describe("git-history evidence activity log (AGENTS.md §8 Rule 1)", () => {
       category: "diagnostic",
       op: "git.process.failed",
       correlationId: "corr-grounded-ask-01",
-      errorKind: "git-error",
-      extra: { subcommand: "log", exitCode: 128 },
+      errorKind: "internal",
+      extra: { subcommand: "log", exitCode: 128, failureKind: "git-error" },
     });
   });
 
@@ -647,8 +647,8 @@ describe("git-history evidence activity log (AGENTS.md §8 Rule 1)", () => {
     expect(activity.events[0]).toMatchObject({
       op: "git.process.failed",
       correlationId: "corr-grounded-ask-02",
-      errorKind: "not-a-repository",
-      extra: { subcommand: "rev-parse" },
+      errorKind: "unavailable",
+      extra: { subcommand: "rev-parse", failureKind: "not-a-repository" },
     });
   });
 
