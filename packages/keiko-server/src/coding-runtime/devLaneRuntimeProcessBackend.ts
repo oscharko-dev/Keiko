@@ -19,10 +19,19 @@ import type {
   LinuxGatewayDiagnosticKind,
   NetworkGatewayPolicy,
 } from "@oscharko-dev/keiko-contracts";
-import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import {
+  activityLogEvent,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { createCodingRuntimeLineParser } from "./codingRuntimeProcessIo.js";
+import {
+  RUNTIME_CONFINEMENT_FAILED_OPERATION,
+  RUNTIME_CONFINEMENT_SPAWNED_OPERATION,
+  RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
+} from "./codingRuntimeActivityOperations.js";
 
 import {
   invalidRequest,
@@ -305,14 +314,25 @@ function gatewayNetworkPolicy(policy: RuntimeGatewayConfinement): NetworkGateway
 }
 
 function recordConfinementFailure(sink: ServerLogSink, runId: string, error: unknown): void {
-  sink.write({
-    category: "process",
-    level: "error",
-    op: "runtime.confinement.failed",
-    correlationId: runId,
-    errorKind: errorKindOf(error),
-    extra: { frames: keikoStackFrames(error), causeChain: causeChain(error) },
-  });
+  sink.write(
+    activityLogEvent(
+      RUNTIME_CONFINEMENT_FAILED_OPERATION,
+      { level: "error", correlationId: runId, errorKind: confinementFailureErrorKind(error) },
+      { frames: keikoStackFrames(error), causeChain: causeChain(error) },
+    ),
+  );
+}
+
+function confinementFailureErrorKind(error: unknown): ActivityLogErrorKind {
+  if (!(error instanceof Error)) return "internal";
+  if (error.message === "runtime-gateway-confinement-drift") return "conflict";
+  if (
+    error.message === "runtime-gateway-confinement-required" ||
+    error.message === "runtime-gateway-confinement-unavailable"
+  ) {
+    return "unavailable";
+  }
+  return error instanceof TypeError ? "validation-failed" : "internal";
 }
 
 function isUnavailableError(error: unknown): boolean {
@@ -324,13 +344,13 @@ function recordConfinementUnavailable(
   runId: string,
   identity: DevLaneRuntimeBackendIdentity,
 ): void {
-  sink.write({
-    category: "process",
-    level: "info",
-    op: "runtime.confinement.unavailable",
-    correlationId: runId,
-    extra: { platform: identity.platform, arch: identity.arch, backend: identity.backend },
-  });
+  sink.write(
+    activityLogEvent(
+      RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
+      { level: "info", correlationId: runId },
+      { platform: identity.platform, arch: identity.arch, backend: identity.backend },
+    ),
+  );
 }
 
 function recordConfinementSpawned(
@@ -340,50 +360,73 @@ function recordConfinementSpawned(
   policy: RuntimeGatewayConfinement,
   childExecutableDigest: string | undefined,
 ): void {
-  sink.write({
-    category: "process",
-    op: "runtime.confinement.spawned",
-    correlationId: runId,
-    extra: {
-      backend,
-      policyDigest: policy.policyDigest,
-      authorityDigest: policy.envelopeDigest,
-      runtimeArtifactDigest: policy.runtimeArtifactDigest,
-      modelProfileDigest: policy.modelProfileDigest,
-      treeBindingId: policy.treeBindingId,
-      profile: policy.profile,
-      childExecutablePolicy:
-        childExecutableDigest === undefined
-          ? "namespace-inherited"
-          : "runtime-and-attested-git-only",
-      ...(childExecutableDigest === undefined ? {} : { childExecutableDigest }),
-    },
-  });
+  sink.write(
+    activityLogEvent(
+      RUNTIME_CONFINEMENT_SPAWNED_OPERATION,
+      { correlationId: runId },
+      {
+        backend: recordedConfinementBackend(backend),
+        policyDigest: policy.policyDigest,
+        authorityDigest: policy.envelopeDigest,
+        runtimeArtifactDigest: policy.runtimeArtifactDigest,
+        modelProfileDigest: policy.modelProfileDigest,
+        treeBindingId: policy.treeBindingId,
+        profile: policy.profile,
+        childExecutablePolicy:
+          childExecutableDigest === undefined
+            ? "namespace-inherited"
+            : "runtime-and-attested-git-only",
+        ...(childExecutableDigest === undefined ? {} : { childExecutableDigest }),
+      },
+    ),
+  );
 }
 
-function linuxGatewayLauncherBackend(backend: string): boolean {
+function recordedConfinementBackend(backend: string): "bubblewrap" | "unshare" | "seatbelt" {
+  if (backend === "bubblewrap" || backend === "unshare" || backend === "seatbelt") return backend;
+  throw new TypeError("invalid recorded confinement backend");
+}
+
+function linuxGatewayLauncherBackend(backend: string): backend is "bubblewrap" | "unshare" {
   return backend === "bubblewrap" || backend === "unshare";
 }
 
 function recordLinuxGatewayLauncherFailure(
   sink: ServerLogSink,
   runId: string,
-  backend: string,
+  backend: "bubblewrap" | "unshare",
   errorKind: LinuxGatewayDiagnosticKind,
 ): void {
-  sink.write({
-    category: "process",
-    level: "error",
-    op: "runtime.confinement.failed",
-    correlationId: runId,
-    errorKind,
-    extra: {
-      backend,
-      diagnosticSource: "linux-gateway-launcher",
-      frames: [],
-      causeChain: [],
-    },
-  });
+  sink.write(
+    activityLogEvent(
+      RUNTIME_CONFINEMENT_FAILED_OPERATION,
+      { level: "error", correlationId: runId, errorKind: linuxGatewayErrorKind(errorKind) },
+      {
+        backend,
+        diagnosticSource: "linux-gateway-launcher",
+        diagnosticKind: errorKind,
+        frames: [],
+        causeChain: [],
+      },
+    ),
+  );
+}
+
+function linuxGatewayErrorKind(errorKind: LinuxGatewayDiagnosticKind): ActivityLogErrorKind {
+  if (errorKind === "unsupported-platform" || errorKind === "loopback-tool-unavailable") {
+    return "unavailable";
+  }
+  if (
+    errorKind === "invalid-backend" ||
+    errorKind === "invalid-command" ||
+    errorKind === "invalid-cwd" ||
+    errorKind === "invalid-gateway-host" ||
+    errorKind === "invalid-gateway-port" ||
+    errorKind === "invalid-mode"
+  ) {
+    return "validation-failed";
+  }
+  return "internal";
 }
 
 function attachLinuxGatewayDiagnostics(
