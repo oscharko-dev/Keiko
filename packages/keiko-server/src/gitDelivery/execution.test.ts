@@ -344,9 +344,10 @@ describe("executeGovernedMutation — real git through the default seams", () =>
       expect(event?.category).toBe("diagnostic");
       expect(event?.op).toBe("git.delivery.mutation.failed");
       expect(event?.correlationId).toBe("request-correlation-2");
-      expect(typeof event?.errorKind).toBe("string");
+      expect(event?.errorKind).toBe("internal");
       expect(event?.extra?.actionKind).toBe("branch-switch");
       expect(event?.extra?.phaseReached).toBe("snapshot");
+      expect(typeof event?.extra?.failureKind).toBe("string");
       expect(JSON.stringify(activity.events)).not.toContain(bare);
     } finally {
       rmSync(bare, { recursive: true, force: true });
@@ -393,6 +394,7 @@ describe("logGitDeliveryUpstreamTrackingFailed — content-free diagnostic for t
     expect(activity.events[0]?.op).not.toBe("git.delivery.mutation.failed");
     expect(activity.events[0]?.category).toBe("diagnostic");
     expect(activity.events[0]?.level).toBe("warn");
+    expect(activity.events[0]?.errorKind).toBe("unavailable");
     expect(activity.events[0]?.correlationId).toBe("request-correlation-9");
   });
 
@@ -854,6 +856,7 @@ describe("executeGovernedMutation — managed-root re-proof at the spawn boundar
       });
       const noSpawn = activity.events.find((e) => e.op === "git.delivery.dispatch.no-spawn");
       expect(noSpawn?.correlationId).toBe("request-correlation-revoked");
+      expect(noSpawn?.errorKind).toBe("authority-denied");
       expect(noSpawn?.extra?.operation).toBe("branch-create");
       expect(
         activity.events.some(
