@@ -455,8 +455,8 @@ interface FailureEnvelope {
 }
 
 function contextFields(context: IndexingLogContext | undefined): {
-  readonly capsuleIdDigest?: string | undefined;
-  readonly documentIdDigest?: string | undefined;
+  readonly capsuleIdDigest?: string;
+  readonly documentIdDigest?: string;
 } {
   return context === undefined
     ? {}
