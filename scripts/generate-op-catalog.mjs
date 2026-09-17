@@ -65,14 +65,19 @@ import ts from "typescript";
 import {
   ACTIVITY_LOG_ANALYZER_PROJECTIONS,
   ACTIVITY_LOG_CATEGORIES,
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
+  ACTIVITY_LOG_COMPLETENESS_STATES,
   ACTIVITY_LOG_DATA_CLASSES,
+  ACTIVITY_LOG_ERROR_KINDS,
   ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
   ACTIVITY_LOG_FIELD_TYPES,
   ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
   ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
   ACTIVITY_LOG_LIFECYCLE_PHASES,
+  ACTIVITY_LOG_LOSS_STATES,
   ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
   ACTIVITY_LOG_RELEASE_IMPACTS,
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
 } from "../packages/keiko-contracts/dist/observability.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { isMainModule } from "./lib/is-main-module.mjs";
@@ -149,6 +154,58 @@ const ACTIVITY_LOG_EXEMPTION_SCHEMA = {
 // output rather than a hand-picked example set.
 export const OP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}(\.[a-z][a-z0-9-]{0,31}){0,5}$/;
 
+const ACTIVITY_LOG_LEVELS = ["debug", "info", "warn", "error"];
+const ACTIVITY_LOG_BUILD_CLASSES = ["node-esm"];
+const ACTIVITY_LOG_RELEASE_CLASSES = ["stable", "prerelease"];
+const ACTIVITY_LOG_PERSISTED_ENVELOPE_CONTRACT = {
+  ts: { type: "string", required: true, format: "iso-8601" },
+  schemaVersion: { type: "integer", required: true, values: [2] },
+  registryVersion: { type: "integer", required: true, minimum: 1 },
+  schemaDigest: { type: "string", required: true, format: "sha256-hex" },
+  catalogDigest: { type: "string", required: true, format: "sha256-hex" },
+  buildClass: { type: "string", required: true, values: ACTIVITY_LOG_BUILD_CLASSES },
+  releaseClass: { type: "string", required: true, values: ACTIVITY_LOG_RELEASE_CLASSES },
+  platformClass: {
+    type: "string",
+    required: true,
+    pattern: "^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$",
+  },
+  productVersion: {
+    type: "string",
+    required: true,
+    pattern: "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$",
+  },
+  compatibilityState: {
+    type: "string",
+    required: true,
+    values: ACTIVITY_LOG_COMPATIBILITY_STATES,
+  },
+  writerCapability: {
+    type: "string",
+    required: true,
+    values: ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+  },
+  pid: { type: "integer", required: true, minimum: 1, maximum: 2_147_483_647 },
+  instanceId: { type: "string", required: true, pattern: "^[a-f0-9]{8}$" },
+  seq: { type: "integer", required: true, minimum: 1 },
+  level: { type: "string", required: true, values: ACTIVITY_LOG_LEVELS },
+  category: { type: "string", required: true, values: ACTIVITY_LOG_CATEGORIES },
+  op: { type: "string", required: true, pattern: OP_NAME_PATTERN.source },
+  correlationId: {
+    type: "string",
+    required: "by-causal-contract",
+    pattern: "^[A-Za-z0-9._-]{8,128}$",
+  },
+  parentCorrelationId: {
+    type: "string",
+    required: "by-parent-causal-contract",
+    pattern: "^[A-Za-z0-9._-]{8,128}$",
+  },
+  durationMs: { type: "number", required: false, minimum: 0 },
+  status: { type: "integer", required: false },
+  errorKind: { type: "string", required: false, values: ACTIVITY_LOG_ERROR_KINDS },
+};
+
 // Codepoint comparison, never `localeCompare`: the catalog's entry order (and, transitively, the
 // order files are walked in) is checked-in output pinned by a drift test. `localeCompare` uses the
 // runtime's ICU collation and the ambient `LANG`, so the SAME source could sort two different ways
@@ -162,21 +219,34 @@ function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function activityLogSchemaDigest() {
-  return sha256(
-    JSON.stringify({
-      schemaVersion: 1,
+export function activityLogSchemaDigestMaterial() {
+  return {
+    schemaVersion: 1,
+    persistedEnvelope: ACTIVITY_LOG_PERSISTED_ENVELOPE_CONTRACT,
+    vocabularies: {
       categories: ACTIVITY_LOG_CATEGORIES,
       fieldTypes: ACTIVITY_LOG_FIELD_TYPES,
-      globalFields: ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
       dataClasses: ACTIVITY_LOG_DATA_CLASSES,
-      exemptionBoundaries: ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
-      implementationObligations: ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
-      lifecyclePhases: ACTIVITY_LOG_LIFECYCLE_PHASES,
-      analyzerProjections: ACTIVITY_LOG_ANALYZER_PROJECTIONS,
-      releaseImpacts: ACTIVITY_LOG_RELEASE_IMPACTS,
-    }),
-  );
+      completenessStates: ACTIVITY_LOG_COMPLETENESS_STATES,
+      lossStates: ACTIVITY_LOG_LOSS_STATES,
+      errorKinds: ACTIVITY_LOG_ERROR_KINDS,
+      compatibilityStates: ACTIVITY_LOG_COMPATIBILITY_STATES,
+      writerCapabilityStates: ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+      levels: ACTIVITY_LOG_LEVELS,
+      buildClasses: ACTIVITY_LOG_BUILD_CLASSES,
+      releaseClasses: ACTIVITY_LOG_RELEASE_CLASSES,
+    },
+    globalFields: ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+    exemptionBoundaries: ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
+    implementationObligations: ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
+    lifecyclePhases: ACTIVITY_LOG_LIFECYCLE_PHASES,
+    analyzerProjections: ACTIVITY_LOG_ANALYZER_PROJECTIONS,
+    releaseImpacts: ACTIVITY_LOG_RELEASE_IMPACTS,
+  };
+}
+
+export function activityLogSchemaDigest() {
+  return sha256(JSON.stringify(activityLogSchemaDigestMaterial()));
 }
 
 // Every workspace package's `src` root, derived from `packages/*` rather than a hand-maintained
