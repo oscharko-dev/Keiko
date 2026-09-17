@@ -19,7 +19,12 @@ import {
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import {
+  SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT,
+  type SafeArtifactDirectoryMutationOperation,
+  type SafeArtifactDirectoryMutationRequest,
+} from "./safe-artifact-directory-mutation-protocol.js";
 import {
   DIR_MODE,
   FILE_MODE,
@@ -49,12 +54,149 @@ afterEach(() => {
   Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   vi.restoreAllMocks();
   vi.doUnmock("node:fs");
+  vi.doUnmock("node:child_process");
   vi.resetModules();
   vi.useRealTimers();
   for (const path of cleanups.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }
 });
+
+interface DirectoryMutationInvocation {
+  readonly operation: SafeArtifactDirectoryMutationOperation;
+  readonly sourcePath: string;
+  readonly targetPath: string | undefined;
+}
+
+type DirectoryMutationHook = (
+  invocation: DirectoryMutationInvocation,
+  perform: () => void,
+) => number;
+
+function requestFromInput(input: unknown): SafeArtifactDirectoryMutationRequest | undefined {
+  if (typeof input !== "string") return undefined;
+  const value = JSON.parse(input) as unknown;
+  if (typeof value !== "object" || value === null || !("operation" in value)) return undefined;
+  return value as SafeArtifactDirectoryMutationRequest;
+}
+
+function invocationFromSpawnOptions(
+  options: Parameters<(typeof import("node:child_process"))["spawnSync"]>[2],
+): DirectoryMutationInvocation | undefined {
+  const request = requestFromInput(options?.input);
+  const cwd = typeof options?.cwd === "string" ? options.cwd : undefined;
+  if (request === undefined || cwd === undefined) return undefined;
+  return {
+    operation: request.operation,
+    sourcePath: join(cwd, request.source),
+    targetPath: request.target === undefined ? undefined : join(cwd, request.target),
+  };
+}
+
+function performMutation(
+  fs: typeof import("node:fs"),
+  invocation: DirectoryMutationInvocation,
+): void {
+  if (invocation.operation === "unlink") {
+    fs.unlinkSync(invocation.sourcePath);
+    return;
+  }
+  if (invocation.targetPath === undefined) throw new Error("expected mutation target");
+  fs.linkSync(invocation.sourcePath, invocation.targetPath);
+}
+
+function mockedMutationResult(
+  status: number,
+): ReturnType<typeof import("node:child_process").spawnSync> {
+  return {
+    pid: 0,
+    output: [null, null, null],
+    stdout: null,
+    stderr: null,
+    status,
+    signal: null,
+  } as ReturnType<typeof import("node:child_process").spawnSync>;
+}
+
+async function mockDirectoryMutation(hook: DirectoryMutationHook): Promise<void> {
+  const actualChild =
+    await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+  vi.doMock("node:child_process", () => ({
+    ...actualChild,
+    spawnSync: (
+      ...args: Parameters<typeof actualChild.spawnSync>
+    ): ReturnType<typeof actualChild.spawnSync> => {
+      const invocation = invocationFromSpawnOptions(args[2]);
+      if (invocation === undefined) {
+        return Reflect.apply(actualChild.spawnSync, actualChild, args);
+      }
+      const status = hook(invocation, () => {
+        performMutation(actualFs, invocation);
+      });
+      return mockedMutationResult(status);
+    },
+  }));
+}
+
+type MutationPredicate = (invocation: DirectoryMutationInvocation) => boolean;
+
+async function swapBeforeDirectoryMutation(
+  predicate: MutationPredicate,
+  swap: (invocation: DirectoryMutationInvocation) => void,
+  after: (invocation: DirectoryMutationInvocation) => void = () => undefined,
+  failFsync: () => boolean = () => false,
+): Promise<void> {
+  const actualChild =
+    await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+  let swapped = false;
+  const trigger = (invocation: DirectoryMutationInvocation): void => {
+    if (swapped || !predicate(invocation)) return;
+    swapped = true;
+    swap(invocation);
+  };
+  vi.doMock("node:fs", () => ({
+    ...actualFs,
+    linkSync: (source: string, target: string): void => {
+      const invocation = { operation: "link", sourcePath: source, targetPath: target } as const;
+      trigger(invocation);
+      actualFs.linkSync(source, target);
+      after(invocation);
+    },
+    unlinkSync: (source: string): void => {
+      const invocation = {
+        operation: "unlink",
+        sourcePath: source,
+        targetPath: undefined,
+      } as const;
+      trigger(invocation);
+      actualFs.unlinkSync(source);
+      after(invocation);
+    },
+    fsyncSync: (descriptor: number): void => {
+      if (failFsync()) throw Object.assign(new Error("directory sync failed"), { code: "EIO" });
+      actualFs.fsyncSync(descriptor);
+    },
+  }));
+  vi.doMock("node:child_process", () => ({
+    ...actualChild,
+    spawnSync: (
+      ...args: Parameters<typeof actualChild.spawnSync>
+    ): ReturnType<typeof actualChild.spawnSync> => {
+      const invocation = invocationFromSpawnOptions(args[2]);
+      if (invocation !== undefined) trigger(invocation);
+      const result = Reflect.apply(actualChild.spawnSync, actualChild, args);
+      if (invocation !== undefined && result.status === 0) after(invocation);
+      return result;
+    },
+  }));
+}
+
+function replaceParentWithOutsideLink(parent: string, displaced: string, outside: string): void {
+  renameSync(parent, displaced);
+  symlinkSync(outside, parent, "dir");
+}
 
 function freshDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "keiko-fs-harden-"));
@@ -70,14 +212,14 @@ function byteCountFixture(byteLength: number): Uint8Array {
 }
 
 async function leaveLinkedPublication(base: string, path: string): Promise<void> {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   vi.resetModules();
-  vi.doMock("node:fs", () => ({
-    ...actual,
-    unlinkSync: (): never => {
-      throw new Error(`unlink failed: ${path}`);
-    },
-  }));
+  await mockDirectoryMutation((invocation, perform) => {
+    if (invocation.operation === "unlink") {
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+    }
+    perform();
+    return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+  });
   const isolated = await import("./fs-hardening.js");
   let thrown: unknown;
   try {
@@ -91,7 +233,7 @@ async function leaveLinkedPublication(base: string, path: string): Promise<void>
   expect(thrown).toEqual(expect.objectContaining({ kind: "publish-failed" }));
   expect(String(thrown)).not.toContain(base);
   expect(statSync(path).nlink).toBe(2);
-  vi.doUnmock("node:fs");
+  vi.doUnmock("node:child_process");
   vi.resetModules();
 }
 
@@ -664,17 +806,16 @@ describe("publishSafeArtifactFileSet", () => {
         artifactClass: "integrity-artifact" as const,
       },
     ];
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let links = 0;
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") {
         links += 1;
-        if (links === 2) throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-    }));
+        if (links === 2) return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const interrupted = await import("./fs-hardening.js");
 
     expect(() =>
@@ -684,7 +825,7 @@ describe("publishSafeArtifactFileSet", () => {
         publicationSlot: slot,
       }),
     ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
 
     expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual(
@@ -745,17 +886,16 @@ describe("publishSafeArtifactFileSet", () => {
       { path: report, contents: "old-report", artifactClass: "support-report" as const },
       { path: integrity, contents: "old-digest", artifactClass: "integrity-artifact" as const },
     ];
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let links = 0;
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") {
         links += 1;
-        if (links === 2) throw Object.assign(new Error("interrupted"), { code: "EINTR" });
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-    }));
+        if (links === 2) return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const interrupted = await import("./fs-hardening.js");
     expect(() =>
       interrupted.publishSafeArtifactFileSet(entries, {
@@ -764,7 +904,7 @@ describe("publishSafeArtifactFileSet", () => {
         publicationSlot: slot,
       }),
     ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
     const before = readdirSync(base).sort();
 
@@ -814,18 +954,17 @@ describe("publishSafeArtifactFileSet", () => {
         },
       });
     };
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let links = 0;
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") {
         links += 1;
         if (links === 1) runPeer("active");
-        if (links === 2) throw Object.assign(new Error("publisher paused"), { code: "EINTR" });
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-    }));
+        if (links === 2) return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const interrupted = await import("./fs-hardening.js");
     expect(() =>
       interrupted.publishSafeArtifactFileSet(entries, {
@@ -834,7 +973,7 @@ describe("publishSafeArtifactFileSet", () => {
         publicationSlot: slot,
       }),
     ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
     expect(() => {
       runPeer("released");
@@ -849,25 +988,21 @@ describe("publishSafeArtifactFileSet", () => {
     const report = join(base, "support.jsonl");
     const integrity = join(base, "support.jsonl.sha256");
     const slot = safeArtifactPublicationSlot("support-export", report);
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let links = 0;
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") {
         links += 1;
-        if (links === 2) throw Object.assign(new Error("interrupted"), { code: "EINTR" });
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
-        if (String(args[0]).endsWith(".owner")) {
-          throw Object.assign(new Error("owner release interrupted"), { code: "EIO" });
-        }
-        Reflect.apply(actual.unlinkSync, actual, args);
-      },
-    }));
+        if (links === 2) return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      if (invocation.operation === "unlink" && invocation.sourcePath.endsWith(".owner")) {
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const interrupted = await import("./fs-hardening.js");
     expect(() =>
       interrupted.publishSafeArtifactFileSet(
@@ -878,7 +1013,7 @@ describe("publishSafeArtifactFileSet", () => {
         { commitPath: report, trustedRoot: base, publicationSlot: slot },
       ),
     ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
     vi.useRealTimers();
     const before = readdirSync(base).sort();
@@ -930,13 +1065,14 @@ describe("publishSafeArtifactFileSet", () => {
         }
         Reflect.apply(actual.fsyncSync, actual, args);
       },
-      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
-        if (String(args[0]).endsWith(".owner")) {
-          throw Object.assign(new Error("owner cleanup failed"), { code: "EIO" });
-        }
-        Reflect.apply(actual.unlinkSync, actual, args);
-      },
     }));
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "unlink" && invocation.sourcePath.endsWith(".owner")) {
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
 
     expect(() =>
@@ -952,14 +1088,14 @@ describe("publishSafeArtifactFileSet", () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
     const slot = safeArtifactPublicationSlot("support-export", report);
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (): never => {
-        throw Object.assign(new Error("hard links unavailable"), { code: "ENOTSUP" });
-      },
-    }));
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") {
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.unsupported;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
     expect(() =>
       isolated.publishSafeArtifactFileSet(
@@ -1009,10 +1145,6 @@ describe("publishSafeArtifactFileSet", () => {
     vi.resetModules();
     vi.doMock("node:fs", () => ({
       ...actual,
-      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
-        Reflect.apply(actual.unlinkSync, actual, args);
-        if (String(args[0]).endsWith(".complete")) intentUnlinked = true;
-      },
       fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
         if (intentUnlinked && !failed) {
           failed = true;
@@ -1021,6 +1153,13 @@ describe("publishSafeArtifactFileSet", () => {
         Reflect.apply(actual.fsyncSync, actual, args);
       },
     }));
+    await mockDirectoryMutation((invocation, perform) => {
+      perform();
+      if (invocation.operation === "unlink" && invocation.sourcePath.endsWith(".complete")) {
+        intentUnlinked = true;
+      }
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const interrupted = await import("./fs-hardening.js");
     expect(() =>
       interrupted.acknowledgeSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base }),
@@ -1212,13 +1351,14 @@ describe("publishSafeArtifactFileSet", () => {
         }
         return Reflect.apply(actual.openSync, actual, args);
       },
-      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
-        if (String(args[0]).endsWith(".owner")) {
-          throw Object.assign(new Error("owner cleanup interrupted"), { code: "EIO" });
-        }
-        Reflect.apply(actual.unlinkSync, actual, args);
-      },
     }));
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "unlink" && invocation.sourcePath.endsWith(".owner")) {
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const interrupted = await import("./fs-hardening.js");
     expect(() =>
       interrupted.publishSafeArtifactFileSet(
@@ -1418,19 +1558,18 @@ describe("publishSafeArtifactFileSet", () => {
       { path: manifest, contents: "manifest\n", artifactClass: "manifest" as const },
       { path: integrity, contents: "digest\n", artifactClass: "integrity-artifact" as const },
     ];
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let links = 0;
     const destinations: string[] = [];
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") {
         links += 1;
-        destinations.push(String(args[1]));
-        if (links === 2) throw Object.assign(new Error("interrupted"), { code: "EINTR" });
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-    }));
+        if (invocation.targetPath !== undefined) destinations.push(invocation.targetPath);
+        if (links === 2) return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
 
     expect(() =>
@@ -1443,7 +1582,7 @@ describe("publishSafeArtifactFileSet", () => {
     expect(destinations).toEqual([integrity, manifest]);
     expect(existsSync(manifest)).toBe(false);
     expect(readFileSync(integrity, "utf8")).toBe("digest\n");
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
 
     expect(
@@ -1597,14 +1736,12 @@ describe("publishSafeArtifactFileSet", () => {
   it("revalidates target identity after reading exact recovery bytes", async () => {
     const base = freshDir();
     const path = join(base, "support.jsonl");
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (): never => {
-        throw Object.assign(new Error("interrupted"), { code: "EINTR" });
-      },
-    }));
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const interrupted = await import("./fs-hardening.js");
     expect(() =>
       interrupted.publishSafeArtifactFileSet(
@@ -1612,12 +1749,13 @@ describe("publishSafeArtifactFileSet", () => {
         { commitPath: path, trustedRoot: base },
       ),
     ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
     const [stageName] = publicationStages(base);
     expect(stageName).toBeDefined();
     const stage = join(base, stageName ?? "missing");
     const displaced = join(base, "stage-displaced");
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let swapped = false;
     vi.doMock("node:fs", () => ({
       ...actual,
@@ -1662,15 +1800,15 @@ describe("publishSafeArtifactFileSet", () => {
   it("refuses a target that appears at the atomic link boundary", async () => {
     const base = freshDir();
     const path = join(base, "report.json");
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
-        writeFileSync(String(args[1]), "attacker", { mode: FILE_MODE });
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-    }));
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link" && invocation.targetPath !== undefined) {
+        writeFileSync(invocation.targetPath, "attacker", { mode: FILE_MODE });
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.targetExists;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
     let thrown: unknown;
     try {
@@ -1689,16 +1827,15 @@ describe("publishSafeArtifactFileSet", () => {
   it("rejects a stage inode replaced immediately after the atomic link", async () => {
     const base = freshDir();
     const path = join(base, "report.json");
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
-        Reflect.apply(actual.linkSync, actual, args);
-        actual.unlinkSync(args[0]);
-        actual.writeFileSync(args[0], "replacement", { mode: FILE_MODE });
-      },
-    }));
+    await mockDirectoryMutation((invocation, perform) => {
+      perform();
+      if (invocation.operation === "link") {
+        unlinkSync(invocation.sourcePath);
+        writeFileSync(invocation.sourcePath, "replacement", { mode: FILE_MODE });
+      }
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
 
     expect(() =>
@@ -1717,16 +1854,15 @@ describe("publishSafeArtifactFileSet", () => {
     const displaced = join(base, "displaced-reports");
     const path = join(parent, "report.json");
     mkdirSync(parent);
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
-        Reflect.apply(actual.linkSync, actual, args);
+    await mockDirectoryMutation((invocation, perform) => {
+      perform();
+      if (invocation.operation === "link") {
         renameSync(parent, displaced);
         mkdirSync(parent);
-      },
-    }));
+      }
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
     expect(() =>
       isolated.publishSafeArtifactFileSet(
@@ -1735,6 +1871,148 @@ describe("publishSafeArtifactFileSet", () => {
       ),
     ).toThrow(expect.objectContaining({ kind: "target-mutated" }));
     expect(existsSync(path)).toBe(false);
+  });
+
+  it("keeps atomic publication links inside the pinned parent", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const container = freshDir();
+    const parent = join(container, "artifacts");
+    const displaced = join(container, "displaced");
+    const outside = join(container, "outside");
+    const path = join(parent, "report.json");
+    mkdirSync(parent);
+    mkdirSync(outside);
+    let outsideStage: string | undefined;
+    vi.resetModules();
+    await swapBeforeDirectoryMutation(
+      (invocation) => invocation.operation === "link" && invocation.targetPath === path,
+      (invocation) => {
+        outsideStage = join(outside, basename(invocation.sourcePath));
+        writeFileSync(outsideStage, "outside-stage", { mode: FILE_MODE });
+        replaceParentWithOutsideLink(parent, displaced, outside);
+      },
+    );
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: container },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "target-mutated" }));
+    expect(outsideStage).toBeDefined();
+    expect(statSync(outsideStage ?? "missing").nlink).toBe(1);
+    expect(existsSync(join(outside, "report.json"))).toBe(false);
+  });
+
+  it("keeps stage cleanup unlink inside the pinned parent", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const container = freshDir();
+    const parent = join(container, "artifacts");
+    const displaced = join(container, "displaced");
+    const outside = join(container, "outside");
+    const path = join(parent, "report.json");
+    mkdirSync(parent);
+    mkdirSync(outside);
+    let outsideStage: string | undefined;
+    vi.resetModules();
+    await swapBeforeDirectoryMutation(
+      (invocation) => invocation.operation === "unlink" && invocation.sourcePath.endsWith(".stage"),
+      (invocation) => {
+        outsideStage = join(outside, basename(invocation.sourcePath));
+        writeFileSync(outsideStage, "outside-stage", { mode: FILE_MODE });
+        replaceParentWithOutsideLink(parent, displaced, outside);
+      },
+    );
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: container },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    expect(outsideStage).toBeDefined();
+    expect(readFileSync(outsideStage ?? "missing", "utf8")).toBe("outside-stage");
+  });
+
+  it("keeps fixed-slot receipt cleanup inside the pinned parent", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const container = freshDir();
+    const root = join(container, "artifacts");
+    const displaced = join(container, "displaced");
+    const outside = join(container, "outside");
+    const path = join(root, "report.json");
+    const slot = safeArtifactPublicationSlot("support-export", path);
+    mkdirSync(root);
+    mkdirSync(outside);
+    const outsideOwner = join(outside, `.keiko-publish-${slot}.owner`);
+    vi.resetModules();
+    await swapBeforeDirectoryMutation(
+      (invocation) => invocation.operation === "unlink" && invocation.sourcePath.endsWith(".owner"),
+      () => {
+        writeFileSync(outsideOwner, "outside-owner", { mode: FILE_MODE });
+        replaceParentWithOutsideLink(root, displaced, outside);
+      },
+    );
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, publicationSlot: slot, trustedRoot: root },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "target-mutated" }));
+    expect(readFileSync(outsideOwner, "utf8")).toBe("outside-owner");
+  });
+
+  it("keeps recovery-marker restoration inside the pinned parent", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const container = freshDir();
+    const parent = join(container, "artifacts");
+    const displaced = join(container, "displaced");
+    const outside = join(container, "outside");
+    const path = join(parent, "report.json");
+    mkdirSync(parent);
+    mkdirSync(outside);
+    await leaveLinkedPublication(parent, path);
+    const stageName = publicationStages(parent)[0];
+    if (stageName === undefined) throw new Error("expected recovery marker");
+    const outsideReport = join(outside, "report.json");
+    const outsideStage = join(outside, stageName);
+    let stageRemoved = false;
+    let syncFailed = false;
+    vi.resetModules();
+    await swapBeforeDirectoryMutation(
+      (invocation) =>
+        invocation.operation === "link" &&
+        invocation.sourcePath === path &&
+        invocation.targetPath?.endsWith(".stage") === true,
+      () => {
+        writeFileSync(outsideReport, "outside-report", { mode: FILE_MODE });
+        replaceParentWithOutsideLink(parent, displaced, outside);
+      },
+      (invocation) => {
+        if (invocation.operation === "unlink" && invocation.sourcePath.endsWith(".stage")) {
+          stageRemoved = true;
+        }
+      },
+      () => {
+        if (!stageRemoved || syncFailed) return false;
+        syncFailed = true;
+        return true;
+      },
+    );
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: parent },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "target-mutated" }));
+    expect(statSync(outsideReport).nlink).toBe(1);
+    expect(existsSync(outsideStage)).toBe(false);
   });
 
   it("recovers a partial stage left by a body-free write failure", async () => {
@@ -1830,19 +2108,16 @@ describe("publishSafeArtifactFileSet", () => {
   it("restores a marker when unlink succeeds but reports failure", async () => {
     const base = freshDir();
     const path = join(base, "report.json");
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let failed = false;
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
-        Reflect.apply(actual.unlinkSync, actual, args);
-        if (!failed) {
-          failed = true;
-          throw Object.assign(new Error(`unlink failed: ${path}`), { code: "EIO" });
-        }
-      },
-    }));
+    await mockDirectoryMutation((invocation, perform) => {
+      perform();
+      if (invocation.operation === "unlink" && !failed) {
+        failed = true;
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      }
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
     expect(() =>
       isolated.publishSafeArtifactFileSet(
@@ -1898,10 +2173,6 @@ describe("publishSafeArtifactFileSet", () => {
     vi.resetModules();
     vi.doMock("node:fs", () => ({
       ...actual,
-      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
-        Reflect.apply(actual.unlinkSync, actual, args);
-        if (String(args[0]).endsWith(".stage")) removedStage = true;
-      },
       fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
         if (removedStage && !failed) {
           failed = true;
@@ -1910,6 +2181,13 @@ describe("publishSafeArtifactFileSet", () => {
         Reflect.apply(actual.fsyncSync, actual, args);
       },
     }));
+    await mockDirectoryMutation((invocation, perform) => {
+      perform();
+      if (invocation.operation === "unlink" && invocation.sourcePath.endsWith(".stage")) {
+        removedStage = true;
+      }
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
     expect(() =>
       isolated.publishSafeArtifactFileSet(entries, { commitPath: manifest, trustedRoot: base }),
@@ -1960,10 +2238,6 @@ describe("publishSafeArtifactFileSet", () => {
     vi.resetModules();
     vi.doMock("node:fs", () => ({
       ...actual,
-      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
-        Reflect.apply(actual.unlinkSync, actual, args);
-        if (String(args[0]).endsWith(".stage")) stageRemoved = true;
-      },
       readSync: (...args: Parameters<typeof actual.readSync>): number => {
         if (stageRemoved) {
           stageRemoved = false;
@@ -1972,6 +2246,13 @@ describe("publishSafeArtifactFileSet", () => {
         return Reflect.apply(actual.readSync, actual, args);
       },
     }));
+    await mockDirectoryMutation((invocation, perform) => {
+      perform();
+      if (invocation.operation === "unlink" && invocation.sourcePath.endsWith(".stage")) {
+        stageRemoved = true;
+      }
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
     const isolated = await import("./fs-hardening.js");
 
     expect(() =>
@@ -2072,17 +2353,17 @@ describe("publishSafeArtifactFileSet", () => {
 
   it.each(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"])(
     "classifies unsupported hard-link code %s without path disclosure",
-    async (code) => {
+    async (_code) => {
       const base = freshDir();
       const path = join(base, "report.json");
-      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
       vi.resetModules();
-      vi.doMock("node:fs", () => ({
-        ...actual,
-        linkSync: (): never => {
-          throw Object.assign(new Error(`unsupported: ${path}`), { code });
-        },
-      }));
+      await mockDirectoryMutation((invocation, perform) => {
+        if (invocation.operation === "link") {
+          return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.unsupported;
+        }
+        perform();
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+      });
       const isolated = await import("./fs-hardening.js");
       let thrown: unknown;
       try {

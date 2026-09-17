@@ -8,6 +8,7 @@
 // hoisting this module here introduces no dependency cycle.
 
 import { createHash, randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   closeSync,
@@ -16,17 +17,21 @@ import {
   fchmodSync,
   fstatSync,
   fsyncSync,
-  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readSync,
   realpathSync,
-  unlinkSync,
   writeSync,
 } from "node:fs";
 import type { BigIntStats } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import {
+  SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT,
+  type SafeArtifactDirectoryMutationOperation,
+  type SafeArtifactDirectoryMutationRequest,
+} from "./safe-artifact-directory-mutation-protocol.js";
 
 // Owner-only directory: rwx for the owner, nothing for group/other.
 export const DIR_MODE = 0o700;
@@ -174,6 +179,97 @@ interface DirectoryGuard {
   readonly dev: bigint;
   readonly ino: bigint;
   readonly descriptor: number | undefined;
+}
+
+type GuardedDirectoryMutationResult = "success" | "target-exists" | "unsupported" | "failed";
+
+const DIRECTORY_MUTATION_TIMEOUT_MS = 5_000;
+
+function directoryMutationHelperPath(): string {
+  const modulePath = fileURLToPath(import.meta.url);
+  const moduleDirectory = dirname(modulePath);
+  return modulePath.endsWith(".ts")
+    ? resolve(moduleDirectory, "../dist/safe-artifact-directory-mutation.js")
+    : join(moduleDirectory, "safe-artifact-directory-mutation.js");
+}
+
+function guardedParent(
+  guards: readonly DirectoryGuard[],
+  parent: string,
+  artifactClass: SafeArtifactClass,
+): DirectoryGuard {
+  const parentKey = filesystemComparisonPath(parent);
+  const guard = guards.find((candidate) => filesystemComparisonPath(candidate.path) === parentKey);
+  if (guard === undefined || !guards.every(directoryGuardStillMatches)) {
+    throw safeFileError(artifactClass, "target-mutated");
+  }
+  return guard;
+}
+
+function mutationExitResult(status: number | null): GuardedDirectoryMutationResult {
+  if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success) return "success";
+  if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.targetExists) return "target-exists";
+  if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.unsupported) return "unsupported";
+  return "failed";
+}
+
+function directoryMutationRequest(
+  operation: SafeArtifactDirectoryMutationOperation,
+  guard: DirectoryGuard,
+  path: string,
+  targetPath: string | undefined,
+): SafeArtifactDirectoryMutationRequest {
+  const common = {
+    operation,
+    expectedDev: guard.dev.toString(),
+    expectedIno: guard.ino.toString(),
+    source: basename(path),
+  };
+  return targetPath === undefined ? common : { ...common, target: basename(targetPath) };
+}
+
+function runGuardedDirectoryMutation(
+  operation: SafeArtifactDirectoryMutationOperation,
+  path: string,
+  trustedRoot: string,
+  artifactClass: SafeArtifactClass,
+  targetPath?: string,
+): GuardedDirectoryMutationResult {
+  const parent = dirname(resolve(path));
+  if (targetPath !== undefined && dirname(resolve(targetPath)) !== parent) {
+    throw safeFileError(artifactClass, "invalid-publication");
+  }
+  const guards = captureDirectoryGuards(trustedRoot, path, artifactClass);
+  try {
+    const guard = guardedParent(guards, parent, artifactClass);
+    const request = directoryMutationRequest(operation, guard, path, targetPath);
+    // The child validates the OS-established cwd identity, then mutates only relative basenames.
+    // Keep those names off argv and suppress child output so no path value reaches diagnostics.
+    const child = spawnSync(process.execPath, [directoryMutationHelperPath()], {
+      cwd: parent,
+      input: JSON.stringify(request),
+      stdio: ["pipe", "ignore", "ignore"],
+      timeout: DIRECTORY_MUTATION_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    if (!guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
+    if (child.error !== undefined || child.signal !== null) return "failed";
+    return mutationExitResult(child.status);
+  } finally {
+    closeDirectoryGuards(guards, artifactClass);
+  }
+}
+
+function unlinkGuardedPath(
+  path: string,
+  trustedRoot: string,
+  artifactClass: SafeArtifactClass,
+): void {
+  const result = runGuardedDirectoryMutation("unlink", path, trustedRoot, artifactClass);
+  if (result === "success") return;
+  throw safeFileError(artifactClass, "publish-failed");
 }
 
 function lstatDirectory(path: string, artifactClass: SafeArtifactClass): BigIntStats {
@@ -1026,7 +1122,7 @@ function removePublicationIntent(
   });
   try {
     verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
-    unlinkSync(path);
+    unlinkGuardedPath(path, trustedRoot, artifactClass);
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
     if (error instanceof SafeArtifactFileError) throw error;
@@ -1308,7 +1404,7 @@ function removeVerifiedStage(entry: PreparedPublicationEntry): void {
       artifactClass: entry.artifactClass,
       trustedRoot: entry.trustedRoot,
     });
-    unlinkSync(entry.stagePath);
+    unlinkGuardedPath(entry.stagePath, entry.trustedRoot, entry.artifactClass);
     syncDirectory(dirname(entry.stagePath), entry.trustedRoot, entry.artifactClass);
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
@@ -1368,56 +1464,23 @@ function acceptRecoveredTarget(entry: PreparedPublicationEntry, recovering: bool
   }
 }
 
-function finishGuardedLink(
-  guards: readonly DirectoryGuard[],
-  entry: PreparedPublicationEntry,
-): void {
-  if (!guards.every(directoryGuardStillMatches)) {
-    throw safeFileError(entry.artifactClass, "target-mutated");
-  }
-  closeDirectoryGuards(guards, entry.artifactClass);
-}
-
-const UNSUPPORTED_HARD_LINK_CODES = new Set(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
-
-function handleLinkFailure(
-  error: unknown,
-  entry: PreparedPublicationEntry,
-  recovering: boolean,
-  guards: readonly DirectoryGuard[],
-): boolean {
-  const code = errorCode(error);
-  if (code === "EEXIST") {
-    try {
-      acceptRecoveredTarget(entry, recovering);
-      finishGuardedLink(guards, entry);
-      return false;
-    } catch (recoveryError) {
-      closeDirectoryGuardsIgnoringErrors(guards);
-      throw recoveryError;
-    }
-  }
-  closeDirectoryGuardsIgnoringErrors(guards);
-  const kind =
-    code !== undefined && UNSUPPORTED_HARD_LINK_CODES.has(code)
-      ? "publish-unsupported"
-      : "publish-failed";
-  throw safeFileError(entry.artifactClass, kind);
-}
-
 function linkPreparedEntry(entry: PreparedPublicationEntry, recovering: boolean): boolean {
-  const guards = captureDirectoryGuards(entry.trustedRoot, entry.path, entry.artifactClass);
-  try {
-    linkSync(entry.stagePath, entry.path);
-    finishGuardedLink(guards, entry);
-    return true;
-  } catch (error) {
-    if (error instanceof SafeArtifactFileError) {
-      closeDirectoryGuardsIgnoringErrors(guards);
-      throw error;
-    }
-    return handleLinkFailure(error, entry, recovering, guards);
+  const result = runGuardedDirectoryMutation(
+    "link",
+    entry.stagePath,
+    entry.trustedRoot,
+    entry.artifactClass,
+    entry.path,
+  );
+  if (result === "success") return true;
+  if (result === "target-exists") {
+    acceptRecoveredTarget(entry, recovering);
+    return false;
   }
+  throw safeFileError(
+    entry.artifactClass,
+    result === "unsupported" ? "publish-unsupported" : "publish-failed",
+  );
 }
 
 function publishPreparedEntry(entry: PreparedPublicationEntry, recovering: boolean): void {
@@ -1446,7 +1509,7 @@ function cleanupPublishedStage(entry: PreparedPublicationEntry): void {
     throw safeFileError(entry.artifactClass, "recovery-conflict");
   }
   try {
-    unlinkSync(entry.stagePath);
+    unlinkGuardedPath(entry.stagePath, entry.trustedRoot, entry.artifactClass);
   } catch {
     restoreRecoveryMarker(entry, dirname(entry.stagePath));
     throw safeFileError(entry.artifactClass, "publish-failed");
@@ -1463,9 +1526,14 @@ function cleanupPublishedStage(entry: PreparedPublicationEntry): void {
 
 function restoreRecoveryMarker(entry: PreparedPublicationEntry, parent: string): void {
   if (pathExists(entry.stagePath, entry.artifactClass)) return;
-  try {
-    linkSync(entry.path, entry.stagePath);
-  } catch {
+  const result = runGuardedDirectoryMutation(
+    "link",
+    entry.path,
+    entry.trustedRoot,
+    entry.artifactClass,
+    entry.stagePath,
+  );
+  if (result !== "success" && result !== "target-exists") {
     throw safeFileError(entry.artifactClass, "durability-failed");
   }
   syncDirectory(parent, entry.trustedRoot, entry.artifactClass);
