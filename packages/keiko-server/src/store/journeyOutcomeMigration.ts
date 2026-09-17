@@ -1,7 +1,36 @@
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "../observability/index.js";
+
+const STORE_JOURNEY_OUTCOMES_MIGRATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "store.journey-outcomes.migration",
+  category: "setup",
+  owner: "keiko-server",
+  emitter: "store.journeyOutcomeMigration.migrateJourneyOutcomeProjection",
+  fields: {
+    migratedCount: { type: "integer", dataClass: "count", required: true },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["prepared"],
+    },
+    storeSchemaVersion: { type: "integer", dataClass: "safe-version", required: true },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["ui-store-migration"],
+  proofIds: ["store.journey-outcomes.migration.count"],
+  releaseImpact: "patch",
+});
 
 const PROJECTION_SQL = `CREATE TABLE git_journey_outcomes_v32 (
   remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
@@ -65,9 +94,11 @@ export function migrateJourneyOutcomeProjection(
   db.exec(
     "DROP TABLE git_journey_outcomes; ALTER TABLE git_journey_outcomes_v32 RENAME TO git_journey_outcomes;",
   );
-  activityLog?.write({
-    category: "setup",
-    op: "store.journey-outcomes.migration",
-    extra: { storeSchemaVersion: 32, stage: "prepared", migratedCount },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      STORE_JOURNEY_OUTCOMES_MIGRATION_OPERATION,
+      {},
+      { storeSchemaVersion: 32, stage: "prepared", migratedCount },
+    ),
+  );
 }
