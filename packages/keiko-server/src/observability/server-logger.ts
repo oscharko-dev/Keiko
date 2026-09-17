@@ -25,6 +25,10 @@
 //    and body-free. See `reportServerLogFailure` in `server-log.ts`.
 
 import { performance } from "node:perf_hooks";
+import {
+  ACTIVITY_LOG_EVENT_REGISTRATION,
+  activityLogEventRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { resolveServerLogThreshold, serverLogLevelEnabled } from "./log-level.js";
 import type { ServerLogLevel, ServerLogThreshold } from "./log-level.js";
@@ -148,7 +152,7 @@ function buildEvent(
   input: ServerLogEventInput,
   binding: ResolvedBinding,
 ): ServerLogEvent {
-  return {
+  const event: ServerLogEvent = {
     level,
     category: input.category ?? binding.category ?? FALLBACK_CATEGORY,
     op: input.op,
@@ -159,6 +163,18 @@ function buildEvent(
     errorKind: input.errorKind,
     extra: mergeExtra(binding, input),
   };
+  const registration = activityLogEventRegistration(
+    input as unknown as Readonly<Record<PropertyKey, unknown>>,
+  );
+  if (registration !== undefined) {
+    Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
+      value: registration,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  }
+  return event;
 }
 
 export interface ServerLoggerOptions {
