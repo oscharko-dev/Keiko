@@ -200,9 +200,64 @@ const MUTATION_COMPLETED_OPERATION = defineActivityLogOperation({
         "internal-error",
       ],
     },
-    rejectionReason: { type: "string", dataClass: "error-kind", required: false, maxLength: 40 },
-    failureClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 40 },
-    identityIssue: { type: "string", dataClass: "error-kind", required: false, maxLength: 40 },
+    rejectionReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "already-exists",
+        "base-missing",
+        "head-unpublished",
+        "validation-error",
+        "permission-denied",
+        "not-found",
+        "rate-limited",
+        "provider-unavailable",
+        "unknown",
+        "non-fast-forward",
+        "fetch-first",
+        "no-upstream",
+        "auth-failed",
+        "protected-ref",
+        "remote-unavailable",
+        "not-mergeable",
+        "checks-failing",
+        "approvals-missing",
+        "conflict",
+        "head-modified",
+        "strategy-unavailable",
+        "branch-protection",
+        "already-merged",
+      ],
+    },
+    failureClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "argv-invalid",
+        "invocation-error",
+        "output-truncated",
+        "number-unparsable",
+        "identity-unparsable",
+      ],
+    },
+    identityIssue: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "json-invalid",
+        "output-redacted",
+        "shape-invalid",
+        "repository-mismatch",
+        "head-repository-mismatch",
+        "head-ref-mismatch",
+        "base-ref-mismatch",
+        "draft-mismatch",
+        "state-not-open",
+      ],
+    },
     stdoutBytes: { type: "integer", dataClass: "count", required: false },
     stderrBytes: { type: "integer", dataClass: "count", required: false },
     exitCode: { type: "integer", dataClass: "count", required: false },
@@ -1041,8 +1096,11 @@ export interface GitDeliveryFailureFields {
   readonly exitCode?: number;
 }
 
-function admittedString(value: unknown): string | undefined {
-  return typeof value === "string" && closedFailureDetailValue(value) ? value : undefined;
+type MutationFailureStringField = "rejectionReason" | "failureClass" | "identityIssue";
+
+function admittedString(fieldName: MutationFailureStringField, value: unknown): string | undefined {
+  const values: readonly string[] = MUTATION_COMPLETED_OPERATION.fields[fieldName].values;
+  return typeof value === "string" && values.includes(value) ? value : undefined;
 }
 
 function admittedCount(value: unknown): number | undefined {
@@ -1064,9 +1122,15 @@ export function executionFailureDetail(
 ): GitDeliveryFailureFields {
   if (outcome.status !== "failed" && outcome.status !== "recovery-required") return {};
   const result: unknown = outcome.executionResult;
-  const rejectionReason = admittedString(failureValue(result, detail, "rejectionReason"));
-  const failureClass = admittedString(failureValue(result, detail, "failureClass"));
-  const identityIssue = admittedString(failureValue(result, detail, "identityIssue"));
+  const rejectionReason = admittedString(
+    "rejectionReason",
+    failureValue(result, detail, "rejectionReason"),
+  );
+  const failureClass = admittedString("failureClass", failureValue(result, detail, "failureClass"));
+  const identityIssue = admittedString(
+    "identityIssue",
+    failureValue(result, detail, "identityIssue"),
+  );
   const stdoutBytes = admittedCount(failureValue(result, detail, "stdoutBytes"));
   const stderrBytes = admittedCount(failureValue(result, detail, "stderrBytes"));
   const exitCode = admittedCount(failureValue(result, detail, "exitCode"));
