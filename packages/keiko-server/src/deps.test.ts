@@ -699,6 +699,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         state: "started",
         activeRunCount: 0,
         openSseStreamCount: openStreamsAtTeardown,
+        completeness: "complete",
+        loss: "none",
       },
     });
     expect(shutdown[1]).toMatchObject({
@@ -713,6 +715,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         // leave only the `started` half behind (CodeRabbit review, 2026-09-10).
         cleanup: "completed",
         durationMs: expect.any(Number) as unknown,
+        completeness: "complete",
+        loss: "none",
       },
     });
     // One id joins the pair, so `keiko support analyze --correlation-id <id>` reads the teardown.
@@ -1031,7 +1035,12 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         expect.objectContaining({
           op: "task-workspace.repository.registered",
           correlationId: "provision-correlation-1",
-          extra: { repositoryId: instance.repositoryId, granted: false },
+          extra: {
+            repositoryId: instance.repositoryId,
+            granted: false,
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       ]);
       // The operator grants the repository through the existing surface; the next exposure derives.
@@ -1108,6 +1117,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
               extra: {
                 repositoryId: instance.repositoryId,
                 reason: "ui-database-inside-repository",
+                completeness: "complete",
+                loss: "none",
               },
             }),
       ]);
@@ -2167,7 +2178,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         category: "memory",
         op: "memory.audit.state-cache.seeded",
         correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
-        extra: { recordCount: 1 },
+        extra: { recordCount: 1, completeness: "complete", loss: "none" },
       }),
     );
     expect(

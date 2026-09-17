@@ -121,6 +121,12 @@ import {
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
+  logMemoryAuditStateCacheSeeded,
+  logRuntimeShutdown,
+  logTaskWorkspaceRepositoryRegistration,
+  type RuntimeShutdownCleanup,
+} from "./deps-activity.js";
+import {
   logCommandTermination,
   processServerLogSink,
   processServerLogSinkFor,
@@ -2155,12 +2161,7 @@ function buildMemoryVault(
     );
   }
   postCommitAudit.seed(records);
-  processServerLogSink().write({
-    category: "memory",
-    op: "memory.audit.state-cache.seeded",
-    correlationId: bootstrapCorrelationId,
-    extra: { recordCount: records.length },
-  });
+  logMemoryAuditStateCacheSeeded(processServerLogSink(), bootstrapCorrelationId, records.length);
   return vault;
 }
 
@@ -2430,22 +2431,23 @@ function ensureBoundRepositoryProject(input: {
     // Recorded, never silent: an unregistered repository gets no script trust, so every
     // verification in its task workspace is refused, and this line names why (CodeRabbit review,
     // PR #3452). Body-free: the repository's id and a closed reason, never a path.
-    (input.activityLog ?? processServerLogSink()).write({
-      level: "warn",
-      category: "security",
-      op: "task-workspace.repository.registration-refused",
-      correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
-      extra: { repositoryId: input.instance.repositoryId, reason: "ui-database-inside-repository" },
-    });
+    logTaskWorkspaceRepositoryRegistration(
+      input.activityLog ?? processServerLogSink(),
+      input.correlationId,
+      {
+        outcome: "refused",
+        repositoryId: input.instance.repositoryId,
+        reason: "ui-database-inside-repository",
+      },
+    );
     return;
   }
   input.uiStore.createProject(repositoryRoot, basename(repositoryRoot));
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "task-workspace.repository.registered",
-    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: { repositoryId: input.instance.repositoryId, granted: false },
-  });
+  logTaskWorkspaceRepositoryRegistration(
+    input.activityLog ?? processServerLogSink(),
+    input.correlationId,
+    { outcome: "registered", repositoryId: input.instance.repositoryId, granted: false },
+  );
 }
 
 function withManagedWorkspaceIdentity(
@@ -4929,31 +4931,6 @@ function buildCodingContextPortsDependency(
     : { codingContextGitHubPort: args.options.codingContextGitHubPort };
 }
 
-/**
- * The shutdown's own evidence (AGENTS.md §8). A customer only ever has the activity log: when this
- * process goes away — an app quit, a service restart, an updater, the dev runner's own reload — the
- * log used to show only the SHAPES that leaves behind (SSE streams closing, an aborted gateway
- * fetch, a run settling as `cancelled`) and nothing saying a shutdown had begun. Reconstructing run
- * 9's cancellation needed the dev runner's console, which no customer has (2026-09-10). These two
- * lines bracket the teardown under one minted correlation id, name what was still live when it
- * began, and are the join key for the terminal lines that follow.
- */
-function recordRuntimeShutdown(
-  activityLog: ServerLogSink,
-  correlationId: string,
-  state: "started" | "completed",
-  extra: Readonly<Record<string, unknown>>,
-): void {
-  activityLog.write({
-    // A faulted cleanup makes the completion line a warning even when the teardown itself ended.
-    level: state === "started" || extra.cleanup === "faulted" ? "warn" : "info",
-    category: "process",
-    op: "server.runtime.shutdown",
-    correlationId,
-    extra: { state, ...extra },
-  });
-}
-
 // Everything the teardown itself tears down, in the order the graph requires. Extracted so the
 // dispose closure stays the shutdown's EVIDENCE bracket and nothing more.
 // The completion line is written whatever the cleanup does (CodeRabbit review, 2026-09-10): a
@@ -4962,11 +4939,11 @@ function recordRuntimeShutdown(
 // rethrown only when nothing else was already failing, so the original error survives.
 export async function disposeRuntimeServicesRecorded(
   dispose: () => Promise<void>,
-  record: (cleanup: Readonly<Record<string, unknown>>) => void,
+  record: (cleanup: RuntimeShutdownCleanup) => void,
   alreadyFailing: boolean,
 ): Promise<void> {
   let failure: unknown;
-  let cleanup: Readonly<Record<string, unknown>> = { cleanup: "completed" };
+  let cleanup: RuntimeShutdownCleanup = { cleanup: "completed" };
   try {
     await dispose();
   } catch (error) {
@@ -4974,7 +4951,7 @@ export async function disposeRuntimeServicesRecorded(
     // The whole body-free description (class, code, dist-anchored frames, cause chain): while an
     // earlier failure propagates, this line is the only evidence of why the cleanup itself failed
     // (owner review, PR #3452).
-    cleanup = { cleanup: "faulted", ...teardownFaultDescription(error) };
+    cleanup = teardownFaultDescription(error);
   } finally {
     record(cleanup);
   }
@@ -4992,10 +4969,26 @@ export class TeardownFaults extends AggregateError {
 // A teardown that failed in several steps is described by its first failure, with the count and
 // every failed step's class in step order, so no fault is dropped from the completion line (owner
 // review, PR #3452). A single failure keeps its full description, as before.
-function teardownFaultDescription(error: unknown): Readonly<Record<string, unknown>> {
+function teardownFaultDescription(error: unknown): RuntimeShutdownCleanup {
   const failures: readonly unknown[] = error instanceof TeardownFaults ? error.errors : [error];
+  const described = describeError(failures[0]);
   return {
-    ...describeError(failures[0]),
+    cleanup: "faulted",
+    errorClass: described.errorClass,
+    ...(described.code === undefined ? {} : { code: described.code }),
+    ...(described.gatewayRequestId === undefined
+      ? {}
+      : { gatewayRequestId: described.gatewayRequestId }),
+    ...(described.httpStatus === undefined ? {} : { httpStatus: described.httpStatus }),
+    ...(described.retryAfterMs === undefined ? {} : { retryAfterMs: described.retryAfterMs }),
+    ...(described.partialUsage === undefined
+      ? {}
+      : {
+          promptTokens: described.partialUsage.promptTokens,
+          completionTokens: described.partialUsage.completionTokens,
+        }),
+    ...(described.frames === undefined ? {} : { frames: described.frames }),
+    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
     failedStepCount: failures.length,
     failedStepErrorClasses: failures.map((failure) => describeError(failure).errorClass),
   };
@@ -5089,7 +5082,8 @@ function createUiHandlerDispose(
     const activeRunCount =
       services.codingRuntimeControlPlane?.orchestrator.hasLiveRun() === true ? 1 : 0;
     markServerShuttingDown();
-    recordRuntimeShutdown(activityLog, correlationId, "started", {
+    logRuntimeShutdown(activityLog, correlationId, {
+      state: "started",
       openSseStreamCount,
       activeRunCount,
     });
@@ -5117,7 +5111,8 @@ function createUiHandlerDispose(
             codingAppSessionDenialWindows,
           ),
         (cleanup) => {
-          recordRuntimeShutdown(activityLog, correlationId, "completed", {
+          logRuntimeShutdown(activityLog, correlationId, {
+            state: "completed",
             durationMs: Date.now() - startedAtMs,
             openSseStreamCount,
             activeRunCount,
