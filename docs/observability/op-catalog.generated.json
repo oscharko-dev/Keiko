@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "45bfe2fe802b5cbc9f632430f6c03bd4ea2ed628fe756f9781062e4ab06af95e",
+    "catalogDigest": "da394d9735e36fb9e506bbb31c911b1b5c418791e426a2c6c8843b6d2338b1be",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -201,6 +201,112 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/process-log-sink.ts:110",
         "emitterSites": ["packages/keiko-server/src/process-log-sink.ts:184"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "embedding.memory.failed",
+        "category": "embedding",
+        "owner": "keiko-server",
+        "emitter": "memory-embedding.logEmbeddingFailed",
+        "fields": {
+          "modelId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 240
+          },
+          "providerIdentity": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "none",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["memory-embedding-request"],
+        "proofIds": ["embedding.memory.failed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:84",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:354"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "embedding.memory.succeeded",
+        "category": "embedding",
+        "owner": "keiko-server",
+        "emitter": "memory-embedding.logEmbeddingSucceeded",
+        "fields": {
+          "modelId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 240
+          },
+          "providerIdentity": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "embeddingKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["query", "document"]
+          },
+          "dimensions": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "none",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-embedding-request"],
+        "proofIds": ["embedding.memory.succeeded.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:140",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:396"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "embedding.memory.unavailable",
+        "category": "embedding",
+        "owner": "keiko-server",
+        "emitter": "memory-embedding.logEmbeddingUnavailable",
+        "fields": {
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["no-embedding-capable-model", "provider-absent"]
+          },
+          "providerCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "none",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["memory-embedding-unavailable"],
+        "proofIds": ["embedding.memory.unavailable.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:60",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:339"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -725,6 +831,129 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:120",
         "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:261"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "memory.capture.novelty-gate",
+        "category": "memory",
+        "owner": "keiko-server",
+        "emitter": "memory-embedding.logNoveltyDecision",
+        "fields": {
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["inserted", "merged", "suppressed"]
+          },
+          "scopeKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["user", "workspace", "project", "workflow", "global"]
+          },
+          "embedded": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "dedupThreshold": {
+            "type": "number",
+            "dataClass": "count",
+            "required": true
+          },
+          "neighborCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["suppressed-by-forget", "suppressed-by-rejection"]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-capture-novelty"],
+        "proofIds": ["memory.capture.novelty-gate.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:189",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:892"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "memory.embedding.invalidated",
+        "category": "memory",
+        "owner": "keiko-server",
+        "emitter": "memory-embedding.logEmbeddingInvalidated",
+        "fields": {
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["no-embedding", "store-rejected"]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-embedding-invalidation"],
+        "proofIds": ["memory.embedding.invalidated.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:166",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:527"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "memory.embedding.invalidation-failed",
+        "category": "memory",
+        "owner": "keiko-server",
+        "emitter": "memory-embedding.logEmbeddingStoreRejected.invalidation",
+        "fields": {
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "none",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["memory-embedding-invalidation"],
+        "proofIds": ["memory.embedding.invalidation-failed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:122",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:385"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "memory.embedding.store-rejected",
+        "category": "memory",
+        "owner": "keiko-server",
+        "emitter": "memory-embedding.logEmbeddingStoreRejected.store",
+        "fields": {
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "none",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["memory-embedding-storage"],
+        "proofIds": ["memory.embedding.store-rejected.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:104",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:380"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3658,19 +3887,19 @@
     {
       "op": "embedding.memory.failed",
       "category": "embedding",
-      "site": "packages/keiko-server/src/memory-embedding.ts:174",
+      "site": "packages/keiko-server/src/memory-embedding.ts:87",
       "package": "keiko-server"
     },
     {
       "op": "embedding.memory.succeeded",
       "category": "embedding",
-      "site": "packages/keiko-server/src/memory-embedding.ts:200",
+      "site": "packages/keiko-server/src/memory-embedding.ts:143",
       "package": "keiko-server"
     },
     {
       "op": "embedding.memory.unavailable",
       "category": "embedding",
-      "site": "packages/keiko-server/src/memory-embedding.ts:161",
+      "site": "packages/keiko-server/src/memory-embedding.ts:63",
       "package": "keiko-server"
     },
     {
@@ -4426,6 +4655,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "invalidation-failed",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:537",
+      "package": "keiko-server"
+    },
+    {
       "op": "local-knowledge.indexing",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2935",
@@ -4505,7 +4740,7 @@
     {
       "op": "memory.capture.novelty-gate",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:686",
+      "site": "packages/keiko-server/src/memory-embedding.ts:192",
       "package": "keiko-server"
     },
     {
@@ -4539,31 +4774,19 @@
     {
       "op": "memory.embedding.invalidated",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:330",
+      "site": "packages/keiko-server/src/memory-embedding.ts:169",
       "package": "keiko-server"
     },
     {
       "op": "memory.embedding.invalidation-failed",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:341",
+      "site": "packages/keiko-server/src/memory-embedding.ts:125",
       "package": "keiko-server"
     },
     {
       "op": "memory.embedding.store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:298",
-      "package": "keiko-server"
-    },
-    {
-      "op": "memory.embedding.store-rejected",
-      "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:321",
-      "package": "keiko-server"
-    },
-    {
-      "op": "memory.embedding.store-rejected",
-      "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:721",
+      "site": "packages/keiko-server/src/memory-embedding.ts:107",
       "package": "keiko-server"
     },
     {
@@ -4862,6 +5085,24 @@
       "op": "sse.stream.closed",
       "category": "http",
       "site": "packages/keiko-server/src/sse-write.ts:40",
+      "package": "keiko-server"
+    },
+    {
+      "op": "store-rejected",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:496",
+      "package": "keiko-server"
+    },
+    {
+      "op": "store-rejected",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:519",
+      "package": "keiko-server"
+    },
+    {
+      "op": "store-rejected",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:942",
       "package": "keiko-server"
     },
     {
@@ -5668,6 +5909,7 @@
     "indexing.source.started",
     "indexing.start.accepted",
     "indexing.start.refused",
+    "invalidation-failed",
     "knowledge.log.sink-failed",
     "knowledge.store.encryption-rejected",
     "knowledge.store.quarantined",
@@ -5772,6 +6014,7 @@
     "speech.tts.stream.peek.failed",
     "sse.run-events.resume",
     "sse.stream.closed",
+    "store-rejected",
     "store.encryption-checkpoint-degraded",
     "store.encryption-migrated",
     "store.journey-outcomes.migration",
