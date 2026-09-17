@@ -5,12 +5,17 @@ import { Worker } from "node:worker_threads";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
 
 import {
   USEARCH_RUNTIME_MANIFEST,
   type UsearchRuntimeApproval,
+  type UsearchRuntimeTargetKey,
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "./usearch-runtime-manifest.js";
@@ -23,6 +28,41 @@ import {
   type UsearchWorkerMessage,
 } from "./usearch-worker-protocol.js";
 import { scoreVectorWithNorms, vectorNorm } from "./vector-scoring.js";
+
+const SEARCH_NATIVE_RUNTIME_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.native-runtime-resolved",
+  category: "search",
+  owner: "keiko-local-knowledge",
+  emitter: "retrieval/usearch-ann-index.logNativeRuntimeResolved",
+  fields: {
+    targetKey: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"],
+    },
+    resolutionState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["resolved", "unavailable", "invalid"],
+    },
+    version: {
+      type: "string",
+      dataClass: "safe-version",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["native-runtime-unavailable", "native-runtime-invalid"],
+  proofIds: ["search.native-runtime-resolved.state"],
+  releaseImpact: "patch",
+});
 
 export interface UsearchVectorEntry {
   readonly id: string;
@@ -356,19 +396,27 @@ function cacheEntryStillMatches(
 // that already justifies not re-hashing on every request (KEIKO-0409).
 function logNativeRuntimeResolved(
   logSink: KnowledgeLogSink | undefined,
-  targetKey: string,
+  targetKey: UsearchRuntimeTargetKey,
   result: TargetRuntimeResult,
 ): void {
-  emitKnowledgeLogEvent(logSink, {
-    level: typeof result === "string" ? "warn" : "info",
-    category: "search",
-    op: "search.native-runtime-resolved",
-    extra: {
-      targetKey,
-      resolved: typeof result !== "string",
-      ...(typeof result === "string" ? { reason: result } : { version: result.expectedVersion }),
-    },
-  });
+  const resolutionState = typeof result === "string" ? result : "resolved";
+  emitKnowledgeLogEvent(
+    logSink,
+    activityLogEvent(
+      SEARCH_NATIVE_RUNTIME_RESOLVED_OPERATION,
+      typeof result === "string"
+        ? {
+            level: "warn",
+            errorKind: result === "invalid" ? "validation-failed" : "unavailable",
+          }
+        : { level: "info" },
+      {
+        targetKey,
+        resolutionState,
+        ...(typeof result === "string" ? {} : { version: result.expectedVersion }),
+      },
+    ),
+  );
 }
 
 function targetRuntime(

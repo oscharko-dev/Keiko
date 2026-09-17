@@ -27,6 +27,10 @@ import {
   embeddingIdentityKey,
   isValidVectorIndexQuery,
 } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { getCapsule } from "../capsule-lifecycle.js";
 import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
@@ -42,6 +46,30 @@ import {
   type VectorIndexSearchRequest,
   type VectorIndexSearchResult,
 } from "./vector-index.js";
+
+const SEARCH_INDEX_INVALIDATED_FOR_CAPSULE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.index-invalidated-for-capsule",
+  category: "search",
+  owner: "keiko-local-knowledge",
+  emitter: "retrieval/local-vector-index-port.logIndexInvalidatedForCapsule",
+  fields: {
+    namespace: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["knowledge", "repo"],
+    },
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["vector-index-identity-mismatch"],
+  proofIds: ["search.index-invalidated-for-capsule.digest"],
+  releaseImpact: "patch",
+});
 
 // Two closed namespaces are backed by the LK store: `knowledge` (capsules the pillar owns)
 // and `repo` (repository-pod capsules governed by ADR-0152 D8). Every other value in the port's
@@ -163,12 +191,14 @@ function logIndexInvalidatedForCapsule(
   namespace: LocalKnowledgeStoreNamespace,
   capsuleId: KnowledgeCapsuleId,
 ): void {
-  emitKnowledgeLogEvent(logSink, {
-    level: "warn",
-    category: "search",
-    op: "search.index-invalidated-for-capsule",
-    extra: { namespace, capsuleIdDigest: capsuleIdDigest(capsuleId) },
-  });
+  emitKnowledgeLogEvent(
+    logSink,
+    activityLogEvent(
+      SEARCH_INDEX_INVALIDATED_FOR_CAPSULE_OPERATION,
+      { level: "warn", errorKind: "validation-failed" },
+      { namespace, capsuleIdDigest: capsuleIdDigest(capsuleId) },
+    ),
+  );
 }
 
 function toPortDiagnostics(source: RetrievalVectorIndexDiagnostics): VectorIndexDiagnostics {
