@@ -45,6 +45,7 @@ import {
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
   replaceSafeArtifactFile,
+  safeArtifactContainmentAssurance,
   safeArtifactPermissionAssurance,
   verifySafeArtifactFileDescriptor,
   bindSecurityLogCorrelation,
@@ -152,6 +153,7 @@ describe("keiko-security package surface", () => {
     expect(typeof verifySafeArtifactFileDescriptor).toBe("function");
     expect(typeof publishSafeArtifactFileSet).toBe("function");
     expect(typeof replaceSafeArtifactFile).toBe("function");
+    expect(typeof safeArtifactContainmentAssurance).toBe("function");
     expect(typeof safeArtifactPermissionAssurance).toBe("function");
   });
 

@@ -21,8 +21,8 @@ import {
   mkdirSync,
   openSync,
   readSync,
+  readdirSync,
   realpathSync,
-  renameSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -91,8 +91,11 @@ export const SAFE_ARTIFACT_FILE_FAILURE_KINDS = [
 ] as const;
 
 export type SafeArtifactClass = (typeof SAFE_ARTIFACT_CLASSES)[number];
+export type SafeArtifactContainmentAssurance = "private-root-guarded" | "platform-inherited";
+export type SafeArtifactDurabilityAssurance = "verified" | "directory-sync-unavailable";
 export type SafeArtifactPermissionAssurance = "verified-private" | "platform-inherited";
-export type SafeArtifactOpenMode = "append-existing-or-create" | "exclusive-create" | "read";
+export type SafeArtifactOpenMode =
+  "append-existing-or-create" | "exclusive-create" | "read" | "read-write-existing";
 export type SafeArtifactFileFailureKind = (typeof SAFE_ARTIFACT_FILE_FAILURE_KINDS)[number];
 
 const SAFE_ARTIFACT_CLASS_SET: ReadonlySet<string> = new Set(SAFE_ARTIFACT_CLASSES);
@@ -130,6 +133,11 @@ export interface OpenSafeArtifactFileOptions {
 /** Windows inherits privacy from the operator-selected root ACL; Node cannot attest that DACL. */
 export function safeArtifactPermissionAssurance(): SafeArtifactPermissionAssurance {
   return process.platform === "win32" ? "platform-inherited" : "verified-private";
+}
+
+/** Node has no portable descriptor-relative create; containment inherits the guarded root. */
+export function safeArtifactContainmentAssurance(): SafeArtifactContainmentAssurance {
+  return process.platform === "win32" ? "platform-inherited" : "private-root-guarded";
 }
 
 function safeFileError(
@@ -369,6 +377,7 @@ function refuseSymlinkFallback(path: string, artifactClass: SafeArtifactClass): 
 
 function openFlags(mode: SafeArtifactOpenMode): number {
   if (mode === "read") return constants.O_RDONLY;
+  if (mode === "read-write-existing") return constants.O_RDWR;
   const create = constants.O_WRONLY | constants.O_CREAT;
   return mode === "exclusive-create" ? create | constants.O_EXCL : create | constants.O_APPEND;
 }
@@ -473,6 +482,9 @@ function validateOpenedArtifact(
   guards: readonly DirectoryGuard[],
 ): void {
   verifyDescriptorIdentity(descriptor, path, options.artifactClass);
+  if (!guards.every(directoryGuardStillMatches)) {
+    throw safeFileError(options.artifactClass, "target-mutated");
+  }
   if (options.mode !== "read") tightenDescriptor(descriptor, options.artifactClass);
   const opened = verifyDescriptorIdentity(descriptor, path, options.artifactClass);
   if (!permissionIsPrivate(opened.mode)) {
@@ -485,9 +497,12 @@ function validateOpenedArtifact(
 
 /**
  * Opens without following the final symlink and verifies the descriptor before any caller write.
- * Windows lacks stable no-follow directory descriptors and Node cannot inspect NTFS DACLs. The
- * lexical/realpath chain rejects redirects, identities are checked before and after open, and the
- * module-level permission assurance is therefore `platform-inherited`, never `verified-private`.
+ * POSIX containment relies on the verified owner-private ancestor chain because Node has no
+ * descriptor-relative open API. A same-UID ancestor mutation can create an empty file before the
+ * post-open guard rejects it, so the closed assurance is `private-root-guarded`, not absolute
+ * containment; no descriptor is returned and no content or chmod reaches the redirected file.
+ * Windows also lacks stable no-follow directory descriptors and Node cannot inspect NTFS DACLs.
+ * Its permission assurance is therefore `platform-inherited`, never `verified-private`.
  */
 export function openSafeArtifactFile(path: string, options: OpenSafeArtifactFileOptions): number {
   const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
@@ -519,6 +534,7 @@ export interface SafeArtifactPublicationOptions {
 export interface SafeArtifactPublicationResult {
   readonly status: "published" | "recovered";
   readonly permissionAssurance: SafeArtifactPermissionAssurance;
+  readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
 }
 
 export interface ReplaceSafeArtifactFileOptions {
@@ -529,6 +545,7 @@ export interface ReplaceSafeArtifactFileOptions {
 interface PreparedPublicationEntry {
   readonly path: string;
   readonly stagePath: string;
+  readonly publicationId: string;
   readonly bytes: Buffer;
   readonly artifactClass: SafeArtifactClass;
   readonly trustedRoot: string;
@@ -539,9 +556,25 @@ function publicationId(
   commitPath: string,
 ): string {
   const hash = createHash("sha256");
-  const paths = entries.map((entry) => resolve(entry.path)).sort();
-  for (const path of paths) hash.update(path).update("\0");
-  hash.update(resolve(commitPath));
+  const ordered = [...entries].sort((left, right) =>
+    resolve(left.path).localeCompare(resolve(right.path)),
+  );
+  for (const entry of ordered) {
+    const bytes =
+      typeof entry.contents === "string"
+        ? Buffer.from(entry.contents, "utf8")
+        : Buffer.from(entry.contents);
+    hash
+      .update(entry.artifactClass)
+      .update("\0")
+      .update(resolve(entry.path))
+      .update("\0")
+      .update(String(bytes.length))
+      .update("\0")
+      .update(bytes)
+      .update("\0");
+  }
+  hash.update(resolve(commitPath)).update("\0");
   return hash.digest("hex").slice(0, 24);
 }
 
@@ -558,6 +591,7 @@ function preparePublicationEntries(
   return ordered.map((entry, index) => ({
     path: resolve(entry.path),
     stagePath: join(parent, `.keiko-publish-${id}-${String(index)}.stage`),
+    publicationId: id,
     bytes:
       typeof entry.contents === "string"
         ? Buffer.from(entry.contents, "utf8")
@@ -632,7 +666,11 @@ function createStage(entry: PreparedPublicationEntry): void {
   closeArtifactDescriptor(descriptor, entry.artifactClass);
 }
 
-function syncDirectory(path: string, trustedRoot: string, artifactClass: SafeArtifactClass): void {
+function syncDirectory(
+  path: string,
+  trustedRoot: string,
+  artifactClass: SafeArtifactClass,
+): SafeArtifactDurabilityAssurance {
   const guards = captureDirectoryGuards(
     trustedRoot,
     join(path, ".keiko-directory-sync"),
@@ -652,7 +690,10 @@ function syncDirectory(path: string, trustedRoot: string, artifactClass: SafeArt
     if (error instanceof SafeArtifactFileError) throw error;
     throw safeFileError(artifactClass, "durability-failed");
   }
+  const assurance =
+    guards.at(-1)?.descriptor === undefined ? "directory-sync-unavailable" : "verified";
   closeDirectoryGuards(guards, artifactClass);
+  return assurance;
 }
 
 function readExactPrivateFile(
@@ -669,6 +710,7 @@ function readExactPrivateFile(
   try {
     const buffer = Buffer.alloc(expected.length + 1);
     const read = readIntoBuffer(descriptor, buffer, artifactClass);
+    verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
     return read === expected.length && buffer.subarray(0, read).equals(expected);
   } catch (error) {
     if (error instanceof SafeArtifactFileError) throw error;
@@ -734,7 +776,7 @@ function openLinkedStage(entry: PreparedPublicationEntry): number {
   const nonBlocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
   if (noFollow === 0) refuseSymlinkFallback(entry.stagePath, entry.artifactClass);
   try {
-    return openSync(entry.stagePath, constants.O_RDONLY | noFollow | nonBlocking);
+    return openSync(entry.stagePath, constants.O_RDWR | noFollow | nonBlocking);
   } catch (error) {
     if (error instanceof SafeArtifactFileError) throw error;
     throw safeFileError(entry.artifactClass, "read-failed");
@@ -808,7 +850,7 @@ function recoverLinkedStage(entry: PreparedPublicationEntry): boolean {
 function syncRecoveredStage(entry: PreparedPublicationEntry): void {
   const descriptor = openSafeArtifactFile(entry.stagePath, {
     artifactClass: entry.artifactClass,
-    mode: "read",
+    mode: "read-write-existing",
     trustedRoot: entry.trustedRoot,
   });
   try {
@@ -989,17 +1031,26 @@ function restoreRecoveryMarker(entry: PreparedPublicationEntry, parent: string):
   syncDirectory(parent, entry.trustedRoot, entry.artifactClass);
 }
 
+function combineDurabilityAssurance(
+  ...assurances: readonly SafeArtifactDurabilityAssurance[]
+): SafeArtifactDurabilityAssurance {
+  return assurances.includes("directory-sync-unavailable")
+    ? "directory-sync-unavailable"
+    : "verified";
+}
+
 function cleanupPublishedStages(
   entries: readonly PreparedPublicationEntry[],
   parent: string,
-): void {
+): SafeArtifactDurabilityAssurance {
   const commit = entries.at(-1);
-  if (commit === undefined) return;
+  if (commit === undefined) return "verified";
   for (const entry of entries.slice(0, -1)) cleanupPublishedStage(entry);
-  syncDirectory(parent, commit.trustedRoot, commit.artifactClass);
+  const beforeCommitCleanup = syncDirectory(parent, commit.trustedRoot, commit.artifactClass);
   cleanupPublishedStage(commit);
   try {
-    syncDirectory(parent, commit.trustedRoot, commit.artifactClass);
+    const afterCommitCleanup = syncDirectory(parent, commit.trustedRoot, commit.artifactClass);
+    return combineDurabilityAssurance(beforeCommitCleanup, afterCommitCleanup);
   } catch (error) {
     restoreRecoveryMarker(commit, parent);
     throw error;
@@ -1017,6 +1068,53 @@ function publicationArtifactClass(entries: readonly PreparedPublicationEntry[]):
   return entries[0]?.artifactClass ?? "manifest";
 }
 
+function hasUnexpectedPublicationStage(entries: readonly PreparedPublicationEntry[]): boolean {
+  const first = entries[0];
+  if (first === undefined) return false;
+  const expected = new Set(entries.map((entry) => entry.stagePath));
+  const prefix = `.keiko-publish-${first.publicationId}-`;
+  const guards = captureDirectoryGuards(first.trustedRoot, first.stagePath, first.artifactClass);
+  try {
+    const unexpected = readdirSync(dirname(first.stagePath)).some((name) => {
+      const candidate = join(dirname(first.stagePath), name);
+      return name.startsWith(prefix) && name.endsWith(".stage") && !expected.has(candidate);
+    });
+    if (!guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(first.artifactClass, "target-mutated");
+    }
+    closeDirectoryGuards(guards, first.artifactClass);
+    return unexpected;
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(first.artifactClass, "open-failed");
+  }
+}
+
+function exactTerminalPublication(
+  entries: readonly PreparedPublicationEntry[],
+): SafeArtifactPublicationResult | undefined {
+  const existing = entries.filter((entry) => pathExists(entry.path, entry.artifactClass));
+  if (existing.length === 0) return undefined;
+  const artifactClass = publicationArtifactClass(entries);
+  if (existing.length !== entries.length || hasUnexpectedPublicationStage(entries)) {
+    throw safeFileError(artifactClass, "recovery-conflict");
+  }
+  for (const entry of entries) {
+    if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+      throw safeFileError(entry.artifactClass, "target-exists");
+    }
+  }
+  const first = entries[0];
+  if (first === undefined) throw safeFileError(artifactClass, "invalid-publication");
+  const durabilityAssurance = syncDirectory(dirname(first.path), first.trustedRoot, artifactClass);
+  return {
+    status: "recovered",
+    permissionAssurance: safeArtifactPermissionAssurance(),
+    durabilityAssurance,
+  };
+}
+
 /**
  * Publishes related files without replacement; the designated commit artifact appears last.
  * Filesystems without same-directory hard links fail closed as `publish-unsupported`.
@@ -1028,127 +1126,47 @@ export function publishSafeArtifactFileSet(
   validatePublication(entries, options);
   const prepared = preparePublicationEntries(entries, options.commitPath, options.trustedRoot);
   const recovering = publicationHasPath(prepared, "stagePath");
-  if (!recovering && publicationHasPath(prepared, "path")) {
-    throw safeFileError(publicationArtifactClass(prepared), "target-exists");
+  if (!recovering) {
+    const terminal = exactTerminalPublication(prepared);
+    if (terminal !== undefined) return terminal;
   }
   for (const entry of prepared) ensurePreparedStage(entry, recovering);
   const parent = dirname(resolve(options.commitPath));
-  syncDirectory(parent, options.trustedRoot, publicationArtifactClass(prepared));
+  const preparedAssurance = syncDirectory(
+    parent,
+    options.trustedRoot,
+    publicationArtifactClass(prepared),
+  );
   const ordered = orderedForCommit(prepared, options.commitPath);
   for (const entry of ordered) {
     publishPreparedEntry(entry, recovering);
   }
-  syncDirectory(parent, options.trustedRoot, publicationArtifactClass(prepared));
-  cleanupPublishedStages(ordered, parent);
+  const publishedAssurance = syncDirectory(
+    parent,
+    options.trustedRoot,
+    publicationArtifactClass(prepared),
+  );
+  const cleanupAssurance = cleanupPublishedStages(ordered, parent);
   const status = recovering ? "recovered" : "published";
-  return { status, permissionAssurance: safeArtifactPermissionAssurance() };
-}
-
-function replacementStagePath(path: string): string {
-  const id = createHash("sha256").update(resolve(path)).digest("hex").slice(0, 24);
-  return join(dirname(resolve(path)), `.keiko-replace-${id}.stage`);
-}
-
-function prepareReplacementStage(
-  path: string,
-  contents: string | Uint8Array,
-  options: ReplaceSafeArtifactFileOptions,
-): PreparedPublicationEntry {
-  const stagePath = replacementStagePath(path);
-  const bytes =
-    typeof contents === "string" ? Buffer.from(contents, "utf8") : Buffer.from(contents);
-  const entry: PreparedPublicationEntry = {
-    path: resolve(path),
-    stagePath,
-    bytes,
-    artifactClass: options.artifactClass,
-    trustedRoot: resolve(options.trustedRoot),
+  return {
+    status,
+    permissionAssurance: safeArtifactPermissionAssurance(),
+    durabilityAssurance: combineDurabilityAssurance(
+      preparedAssurance,
+      publishedAssurance,
+      cleanupAssurance,
+    ),
   };
-  if (!pathExists(stagePath, options.artifactClass)) {
-    createStage(entry);
-    return entry;
-  }
-  if (!readExactPrivateFile(stagePath, bytes, options.artifactClass, options.trustedRoot)) {
-    throw safeFileError(options.artifactClass, "recovery-conflict");
-  }
-  syncRecoveredStage(entry);
-  return entry;
 }
 
-function assertSafeReplacementTarget(path: string, options: ReplaceSafeArtifactFileOptions): void {
-  const descriptor = openSafeArtifactFile(path, {
-    artifactClass: options.artifactClass,
-    mode: "read",
-    trustedRoot: options.trustedRoot,
-  });
-  closeArtifactDescriptor(descriptor, options.artifactClass);
-}
-
-function validateRenamedStage(
-  descriptor: number,
-  path: string,
-  entry: PreparedPublicationEntry,
-  guards: readonly DirectoryGuard[],
-): void {
-  const opened = verifyDescriptorIdentity(descriptor, path, entry.artifactClass);
-  if (!permissionIsPrivate(opened.mode) || !readMatchesPublication(descriptor, entry)) {
-    throw safeFileError(entry.artifactClass, "target-mutated");
-  }
-  if (!guards.every(directoryGuardStillMatches)) {
-    throw safeFileError(entry.artifactClass, "target-mutated");
-  }
-}
-
-function renamePreparedReplacement(
-  path: string,
-  entry: PreparedPublicationEntry,
-  options: ReplaceSafeArtifactFileOptions,
-): void {
-  const descriptor = openSafeArtifactFile(entry.stagePath, {
-    artifactClass: entry.artifactClass,
-    mode: "read",
-    trustedRoot: entry.trustedRoot,
-  });
-  const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
-  try {
-    if (!readMatchesPublication(descriptor, entry)) {
-      throw safeFileError(entry.artifactClass, "recovery-conflict");
-    }
-    syncArtifactDescriptor(descriptor, entry.artifactClass);
-    assertSafeReplacementTarget(path, options);
-    verifyDescriptorIdentity(descriptor, entry.stagePath, entry.artifactClass);
-    renameSync(entry.stagePath, path);
-    validateRenamedStage(descriptor, path, entry, guards);
-    closeArtifactDescriptor(descriptor, entry.artifactClass);
-    closeDirectoryGuards(guards, options.artifactClass);
-  } catch (error) {
-    closeDescriptorIgnoringErrors(descriptor);
-    closeDirectoryGuardsIgnoringErrors(guards);
-    if (error instanceof SafeArtifactFileError) throw error;
-    throw safeFileError(options.artifactClass, "replace-failed");
-  }
-}
-
-/** Atomically replaces an existing, verified private file; unsupported on Windows. */
+/**
+ * Fails closed until Node exposes a portable descriptor-relative atomic replacement primitive.
+ * Absolute-path rename cannot exclude a final ancestor substitution, even with verified guards.
+ */
 export function replaceSafeArtifactFile(
-  path: string,
-  contents: string | Uint8Array,
+  _path: string,
+  _contents: string | Uint8Array,
   options: ReplaceSafeArtifactFileOptions,
 ): void {
-  if (process.platform === "win32") {
-    throw safeFileError(options.artifactClass, "publish-unsupported");
-  }
-  containedDirectories(options.trustedRoot, path, options.artifactClass);
-  assertSafeReplacementTarget(path, options);
-  const entry = prepareReplacementStage(path, contents, options);
-  const parent = dirname(resolve(path));
-  try {
-    syncDirectory(parent, options.trustedRoot, options.artifactClass);
-    renamePreparedReplacement(path, entry, options);
-    assertSafeReplacementTarget(path, options);
-    syncDirectory(parent, options.trustedRoot, options.artifactClass);
-  } catch (error) {
-    if (error instanceof SafeArtifactFileError) throw error;
-    throw safeFileError(options.artifactClass, "replace-failed");
-  }
+  throw safeFileError(options.artifactClass, "publish-unsupported");
 }
