@@ -34,6 +34,20 @@ export interface PrDescriptionPreviewRequest {
   readonly language: PrDescriptionLanguage;
   readonly refinement?: string;
 }
+
+export type PrDescriptionFailureDetail =
+  | "adapter-unavailable"
+  | "read-already-exists"
+  | "read-base-missing"
+  | "read-head-unpublished"
+  | "read-validation-error"
+  | "read-permission-denied"
+  | "read-not-found"
+  | "read-rate-limited"
+  | "read-provider-unavailable"
+  | "read-unknown"
+  | "read-invalid-response"
+  | "read-body-invalid";
 export interface PrDescriptionPreview {
   readonly proposalId: string;
   readonly expiresAt: string;
@@ -101,10 +115,10 @@ export interface PrDescriptionApplicationService {
 export class PrDescriptionFailure extends Error {
   /** A closed detail word behind a generic reason -- which provider read or validation failed --
    * carried onto the `git.pr-description` activity log line by `logDescription`. Never free text. */
-  public readonly detail?: string;
+  public readonly detail?: PrDescriptionFailureDetail;
   public constructor(
     public readonly reason: PrDescriptionApplicationReason,
-    options?: ErrorOptions & { readonly detail?: string },
+    options?: ErrorOptions & { readonly detail?: PrDescriptionFailureDetail },
   ) {
     super(reason, options);
     this.name = "PrDescriptionFailure";
