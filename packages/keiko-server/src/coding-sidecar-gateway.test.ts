@@ -4329,14 +4329,21 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
         parentCorrelationId: undefined,
         durationMs: undefined,
         status: undefined,
-        errorKind: undefined,
+        errorKind: "unavailable",
         extra: {
           reason: "model-context-window-insufficient",
           maxPromptTokens: 4_096,
           minimumRequiredPromptTokens: 32_000,
+          completeness: "complete",
+          loss: "none",
         },
       },
     ]);
+    expect(
+      activityLogEventRegistration(
+        sink.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
   });
 
   it("keeps reporting available when the derived prompt budget clears the minimum", () => {

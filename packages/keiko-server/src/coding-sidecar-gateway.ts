@@ -160,6 +160,33 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
   releaseImpact: "patch",
 });
 
+const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.readiness-insufficient",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.gatewayReadinessProjection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["model-context-window-insufficient"],
+    },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+    minimumRequiredPromptTokens: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-sidecar-gateway-readiness"],
+  proofIds: ["coding-sidecar.gateway.readiness-insufficient.line"],
+  releaseImpact: "patch",
+});
+
 // #3390 closeout (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // activity-log line carrying the REASON, so a defect is reconstructable from the log alone instead
 // of only the opaque HTTP status the client saw. `reason` is this closed vocabulary — never a raw
@@ -168,7 +195,6 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OP = "coding-sidecar.gateway.rejected";
 // The readiness projection (`/api/coding-sidecar/gateway/profile`) demoting an otherwise
 // "available" profile because its context window cannot survive a real request gets its own op:
 // it is not a per-request rejection, it is a standing state of the profile itself.
-const CODING_SIDECAR_GATEWAY_READINESS_OP = "coding-sidecar.gateway.readiness-insufficient";
 const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OP = "coding-sidecar.gateway.tool-availability";
 
 type CodingSidecarGatewayRejectionReason =
@@ -2118,16 +2144,22 @@ function gatewayReadinessProjection(
   ) {
     return result;
   }
-  getServerLogger().warn({
-    category: "gateway",
-    op: CODING_SIDECAR_GATEWAY_READINESS_OP,
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      reason: "model-context-window-insufficient",
-      maxPromptTokens: result.runMetadata.maxPromptTokens,
-      minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
-    },
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        errorKind: "unavailable",
+      },
+      {
+        reason: "model-context-window-insufficient",
+        maxPromptTokens: result.runMetadata.maxPromptTokens,
+        minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   return { status: "unavailable", reason: "model-context-window-insufficient" };
 }
 
