@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "da394d9735e36fb9e506bbb31c911b1b5c418791e426a2c6c8843b6d2338b1be",
+    "catalogDigest": "9b0d40284b2fdba0d623425f3e8fe359b860e8c83b8f5039fb89b8f3b9e757d3",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -136,6 +136,190 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:65",
         "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:178"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-context.github-authorization.changed",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "coding-context/githubAuthorizationRoutes.handlePutGitHubIssueReaderAuthorization",
+        "fields": {
+          "repositoryId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 256
+          },
+          "authorized": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "revision": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["github-issue-reader-authorization"],
+        "proofIds": ["coding-context.github-authorization.changed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:22",
+        "emitterSites": [
+          "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:204"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-context.github-authorization.evaluated",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "coding-context/githubIssueReaderAuthorization.isGitHubIssueReaderAuthorized",
+        "fields": {
+          "decision": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "authorized",
+              "repository-unresolved",
+              "store-unavailable",
+              "no-grant",
+              "revoked"
+            ]
+          },
+          "authorized": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "repositoryId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 256
+          },
+          "revision": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "inheritedFromRepository": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["github-issue-reader-authorization"],
+        "proofIds": ["coding-context.github-authorization.evaluated.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:23",
+        "emitterSites": [
+          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:241"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-context.github-remote.evaluated",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "coding-context/githubIssueReaderAuthorization.recordRemoteResolution",
+        "fields": {
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "resolved",
+              "repository-unresolved",
+              "remote-not-github",
+              "remote-redacted",
+              "remote-unreadable",
+              "resolver-failed"
+            ]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["github-remote-resolution"],
+        "proofIds": ["coding-context.github-remote.evaluated.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:50",
+        "emitterSites": [
+          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:333"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-context.github.read",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "coding-context/githubCodeContextPort.recordRead",
+        "fields": {
+          "byteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "succeeded",
+              "cancelled",
+              "gh-denied",
+              "gh-failed",
+              "gh-transient-failure",
+              "gh-output-truncated",
+              "gh-invalid-json",
+              "failed"
+            ]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxItems": 5
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["github-code-context-read"],
+        "proofIds": ["coding-context.github.read.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-context/githubCodeContextPort.ts:47",
+        "emitterSites": ["packages/keiko-server/src/coding-context/githubCodeContextPort.ts:298"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3043,25 +3227,25 @@
     {
       "op": "coding-context.github-authorization.changed",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:181",
+      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:25",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.github-authorization.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:175",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:26",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.github-remote.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:264",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:53",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.github.read",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-context/githubCodeContextPort.ts:246",
+      "site": "packages/keiko-server/src/coding-context/githubCodeContextPort.ts:50",
       "package": "keiko-server"
     },
     {

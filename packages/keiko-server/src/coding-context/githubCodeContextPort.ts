@@ -19,6 +19,12 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { CommandResult, CommandRule, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  isActivityLogErrorKind,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
@@ -37,6 +43,52 @@ const GH_API_TIMEOUT_MS = 30_000;
 // trips, so a second, larger number here could never bound anything — it only made an over-cap read
 // look like a syntax problem when the marker reached `JSON.parse`.
 const GH_API_MAX_STDOUT_BYTES = GOVERNED_GIT_REMOTE_SANDBOX_POLICY.maxOutputBytes;
+
+const GITHUB_CONTEXT_READ_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-context.github.read",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-context/githubCodeContextPort.recordRead",
+  fields: {
+    byteCount: { type: "integer", dataClass: "count", required: true },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "succeeded",
+        "cancelled",
+        "gh-denied",
+        "gh-failed",
+        "gh-transient-failure",
+        "gh-output-truncated",
+        "gh-invalid-json",
+        "failed",
+      ],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["github-code-context-read"],
+  proofIds: ["coding-context.github.read.line"],
+  releaseImpact: "patch",
+});
 
 // Flags that turn `gh api` into a mutation or redirect it to another host. Presence
 // anywhere in the argument vector rejects the invocation (deny-by-default posture).
@@ -241,22 +293,45 @@ function recordRead(
   error: unknown,
   byteCount = 0,
 ): void {
-  log.write({
-    category: "process",
-    op: "coding-context.github.read",
-    correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
-    ...(error === undefined ? {} : { level: "warn", errorKind: errorKindOf(error) }),
-    extra: {
-      byteCount,
-      outcome: readOutcome(context, error),
-      ...(error === undefined
-        ? {}
-        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
-    },
-  });
+  const failureKind = error === undefined ? undefined : errorKindOf(error);
+  log.write(
+    activityLogEvent(
+      GITHUB_CONTEXT_READ_OPERATION,
+      {
+        correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
+        ...(failureKind === undefined
+          ? {}
+          : { level: "warn", errorKind: closedReadErrorKind(failureKind) }),
+      },
+      {
+        byteCount,
+        outcome: readOutcome(context, error),
+        ...(failureKind === undefined
+          ? {}
+          : {
+              failureKind,
+              frames: keikoStackFrames(error),
+              causeChain: causeChain(error),
+            }),
+      },
+    ),
+  );
 }
 
-function readOutcome(context: GitHubCodeContextReadContext, error: unknown): string {
+type GitHubContextReadOutcome =
+  | "succeeded"
+  | "cancelled"
+  | GitHubCodeContextPortErrorCode
+  | "failed";
+
+function closedReadErrorKind(value: string): ActivityLogErrorKind {
+  return isActivityLogErrorKind(value) ? value : "unknown";
+}
+
+function readOutcome(
+  context: GitHubCodeContextReadContext,
+  error: unknown,
+): GitHubContextReadOutcome {
   if (context.signal?.aborted === true) return "cancelled";
   if (error === undefined) return "succeeded";
   return error instanceof GitHubCodeContextPortError ? error.code : "failed";
