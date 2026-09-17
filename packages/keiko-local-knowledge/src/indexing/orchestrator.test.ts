@@ -2970,20 +2970,27 @@ describe("runIndexingJob — activity log", () => {
         runIndexingJob(buildOptions(fixture, { logSink: log.sink, idSource: () => "job-pf" })),
       );
 
-      const started = log.find("embedding.preflight.started");
-      expect(started?.level).toBe("info");
-      expect(started?.category).toBe("embedding");
-      expect(started?.extra).toMatchObject({
-        providerDigest: expect.stringMatching(HEX_DIGEST),
-        modelIdDigest: expect.stringMatching(HEX_DIGEST),
+      const started = requireLine(log, "embedding.preflight.started");
+      expect(started.level).toBe("info");
+      expect(started.category).toBe("embedding");
+      const startedExtra = extraOf(started);
+      const providerDigest = startedExtra.providerDigest;
+      const modelIdDigest = startedExtra.modelIdDigest;
+      const endpointDigest = startedExtra.endpointDigest;
+      expect(providerDigest).toMatch(HEX_DIGEST);
+      expect(modelIdDigest).toMatch(HEX_DIGEST);
+      expect(endpointDigest).toMatch(HEX_DIGEST);
+      expect(startedExtra).toMatchObject({
+        providerDigest,
+        modelIdDigest,
         cached: false,
-        endpointDigest: expect.stringMatching(HEX_DIGEST),
+        endpointDigest,
       });
 
-      const completed = log.find("embedding.preflight.completed");
-      expect(completed?.level).toBe("info");
-      expect(completed?.durationMs).toBeGreaterThanOrEqual(0);
-      expect(completed?.extra).toMatchObject({
+      const completed = requireLine(log, "embedding.preflight.completed");
+      expect(completed.level).toBe("info");
+      expect(completed.durationMs).toBeGreaterThanOrEqual(0);
+      expect(extraOf(completed)).toMatchObject({
         observedDimensions: DEFAULT_EMBEDDING.vectorDimensions,
       });
       // Ordering: nothing about the corpus may be logged before the gateway was asked.
@@ -3028,9 +3035,11 @@ describe("runIndexingJob — activity log", () => {
       expect(hit?.level).toBe("info");
       expect(hit?.category).toBe("embedding");
       expect(hit?.correlationId).toBe("job-pf-2");
+      const modelIdDigest = hit?.extra?.modelIdDigest;
+      expect(modelIdDigest).toMatch(HEX_DIGEST);
       expect(hit?.extra).toMatchObject({
         cached: true,
-        modelIdDigest: expect.stringMatching(HEX_DIGEST),
+        modelIdDigest,
       });
       // The short-circuit is the whole point: no probe was issued on the second run.
       expect(second.ops()).not.toContain("embedding.preflight.started");
@@ -3060,8 +3069,10 @@ describe("runIndexingJob — activity log", () => {
       expect(failed?.level).toBe("error");
       expect(failed?.errorKind).toBeDefined();
       expect(failed?.durationMs).toBeGreaterThanOrEqual(0);
+      const endpointDigest = failed?.extra?.endpointDigest;
+      expect(endpointDigest).toMatch(HEX_DIGEST);
       expect(failed?.extra).toMatchObject({
-        endpointDigest: expect.stringMatching(HEX_DIGEST),
+        endpointDigest,
         failureSource: "result",
       });
       // A failed run must close at a level an operator filters TO, not one they filter out.

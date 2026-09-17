@@ -579,13 +579,19 @@ export type IndexingActivity =
       readonly failureKind?: string;
     } & ClosingCounts);
 
+const EXACT_FAILURE_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  CANCELLED: "cancelled",
+  POLICY_DENIED: "authority-denied",
+  READ_FAILED: "read-failed",
+  PATH_ESCAPE: "unsafe-target",
+  PERMISSION_DENIED: "permission-denied",
+  LIMIT_REACHED: "validation-failed",
+  INVALID_SCOPE: "validation-failed",
+};
+
 function failureErrorKind(kind: string): ActivityLogErrorKind {
-  if (kind === "CANCELLED") return "cancelled";
-  if (kind === "POLICY_DENIED") return "authority-denied";
-  if (kind === "READ_FAILED") return "read-failed";
-  if (kind === "PATH_ESCAPE") return "unsafe-target";
-  if (kind === "PERMISSION_DENIED") return "permission-denied";
-  if (kind === "LIMIT_REACHED" || kind === "INVALID_SCOPE") return "validation-failed";
+  const exact = EXACT_FAILURE_ERROR_KINDS[kind];
+  if (exact !== undefined) return exact;
   if (kind.includes("TIMEOUT")) return "timeout";
   if (kind.includes("INVALID") || kind.includes("INCOMPATIBLE")) return "validation-failed";
   return "internal";

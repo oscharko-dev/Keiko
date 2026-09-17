@@ -96,6 +96,51 @@ function endpointExtra(options: EmbedBatchOptions): { readonly endpointDigest?: 
     : { endpointDigest: createHash("sha256").update(host).digest("hex").slice(0, 16) };
 }
 
+interface EmbeddingRetryExtra {
+  readonly attempt: number;
+  readonly maxRetries: number;
+  readonly delayMs?: number;
+  readonly zeroProgressRetries?: number;
+  readonly remainingCount?: number;
+  readonly completedCount?: number;
+  readonly transport: "scalar" | "array-batch";
+}
+
+function logScalarEmbeddingRetry(
+  options: EmbedBatchOptions,
+  outcome: OpenAIEmbeddingOutcome | OpenAIEmbeddingBatchOutcome,
+  op: "embedding.chunk.retry" | "embedding.chunk.retry-exhausted",
+  durationMs: number,
+  extra: EmbeddingRetryExtra,
+): void {
+  if (outcome.ok) return;
+  const failure = {
+    failureKind: outcome.kind,
+    ...(outcome.status === undefined ? {} : { status: outcome.status }),
+    durationMs,
+    ...endpointExtra(options),
+  };
+  logEmbedding(
+    options,
+    op === "embedding.chunk.retry"
+      ? {
+          op,
+          ...failure,
+          attempt: extra.attempt,
+          maxRetries: extra.maxRetries,
+          delayMs: extra.delayMs ?? 0,
+          transport: "scalar",
+        }
+      : {
+          op,
+          ...failure,
+          attempt: extra.attempt,
+          maxRetries: extra.maxRetries,
+          transport: "scalar",
+        },
+  );
+}
+
 // One shape for both transports' retry lines. The `ok` guard is what narrows the union down to
 // the failure variants that actually carry `kind` and `status`.
 //
@@ -113,44 +158,19 @@ function logEmbeddingRetry(
     | "embedding.batch.partial-progress"
     | "embedding.batch.retry",
   durationMs: number,
-  extra: {
-    readonly attempt: number;
-    readonly maxRetries: number;
-    readonly delayMs?: number;
-    readonly zeroProgressRetries?: number;
-    readonly remainingCount?: number;
-    readonly completedCount?: number;
-    readonly transport: "scalar" | "array-batch";
-  },
+  extra: EmbeddingRetryExtra,
 ): void {
   if (outcome.ok) return;
+  if (op === "embedding.chunk.retry" || op === "embedding.chunk.retry-exhausted") {
+    logScalarEmbeddingRetry(options, outcome, op, durationMs, extra);
+    return;
+  }
   const failure = {
     failureKind: outcome.kind,
     ...(outcome.status === undefined ? {} : { status: outcome.status }),
     durationMs,
     ...endpointExtra(options),
   };
-  if (op === "embedding.chunk.retry") {
-    logEmbedding(options, {
-      op,
-      ...failure,
-      attempt: extra.attempt,
-      maxRetries: extra.maxRetries,
-      delayMs: extra.delayMs ?? 0,
-      transport: "scalar",
-    });
-    return;
-  }
-  if (op === "embedding.chunk.retry-exhausted") {
-    logEmbedding(options, {
-      op,
-      ...failure,
-      attempt: extra.attempt,
-      maxRetries: extra.maxRetries,
-      transport: "scalar",
-    });
-    return;
-  }
   logEmbedding(options, {
     op,
     ...failure,

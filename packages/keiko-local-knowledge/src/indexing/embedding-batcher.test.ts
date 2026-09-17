@@ -1233,6 +1233,8 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
 // and those are exactly the facts an operator needs when a run is slow rather than broken.
 // These tests pin that those decisions reach the sink, and that no chunk text goes with them.
 describe("embedChunkBatch — activity log", () => {
+  const COMPLETE_ACTIVITY_FIELDS = { completeness: "complete", loss: "none" } as const;
+
   function recordingSink(): {
     sink: KnowledgeLogSink;
     events: KnowledgeLogEvent[];
@@ -1250,6 +1252,12 @@ describe("embedChunkBatch — activity log", () => {
       ops: (): readonly string[] => events.map((event) => event.op),
       find: (op): KnowledgeLogEvent | undefined => events.find((event) => event.op === op),
     };
+  }
+
+  function requireActivity(log: ReturnType<typeof recordingSink>, op: string): KnowledgeLogEvent {
+    const event = log.find(op);
+    if (event === undefined) throw new Error(`missing activity event: ${op}`);
+    return event;
   }
 
   const noBackoff = {
@@ -1286,37 +1294,42 @@ describe("embedChunkBatch — activity log", () => {
         logSink: log.sink,
       });
 
-      const selected = log.find("embedding.batch.transport-selected");
+      const selected = requireActivity(log, "embedding.batch.transport-selected");
       // `info`, not `debug`: the transport and the request profile are the run's spine, and an
       // operator reading the file at the default level must see them.
-      expect(selected?.level).toBe("info");
-      expect(selected?.category).toBe("embedding");
-      expect(selected?.extra).toEqual({
+      expect(selected.level).toBe("info");
+      expect(selected.category).toBe("embedding");
+      const selectedEndpointDigest = selected.extra?.endpointDigest;
+      expect(selectedEndpointDigest).toMatch(LOG_DIGEST);
+      expect(selected.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
         transport: "array-batch",
         chunkCount: chunks.length,
         uniqueChunkCount: chunks.length,
         dedupedCount: 0,
         concurrency: 4,
-        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        endpointDigest: selectedEndpointDigest,
       });
 
-      const grouped = log.find("embedding.batch.grouped");
-      expect(grouped?.level).toBe("info");
-      expect(grouped?.extra).toEqual({
+      const grouped = requireActivity(log, "embedding.batch.grouped");
+      expect(grouped.level).toBe("info");
+      expect(grouped.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
         uniqueChunkCount: chunks.length,
         batchCount: 1,
         concurrency: 4,
-        endpointDigest: selected?.extra?.endpointDigest,
+        endpointDigest: selectedEndpointDigest,
       });
 
-      const completed = log.find("embedding.batch.completed");
-      expect(completed?.level).toBe("info");
-      expect(completed?.extra).toEqual({
+      const completed = requireActivity(log, "embedding.batch.completed");
+      expect(completed.level).toBe("info");
+      expect(completed.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
         chunkCount: chunks.length,
         vectorCount: result.vectors.length,
         errorCount: 0,
       });
-      expect(completed?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(completed.durationMs).toBeGreaterThanOrEqual(0);
     } finally {
       cleanup();
     }
@@ -1342,13 +1355,17 @@ describe("embedChunkBatch — activity log", () => {
         logSink: log.sink,
       });
 
-      expect(log.find("embedding.batch.transport-selected")?.extra).toEqual({
+      const selected = requireActivity(log, "embedding.batch.transport-selected");
+      const endpointDigest = selected.extra?.endpointDigest;
+      expect(endpointDigest).toMatch(LOG_DIGEST);
+      expect(selected.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
         transport: "scalar",
         chunkCount: repeated.length,
         uniqueChunkCount: 1,
         dedupedCount: 2,
         concurrency: 2,
-        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        endpointDigest,
       });
       expect(log.ops()).not.toContain("embedding.batch.grouped");
     } finally {
@@ -1396,7 +1413,10 @@ describe("embedChunkBatch — activity log", () => {
       expect(retry?.level).toBe("warn");
       expect(retry?.errorKind).toBe("timeout");
       expect(retry?.status).toBe(504);
+      const endpointDigest = retry?.extra?.endpointDigest;
+      expect(endpointDigest).toMatch(LOG_DIGEST);
       expect(retry?.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
         attempt: 1,
         zeroProgressRetries: 1,
         maxRetries: 2,
@@ -1404,7 +1424,7 @@ describe("embedChunkBatch — activity log", () => {
         remainingCount: 2,
         completedCount: 0,
         transport: "array-batch",
-        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        endpointDigest,
         failureKind: "timeout",
       });
       // "Refused instantly" and "burned the provider deadline" are the same error kind; only
@@ -1504,18 +1524,26 @@ describe("embedChunkBatch — activity log", () => {
       const failed = log.find("embedding.batch.failed");
       expect(failed?.level).toBe("warn");
       expect(failed?.errorKind).toBe("timeout");
+      const endpointDigest = failed?.extra?.endpointDigest;
+      expect(endpointDigest).toMatch(LOG_DIGEST);
       expect(failed?.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
         itemCount: 2,
         failureClass: "transient",
         transport: "array-batch",
-        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        endpointDigest,
         failureKind: "timeout",
       });
       expect(failed?.durationMs).toBeGreaterThanOrEqual(0);
       // The batch still "completed" — with zero vectors and two errors, at warn.
       const completed = log.find("embedding.batch.completed");
       expect(completed?.level).toBe("warn");
-      expect(completed?.extra).toEqual({ chunkCount: 2, vectorCount: 0, errorCount: 2 });
+      expect(completed?.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
+        chunkCount: 2,
+        vectorCount: 0,
+        errorCount: 2,
+      });
     } finally {
       cleanup();
     }
@@ -1546,6 +1574,7 @@ describe("embedChunkBatch — activity log", () => {
       expect(rejectedIdentity?.level).toBe("error");
       expect(rejectedIdentity?.errorKind).toBe("validation-failed");
       expect(rejectedIdentity?.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
         pinnedDimensions: DEFAULT_EMBEDDING.vectorDimensions,
         observedDimensions: 768,
         pinnedNormalization: "l2",
@@ -1595,6 +1624,7 @@ describe("embedChunkBatch — activity log", () => {
       expect(budgeting?.level).toBe("warn");
       expect(budgeting?.errorKind).toBe("unavailable");
       expect(budgeting?.extra).toEqual({
+        ...COMPLETE_ACTIVITY_FIELDS,
         uniqueChunkCount: chunks.length,
         failureKind: "RangeError",
       });
@@ -1779,12 +1809,14 @@ describe("embedChunkBatch — activity log", () => {
       expect(retry?.errorKind).toBe("timeout");
       expect(retry?.status).toBe(504);
       expect(retry?.durationMs).toBeGreaterThanOrEqual(0);
+      const endpointDigest = retry?.extra?.endpointDigest;
+      expect(endpointDigest).toMatch(LOG_DIGEST);
       // Port kept (it is part of "which gateway"), api-version query and path dropped.
       expect(retry?.extra).toMatchObject({
         attempt: 1,
         maxRetries: 2,
         transport: "scalar",
-        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        endpointDigest,
       });
     } finally {
       cleanup();
@@ -1827,11 +1859,13 @@ describe("embedChunkBatch — activity log", () => {
       expect(exhausted?.level).toBe("warn");
       expect(exhausted?.errorKind).toBe("unavailable");
       expect(exhausted?.durationMs).toBeGreaterThanOrEqual(0);
+      const endpointDigest = exhausted?.extra?.endpointDigest;
+      expect(endpointDigest).toMatch(LOG_DIGEST);
       expect(exhausted?.extra).toMatchObject({
         attempt: roundTripsPerChunk,
         maxRetries: noBackoff.maxRetries,
         transport: "scalar",
-        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        endpointDigest,
         failureKind: "transport",
       });
     } finally {

@@ -1336,6 +1336,7 @@ describe("analyzeLogText — legacy line accounting and warnings", () => {
 describe("analyzeLogText — strict v2 identity and compatibility classification", () => {
   const base = {
     ts: T0,
+    level: "info",
     category: "gateway",
     op: "gateway.instance.reused",
     generation: 1,
@@ -1411,6 +1412,8 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
     ["missing registered field", { generation: undefined }, "incomplete"],
     ["unknown registered field", { unexpected: "value" }, "corrupt"],
     ["unknown error kind", { errorKind: "provider prose is forbidden" }, "corrupt"],
+    ["missing persisted level", { level: undefined }, "corrupt"],
+    ["non-ISO timestamp", { ts: "September 17, 2026" }, "corrupt"],
   ] as const)("classifies %s from the generated registry contract", (_name, override, expected) => {
     const result = analyzeLogText(`${line({ ...base, ...override })}\n`);
 
@@ -1626,7 +1629,7 @@ describe("analyzeLogText — line-splitting and value-shape edge cases", () => {
     expect(findTimeline(result, "req-dup")?.errorKinds).toEqual(["TIMEOUT"]);
   });
 
-  it("falls back to a zero durationMs when the group's timestamps do not parse as dates", () => {
+  it("rejects non-ISO timestamps before timeline duration calculation", () => {
     const first = line({
       ts: "garbage-ts",
       category: "http",
@@ -1642,7 +1645,11 @@ describe("analyzeLogText — line-splitting and value-shape edge cases", () => {
 
     const result = analyzeLogText(`${first}\n${second}\n`);
 
-    expect(findTimeline(result, "req-garbage-ts")?.durationMs).toBe(0);
+    expect(findTimeline(result, "req-garbage-ts")).toBeUndefined();
+    expect(result.evidence).toMatchObject({
+      classification: "corrupt",
+      corruptLineCount: 2,
+    });
   });
 });
 

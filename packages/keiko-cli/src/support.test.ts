@@ -20,6 +20,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   createInMemoryEvidenceStore,
   type EvidenceManifest,
   type EvidenceStore,
@@ -42,6 +47,34 @@ import {
 import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
 
 const BUILT_CLI_ENTRY = fileURLToPath(new URL("../../../dist/cli/index.js", import.meta.url));
+
+function validV2AnalysisRecord(
+  overrides: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> {
+  return {
+    ts: "2026-08-21T00:00:00.000Z",
+    level: "info",
+    category: "gateway",
+    op: "gateway.instance.reused",
+    generation: 1,
+    completeness: "complete",
+    loss: "none",
+    schemaVersion: 2,
+    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+    buildClass: "node-esm",
+    releaseClass: "stable",
+    platformClass: "linux-x64",
+    productVersion: "1.0.0",
+    compatibilityState: "supported",
+    writerCapability: "active",
+    pid: 1,
+    instanceId: "aaaaaaaa",
+    seq: 1,
+    ...overrides,
+  };
+}
 
 function runBuiltSupportCli(
   cwd: string,
@@ -1338,9 +1371,6 @@ describe("runSupportCli analyze", () => {
       category: "http",
       op: "a",
       correlationId: "req-1",
-      pid: 1,
-      instanceId: "aaaaaaaa",
-      seq: 1,
     });
     writeFileSync(filePath, `${l1}\nnot-json\n`);
 
@@ -1408,17 +1438,7 @@ describe("runSupportCli analyze", () => {
     const logDir = join(stateDir, "logs");
     mkdirSync(logDir, { recursive: true });
     const filePath = join(logDir, "server.log");
-    writeFileSync(
-      filePath,
-      `${JSON.stringify({
-        ts: "2026-08-21T00:00:00.000Z",
-        category: "process",
-        op: "process.heartbeat",
-        pid: 4242,
-        instanceId: "aaaaaaaa",
-        seq: 1,
-      })}\n`,
-    );
+    writeFileSync(filePath, `${JSON.stringify(validV2AnalysisRecord({ pid: 4242 }))}\n`);
 
     const c = makeIo();
     const code = await runSupportCli(
@@ -1458,17 +1478,7 @@ describe("runSupportCli analyze", () => {
     const logDir = join(stateDir, "logs");
     mkdirSync(logDir, { recursive: true });
     const filePath = join(logDir, "server.log");
-    writeFileSync(
-      filePath,
-      `${JSON.stringify({
-        ts: "2026-08-21T00:00:00.000Z",
-        category: "process",
-        op: "process.heartbeat",
-        pid: 0,
-        instanceId: "aaaaaaaa",
-        seq: 1,
-      })}\n`,
-    );
+    writeFileSync(filePath, `${JSON.stringify(validV2AnalysisRecord({ pid: 0 }))}\n`);
 
     let probeCalls = 0;
     const c = makeIo();
@@ -1492,24 +1502,14 @@ describe("runSupportCli analyze", () => {
       readonly warnings: readonly string[];
     };
     expect(parsed.analysisContext.processActivity).toBe("unknown");
-    expect(parsed.warnings).toContain(
-      "analyzed raw log declares a non-positive process identifier",
-    );
+    expect(parsed.warnings).toContain("1 corrupt Activity Log line(s)");
   });
 
   it("renders the analyzed log context before the human-readable timeline", async () => {
     const filePath = join(dir, "server.log");
     writeFileSync(
       filePath,
-      `${JSON.stringify({
-        ts: "2026-08-21T00:00:00.000Z",
-        category: "http",
-        op: "request",
-        correlationId: "req-1",
-        pid: 1,
-        instanceId: "bbbbbbbb",
-        seq: 1,
-      })}\n`,
+      `${JSON.stringify(validV2AnalysisRecord({ instanceId: "bbbbbbbb" }))}\n`,
     );
 
     const c = makeIo();

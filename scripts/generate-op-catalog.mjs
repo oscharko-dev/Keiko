@@ -521,6 +521,18 @@ function validExpiryDate(value) {
   return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function validExemptionToken(value) {
+  return typeof value === "string" && REGISTRATION_TOKEN.test(value);
+}
+
+function validExemptionOperation(value) {
+  return typeof value === "string" && OP_NAME_PATTERN.test(value);
+}
+
+function validExemptionReason(value) {
+  return typeof value === "string" && value.trim().length >= 16 && value.length <= 512;
+}
+
 function invalidExemptionField(exemption) {
   if (typeof exemption !== "object" || exemption === null || Array.isArray(exemption)) {
     return "record";
@@ -529,23 +541,12 @@ function invalidExemptionField(exemption) {
   const checks = [
     ["contractKind", exemption.contractKind === "activity-log-exemption"],
     ["schemaVersion", exemption.schemaVersion === 1],
-    ["id", typeof exemption.id === "string" && REGISTRATION_TOKEN.test(exemption.id)],
-    [
-      "operation",
-      typeof exemption.operation === "string" && OP_NAME_PATTERN.test(exemption.operation),
-    ],
-    [
-      "failureClass",
-      typeof exemption.failureClass === "string" && REGISTRATION_TOKEN.test(exemption.failureClass),
-    ],
+    ["id", validExemptionToken(exemption.id)],
+    ["operation", validExemptionOperation(exemption.operation)],
+    ["failureClass", validExemptionToken(exemption.failureClass)],
     ["boundary", EXEMPTION_BOUNDARIES.has(exemption.boundary)],
-    ["owner", typeof exemption.owner === "string" && REGISTRATION_TOKEN.test(exemption.owner)],
-    [
-      "reason",
-      typeof exemption.reason === "string" &&
-        exemption.reason.trim().length >= 16 &&
-        exemption.reason.length <= 512,
-    ],
+    ["owner", validExemptionToken(exemption.owner)],
+    ["reason", validExemptionReason(exemption.reason)],
     ["trackingIssue", Number.isInteger(exemption.trackingIssue) && exemption.trackingIssue > 0],
     ["expiresOn", validExpiryDate(exemption.expiresOn)],
   ];
@@ -820,44 +821,51 @@ function invalidRegistrationField(value) {
   return checks.find(([, valid]) => !valid)?.[0];
 }
 
-function collectTypedRegistration(context, sourceFile, node) {
-  if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
-  const site = registrySite(context.repoRoot, sourceFile, node);
+function pushInvalidRegistration(context, site, detail, correctiveAction) {
+  context.violations.push({
+    ...registryViolation("registration-invalid", site, correctiveAction),
+    detail,
+  });
+}
+
+function registrationLiteral(context, node, site) {
   const argument = node.arguments[0];
   const value =
     argument === undefined ? undefined : literalRegistryValue(argument, context.checker);
-  if (value === undefined || typeof value.op !== "string") {
-    context.violations.push(
-      registryViolation(
-        "registration-not-literal",
-        site,
-        "Pass one closed object literal with a literal op to defineActivityLogOperation.",
-      ),
-    );
-    return;
-  }
+  if (value !== undefined && typeof value.op === "string") return value;
+  context.violations.push(
+    registryViolation(
+      "registration-not-literal",
+      site,
+      "Pass one closed object literal with a literal op to defineActivityLogOperation.",
+    ),
+  );
+  return undefined;
+}
+
+function collectTypedRegistration(context, sourceFile, node) {
+  if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
+  const site = registrySite(context.repoRoot, sourceFile, node);
+  const value = registrationLiteral(context, node, site);
+  if (value === undefined) return;
   const declaredInvalidField = invalidRegistrationField(value);
   if (declaredInvalidField !== undefined) {
-    context.violations.push({
-      ...registryViolation(
-        "registration-invalid",
-        site,
-        "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
-      ),
-      detail: declaredInvalidField,
-    });
+    pushInvalidRegistration(
+      context,
+      site,
+      declaredInvalidField,
+      "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
+    );
     return;
   }
   const invalidGlobalField = invalidGlobalFieldOverride(value.fields);
   if (invalidGlobalField !== undefined) {
-    context.violations.push({
-      ...registryViolation(
-        "registration-invalid",
-        site,
-        "Use the mandatory global completeness and loss field contracts without modification.",
-      ),
-      detail: `fields.${invalidGlobalField}`,
-    });
+    pushInvalidRegistration(
+      context,
+      site,
+      `fields.${invalidGlobalField}`,
+      "Use the mandatory global completeness and loss field contracts without modification.",
+    );
     return;
   }
   const valueWithGlobalFields = {
@@ -866,14 +874,12 @@ function collectTypedRegistration(context, sourceFile, node) {
   };
   const invalidField = invalidRegistrationField(valueWithGlobalFields);
   if (invalidField !== undefined) {
-    context.violations.push({
-      ...registryViolation(
-        "registration-invalid",
-        site,
-        "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
-      ),
-      detail: invalidField,
-    });
+    pushInvalidRegistration(
+      context,
+      site,
+      invalidField,
+      "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
+    );
     return;
   }
   const operation = { ...valueWithGlobalFields, registrationSite: site, emitterSites: [] };

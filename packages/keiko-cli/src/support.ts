@@ -753,51 +753,77 @@ function emitSupportPublicationEvidence(
   const activityLog = server.createFileServerLogSink(stateDir);
   try {
     if (outcome.status === "acknowledgement-failed") {
-      activityLog.write(
-        activityLogEvent(
-          SUPPORT_EXPORT_PUBLICATION_OPERATION,
-          {
-            level: "error",
-            correlationId,
-            errorKind: supportPublicationActivityErrorKind(outcome.errorKind),
-          },
-          {
-            ...completedPublicationEvidenceFields(
-              outcome.publication,
-              "acknowledgement-failed",
-              "acknowledgement-uncertain",
-            ),
-            failedArtifactClass: "manifest",
-            failureKind: outcome.errorKind,
-          },
-        ),
-      );
+      writeAcknowledgementFailure(activityLog, correlationId, outcome);
       return;
     }
     if (outcome.status !== "failed") {
-      activityLog.write(
-        activityLogEvent(
-          SUPPORT_EXPORT_PUBLICATION_OPERATION,
-          { correlationId },
-          completedPublicationEvidenceFields(outcome, outcome.status, "consumed"),
-        ),
-      );
+      writeCompletedPublication(activityLog, correlationId, outcome);
       return;
     }
-    activityLog.write(
-      activityLogEvent(
-        SUPPORT_EXPORT_PUBLICATION_OPERATION,
-        {
-          level: "error",
-          correlationId,
-          errorKind: supportPublicationActivityErrorKind(outcome.errorKind),
-        },
-        failedPublicationEvidenceFields(outcome),
-      ),
-    );
+    writeFailedPublication(activityLog, correlationId, outcome);
   } finally {
     activityLog.close?.();
   }
+}
+
+type SupportActivityLog = ReturnType<LoadedServer["createFileServerLogSink"]>;
+
+function writeAcknowledgementFailure(
+  activityLog: SupportActivityLog,
+  correlationId: string,
+  outcome: AcknowledgementFailedOutcome,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      SUPPORT_EXPORT_PUBLICATION_OPERATION,
+      {
+        level: "error",
+        correlationId,
+        errorKind: supportPublicationActivityErrorKind(outcome.errorKind),
+      },
+      {
+        ...completedPublicationEvidenceFields(
+          outcome.publication,
+          "acknowledgement-failed",
+          "acknowledgement-uncertain",
+        ),
+        failedArtifactClass: "manifest",
+        failureKind: outcome.errorKind,
+      },
+    ),
+  );
+}
+
+function writeCompletedPublication(
+  activityLog: SupportActivityLog,
+  correlationId: string,
+  outcome: CompletedBundlePublicationOutcome,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      SUPPORT_EXPORT_PUBLICATION_OPERATION,
+      { correlationId },
+      completedPublicationEvidenceFields(outcome, outcome.status, "consumed"),
+    ),
+  );
+}
+
+function writeFailedPublication(
+  activityLog: SupportActivityLog,
+  correlationId: string,
+  outcome: Extract<BundlePublicationOutcome, { readonly status: "failed" }>,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      SUPPORT_EXPORT_PUBLICATION_OPERATION,
+      {
+        level: "error",
+        correlationId,
+        errorKind: supportPublicationActivityErrorKind(outcome.errorKind),
+      },
+      failedPublicationEvidenceFields(outcome),
+    ),
+  );
 }
 
 // Finding 1 (minor): store fingerprint collection runs a synchronous full-DB `quick_check` plus

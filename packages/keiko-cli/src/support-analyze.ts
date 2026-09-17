@@ -441,30 +441,49 @@ function hasValidProcessIdentity(record: Record<string, unknown>): boolean {
   );
 }
 
-function validRegistryIdentityShape(record: Record<string, unknown>): boolean {
+const ACTIVITY_LOG_COMPATIBILITY_STATES: ReadonlySet<string> = new Set([
+  "supported",
+  "legacy-supported",
+  "unsupported-version",
+  "corrupt",
+  "truncated",
+  "incomplete",
+]);
+const ACTIVITY_LOG_WRITER_CAPABILITIES: ReadonlySet<string> = new Set([
+  "active",
+  "degraded",
+  "unavailable",
+]);
+
+function validRegistryDigests(record: Record<string, unknown>): boolean {
   return (
-    typeof record.registryVersion === "number" &&
-    Number.isSafeInteger(record.registryVersion) &&
-    record.registryVersion > 0 &&
     typeof record.schemaDigest === "string" &&
     ACTIVITY_LOG_DIGEST_PATTERN.test(record.schemaDigest) &&
     typeof record.catalogDigest === "string" &&
-    ACTIVITY_LOG_DIGEST_PATTERN.test(record.catalogDigest) &&
+    ACTIVITY_LOG_DIGEST_PATTERN.test(record.catalogDigest)
+  );
+}
+
+function validRuntimeIdentity(record: Record<string, unknown>): boolean {
+  return (
     record.buildClass === "node-esm" &&
     (record.releaseClass === "stable" || record.releaseClass === "prerelease") &&
     typeof record.platformClass === "string" &&
     ACTIVITY_LOG_PLATFORM_PATTERN.test(record.platformClass) &&
     typeof record.productVersion === "string" &&
-    ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(record.productVersion) &&
-    [
-      "supported",
-      "legacy-supported",
-      "unsupported-version",
-      "corrupt",
-      "truncated",
-      "incomplete",
-    ].includes(String(record.compatibilityState)) &&
-    ["active", "degraded", "unavailable"].includes(String(record.writerCapability))
+    ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(record.productVersion)
+  );
+}
+
+function validRegistryIdentityShape(record: Record<string, unknown>): boolean {
+  return (
+    typeof record.registryVersion === "number" &&
+    Number.isSafeInteger(record.registryVersion) &&
+    record.registryVersion > 0 &&
+    validRegistryDigests(record) &&
+    validRuntimeIdentity(record) &&
+    ACTIVITY_LOG_COMPATIBILITY_STATES.has(String(record.compatibilityState)) &&
+    ACTIVITY_LOG_WRITER_CAPABILITIES.has(String(record.writerCapability))
   );
 }
 
@@ -496,12 +515,10 @@ function registryIdentityClassification(
   return declaredCompatibility(record);
 }
 
-function identityClassification(
-  record: Record<string, unknown>,
-): ActivityLogEvidenceClassification {
-  const schemaVersion = record.schemaVersion;
-  const identityValues = [record.pid, record.instanceId, record.seq];
-  const identityCount = identityValues.filter((value) => value !== undefined).length;
+function schemaVersionClassification(
+  schemaVersion: unknown,
+  identityCount: number,
+): ActivityLogEvidenceClassification | undefined {
   if (schemaVersion === undefined) return identityCount === 0 ? "legacy" : "incomplete";
   if (
     typeof schemaVersion !== "number" ||
@@ -511,6 +528,16 @@ function identityClassification(
     return "corrupt";
   if (schemaVersion === 1) return identityCount === 0 ? "legacy" : "corrupt";
   if (schemaVersion !== 2) return "unsupported";
+  return undefined;
+}
+
+function identityClassification(
+  record: Record<string, unknown>,
+): ActivityLogEvidenceClassification {
+  const identityValues = [record.pid, record.instanceId, record.seq];
+  const identityCount = identityValues.filter((value) => value !== undefined).length;
+  const schemaClassification = schemaVersionClassification(record.schemaVersion, identityCount);
+  if (schemaClassification !== undefined) return schemaClassification;
   if (identityCount < identityValues.length) return "incomplete";
   if (!hasValidProcessIdentity(record)) return "corrupt";
   return registryIdentityClassification(record);
@@ -535,7 +562,7 @@ function validOptionalType(value: unknown, expected: "string" | "number"): boole
 }
 
 function validRecordLevel(value: unknown): boolean {
-  return value === undefined || (typeof value === "string" && ACTIVITY_LOG_LEVELS.has(value));
+  return typeof value === "string" && ACTIVITY_LOG_LEVELS.has(value);
 }
 
 function validRecordStatus(
@@ -617,6 +644,53 @@ function registeredRecordClassification(
   }
 }
 
+function isPersistedTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+type RejectedEvidence = "unsupported" | "corrupt" | "truncated" | "incomplete";
+
+function rejectedLine(evidence: RejectedEvidence): LineClassification {
+  return { kind: "rejected" as const, evidence };
+}
+
+function invalidJsonEvidence(terminalFragment: boolean): "truncated" | "corrupt" {
+  return terminalFragment ? "truncated" : "corrupt";
+}
+
+interface RequiredLineLabels {
+  readonly ts: string;
+  readonly category: string;
+  readonly op: string;
+}
+
+function requiredLineLabels(record: Record<string, unknown>): RequiredLineLabels | undefined {
+  const ts = optionalString(record, "ts");
+  const category = optionalString(record, "category");
+  const op = optionalString(record, "op");
+  if (ts === undefined || !isPersistedTimestamp(ts)) return undefined;
+  if (category === undefined || op === undefined) return undefined;
+  return { ts, category, op };
+}
+
+function acceptedEvidence(
+  evidence: ActivityLogEvidenceClassification,
+): evidence is "supported" | "legacy" {
+  return evidence === "supported" || evidence === "legacy";
+}
+
+function recordEvidence(
+  record: Record<string, unknown>,
+  labels: RequiredLineLabels,
+  evidence: "supported" | "legacy",
+): ActivityLogEvidenceClassification {
+  if (evidence === "supported" && record.registryVersion !== undefined) {
+    return registeredRecordClassification(record, labels.category, labels.op);
+  }
+  return evidence;
+}
+
 // A `$section`-tagged line is bundle metadata, not evidence. Unsupported versions are classified
 // before their unknown envelope is interpreted; every supported or legacy record still requires
 // the common ts/category/op shape.
@@ -627,34 +701,21 @@ function classifyLine(
   options: SupportAnalyzeOptions,
 ): LineClassification {
   const record = tryParseJsonObject(raw);
-  if (record === undefined) {
-    return { kind: "rejected", evidence: terminalFragment ? "truncated" : "corrupt" };
-  }
+  if (record === undefined) return rejectedLine(invalidJsonEvidence(terminalFragment));
   if (typeof record.$section === "string") return { kind: "section" };
   const evidence = identityClassification(record);
-  if (evidence === "unsupported") return { kind: "rejected", evidence };
-  const ts = optionalString(record, "ts");
-  const category = optionalString(record, "category");
-  const op = optionalString(record, "op");
-  if (ts === undefined || category === undefined || op === undefined) {
-    return { kind: "rejected", evidence: "corrupt" };
-  }
-  if (evidence !== "supported" && evidence !== "legacy") {
-    return { kind: "rejected", evidence };
-  }
-  const recordEvidence =
-    evidence === "supported" && record.registryVersion !== undefined
-      ? registeredRecordClassification(record, category, op)
-      : evidence;
-  if (recordEvidence !== "supported" && recordEvidence !== "legacy") {
-    return { kind: "rejected", evidence: recordEvidence };
-  }
+  if (evidence === "unsupported") return rejectedLine(evidence);
+  const labels = requiredLineLabels(record);
+  if (labels === undefined) return rejectedLine("corrupt");
+  if (!acceptedEvidence(evidence)) return rejectedLine(evidence);
+  const recordClassification = recordEvidence(record, labels, evidence);
+  if (!acceptedEvidence(recordClassification)) return rejectedLine(recordClassification);
   const identity = readIdentity(record);
   return {
     kind: "line",
-    evidence: recordEvidence,
+    evidence: recordClassification,
     parsed: {
-      view: buildView(ts, category, op, record, identity, options),
+      view: buildView(labels.ts, labels.category, labels.op, record, identity, options),
       correlationId: optionalString(record, "correlationId"),
       hasFullIdentity: hasValidProcessIdentity(record),
       fileIndex,

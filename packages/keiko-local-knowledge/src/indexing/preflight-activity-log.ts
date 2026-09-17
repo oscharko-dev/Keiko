@@ -404,16 +404,14 @@ function emitIdentityState(
     );
     return;
   }
-  if (event.op === "embedding.preflight.identity-refreshed") {
-    emitKnowledgeLogEvent(
-      sink,
-      activityLogEvent(
-        PREFLIGHT_IDENTITY_REFRESHED_OPERATION,
-        eventEnvelope(context, "info"),
-        fields,
-      ),
-    );
-  }
+  emitKnowledgeLogEvent(
+    sink,
+    activityLogEvent(
+      PREFLIGHT_IDENTITY_REFRESHED_OPERATION,
+      eventEnvelope(context, "info"),
+      fields,
+    ),
+  );
 }
 
 export function emitPreflightActivity(

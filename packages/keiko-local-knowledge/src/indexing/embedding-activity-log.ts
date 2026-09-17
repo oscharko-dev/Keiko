@@ -3,6 +3,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
   type ActivityLogEventEnvelope,
+  type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   emitKnowledgeLogEvent,
@@ -474,6 +475,8 @@ function failureErrorKind(kind: string): ActivityLogErrorKind {
     case "timeout":
     case "cancelled":
       return kind;
+    case "CANCELLED":
+      return "cancelled";
     case "proxy-blocked-by-policy":
       return "authority-denied";
     case "wrong-header":
@@ -504,86 +507,194 @@ function correlatedEnvelope(
     : { ...envelope, correlationId: knowledgeLogCorrelationId(context.jobId) };
 }
 
+function emitChunkRetry(
+  sink: KnowledgeLogSink | undefined,
+  context: IndexingLogContext | undefined,
+  event: RetryFields & FailureEnvelope,
+): void {
+  emitKnowledgeLogEvent(
+    sink,
+    activityLogEvent(CHUNK_RETRY_OPERATION, correlatedEnvelope(context, failureEnvelope(event)), {
+      ...contextFields(context),
+      attempt: event.attempt,
+      maxRetries: event.maxRetries,
+      delayMs: event.delayMs ?? 0,
+      transport: "scalar",
+      ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
+      failureKind: event.failureKind,
+    }),
+  );
+}
+
+function emitChunkRetryExhausted(
+  sink: KnowledgeLogSink | undefined,
+  context: IndexingLogContext | undefined,
+  event: RetryFields & FailureEnvelope,
+): void {
+  emitKnowledgeLogEvent(
+    sink,
+    activityLogEvent(
+      CHUNK_RETRY_EXHAUSTED_OPERATION,
+      correlatedEnvelope(context, failureEnvelope(event)),
+      {
+        ...contextFields(context),
+        attempt: event.attempt,
+        maxRetries: event.maxRetries,
+        transport: "scalar",
+        ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
+        failureKind: event.failureKind,
+      },
+    ),
+  );
+}
+
+type BatchRetryActivity = RetryFields &
+  Required<
+    Pick<RetryFields, "delayMs" | "zeroProgressRetries" | "remainingCount" | "completedCount">
+  > &
+  FailureEnvelope;
+type BatchRetryFields = Omit<
+  ActivityLogFields<typeof BATCH_RETRY_OPERATION>,
+  "completeness" | "loss"
+>;
+
+function batchRetryFields(
+  context: IndexingLogContext | undefined,
+  event: BatchRetryActivity,
+): BatchRetryFields {
+  return {
+    ...contextFields(context),
+    attempt: event.attempt,
+    zeroProgressRetries: event.zeroProgressRetries,
+    maxRetries: event.maxRetries,
+    delayMs: event.delayMs,
+    remainingCount: event.remainingCount,
+    completedCount: event.completedCount,
+    transport: "array-batch" as const,
+    ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
+    failureKind: event.failureKind,
+  };
+}
+
 function emitRetryActivity(
   sink: KnowledgeLogSink | undefined,
   context: IndexingLogContext | undefined,
   event: EmbeddingActivity,
 ): boolean {
-  const base = contextFields(context);
   switch (event.op) {
     case "embedding.chunk.retry":
-      emitKnowledgeLogEvent(
-        sink,
-        activityLogEvent(
-          CHUNK_RETRY_OPERATION,
-          correlatedEnvelope(context, failureEnvelope(event)),
-          {
-            ...base,
-            attempt: event.attempt,
-            maxRetries: event.maxRetries,
-            delayMs: event.delayMs ?? 0,
-            transport: "scalar",
-            ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
-            failureKind: event.failureKind,
-          },
-        ),
-      );
+      emitChunkRetry(sink, context, event);
       return true;
     case "embedding.chunk.retry-exhausted":
+      emitChunkRetryExhausted(sink, context, event);
+      return true;
+    case "embedding.batch.partial-progress":
       emitKnowledgeLogEvent(
         sink,
         activityLogEvent(
-          CHUNK_RETRY_EXHAUSTED_OPERATION,
+          BATCH_PARTIAL_PROGRESS_OPERATION,
           correlatedEnvelope(context, failureEnvelope(event)),
-          {
-            ...base,
-            attempt: event.attempt,
-            maxRetries: event.maxRetries,
-            transport: "scalar",
-            ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
-            failureKind: event.failureKind,
-          },
+          batchRetryFields(context, event),
         ),
       );
       return true;
-    case "embedding.batch.partial-progress":
-    case "embedding.batch.retry": {
-      const fields = {
-        ...base,
-        attempt: event.attempt,
-        zeroProgressRetries: event.zeroProgressRetries,
-        maxRetries: event.maxRetries,
-        delayMs: event.delayMs,
-        remainingCount: event.remainingCount,
-        completedCount: event.completedCount,
-        transport: "array-batch" as const,
-        ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
-        failureKind: event.failureKind,
-      };
-      if (event.op === "embedding.batch.partial-progress") {
-        emitKnowledgeLogEvent(
-          sink,
-          activityLogEvent(
-            BATCH_PARTIAL_PROGRESS_OPERATION,
-            correlatedEnvelope(context, failureEnvelope(event)),
-            fields,
-          ),
-        );
-      } else {
-        emitKnowledgeLogEvent(
-          sink,
-          activityLogEvent(
-            BATCH_RETRY_OPERATION,
-            correlatedEnvelope(context, failureEnvelope(event)),
-            fields,
-          ),
-        );
-      }
+    case "embedding.batch.retry":
+      emitKnowledgeLogEvent(
+        sink,
+        activityLogEvent(
+          BATCH_RETRY_OPERATION,
+          correlatedEnvelope(context, failureEnvelope(event)),
+          batchRetryFields(context, event),
+        ),
+      );
       return true;
-    }
     default:
       return false;
   }
+}
+
+type BatchFailedActivity = Extract<EmbeddingActivity, { readonly op: "embedding.batch.failed" }>;
+type BatchBudgetingFailedActivity = Extract<
+  EmbeddingActivity,
+  { readonly op: "embedding.batch.budgeting-failed" }
+>;
+type BatchGroupedActivity = Extract<EmbeddingActivity, { readonly op: "embedding.batch.grouped" }>;
+type TransportSelectedActivity = Extract<
+  EmbeddingActivity,
+  { readonly op: "embedding.batch.transport-selected" }
+>;
+
+function emitBatchFailed(
+  sink: KnowledgeLogSink | undefined,
+  context: IndexingLogContext | undefined,
+  event: BatchFailedActivity,
+): void {
+  emitKnowledgeLogEvent(
+    sink,
+    activityLogEvent(BATCH_FAILED_OPERATION, correlatedEnvelope(context, failureEnvelope(event)), {
+      ...contextFields(context),
+      itemCount: event.itemCount,
+      failureClass: event.failureClass,
+      transport: "array-batch",
+      ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
+      failureKind: event.failureKind,
+    }),
+  );
+}
+
+function emitBatchBudgetingFailed(
+  sink: KnowledgeLogSink | undefined,
+  context: IndexingLogContext | undefined,
+  event: BatchBudgetingFailedActivity,
+): void {
+  emitKnowledgeLogEvent(
+    sink,
+    activityLogEvent(
+      BUDGETING_FAILED_OPERATION,
+      correlatedEnvelope(context, failureEnvelope(event)),
+      {
+        ...contextFields(context),
+        uniqueChunkCount: event.uniqueChunkCount,
+        failureKind: event.failureKind,
+      },
+    ),
+  );
+}
+
+function emitBatchGrouped(
+  sink: KnowledgeLogSink | undefined,
+  context: IndexingLogContext | undefined,
+  event: BatchGroupedActivity,
+): void {
+  emitKnowledgeLogEvent(
+    sink,
+    activityLogEvent(BATCH_GROUPED_OPERATION, correlatedEnvelope(context, { level: "info" }), {
+      ...contextFields(context),
+      uniqueChunkCount: event.uniqueChunkCount,
+      batchCount: event.batchCount,
+      concurrency: event.concurrency,
+      ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
+    }),
+  );
+}
+
+function emitTransportSelected(
+  sink: KnowledgeLogSink | undefined,
+  context: IndexingLogContext | undefined,
+  event: TransportSelectedActivity,
+): void {
+  emitKnowledgeLogEvent(
+    sink,
+    activityLogEvent(TRANSPORT_SELECTED_OPERATION, correlatedEnvelope(context, { level: "info" }), {
+      ...contextFields(context),
+      transport: event.transport,
+      chunkCount: event.chunkCount,
+      uniqueChunkCount: event.uniqueChunkCount,
+      dedupedCount: event.dedupedCount,
+      concurrency: event.concurrency,
+      ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
+    }),
+  );
 }
 
 function emitBatchDecisionActivity(
@@ -591,7 +702,6 @@ function emitBatchDecisionActivity(
   context: IndexingLogContext | undefined,
   event: EmbeddingActivity,
 ): boolean {
-  const base = contextFields(context);
   switch (event.op) {
     case "embedding.batch.transport-unavailable":
       emitKnowledgeLogEvent(
@@ -599,7 +709,7 @@ function emitBatchDecisionActivity(
         activityLogEvent(
           TRANSPORT_UNAVAILABLE_OPERATION,
           correlatedEnvelope(context, { level: "debug", errorKind: "unavailable" }),
-          { ...base, itemCount: event.itemCount, transport: "array-batch" },
+          { ...contextFields(context), itemCount: event.itemCount, transport: "array-batch" },
         ),
       );
       return true;
@@ -610,7 +720,7 @@ function emitBatchDecisionActivity(
           IDENTITY_REJECTED_OPERATION,
           correlatedEnvelope(context, { level: "error", errorKind: "validation-failed" }),
           {
-            ...base,
+            ...contextFields(context),
             pinnedDimensions: event.pinnedDimensions,
             observedDimensions: event.observedDimensions,
             pinnedNormalization: event.pinnedNormalization,
@@ -620,65 +730,59 @@ function emitBatchDecisionActivity(
       );
       return true;
     case "embedding.batch.failed":
-      emitKnowledgeLogEvent(
-        sink,
-        activityLogEvent(
-          BATCH_FAILED_OPERATION,
-          correlatedEnvelope(context, failureEnvelope(event)),
-          {
-            ...base,
-            itemCount: event.itemCount,
-            failureClass: event.failureClass,
-            transport: "array-batch",
-            ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
-            failureKind: event.failureKind,
-          },
-        ),
-      );
+      emitBatchFailed(sink, context, event);
       return true;
     case "embedding.batch.budgeting-failed":
-      emitKnowledgeLogEvent(
-        sink,
-        activityLogEvent(
-          BUDGETING_FAILED_OPERATION,
-          correlatedEnvelope(context, failureEnvelope(event)),
-          { ...base, uniqueChunkCount: event.uniqueChunkCount, failureKind: event.failureKind },
-        ),
-      );
+      emitBatchBudgetingFailed(sink, context, event);
       return true;
     case "embedding.batch.grouped":
-      emitKnowledgeLogEvent(
-        sink,
-        activityLogEvent(BATCH_GROUPED_OPERATION, correlatedEnvelope(context, { level: "info" }), {
-          ...base,
-          uniqueChunkCount: event.uniqueChunkCount,
-          batchCount: event.batchCount,
-          concurrency: event.concurrency,
-          ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
-        }),
-      );
+      emitBatchGrouped(sink, context, event);
       return true;
     case "embedding.batch.transport-selected":
-      emitKnowledgeLogEvent(
-        sink,
-        activityLogEvent(
-          TRANSPORT_SELECTED_OPERATION,
-          correlatedEnvelope(context, { level: "info" }),
-          {
-            ...base,
-            transport: event.transport,
-            chunkCount: event.chunkCount,
-            uniqueChunkCount: event.uniqueChunkCount,
-            dedupedCount: event.dedupedCount,
-            concurrency: event.concurrency,
-            ...(event.endpointDigest === undefined ? {} : { endpointDigest: event.endpointDigest }),
-          },
-        ),
-      );
+      emitTransportSelected(sink, context, event);
       return true;
     default:
       return false;
   }
+}
+
+type ClosingFailureActivity = ClosingFields & FailureEnvelope;
+type ClosingFailureFields = Omit<
+  ActivityLogFields<typeof PERSIST_FAILED_OPERATION>,
+  "completeness" | "loss"
+>;
+
+function closingFailureFields(
+  context: IndexingLogContext | undefined,
+  event: ClosingFailureActivity,
+): ClosingFailureFields {
+  return {
+    ...contextFields(context),
+    chunkCount: event.chunkCount,
+    vectorCount: event.vectorCount,
+    errorCount: event.errorCount,
+    failureKind: event.failureKind,
+  };
+}
+
+function emitBatchCompleted(
+  sink: KnowledgeLogSink | undefined,
+  context: IndexingLogContext | undefined,
+  event: Extract<EmbeddingActivity, { readonly op: "embedding.batch.completed" }>,
+): void {
+  emitKnowledgeLogEvent(
+    sink,
+    activityLogEvent(
+      BATCH_COMPLETED_OPERATION,
+      correlatedEnvelope(context, { level: event.level, durationMs: event.durationMs }),
+      {
+        ...contextFields(context),
+        chunkCount: event.chunkCount,
+        vectorCount: event.vectorCount,
+        errorCount: event.errorCount,
+      },
+    ),
+  );
 }
 
 function emitClosingActivity(
@@ -686,7 +790,6 @@ function emitClosingActivity(
   context: IndexingLogContext | undefined,
   event: EmbeddingActivity,
 ): boolean {
-  const base = contextFields(context);
   switch (event.op) {
     case "embedding.batch.persist-failed":
       emitKnowledgeLogEvent(
@@ -694,30 +797,12 @@ function emitClosingActivity(
         activityLogEvent(
           PERSIST_FAILED_OPERATION,
           correlatedEnvelope(context, { ...failureEnvelope(event), level: "error" }),
-          {
-            ...base,
-            chunkCount: event.chunkCount,
-            vectorCount: event.vectorCount,
-            errorCount: event.errorCount,
-            failureKind: event.failureKind,
-          },
+          closingFailureFields(context, event),
         ),
       );
       return true;
     case "embedding.batch.completed":
-      emitKnowledgeLogEvent(
-        sink,
-        activityLogEvent(
-          BATCH_COMPLETED_OPERATION,
-          correlatedEnvelope(context, { level: event.level, durationMs: event.durationMs }),
-          {
-            ...base,
-            chunkCount: event.chunkCount,
-            vectorCount: event.vectorCount,
-            errorCount: event.errorCount,
-          },
-        ),
-      );
+      emitBatchCompleted(sink, context, event);
       return true;
     case "embedding.batch.rejected":
       emitKnowledgeLogEvent(
@@ -725,13 +810,7 @@ function emitClosingActivity(
         activityLogEvent(
           BATCH_REJECTED_OPERATION,
           correlatedEnvelope(context, { ...failureEnvelope(event), level: "error" }),
-          {
-            ...base,
-            chunkCount: event.chunkCount,
-            vectorCount: event.vectorCount,
-            errorCount: event.errorCount,
-            failureKind: event.failureKind,
-          },
+          closingFailureFields(context, event),
         ),
       );
       return true;
@@ -741,13 +820,7 @@ function emitClosingActivity(
         activityLogEvent(
           BATCH_CANCELLED_OPERATION,
           correlatedEnvelope(context, { ...failureEnvelope(event), level: "warn" }),
-          {
-            ...base,
-            chunkCount: event.chunkCount,
-            vectorCount: event.vectorCount,
-            errorCount: event.errorCount,
-            failureKind: event.failureKind,
-          },
+          closingFailureFields(context, event),
         ),
       );
       return true;

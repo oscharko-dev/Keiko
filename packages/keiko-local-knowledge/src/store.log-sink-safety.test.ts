@@ -49,6 +49,13 @@ function sinkFailingOn(failingOp: string, events: KnowledgeLogEvent[]): Knowledg
   };
 }
 
+function warningRecord(value: unknown): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("expected warning metadata record");
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
 describe("openKnowledgeStore — a failing log sink never becomes the failure", () => {
   let tmp: string;
   // The dead-sink specs below report through `process.emitWarning`; the spy is what keeps that
@@ -114,10 +121,9 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
 
     expect(warn).toHaveBeenCalledTimes(1);
     const calls: readonly (readonly unknown[])[] = warn.mock.calls;
-    expect(calls[0]?.[1]).toMatchObject({
-      code: "KEIKO_LOG_SINK_FAILED",
-      detail: expect.stringMatching(/^opDigest=[0-9a-f]{16} errorKind=Error$/u),
-    });
+    const warning = warningRecord(calls[0]?.[1]);
+    expect(warning.code).toBe("KEIKO_LOG_SINK_FAILED");
+    expect(warning.detail).toMatch(/^opDigest=[0-9a-f]{16} errorKind=Error$/u);
     // The sink's own message is a body like any other and never reaches the report.
     expect(JSON.stringify(calls)).not.toContain("the activity log sink is down");
   });

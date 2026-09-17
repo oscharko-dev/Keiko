@@ -20,6 +20,13 @@ import {
   type KnowledgeLogSink,
 } from "./knowledge-log.js";
 
+function warningRecord(value: unknown): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("expected warning metadata record");
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
 // The specs below replace platform functions — `performance.now`, `process.emitWarning`. A spy
 // restored on the last line of its own test is only restored when that test PASSES: an assertion
 // that throws first leaves the platform patched for every later test in this worker, turning one
@@ -226,10 +233,9 @@ describe("emitKnowledgeLogEvent", () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     const calls: readonly (readonly unknown[])[] = warn.mock.calls;
-    expect(calls[0]?.[1]).toMatchObject({
-      code: "KEIKO_LOG_SINK_FAILED",
-      detail: expect.stringMatching(/^opDigest=[0-9a-f]{16} errorKind=ENOSPC$/u),
-    });
+    const warning = warningRecord(calls[0]?.[1]);
+    expect(warning.code).toBe("KEIKO_LOG_SINK_FAILED");
+    expect(warning.detail).toMatch(/^opDigest=[0-9a-f]{16} errorKind=ENOSPC$/u);
 
     // Per sink, not per process: a replaced sink that also fails is a new fact about the log.
     const replacement: KnowledgeLogSink = {
