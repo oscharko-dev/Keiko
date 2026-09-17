@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ActivityLogEventValidationError,
   ERROR_KIND_PATTERN,
   activityLogEvent,
   classifyErrorKind,
@@ -81,10 +82,16 @@ describe("typed Activity Log operation registration", () => {
       releaseImpact: "patch",
     });
 
-    expect(activityLogEvent(operation, {}, { itemCount: 2 })).toEqual({
-      contractKind: "activity-log-event",
+    expect(
+      activityLogEvent(
+        operation,
+        { correlationId: "registry-fixture-correlation" },
+        { itemCount: 2 },
+      ),
+    ).toEqual({
       category: "diagnostic",
       op: "registry.fixture.completed",
+      correlationId: "registry-fixture-correlation",
       extra: { itemCount: 2 },
     });
 
@@ -99,5 +106,20 @@ describe("typed Activity Log operation registration", () => {
       // @ts-expect-error registered count fields are numeric
       activityLogEvent(operation, {}, { itemCount: "two" });
     }
+
+    expect(() =>
+      activityLogEvent(
+        operation,
+        { correlationId: "registry-fixture-correlation" },
+        { itemCount: 2, rawBody: "secret" } as never,
+      ),
+    ).toThrow(new ActivityLogEventValidationError("unknown-field"));
+    expect(() =>
+      activityLogEvent(
+        operation,
+        { correlationId: "registry-fixture-correlation" },
+        { itemCount: "two" } as never,
+      ),
+    ).toThrow(new ActivityLogEventValidationError("invalid-field-type"));
   });
 });

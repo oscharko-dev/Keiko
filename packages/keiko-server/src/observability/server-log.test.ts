@@ -18,6 +18,11 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ActivityLogEventValidationError,
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { MAX_LOG_FIELD_COUNT, REDACTED_KEY, REDACTED_SHAPE } from "./log-redaction.js";
 import {
@@ -30,6 +35,7 @@ import {
   appendDurableServerLogBatch,
   errorKindOf,
   formatServerLogLine,
+  formatRegisteredServerLogLine,
   reportServerLogFailure,
   resetServerLogFailureNotices,
   serverLogInstanceId,
@@ -1288,6 +1294,44 @@ describe("server activity log level threshold", () => {
 });
 
 describe("server activity log line format", () => {
+  it("rejects unregistered and post-construction-mutated typed events without serializing content", () => {
+    expect(() =>
+      formatRegisteredServerLogLine({ category: "diagnostic", op: "unknown.operation" }),
+    ).toThrow(new ActivityLogEventValidationError("unregistered-operation"));
+
+    const operation = defineActivityLogOperation({
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "registry.runtime.fixture",
+      category: "diagnostic",
+      owner: "keiko-server",
+      emitter: "observability/server-log.test",
+      fields: {
+        status: {
+          type: "string",
+          dataClass: "closed-enum",
+          required: true,
+          values: ["ready"],
+        },
+      },
+      causal: "correlation",
+      lifecycle: "state",
+      analyzerProjection: "timeline",
+      failureClasses: ["registry-runtime-fixture"],
+      proofIds: ["registry-runtime-fixture-line"],
+      releaseImpact: "patch",
+    });
+    const event = activityLogEvent(
+      operation,
+      { correlationId: "registry-runtime-fixture" },
+      { status: "ready" },
+    );
+    (event.extra as Record<string, unknown>).rawBody = "must-not-serialize";
+    expect(() => formatRegisteredServerLogLine(event)).toThrow(
+      new ActivityLogEventValidationError("unknown-field"),
+    );
+  });
+
   it("redacts every field the caller supplies through extra", () => {
     const line = formatServerLogLine({
       category: "embedding",

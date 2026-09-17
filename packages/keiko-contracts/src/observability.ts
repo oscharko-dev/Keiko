@@ -104,6 +104,54 @@ export const ACTIVITY_LOG_LOSS_STATES = [
 ] as const;
 export type ActivityLogLossState = (typeof ACTIVITY_LOG_LOSS_STATES)[number];
 
+export const ACTIVITY_LOG_ERROR_KINDS = [
+  "unknown",
+  "internal",
+  "invalid-request",
+  "validation-failed",
+  "permission-denied",
+  "authority-denied",
+  "unavailable",
+  "timeout",
+  "cancelled",
+  "rate-limited",
+  "conflict",
+  "unsafe-target",
+  "target-exists",
+  "target-mutated",
+  "open-failed",
+  "read-failed",
+  "write-failed",
+  "durability-failed",
+  "publish-unsupported",
+] as const;
+export type ActivityLogErrorKind = (typeof ACTIVITY_LOG_ERROR_KINDS)[number];
+
+export const ACTIVITY_LOG_COMPATIBILITY_STATES = [
+  "supported",
+  "legacy-supported",
+  "unsupported-version",
+  "corrupt",
+  "truncated",
+  "incomplete",
+] as const;
+export type ActivityLogCompatibilityState = (typeof ACTIVITY_LOG_COMPATIBILITY_STATES)[number];
+
+export const ACTIVITY_LOG_WRITER_CAPABILITY_STATES = [
+  "active",
+  "degraded",
+  "unavailable",
+] as const;
+export type ActivityLogWriterCapabilityState =
+  (typeof ACTIVITY_LOG_WRITER_CAPABILITY_STATES)[number];
+
+export function isActivityLogErrorKind(value: unknown): value is ActivityLogErrorKind {
+  return (
+    typeof value === "string" &&
+    (ACTIVITY_LOG_ERROR_KINDS as readonly string[]).includes(value)
+  );
+}
+
 export interface ActivityLogFieldContract {
   readonly type: ActivityLogFieldType;
   readonly dataClass: ActivityLogDataClass;
@@ -146,9 +194,31 @@ export interface ActivityLogOperationRegistration {
 export interface RegisteredActivityLogEvent<
   Registration extends ActivityLogOperationRegistration = ActivityLogOperationRegistration,
 > {
-  readonly contractKind: "activity-log-event";
   readonly category: Registration["category"];
   readonly op: Registration["op"];
+}
+
+export const ACTIVITY_LOG_EVENT_FAILURE_KINDS = [
+  "unregistered-operation",
+  "registration-mismatch",
+  "fields-not-object",
+  "missing-field",
+  "unknown-field",
+  "invalid-field-type",
+  "invalid-field-bound",
+  "invalid-field-vocabulary",
+] as const;
+
+export type ActivityLogEventFailureKind = (typeof ACTIVITY_LOG_EVENT_FAILURE_KINDS)[number];
+
+export class ActivityLogEventValidationError extends Error {
+  public readonly kind: ActivityLogEventFailureKind;
+
+  public constructor(kind: ActivityLogEventFailureKind) {
+    super("activity-log-event-invalid");
+    this.name = "ActivityLogEventValidationError";
+    this.kind = kind;
+  }
 }
 
 export interface ActivityLogEventEnvelope {
@@ -157,7 +227,7 @@ export interface ActivityLogEventEnvelope {
   readonly parentCorrelationId?: string | undefined;
   readonly durationMs?: number | undefined;
   readonly status?: number | undefined;
-  readonly errorKind?: string | undefined;
+  readonly errorKind?: ActivityLogErrorKind | undefined;
 }
 
 type ActivityLogPrimitiveValue<Contract extends ActivityLogFieldContract> =
@@ -200,6 +270,219 @@ type ExactActivityLogFields<
   Fields extends ActivityLogFields<Registration>,
 > = Fields & Record<Exclude<keyof Fields, keyof ActivityLogFields<Registration>>, never>;
 
+function stringFieldFailure(
+  contract: ActivityLogFieldContract,
+  value: string,
+): ActivityLogEventFailureKind | undefined {
+  if (contract.maxLength !== undefined && value.length > contract.maxLength) {
+    return "invalid-field-bound";
+  }
+  if (contract.values !== undefined && !contract.values.includes(value)) {
+    return "invalid-field-vocabulary";
+  }
+  if (
+    contract.dataClass === "completeness-state" &&
+    !(ACTIVITY_LOG_COMPLETENESS_STATES as readonly string[]).includes(value)
+  ) {
+    return "invalid-field-vocabulary";
+  }
+  if (
+    contract.dataClass === "loss-state" &&
+    !(ACTIVITY_LOG_LOSS_STATES as readonly string[]).includes(value)
+  ) {
+    return "invalid-field-vocabulary";
+  }
+  return undefined;
+}
+
+function stringArrayFailure(
+  contract: ActivityLogFieldContract,
+  value: readonly unknown[],
+): ActivityLogEventFailureKind | undefined {
+  if (contract.maxItems !== undefined && value.length > contract.maxItems) {
+    return "invalid-field-bound";
+  }
+  for (const item of value) {
+    if (typeof item !== "string") return "invalid-field-type";
+    const failure = stringFieldFailure(contract, item);
+    if (failure !== undefined) return failure;
+  }
+  return undefined;
+}
+
+function numberFieldFailure(
+  contract: ActivityLogFieldContract,
+  value: number,
+): ActivityLogEventFailureKind | undefined {
+  if (!Number.isFinite(value)) return "invalid-field-type";
+  if (contract.type === "integer" && !Number.isInteger(value)) return "invalid-field-type";
+  if ((contract.dataClass === "count" || contract.dataClass === "duration") && value < 0) {
+    return "invalid-field-bound";
+  }
+  return undefined;
+}
+
+function fieldFailure(
+  contract: ActivityLogFieldContract,
+  value: unknown,
+): ActivityLogEventFailureKind | undefined {
+  if (contract.type === "boolean") return typeof value === "boolean" ? undefined : "invalid-field-type";
+  if (contract.type === "string") {
+    return typeof value === "string" ? stringFieldFailure(contract, value) : "invalid-field-type";
+  }
+  if (contract.type === "string-array") {
+    return Array.isArray(value) ? stringArrayFailure(contract, value) : "invalid-field-type";
+  }
+  return typeof value === "number" ? numberFieldFailure(contract, value) : "invalid-field-type";
+}
+
+function validateActivityLogFields(
+  registration: ActivityLogOperationRegistration,
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  const expected = registration.fields;
+  for (const name of Object.keys(fields)) {
+    if (expected[name] === undefined) throw new ActivityLogEventValidationError("unknown-field");
+  }
+  for (const [name, contract] of Object.entries(expected)) {
+    const value = fields[name];
+    if (value === undefined) {
+      if (contract.required) throw new ActivityLogEventValidationError("missing-field");
+      continue;
+    }
+    const failure = fieldFailure(contract, value);
+    if (failure !== undefined) throw new ActivityLogEventValidationError(failure);
+  }
+}
+
+const ACTIVITY_LOG_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
+  "level",
+  "correlationId",
+  "parentCorrelationId",
+  "durationMs",
+  "status",
+  "errorKind",
+]);
+const ACTIVITY_LOG_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/u;
+
+function validOptionalCorrelationId(value: string | undefined): boolean {
+  return value === undefined || ACTIVITY_LOG_CORRELATION_ID.test(value);
+}
+
+function validateActivityLogEnvelope(
+  registration: ActivityLogOperationRegistration,
+  envelope: ActivityLogEventEnvelope,
+): void {
+  if (Object.keys(envelope).some((key) => !ACTIVITY_LOG_ENVELOPE_KEYS.has(key))) {
+    throw new ActivityLogEventValidationError("unknown-field");
+  }
+  if (!validOptionalCorrelationId(envelope.correlationId)) {
+    throw new ActivityLogEventValidationError("invalid-field-bound");
+  }
+  if (!validOptionalCorrelationId(envelope.parentCorrelationId)) {
+    throw new ActivityLogEventValidationError("invalid-field-bound");
+  }
+  if (registration.causal !== "none" && envelope.correlationId === undefined) {
+    throw new ActivityLogEventValidationError("missing-field");
+  }
+  if (registration.causal === "parent-correlation" && envelope.parentCorrelationId === undefined) {
+    throw new ActivityLogEventValidationError("missing-field");
+  }
+  if (envelope.errorKind !== undefined && !isActivityLogErrorKind(envelope.errorKind)) {
+    throw new ActivityLogEventValidationError("invalid-field-vocabulary");
+  }
+  if (
+    envelope.durationMs !== undefined &&
+    (!Number.isFinite(envelope.durationMs) || envelope.durationMs < 0)
+  ) {
+    throw new ActivityLogEventValidationError("invalid-field-bound");
+  }
+  if (envelope.status !== undefined && !Number.isInteger(envelope.status)) {
+    throw new ActivityLogEventValidationError("invalid-field-type");
+  }
+}
+
+export const ACTIVITY_LOG_EVENT_REGISTRATION = Symbol.for(
+  "@oscharko-dev/keiko-contracts/activity-log-event-registration",
+);
+
+export function activityLogEventRegistration(
+  event: Readonly<Record<PropertyKey, unknown>>,
+): ActivityLogOperationRegistration | undefined {
+  const registration = event[ACTIVITY_LOG_EVENT_REGISTRATION];
+  return registration !== null && typeof registration === "object"
+    ? (registration as ActivityLogOperationRegistration)
+    : undefined;
+}
+
+const ACTIVITY_LOG_EVENT_KEYS: ReadonlySet<string> = new Set([
+  "level",
+  "category",
+  "op",
+  "correlationId",
+  "parentCorrelationId",
+  "durationMs",
+  "status",
+  "errorKind",
+  "extra",
+]);
+
+const ACTIVITY_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
+
+function registeredEventEnvelope(
+  event: Readonly<Record<PropertyKey, unknown>>,
+): ActivityLogEventEnvelope {
+  if (event.correlationId !== undefined && typeof event.correlationId !== "string") {
+    throw new ActivityLogEventValidationError("invalid-field-type");
+  }
+  if (event.parentCorrelationId !== undefined && typeof event.parentCorrelationId !== "string") {
+    throw new ActivityLogEventValidationError("invalid-field-type");
+  }
+  if (event.level !== undefined && !ACTIVITY_LOG_LEVELS.has(String(event.level))) {
+    throw new ActivityLogEventValidationError("invalid-field-vocabulary");
+  }
+  if (event.errorKind !== undefined && !isActivityLogErrorKind(event.errorKind)) {
+    throw new ActivityLogEventValidationError("invalid-field-vocabulary");
+  }
+  if (event.durationMs !== undefined && typeof event.durationMs !== "number") {
+    throw new ActivityLogEventValidationError("invalid-field-type");
+  }
+  if (event.status !== undefined && typeof event.status !== "number") {
+    throw new ActivityLogEventValidationError("invalid-field-type");
+  }
+  return {
+    ...(event.level !== undefined ? { level: event.level as ActivityLogEventEnvelope["level"] } : {}),
+    ...(typeof event.correlationId === "string" ? { correlationId: event.correlationId } : {}),
+    ...(typeof event.parentCorrelationId === "string"
+      ? { parentCorrelationId: event.parentCorrelationId }
+      : {}),
+    ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
+    ...(typeof event.status === "number" ? { status: event.status } : {}),
+    ...(isActivityLogErrorKind(event.errorKind) ? { errorKind: event.errorKind } : {}),
+  };
+}
+
+export function validateRegisteredActivityLogEvent(
+  event: Readonly<Record<PropertyKey, unknown>>,
+): ActivityLogOperationRegistration {
+  const registration = activityLogEventRegistration(event);
+  if (registration === undefined) {
+    throw new ActivityLogEventValidationError("unregistered-operation");
+  }
+  if (event.op !== registration.op || event.category !== registration.category) {
+    throw new ActivityLogEventValidationError("registration-mismatch");
+  }
+  if (Object.keys(event).some((key) => !ACTIVITY_LOG_EVENT_KEYS.has(key))) {
+    throw new ActivityLogEventValidationError("unknown-field");
+  }
+  validateActivityLogEnvelope(registration, registeredEventEnvelope(event));
+  if (typeof event.extra !== "object" || event.extra === null || Array.isArray(event.extra)) {
+    throw new ActivityLogEventValidationError("fields-not-object");
+  }
+  validateActivityLogFields(registration, event.extra as Readonly<Record<string, unknown>>);
+  return registration;
+}
+
 /**
  * Declares one operation for the generated Activity Log registry. Keep the call at the production
  * emitter; the generator records that exact source site and rejects non-literal declarations.
@@ -224,11 +507,19 @@ export function activityLogEvent<
   fields: ExactActivityLogFields<Registration, Fields>,
 ): RegisteredActivityLogEvent<Registration> &
   ActivityLogEventEnvelope & { readonly extra: ActivityLogFields<Registration> } {
-  return {
+  validateActivityLogEnvelope(registration, envelope);
+  validateActivityLogFields(registration, fields);
+  const event = {
     ...envelope,
-    contractKind: "activity-log-event",
     category: registration.category,
     ["op"]: registration.op,
     extra: fields,
   };
+  Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
+    value: registration,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return event;
 }
