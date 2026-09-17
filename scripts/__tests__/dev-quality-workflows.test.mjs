@@ -171,6 +171,9 @@ describe("dev quality workflows", () => {
 
   it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {
     const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
+    const evidenceStep = uiJob?.match(
+      /- name: Build internal packages[\s\S]*?(?=\n\s+- name: Security audit UI dependencies)/u,
+    )?.[0];
     const performanceStep = uiJob?.match(
       /- name: Refresh workspace performance evidence\n[\s\S]*?(?=\n\s+- name: Performance evidence freshness)/u,
     )?.[0];
@@ -194,14 +197,19 @@ describe("dev quality workflows", () => {
     expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
     expect(performanceStep).toContain("rm -f docs/release/1580-workspace-perf-evidence.json");
     expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
-    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
-    expect(performanceStep).toContain("Validate immutable editor D12 performance evidence");
-    expect(performanceStep).toContain(
+    expect(evidenceStep).toContain("Validate tool-catalog performance evidence");
+    expect(evidenceStep).toContain("npm run check:tool-catalog-performance");
+    expect(evidenceStep).toContain("Validate immutable editor D12 performance evidence");
+    expect(evidenceStep).toContain(
       "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
     );
-    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
-    expect(performanceStep).toContain("Validate workspace performance evidence freshness");
-    expect(performanceStep).toContain("npm run check:perf-evidence:workspace");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("Validate workspace performance evidence freshness");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:workspace");
+    expect(evidenceStep).toContain("Validate coding runtime performance evidence");
+    expect(uiJob.indexOf("Validate tool-catalog performance evidence")).toBeLessThan(
+      uiJob.indexOf("Install Playwright browser"),
+    );
     expect(freshnessStep).toContain(
       "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",
     );

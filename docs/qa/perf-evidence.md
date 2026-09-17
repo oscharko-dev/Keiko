@@ -101,35 +101,36 @@ producer's 262,144-byte catalog bound. A separate 320-tool fixture must be rejec
 host-dependent timeout as a performance threshold.
 
 The committed calibration and candidate use the same percentile and budget policy as the native
-coding-runtime target: nearest-rank p95 with a ceiling of the calibration maximum plus its full
-observed range. The evidence binds the tool-catalog source tree, lockfile, and the five scripts that
-form its measurement ruler. `npm run check:tool-catalog-performance` runs a fresh deterministic
-work check on every invocation, then evaluates the committed reference evidence. Fresh local or CI
-wall-clock values are reported for diagnosis and are never compared with the reference threshold.
+coding-runtime target: nearest-rank p95 with a ceiling no wider than the calibration maximum plus
+its full observed range. The candidate binds the measured tool-catalog source tree and lockfile;
+both documents bind the measurement ruler and reference environment. A routine source or lockfile
+update therefore writes a new candidate against the frozen calibration and budget. It never moves
+the threshold. `npm run check:tool-catalog-performance` runs a fresh deterministic work check on
+every invocation, then evaluates the committed reference evidence. Fresh local or CI wall-clock
+values are reported for diagnosis and are never compared with the reference threshold.
 
 The reference environment is the pinned Linux arm64 Node image below with at least 14 logical cores.
-Create a self-contained clone at the exact source revision first; do not mount this repository's
-`node_modules` into the container. The image identity is supplied both to Docker and to the producer,
-which records and validates it. The producer writes the calibration, derived budget, and candidate
-before returning any performance verdict, so a slow run cannot destroy its evidence.
+The repository command creates a self-contained clone at the exact source revision, installs and
+builds inside the container, supplies the image identity to the producer, validates the candidate,
+and copies only the candidate document back. It refuses a dirty working tree because a clean clone
+could not reproduce that subject.
 
 ```bash
-git clone --no-local . /tmp/keiko-3415-performance.noindex
-docker run --rm --platform linux/arm64 --cpus=16 --memory=20g \
-  -e KEIKO_TOOL_CATALOG_REFERENCE_IMAGE=node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
-  -v /tmp/keiko-3415-performance.noindex:/repo -w /repo \
-  node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 \
-  bash -lc 'npm ci --no-audit --no-fund && npm run build:packages && node scripts/check-tool-catalog-performance.mjs --write-reference'
+npm run perf:evidence:regen:tool-catalog
 ```
 
-Copy these three canonical files back from the disposable clone and run the gate again in the
-working checkout:
+If and only if the measurement ruler itself intentionally changes, use the explicit recalibration
+mode in the reviewed change:
 
 ```bash
-cp /tmp/keiko-3415-performance.noindex/docs/release/3415-tool-catalog-{calibration,perf-evidence}.json docs/release/
-cp /tmp/keiko-3415-performance.noindex/scripts/tool-catalog-performance-budget.json scripts/
-npm run check:tool-catalog-performance
+npm run perf:evidence:regen:tool-catalog -- --recalibrate
 ```
+
+Recalibration refuses a different reference environment or case identity and carries every
+existing numeric ceiling forward with a shrink-only `min(previous, newly-derived)` ratchet. It can
+therefore tighten a threshold but cannot turn a slower ruler run into a wider budget. Initial
+calibration is a separate `--calibrate` operation and refuses to overwrite existing calibration or
+budget files.
 
 This is functional compiler and lookup performance evidence. It does not qualify provider latency,
 live-model behavior, or production customer workloads.
@@ -300,10 +301,24 @@ This empirical regression allowance is derived before seeing candidate results. 
 or a statistical confidence interval. The budget anchors the calibration's whole-document digest;
 the judge independently re-derives both percentiles and ceilings. Calibration and candidate must
 also carry the same ruler digest: a changed measurement definition requires an explicitly reviewed
-calibration run, not just a candidate measured against incompatible old thresholds. Ordinary generation only writes
-`docs/release/2952-coding-runtime-perf-evidence.json`. To change the reference class or the calibration,
-review the reason explicitly and remove the old calibration/budget as part of that change; never
-recalibrate simply to erase a regression.
+calibration run, not just a candidate measured against incompatible old thresholds. Ordinary
+generation only writes `docs/release/2952-coding-runtime-perf-evidence.json`.
+
+When a reviewed ruler change makes the frozen calibration incomparable, use the explicit
+non-widening path in the same quiet machine window, followed by an independent candidate run:
+
+```sh
+npm run perf:evidence:coding-runtime -- --recalibrate
+npm run perf:evidence:coding-runtime
+npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness
+```
+
+`--recalibrate` requires the exact existing reference environment and a valid existing calibration
+and budget. It derives ceilings from the new samples but writes the minimum of each new ceiling and
+its previously reviewed value, so recalibration can only preserve or tighten a budget. A wider
+ceiling is rejected by the judge even when its calibration digest is valid. Use this operation only
+for an explicitly reviewed ruler change; never recalibrate simply to erase a regression or change
+the reference class.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

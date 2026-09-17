@@ -258,6 +258,10 @@ describe("CI test/gate wiring guard", () => {
   });
 
   it("refreshes workspace evidence without replacing the immutable D12 comparison", () => {
+    const evidenceStep = ci.slice(
+      ci.indexOf("      - name: Build internal packages so contracts dist resolves for UI tsc"),
+      ci.indexOf("      - name: Security audit UI dependencies"),
+    );
     const performanceStep = ci.slice(
       ci.indexOf("      - name: Refresh workspace performance evidence"),
       ci.indexOf("      - name: Build package and UI assets"),
@@ -265,13 +269,18 @@ describe("CI test/gate wiring guard", () => {
     expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
     expect(performanceStep).not.toContain("npm run test:e2e:editor-perf");
     expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
-    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
     // ADR-0139 D7: the immutable editor evidence is validated on pull requests and merge groups;
     // the workspace refresh and freshness gate stay on push/dispatch (post-merge) only.
-    expect(performanceStep).toContain(
+    expect(evidenceStep).toContain(
       "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
     );
-    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("npm run check:tool-catalog-performance");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:workspace");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:coding-runtime");
+    expect(ci.indexOf("Validate tool-catalog performance evidence")).toBeLessThan(
+      ci.indexOf("Install Playwright browser"),
+    );
     expect(performanceStep).toContain("Upload redacted performance evidence");
     expect(performanceStep).toContain("if-no-files-found: warn");
     expect(performanceStep).not.toContain("always()");

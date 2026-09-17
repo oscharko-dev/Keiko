@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildCodingPerformanceEvidence,
   calibrationBudgets,
+  codingPerformanceBudgetDefects,
   evaluateCodingPerformanceEvidence,
+  ratchetCodingPerformanceBudgets,
   sealCodingPerformanceDocument,
 } from "../coding-runtime-performance-evidence.mjs";
 
@@ -85,6 +87,36 @@ describe("coding-runtime performance ruler", () => {
     const findings = evaluateCodingPerformanceEvidence(evidence, calibration, budget);
     expect(findings.defects).toEqual([]);
     expect(findings.verdicts).toEqual(["coldStartMs exceeds the calibrated p95 budget"]);
+  });
+
+  it("permits only shrink-only reviewed ceilings and judges against the stricter budget", () => {
+    const { calibration, budget, evidence } = fixture();
+    const stricter = structuredClone(budget);
+    stricter.maximumP95Ms.coldStartMs = evidence.aggregates.coldStartMs.p95 - 1;
+    expect(codingPerformanceBudgetDefects(calibration, stricter)).toEqual([]);
+    expect(evaluateCodingPerformanceEvidence(evidence, calibration, stricter)).toEqual({
+      defects: [],
+      verdicts: ["coldStartMs exceeds the calibrated p95 budget"],
+    });
+
+    const wider = structuredClone(budget);
+    wider.maximumP95Ms.coldStartMs += 1;
+    expect(codingPerformanceBudgetDefects(calibration, wider)).toContain(
+      "coldStartMs budget exceeds its calibrated ceiling",
+    );
+  });
+
+  it("ratchets recalibrated ceilings without widening a reviewed budget", () => {
+    const { budget } = fixture();
+    const slower = input();
+    slower.samples = slower.samples.map((sample) => ({
+      ...sample,
+      coldStartMs: sample.coldStartMs + 1000,
+    }));
+    const recalibration = buildCodingPerformanceEvidence(slower);
+    const ratcheted = ratchetCodingPerformanceBudgets(recalibration, budget);
+    expect(ratcheted.calibrationSha256).toBe(recalibration.documentSha256);
+    expect(ratcheted.maximumP95Ms.coldStartMs).toBe(budget.maximumP95Ms.coldStartMs);
   });
 
   it.each(["prompt", "path", "apiKey"])(

@@ -1387,6 +1387,29 @@ jobs:
         uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages so contracts dist resolves for UI tsc
         run: npm run build:packages
+      # Provenance checks are deterministic and do not need browsers. Keep them before audits,
+      # lint, UI compilation, and every E2E so stale evidence fails in minutes rather than after
+      # the complete Chromium/Firefox/WebKit sequence.
+      - name: Validate tool-catalog performance evidence
+        run: npm run check:tool-catalog-performance
+      - name: Validate immutable editor D12 performance evidence
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:editor
+      - name: Validate workspace performance evidence freshness
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:workspace
+      - name: Validate coding runtime performance evidence
+        if: >-
+          hashFiles('docs/release/2952-coding-runtime-calibration.json',
+          'docs/release/2952-coding-runtime-perf-evidence.json',
+          'scripts/coding-runtime-performance-budget.json') != ''
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:coding-runtime
       - name: Security audit UI dependencies (moderate and above)
         # Same shipped-graph scope as the audit in the build job; the UI's dev toolchain (eslint,
         # next lint plugins) is not part of the static export this job builds.
@@ -1468,43 +1491,6 @@ jobs:
         run: |
           rm -f docs/release/1580-workspace-perf-evidence.json
           npm run test:e2e:workspace-perf
-      # The editor document is the immutable D12 baseline/candidate comparison measured on the PR
-      # candidate. Its source-tree and toolchain bindings (ADR-0139 D2: measured surfaces only)
-      # make it valid across the signed squash and across merge-queue integration.
-      - name: Validate immutable editor D12 performance evidence
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
-        # The base ref scopes the measurement-toolchain freshness check to diffs that actually move
-        # the ruler. Integrity, budgets and the pinned-baseline anchor are checked unconditionally;
-        # only the "was this measured with the current toolchain" question is the responsibility of
-        # the change that altered it, not of every other open pull request (ADR-0139 D10).
-        env:
-          # merge_group carries no pull_request payload; its base sha lives under merge_group.
-          # Without this the merge queue would see an empty base ref, fall back to evaluating the
-          # digest unconditionally, and reintroduce exactly the cross-PR blocking this removes.
-          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: npm run check:perf-evidence:editor
-      # The post-push workspace browser run above remains the runtime-regression detector. This
-      # deterministic check is intentionally narrower: it validates the committed document's
-      # provenance and makes a workspace measurement-ruler change carry its own re-measurement.
-      - name: Validate workspace performance evidence freshness
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
-        env:
-          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: npm run check:perf-evidence:workspace
-      # Coding-runtime samples are produced only on the declared native reference host.
-      # Hosted CI checks their closed schema, derived budgets and measurement-toolchain binding.
-      # The #2952 calibration/measurement/budget documents are not committed yet, so this step
-      # would fail every run before that evidence lands; gate it on the documents' presence the
-      # same way the sibling editor/workspace steps are gated on their event, and wire it
-      # unconditionally once #2952 commits the evidence.
-      - name: Validate coding runtime performance evidence
-        if: >-
-          hashFiles('docs/release/2952-coding-runtime-calibration.json',
-          'docs/release/2952-coding-runtime-perf-evidence.json',
-          'scripts/coding-runtime-performance-budget.json') != ''
-        env:
-          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: npm run check:perf-evidence:coding-runtime
       - name: Performance evidence freshness + budget gate
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: npm run check:perf-evidence

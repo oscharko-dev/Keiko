@@ -1,43 +1,96 @@
 #!/usr/bin/env node
-// Re-measures the tool-catalog performance reference in its pinned container.
-//
-// The reference environment is fixed by `check-tool-catalog-performance.mjs` (linux/arm64, Node
-// v24.18.0, >=14 logical cores, one pinned image digest), so a producer change that legitimately
-// moves the subject could only be re-measured by hand-assembling that `docker run` from the gate's
-// constants. That undocumented step is why an otherwise one-line producer edit stalled: the gate
-// named the drift correctly and left no supported way to repair it. This is that way.
-//
-// The image is IMPORTED from the gate, never re-read out of its source: one declaration, so the
-// container a measurement runs in and the container the gate attests cannot drift apart.
+
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { copyFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { TOOL_CATALOG_REFERENCE_IMAGE } from "./check-tool-catalog-performance.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
-import { TOOL_CATALOG_REFERENCE_IMAGE } from "./check-tool-catalog-performance.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const MEASUREMENT_FILE = "docs/release/3415-tool-catalog-perf-evidence.json";
+const CALIBRATION_FILES = [
+  "docs/release/3415-tool-catalog-calibration.json",
+  "scripts/tool-catalog-performance-budget.json",
+];
 
-/** The exact `docker run` the reference measurement needs; pure, so its shape is testable. */
-export function regenerateArguments(root, image = TOOL_CATALOG_REFERENCE_IMAGE) {
+function containerScript(recalibrate) {
+  const measurementCommands = recalibrate
+    ? [
+        "node scripts/check-tool-catalog-performance.mjs --recalibrate",
+        "node scripts/check-tool-catalog-performance.mjs --write-measurement",
+      ]
+    : ["node scripts/check-tool-catalog-performance.mjs --write-measurement"];
+  return [
+    "set -euo pipefail",
+    "npm ci --ignore-scripts --no-audit --no-fund",
+    "npm run build:packages",
+    ...measurementCommands,
+    "npm run check:tool-catalog-performance",
+  ].join("\n");
+}
+
+export function regenerateArguments(
+  clone,
+  { image = TOOL_CATALOG_REFERENCE_IMAGE, recalibrate = false } = {},
+) {
   return [
     "run",
     "--rm",
+    "--platform",
+    "linux/arm64",
+    "--cpus=16",
+    "--memory=20g",
     "-v",
-    `${root}:/repo`,
+    `${clone}:/repo`,
     "-w",
     "/repo",
     "-e",
     `KEIKO_TOOL_CATALOG_REFERENCE_IMAGE=${image}`,
     image,
-    "node",
-    "scripts/check-tool-catalog-performance.mjs",
-    "--write-reference",
+    "bash",
+    "-lc",
+    containerScript(recalibrate),
   ];
 }
 
+function defaultDependencies() {
+  return {
+    copyFile: copyFileSync,
+    makeWorkdir: () => mkdtempSync(join(tmpdir(), "keiko-tool-catalog-perf-")),
+    run: (command, args, options = {}) =>
+      execFileSync(resolveHostExecutable(command), args, { stdio: "inherit", ...options }),
+    status: () =>
+      execFileSync(
+        resolveHostExecutable("git"),
+        ["status", "--porcelain", "--untracked-files=all"],
+        {
+          cwd: repoRoot,
+          encoding: "utf8",
+        },
+      ).trim(),
+  };
+}
+
+export function regenerateToolCatalogPerformanceEvidence(options = {}) {
+  const { recalibrate = false } = options;
+  const deps = { ...defaultDependencies(), ...options };
+  if (deps.status() !== "") {
+    throw new TypeError("tool-catalog measurement requires a clean working tree");
+  }
+  const clone = join(deps.makeWorkdir(), "repo.noindex");
+  deps.run("git", ["clone", "--no-local", "--quiet", repoRoot, clone]);
+  deps.run("docker", regenerateArguments(clone, { recalibrate }));
+  const files = recalibrate ? [...CALIBRATION_FILES, MEASUREMENT_FILE] : [MEASUREMENT_FILE];
+  for (const file of files) deps.copyFile(join(clone, file), join(repoRoot, file));
+  return { clone, files, recalibrate };
+}
+
 if (isMainModule(import.meta.url)) {
-  execFileSync(resolveHostExecutable("docker"), regenerateArguments(repoRoot), {
-    stdio: "inherit",
-  });
+  const unknown = process.argv.slice(2).filter((argument) => argument !== "--recalibrate");
+  if (unknown.length > 0) throw new TypeError(`unknown argument: ${unknown.join(", ")}`);
+  regenerateToolCatalogPerformanceEvidence({ recalibrate: process.argv.includes("--recalibrate") });
 }
