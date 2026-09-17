@@ -207,8 +207,12 @@ describe("managed task-workspace Files authorization", (): void => {
     expect(denials).toHaveLength(2);
     expect(denials[0]).toMatchObject({
       category: "security",
-      errorKind: "DENIED",
-      extra: { decision: "denied", reason: "managed-root-session-authority-missing" },
+      errorKind: "authority-denied",
+      extra: {
+        decision: "denied",
+        reason: "managed-root-session-authority-missing",
+        failureKind: "DENIED",
+      },
     });
     expect(JSON.stringify(denials)).not.toContain(managedWorktree);
   });
