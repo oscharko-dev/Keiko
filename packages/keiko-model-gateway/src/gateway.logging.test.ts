@@ -181,6 +181,7 @@ describe("Gateway routing — activity log", () => {
     const rejected = eventFor(log.events, "gateway.route.rejected");
     expect(rejected.level).toBe("warn");
     expect(rejected.category).toBe("gateway");
+    expect(rejected.errorKind).toBe("unavailable");
     expect(rejected.extra).toMatchObject({
       modelId: "not-configured",
       reason: "no-provider-configured",
@@ -197,7 +198,9 @@ describe("Gateway routing — activity log", () => {
       log: log.sink,
     });
     await expect(gateway.chat({ ...REQUEST, modelId: "text-embedding-3-small" })).rejects.toThrow();
-    expect(eventFor(log.events, "gateway.route.rejected").extra).toMatchObject({
+    const rejected = eventFor(log.events, "gateway.route.rejected");
+    expect(rejected.errorKind).toBe("validation-failed");
+    expect(rejected.extra).toMatchObject({
       modelId: "text-embedding-3-small",
       reason: "wrong-model-kind",
       kind: "embedding",

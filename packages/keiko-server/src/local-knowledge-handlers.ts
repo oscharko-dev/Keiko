@@ -3073,6 +3073,12 @@ type IndexingStartRefusal =
   | "job-already-running"
   | "run-already-starting";
 
+function indexingStartRefusalErrorKind(reason: IndexingStartRefusal): ActivityLogErrorKind {
+  if (reason === "no-embedding-capable-model") return "unavailable";
+  if (reason === "job-already-running" || reason === "run-already-starting") return "conflict";
+  return "invalid-request";
+}
+
 // Warn, not info: a refused index is the operator's own click coming back rejected, and it must
 // survive the level an operator filters to when a pod will not build.
 function refuseIndexingStart(
@@ -3083,7 +3089,11 @@ function refuseIndexingStart(
   log.logger.warn(
     activityLogEvent(
       INDEXING_START_REFUSED_OPERATION,
-      { correlationId: log.correlationId, status: response.status },
+      {
+        correlationId: log.correlationId,
+        status: response.status,
+        errorKind: indexingStartRefusalErrorKind(reason),
+      },
       {
         capsuleIdDigest: log.capsuleIdDigest,
         reason,
@@ -3331,7 +3341,11 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
         log.logger.warn(
           activityLogEvent(
             INDEXING_CANCEL_REFUSED_OPERATION,
-            { correlationId: log.correlationId, status: 404 },
+            {
+              correlationId: log.correlationId,
+              status: 404,
+              errorKind: "invalid-request",
+            },
             {
               capsuleIdDigest: log.capsuleIdDigest,
               reason: "capsule-not-found",
@@ -3349,7 +3363,7 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
         log.logger.warn(
           activityLogEvent(
             INDEXING_CANCEL_REFUSED_OPERATION,
-            { correlationId: log.correlationId, status: 409 },
+            { correlationId: log.correlationId, status: 409, errorKind: "conflict" },
             {
               capsuleIdDigest: log.capsuleIdDigest,
               reason: "no-running-job",

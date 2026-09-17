@@ -1554,4 +1554,24 @@ describe("logRequestOnClose", () => {
       aborted: false,
     });
   });
+
+  it("reduces an oversized request path before typed close-time logging", () => {
+    const { req, res } = doubles();
+    const sensitiveSegment = "customer-secret-".repeat(600);
+    req.url = `/api/${sensitiveSegment}`;
+    const sink = createBufferedServerLogSink();
+
+    logRequestOnClose(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      "corr-long-path",
+      sink,
+      {},
+    );
+
+    expect(req.url.length).toBeGreaterThan(8192);
+    expect(() => res.emit("close")).not.toThrow();
+    expect(sink.events[0]?.extra?.path).toBe("/api/{id}");
+    expect(JSON.stringify(sink.events[0])).not.toContain("customer-secret");
+  });
 });

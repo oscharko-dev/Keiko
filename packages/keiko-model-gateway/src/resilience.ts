@@ -581,6 +581,7 @@ export class CircuitBreaker {
         GATEWAY_CIRCUIT_REJECTED_OPERATION,
         {
           level: first ? "warn" : "debug",
+          errorKind: "unavailable",
           ...(correlationId === undefined ? {} : { correlationId }),
         },
         {
@@ -697,6 +698,7 @@ export class CircuitBreaker {
         GATEWAY_CIRCUIT_OPENED_OPERATION,
         {
           level: "warn",
+          errorKind: "unavailable",
           ...(correlationId === undefined ? {} : { correlationId }),
         },
         {

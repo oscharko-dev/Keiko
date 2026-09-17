@@ -28,6 +28,7 @@ import {
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import {
   MAX_LOG_STRING_LENGTH,
+  REDACTED_PATH,
   redactRoutePath,
   type ServerLogSink,
 } from "./observability/server-log.js";
@@ -456,10 +457,9 @@ function createVoicePlanes(
 // ONLY when the deployment is full-realtime voice capable; every other upgrade keeps the hard reject.
 
 // Content-free by construction: every value here is a count, a bounded label, or a route
-// TEMPLATE — never a raw query value, a header or a body. `path` keeps its pre-existing behaviour
-// (reduced generically by `log-redaction.ts`'s own path guard); `routeTemplate` is the field this
-// wave adds so a reader learns WHICH declared route actually matched, sourced from the real match
-// `dispatchApi` resolved rather than re-derived independently from the same raw path.
+// TEMPLATE — never a raw query value, a header or a body. `path` is reduced before typed event
+// construction so an oversized or hostile request target cannot make close-time logging throw;
+// `routeTemplate` records the exact declared route `dispatchApi` matched when one exists.
 interface HttpRequestOutcome {
   readonly method: string;
   readonly path: string;
@@ -502,13 +502,20 @@ const HTTP_REQUEST_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+function boundedRequestPath(pathname: string, routeTemplate: string | undefined): string {
+  if (routeTemplate !== undefined && routeTemplate.length <= MAX_LOG_STRING_LENGTH) {
+    return routeTemplate;
+  }
+  return redactRoutePath(pathname, MAX_LOG_STRING_LENGTH) ?? REDACTED_PATH;
+}
+
 function buildHttpRequestExtra(
   outcome: HttpRequestOutcome,
   context: RequestLogContext,
 ): ActivityLogEventFields<typeof HTTP_REQUEST_OPERATION> {
   return {
     method: outcome.method,
-    path: outcome.path,
+    path: boundedRequestPath(outcome.path, context.routeTemplate),
     ...(context.routeTemplate === undefined ? {} : { routeTemplate: context.routeTemplate }),
     queryParamNames: context.queryParamNames ?? [],
     ...(context.queryParamDroppedCount === undefined

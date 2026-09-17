@@ -218,9 +218,7 @@ function lineFor(sink: BufferedServerLogSink, op: string): ServerLogEvent {
   }
   if (ROUTE_OPERATIONS.has(op)) {
     expect(
-      activityLogEventRegistration(
-        event as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
     expect(event.extra).toMatchObject({ completeness: "complete", loss: "none" });
   }
@@ -459,6 +457,7 @@ describe("every refusal of a start names which refusal it was", () => {
       level: "warn",
       category: "indexing",
       status: 404,
+      errorKind: "invalid-request",
       extra: { reason: "capsule-not-found" },
     });
   });
@@ -473,6 +472,7 @@ describe("every refusal of a start names which refusal it was", () => {
     expect(result.status).toBe(409);
     expect(lineFor(sink, START_REFUSED)).toMatchObject({
       status: 409,
+      errorKind: "invalid-request",
       extra: { reason: "capsule-has-no-sources" },
     });
   });
@@ -494,6 +494,7 @@ describe("every refusal of a start names which refusal it was", () => {
     expect(result.status).toBe(409);
     expect(lineFor(sink, START_REFUSED)).toMatchObject({
       status: 409,
+      errorKind: "unavailable",
       extra: { reason: "no-embedding-capable-model" },
     });
   });
@@ -517,6 +518,7 @@ describe("every refusal of a start names which refusal it was", () => {
       level: "warn",
       status: 409,
       correlationId: jobIdOf(first),
+      errorKind: "conflict",
       extra: { reason: "job-already-running" },
     });
   });
@@ -542,6 +544,7 @@ describe("every refusal of a start names which refusal it was", () => {
     // `job-already-running`, and the two must never be conflated on the record.
     expect(lineFor(sink, START_REFUSED)).toMatchObject({
       status: 409,
+      errorKind: "conflict",
       extra: { reason: "run-already-starting" },
     });
   });
@@ -589,6 +592,7 @@ describe("cancelling an indexing run is on the record", () => {
     expect(lineFor(sink, CANCEL_REFUSED)).toMatchObject({
       level: "warn",
       status: 404,
+      errorKind: "invalid-request",
       extra: { reason: "capsule-not-found" },
     });
   });
@@ -603,6 +607,7 @@ describe("cancelling an indexing run is on the record", () => {
     expect(result.status).toBe(409);
     expect(lineFor(sink, CANCEL_REFUSED)).toMatchObject({
       status: 409,
+      errorKind: "conflict",
       extra: { reason: "no-running-job" },
     });
   });

@@ -266,6 +266,7 @@ describe("CircuitBreaker — activity log", () => {
     const opened = eventFor(log.events, "gateway.circuit.opened");
     expect(opened.level).toBe("warn");
     expect(opened.category).toBe("gateway");
+    expect(opened.errorKind).toBe("unavailable");
     expect(opened.extra).toMatchObject({
       modelId: "m",
       previousState: "closed",
@@ -301,6 +302,7 @@ describe("CircuitBreaker — activity log", () => {
       "debug",
       "debug",
     ]);
+    expect(rejections.every((event) => event.errorKind === "unavailable")).toBe(true);
     expect(rejections[0]?.extra).toMatchObject({
       modelId: "m",
       state: "open",

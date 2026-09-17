@@ -2,6 +2,7 @@ import { isGitChangeSnapshotReference } from "@oscharko-dev/keiko-contracts/runt
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   PR_DESCRIPTION_SECTION_KEYS,
@@ -331,6 +332,35 @@ const PR_DESCRIPTION_GENERATION_UNAVAILABLE_OPERATION = defineActivityLogOperati
   proofIds: ["pr-description.generation-unavailable.emitted-line"],
   releaseImpact: "patch",
 });
+
+const PR_DESCRIPTION_REASON_ERROR_KIND = {
+  none: "unknown",
+  "model-unavailable": "unavailable",
+  "invalid-model-output": "validation-failed",
+  "unsafe-model-output": "validation-failed",
+  "provider-failed": "unavailable",
+  "budget-exhausted": "unavailable",
+  cancelled: "cancelled",
+  timeout: "timeout",
+  "snapshot-unavailable": "unavailable",
+  "invalid-snapshot": "validation-failed",
+  "invalid-request": "invalid-request",
+  "authority-denied": "authority-denied",
+} as const satisfies Readonly<Record<PrDescriptionReason, ActivityLogErrorKind>>;
+
+function logGenerationUnavailable(
+  log: ModelGatewayLogSink,
+  correlationId: string,
+  reason: PrDescriptionReason,
+): void {
+  log.write(
+    activityLogEvent(
+      PR_DESCRIPTION_GENERATION_UNAVAILABLE_OPERATION,
+      { level: "warn", correlationId, errorKind: PR_DESCRIPTION_REASON_ERROR_KIND[reason] },
+      { reason },
+    ),
+  );
+}
 
 const PR_DESCRIPTION_GENERATION_FAILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -808,23 +838,26 @@ export async function generatePrDescription(
   request: PrDescriptionRequest,
   deps: PrDescriptionDeps,
 ): Promise<PrDescriptionGenerationResult> {
-  if (!validRequest(request)) return { status: "unavailable", reason: "invalid-request" };
   const log = withCorrelationId(resolveLogSink(deps.log), request.authority.correlationId);
+  if (!validRequest(request)) {
+    logGenerationUnavailable(log, request.authority.correlationId, "invalid-request");
+    return { status: "unavailable", reason: "invalid-request" };
+  }
   const limits = resolvePrDescriptionLimits(deps.limits);
-  if (Object.values(limits).includes(0))
+  if (Object.values(limits).includes(0)) {
+    logGenerationUnavailable(log, request.authority.correlationId, "budget-exhausted");
     return { status: "unavailable", reason: "budget-exhausted" };
-  if (request.signal?.aborted === true) return { status: "unavailable", reason: "cancelled" };
+  }
+  if (request.signal?.aborted === true) {
+    logGenerationUnavailable(log, request.authority.correlationId, "cancelled");
+    return { status: "unavailable", reason: "cancelled" };
+  }
   const cancellation = composeCancellationSignal(limits.timeoutMs, request.signal);
   try {
     const result = await resolveAndGenerate(request, deps, limits, cancellation, log);
-    if (result.status === "unavailable")
-      log.write(
-        activityLogEvent(
-          PR_DESCRIPTION_GENERATION_UNAVAILABLE_OPERATION,
-          { correlationId: request.authority.correlationId },
-          { reason: result.reason },
-        ),
-      );
+    if (result.status === "unavailable") {
+      logGenerationUnavailable(log, request.authority.correlationId, result.reason);
+    }
     return result;
   } catch (error) {
     const reason = failedGenerationReason(cancellation);

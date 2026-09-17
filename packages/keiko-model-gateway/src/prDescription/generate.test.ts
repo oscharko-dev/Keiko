@@ -475,6 +475,15 @@ describe("bounded PR narrative lifecycle", () => {
       reason: "cancelled",
     });
     expect(resolveSnapshot).not.toHaveBeenCalled();
+    expect(
+      setup.events
+        .filter((event) => event.op === "pr-description.generation.unavailable")
+        .map((event) => [event.extra?.reason, event.errorKind]),
+    ).toEqual([
+      ["invalid-request", "invalid-request"],
+      ["budget-exhausted", "unavailable"],
+      ["cancelled", "cancelled"],
+    ]);
   });
 
   it("records an inaccessible resolver failure without retaining its body", async () => {

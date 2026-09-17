@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
@@ -512,6 +513,12 @@ const GATEWAY_ROUTE_REJECTED_OPERATION = defineActivityLogOperation({
   proofIds: ["gateway.route-rejected.emitted-line"],
   releaseImpact: "patch",
 });
+
+function routeRejectionErrorKind(
+  reason: "no-provider-configured" | "no-capability-metadata" | "wrong-model-kind",
+): ActivityLogErrorKind {
+  return reason === "wrong-model-kind" ? "validation-failed" : "unavailable";
+}
 
 // RB-6 (GEN-OBS-CORRELATION-503): tag a thrown GatewayError with the gateway's per-call request id
 // so a failed model call is traceable to the gateway record (mirrors the id already carried by a
@@ -1289,6 +1296,7 @@ export class Gateway {
         GATEWAY_ROUTE_REJECTED_OPERATION,
         {
           level: "warn",
+          errorKind: routeRejectionErrorKind(reason),
           ...(correlationId === undefined ? {} : { correlationId }),
         },
         { modelId, reason, ...(kind === undefined ? {} : { kind }) },
