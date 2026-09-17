@@ -32,6 +32,7 @@ import {
   VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
@@ -119,6 +120,7 @@ import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
+import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 const PROPOSAL_APPROVAL_POLL_MS = 25;
 
@@ -770,14 +772,17 @@ function recordPolicyAuthorizedProposal(
   actionKind: "commit" | "push" | "pull-request",
   proposalId: string,
 ): void {
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "coding-runtime.tool-result",
-    correlationId: isValidCorrelationId(input.authorityRef.runId)
-      ? input.authorityRef.runId
-      : UNKNOWN_CORRELATION_ID,
-    extra: { actionKind, proposalId, state: "proposal-ready", reason: "policy-authorized" },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_RESULT_OPERATION,
+      {
+        correlationId: isValidCorrelationId(input.authorityRef.runId)
+          ? input.authorityRef.runId
+          : UNKNOWN_CORRELATION_ID,
+      },
+      { actionKind, proposalId, state: "proposal-ready", reason: "policy-authorized" },
+    ),
+  );
 }
 
 function recordProposalApprovalWait(
@@ -786,20 +791,29 @@ function recordProposalApprovalWait(
   proposalId: string,
   outcome: ProposalApprovalWaitOutcome,
 ): void {
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "coding-runtime.tool-result",
-    correlationId: isValidCorrelationId(input.authorityRef.runId)
-      ? input.authorityRef.runId
-      : UNKNOWN_CORRELATION_ID,
-    extra: {
-      actionKind,
-      proposalId,
-      state: "approval-wait-settled",
-      reason: outcome,
-      waitCeilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
-    },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_RESULT_OPERATION,
+      {
+        ...(outcome === "approved"
+          ? {}
+          : {
+              level: "warn",
+              errorKind: outcome === "cancelled" ? "cancelled" : "unavailable",
+            }),
+        correlationId: isValidCorrelationId(input.authorityRef.runId)
+          ? input.authorityRef.runId
+          : UNKNOWN_CORRELATION_ID,
+      },
+      {
+        actionKind,
+        proposalId,
+        state: "approval-wait-settled",
+        reason: outcome,
+        waitCeilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
+      },
+    ),
+  );
 }
 
 export function recordProposalApprovalResolutionFailure(
@@ -811,21 +825,20 @@ export function recordProposalApprovalResolutionFailure(
   const correlationId = isValidCorrelationId(input.authorityRef.runId)
     ? input.authorityRef.runId
     : UNKNOWN_CORRELATION_ID;
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "coding-runtime.tool-result",
-    correlationId,
-    level: "warn",
-    errorKind: contentFreeErrorClass(error),
-    extra: {
-      actionKind,
-      proposalId,
-      state: "approval-wait-failed",
-      reason: "authority-resolution-failed",
-      frames: keikoStackFrames(error),
-      causeChain: causeChain(error),
-    },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_RESULT_OPERATION,
+      { correlationId, level: "warn", errorKind: "authority-denied" },
+      {
+        actionKind,
+        proposalId,
+        state: "approval-wait-failed",
+        reason: "authority-resolution-failed",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
   emitServerDiagnostic(input.diagnostics, {
     correlationId,
     timestamp: new Date().toISOString(),

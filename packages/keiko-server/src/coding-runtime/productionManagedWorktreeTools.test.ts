@@ -139,7 +139,7 @@ describe("production managed worktree tools", () => {
       expect.objectContaining({
         op: "coding-runtime.tool-result",
         correlationId: "run-proposal-drift",
-        errorKind: "Error",
+        errorKind: "authority-denied",
         extra: expect.objectContaining({
           actionKind: "commit",
           proposalId: "proposal-drift",
