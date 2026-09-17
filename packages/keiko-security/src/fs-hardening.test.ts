@@ -670,8 +670,8 @@ describe("publishSafeArtifactFileSet", () => {
       publishSafeArtifactFileSet(entries, { commitPath: manifest, trustedRoot: base }),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(readFileSync(manifest, "utf8")).toBe("manifest\n");
     expect(readFileSync(integrity, "utf8")).toBe("digest\n");
@@ -906,6 +906,31 @@ describe("publishSafeArtifactFileSet", () => {
     expect(readFileSync(path, "utf8")).toBe("attacker");
   });
 
+  it("rejects a stage inode replaced immediately after the atomic link", async () => {
+    const base = freshDir();
+    const path = join(base, "report.json");
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        Reflect.apply(actual.linkSync, actual, args);
+        actual.unlinkSync(args[0]);
+        actual.writeFileSync(args[0], "replacement", { mode: FILE_MODE });
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: base },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "target-mutated" }));
+    expect(readFileSync(path, "utf8")).toBe("report");
+    expect(statSync(path).nlink).toBe(1);
+  });
+
   it("rejects parent replacement across the atomic publication link", async () => {
     const base = freshDir();
     const parent = join(base, "reports");
@@ -943,7 +968,7 @@ describe("publishSafeArtifactFileSet", () => {
       writeSync: (...args: Parameters<typeof actual.writeSync>): number => {
         calls += 1;
         if (calls === 1) {
-          const typed = args as [number, Uint8Array, number, number, number | null];
+          const typed = args as unknown as [number, Uint8Array, number, number, number | null];
           return actual.writeSync(typed[0], typed[1], typed[2], 2, typed[4]);
         }
         throw Object.assign(new Error(`write failed: ${path}`), { code: "EIO" });
@@ -1079,6 +1104,54 @@ describe("publishSafeArtifactFileSet", () => {
     expect(publicationStages(base)).toHaveLength(0);
   });
 
+  it("recovers a file set after a non-commit stage was removed", async () => {
+    const base = freshDir();
+    const manifest = join(base, "manifest.json");
+    const integrity = join(base, "integrity.json");
+    const entries = [
+      { path: manifest, contents: "manifest", artifactClass: "manifest" as const },
+      { path: integrity, contents: "integrity", artifactClass: "integrity-artifact" as const },
+    ];
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let removedStage = false;
+    let failed = false;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
+        Reflect.apply(actual.unlinkSync, actual, args);
+        if (String(args[0]).endsWith(".stage")) removedStage = true;
+      },
+      fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
+        if (removedStage && !failed) {
+          failed = true;
+          throw Object.assign(new Error("directory sync failed"), { code: "EIO" });
+        }
+        Reflect.apply(actual.fsyncSync, actual, args);
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(entries, { commitPath: manifest, trustedRoot: base }),
+    ).toThrow(expect.objectContaining({ kind: "durability-failed" }));
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+
+    expect(publicationStages(base)).toHaveLength(1);
+    expect(
+      publishSafeArtifactFileSet(entries, { commitPath: manifest, trustedRoot: base }),
+    ).toEqual({
+      status: "recovered",
+      permissionAssurance: "verified-private",
+      durabilityAssurance: "verified",
+    });
+    expect(publicationStages(base)).toHaveLength(0);
+    expect(readFileSync(manifest, "utf8")).toBe("manifest");
+    expect(readFileSync(integrity, "utf8")).toBe("integrity");
+    expect(statSync(manifest).nlink).toBe(1);
+    expect(statSync(integrity).nlink).toBe(1);
+  });
+
   it("recovers a crash after link and before recovery-marker unlink", async () => {
     const base = freshDir();
     const path = join(base, "report.json");
@@ -1107,7 +1180,7 @@ describe("publishSafeArtifactFileSet", () => {
     vi.doMock("node:fs", () => ({
       ...actual,
       readSync: (...args: Parameters<typeof actual.readSync>): number => {
-        const typed = args as [number, Uint8Array, number, number, number | null];
+        const typed = args as unknown as [number, Uint8Array, number, number, number | null];
         return actual.readSync(typed[0], typed[1], typed[2], Math.min(2, typed[3]), typed[4]);
       },
     }));
@@ -1123,6 +1196,56 @@ describe("publishSafeArtifactFileSet", () => {
       durabilityAssurance: "verified",
     });
     expect(readFileSync(path, "utf8")).toBe("report");
+  });
+
+  it("closes linked-recovery descriptors after a read failure and retries", async () => {
+    const base = freshDir();
+    const path = join(base, "report.json");
+    await leaveLinkedPublication(base, path);
+    const stage = publicationStages(base)[0];
+    if (stage === undefined) throw new Error("expected a recovery stage");
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const opened = new Set<number>();
+    const closed = new Set<number>();
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      openSync: (...args: Parameters<typeof actual.openSync>): number => {
+        const descriptor = Reflect.apply(actual.openSync, actual, args);
+        opened.add(descriptor);
+        return descriptor;
+      },
+      closeSync: (...args: Parameters<typeof actual.closeSync>): void => {
+        closed.add(args[0]);
+        Reflect.apply(actual.closeSync, actual, args);
+      },
+      readSync: (): never => {
+        throw Object.assign(new Error("read failed"), { code: "EIO" });
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: base },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "read-failed" }));
+    expect(opened.size).toBeGreaterThan(0);
+    expect([...opened].every((descriptor) => closed.has(descriptor))).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe("report");
+    expect(statSync(path).nlink).toBe(2);
+    expect(statSync(join(base, stage)).nlink).toBe(2);
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+
+    expect(
+      publishSafeArtifactFileSet([{ path, contents: "report", artifactClass: "support-report" }], {
+        commitPath: path,
+        trustedRoot: base,
+      }),
+    ).toEqual(expect.objectContaining({ status: "recovered" }));
+    expect(publicationStages(base)).toHaveLength(0);
+    expect(statSync(path).nlink).toBe(1);
   });
 
   it.each(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"])(
