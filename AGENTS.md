@@ -403,6 +403,13 @@ system that exists, never beside it:
   [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
   `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
   the catalog. Its legacy literal scan is migration input only and authorizes nothing.
+- **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
+  implementation-obligation categories and a failure-class matrix with product owners, lifecycle
+  transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
+  replay references. Its release expectation is 100% complete. A genuinely unavoidable platform
+  or durability boundary may use only the registry's reviewed exemption shape: one exact operation
+  and failure class, owner, technical reason, linked issue, and expiry. Wildcards, expired records,
+  unknown operations, extra authorization fields, silent loss, and incomplete evidence fail closed.
 - **Thread the correlation.** Every line of one logical operation carries that operation's
   `correlationId`; a background job spawned by a request carries `parentCorrelationId` pointing
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`

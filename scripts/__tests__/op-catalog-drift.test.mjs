@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { generateOpCatalog, generateTypedActivityLogRegistry } from "../generate-op-catalog.mjs";
+import {
+  generateOpCatalog,
+  generateTypedActivityLogRegistry,
+  validateActivityLogRegistryExemptions,
+} from "../generate-op-catalog.mjs";
 import {
   TOOL_CATALOG_OPERATIONS_PATH,
   generateToolCatalogOperations,
@@ -73,6 +77,73 @@ function withTypedRegistryFixture(pkgName, fileContents, check) {
   }
 }
 
+const EXEMPTION_OPERATION_FIXTURE = {
+  op: "fixture.registry.completed",
+  failureClasses: ["fixture-failure"],
+};
+
+function validExemption(overrides = {}) {
+  return {
+    contractKind: "activity-log-exemption",
+    schemaVersion: 1,
+    id: "fixture-platform-boundary",
+    operation: "fixture.registry.completed",
+    failureClass: "fixture-failure",
+    boundary: "platform",
+    owner: "keiko-contracts",
+    reason: "The fixture platform cannot expose this proof signal.",
+    trackingIssue: 3529,
+    expiresOn: "2030-01-01",
+    ...overrides,
+  };
+}
+
+describe("Activity Log registry exemptions", () => {
+  const now = new Date("2026-09-17T00:00:00.000Z");
+
+  it("accepts one exact reviewed operation and failure-class boundary", () => {
+    expect(
+      validateActivityLogRegistryExemptions([validExemption()], [EXEMPTION_OPERATION_FIXTURE], now),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["missing owner", { owner: undefined }, "exemption-invalid", "owner"],
+    ["missing reason", { reason: undefined }, "exemption-invalid", "reason"],
+    ["missing issue", { trackingIssue: undefined }, "exemption-invalid", "trackingIssue"],
+    ["broad operation", { operation: "*" }, "exemption-invalid", "operation"],
+    ["expired", { expiresOn: "2026-09-16" }, "exemption-expired", "2026-09-16"],
+    [
+      "unknown operation",
+      { operation: "fixture.registry.unknown" },
+      "exemption-unknown-operation",
+      "fixture.registry.unknown",
+    ],
+    [
+      "unowned failure class",
+      { failureClass: "other-failure" },
+      "exemption-failure-class-mismatch",
+      "other-failure",
+    ],
+    ["prohibited field authorization", { fields: ["prompt"] }, "exemption-invalid", "unknown-key"],
+    ["silent loss authorization", { allowSilentLoss: true }, "exemption-invalid", "unknown-key"],
+    [
+      "incomplete evidence authorization",
+      { allowIncomplete: true },
+      "exemption-invalid",
+      "unknown-key",
+    ],
+  ])("rejects %s", (_label, mutation, code, detail) => {
+    expect(
+      validateActivityLogRegistryExemptions(
+        [validExemption(mutation)],
+        [EXEMPTION_OPERATION_FIXTURE],
+        now,
+      ),
+    ).toContainEqual(expect.objectContaining({ code, detail }));
+  });
+});
+
 describe("op catalog drift", () => {
   it("discovers a typed registration and emission with its exact owning source sites", () => {
     withTypedRegistryFixture(
@@ -86,7 +157,10 @@ describe("op catalog drift", () => {
         '  category: "diagnostic",',
         '  owner: "zzz-fixture-typed-registry",',
         '  emitter: "fixture",',
-        "  fields: {},",
+        "  fields: {",
+        '    completeness: { type: "string", dataClass: "completeness-state", required: true },',
+        '    loss: { type: "string", dataClass: "loss-state", required: true },',
+        "  },",
         '  causal: "correlation",',
         '  lifecycle: "end",',
         '  analyzerProjection: "timeline",',
@@ -105,9 +179,48 @@ describe("op catalog drift", () => {
             op: "fixture.registry.completed",
             owner: "zzz-fixture-typed-registry",
             registrationSite: "packages/zzz-fixture-typed-registry/src/fixture.ts:2",
-            emitterSites: ["packages/zzz-fixture-typed-registry/src/fixture.ts:17"],
+            emitterSites: ["packages/zzz-fixture-typed-registry/src/fixture.ts:20"],
           }),
         ]);
+        expect(registry.failureClassCoverage).toMatchObject({
+          releaseExpectation: "100%-complete",
+          supportedClassCount: 1,
+          completeClassCount: 1,
+          completeness: "complete",
+        });
+      },
+    );
+  });
+
+  it("marks a supported failure class incomplete when loss/completeness proof fields are absent", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-incomplete-failure-class",
+      [
+        'import { activityLogEvent, defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        "const operation = defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+        '  op: "fixture.registry.incomplete", category: "diagnostic",',
+        '  owner: "zzz-fixture-incomplete-failure-class", emitter: "fixture", fields: {},',
+        '  causal: "correlation", lifecycle: "failure", analyzerProjection: "failure-cluster",',
+        '  failureClasses: ["fixture-failure"], proofIds: ["fixture-proof"],',
+        '  releaseImpact: "patch",',
+        "});",
+        "activityLogEvent(operation, {});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry.failureClassCoverage).toMatchObject({
+          supportedClassCount: 1,
+          completeClassCount: 0,
+          completeness: "incomplete",
+        });
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({
+            code: "failure-class-incomplete",
+            detail: "lifecycle-evidence,loss-evidence",
+          }),
+        );
       },
     );
   });
@@ -163,6 +276,33 @@ describe("op catalog drift", () => {
     );
   });
 
+  it("rejects a string array without both item-count and per-item bounds", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-unbounded-registration",
+      [
+        'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        "defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+        '  op: "fixture.registry.unbounded", category: "diagnostic",',
+        '  owner: "zzz-fixture-unbounded-registration", emitter: "fixture",',
+        '  fields: { labels: { type: "string-array", dataClass: "opaque-id", required: true, maxItems: 4 } },',
+        '  causal: "correlation", lifecycle: "state", analyzerProjection: "timeline",',
+        '  failureClasses: ["fixture-failure"], proofIds: ["fixture-proof"],',
+        '  releaseImpact: "patch",',
+        "});",
+        "",
+      ].join("\n"),
+      (root) => {
+        expect(generateTypedActivityLogRegistry(root).violations).toContainEqual(
+          expect.objectContaining({
+            code: "registration-invalid",
+            detail: "fields.labels",
+          }),
+        );
+      },
+    );
+  });
+
   it("rejects an emitted event whose descriptor is not a discovered registration", () => {
     withTypedRegistryFixture(
       "zzz-fixture-unregistered-emission",
@@ -193,7 +333,10 @@ describe("op catalog drift", () => {
         "defineActivityLogOperation({",
         '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
         '  op: "fixture.registry.duplicate", category: "diagnostic",',
-        '  owner: "zzz-fixture-duplicate-registration", emitter: "fixture", fields: {},',
+        '  owner: "zzz-fixture-duplicate-registration", emitter: "fixture", fields: {',
+        '    completeness: { type: "string", dataClass: "completeness-state", required: true },',
+        '    loss: { type: "string", dataClass: "loss-state", required: true },',
+        "  },",
         '  causal: "correlation", lifecycle: "end", analyzerProjection: "timeline",',
         '  failureClasses: ["fixture-failure"], proofIds: ["fixture-proof"],',
         '  releaseImpact: "patch",',
@@ -201,7 +344,10 @@ describe("op catalog drift", () => {
         "defineActivityLogOperation({",
         '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
         '  op: "fixture.registry.duplicate", category: "diagnostic",',
-        '  owner: "zzz-fixture-duplicate-registration", emitter: "fixture", fields: {},',
+        '  owner: "zzz-fixture-duplicate-registration", emitter: "fixture", fields: {',
+        '    completeness: { type: "string", dataClass: "completeness-state", required: true },',
+        '    loss: { type: "string", dataClass: "loss-state", required: true },',
+        "  },",
         '  causal: "correlation", lifecycle: "end", analyzerProjection: "timeline",',
         '  failureClasses: ["fixture-failure"], proofIds: ["fixture-proof"],',
         '  releaseImpact: "patch",',
@@ -284,6 +430,28 @@ describe("op catalog drift", () => {
         (operation) => operation.op === "<dynamic>" || operation.category === "unknown",
       ),
     ).toBe(false);
+    expect(checkedIn.typedRegistry.obligationCategories).toEqual([
+      "typed-operation-registration",
+      "closed-bounded-fields",
+      "causal-correlation",
+      "lifecycle-evidence",
+      "failure-evidence",
+      "loss-evidence",
+      "analyzer-projection",
+      "executable-proof",
+      "release-impact",
+    ]);
+    expect(checkedIn.typedRegistry.exemptionSchema).toMatchObject({
+      schemaVersion: 1,
+      scope: "exact-operation-and-failure-class",
+      maximumEntries: 64,
+    });
+    expect(checkedIn.typedRegistry.exemptions).toEqual([]);
+    expect(checkedIn.typedRegistry.failureClassCoverage).toMatchObject({
+      schemaVersion: 1,
+      releaseExpectation: "100%-complete",
+      completeness: "complete",
+    });
   });
 
   // PR #3394 regression: a stale regeneration dropped these 26 still-emitted operations while

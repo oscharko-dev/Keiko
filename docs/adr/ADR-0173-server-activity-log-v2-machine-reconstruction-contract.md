@@ -332,6 +332,20 @@ check closes post-construction mutation and protects JavaScript callers that did
 the TypeScript checker. A rejection produces only a closed body-free rejection kind; it never
 echoes the rejected operation, field, or value and cannot recursively enter the failed sink.
 
+The registry also generates two derived governance surfaces from those same declarations. Stable
+implementation-obligation categories give later quality gates one machine vocabulary rather than
+redeclared documentation rules. The failure-class coverage matrix groups each supported class by
+owner, operation and lifecycle role, causal edges, safe context/evidence classes, loss signals,
+analyzer projection, and executable proof or replay references; release expectation is 100%
+complete. Missing required completeness, loss, or proof evidence is a registry violation.
+
+There is one exemption schema inside this registry and no side list. It scopes one reviewed record
+to one exact registered operation/failure-class pair at an unavoidable platform or durability
+boundary and requires a stable id, owner, technical reason, linked issue, and expiry. Validation
+rejects broad or unknown scope, duplicates, stale/expired records, and any extra key that attempts
+to authorize prohibited fields, silent loss, or incomplete evidence. Exemptions cannot modify an
+operation schema or reduce a supported class's sufficiency requirement.
+
 ### D7 — Process lifecycle events give the log a subject
 
 Before this contract, the log recorded what happened but never which process, running which

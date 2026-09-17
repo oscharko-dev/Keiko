@@ -66,8 +66,11 @@ import {
   ACTIVITY_LOG_ANALYZER_PROJECTIONS,
   ACTIVITY_LOG_CATEGORIES,
   ACTIVITY_LOG_DATA_CLASSES,
+  ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
   ACTIVITY_LOG_FIELD_TYPES,
+  ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
   ACTIVITY_LOG_LIFECYCLE_PHASES,
+  ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
   ACTIVITY_LOG_RELEASE_IMPACTS,
 } from "../packages/keiko-contracts/dist/observability.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
@@ -115,6 +118,27 @@ const REGISTRATION_FIELD_KEYS = new Set([
 ]);
 const REGISTRATION_TOKEN = /^[A-Za-z][A-Za-z0-9._/-]{0,159}$/u;
 const REGISTRATION_FIELD_NAME = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
+const EXEMPTION_KEYS = new Set([
+  "contractKind",
+  "schemaVersion",
+  "id",
+  "operation",
+  "failureClass",
+  "boundary",
+  "owner",
+  "reason",
+  "trackingIssue",
+  "expiresOn",
+]);
+const EXEMPTION_BOUNDARIES = new Set(ACTIVITY_LOG_EXEMPTION_BOUNDARIES);
+const EXEMPTION_DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const ACTIVITY_LOG_EXEMPTION_SCHEMA = {
+  schemaVersion: 1,
+  scope: "exact-operation-and-failure-class",
+  boundaries: ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
+  required: [...EXEMPTION_KEYS],
+  maximumEntries: 64,
+};
 
 // A well-formed op: lowercase dot-separated segments, each starting with a letter, hyphens
 // allowed within a segment, at most 6 segments and 32 characters per segment. Verified against
@@ -143,6 +167,8 @@ function activityLogSchemaDigest() {
       categories: ACTIVITY_LOG_CATEGORIES,
       fieldTypes: ACTIVITY_LOG_FIELD_TYPES,
       dataClasses: ACTIVITY_LOG_DATA_CLASSES,
+      exemptionBoundaries: ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
+      implementationObligations: ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
       lifecyclePhases: ACTIVITY_LOG_LIFECYCLE_PHASES,
       analyzerProjections: ACTIVITY_LOG_ANALYZER_PROJECTIONS,
       releaseImpacts: ACTIVITY_LOG_RELEASE_IMPACTS,
@@ -334,9 +360,7 @@ function typedCallKind(checker, node) {
   const apiName = canonicalActivityLogApiName(checker, node);
   if (apiName === "activityLogEvent") return "activity-log-event";
   const expectedKind =
-    apiName === "defineActivityLogOperation"
-      ? "activity-log-operation"
-      : undefined;
+    apiName === "defineActivityLogOperation" ? "activity-log-operation" : undefined;
   return stringLiteralType(checker, node, "contractKind") === expectedKind
     ? expectedKind
     : undefined;
@@ -386,6 +410,134 @@ function registrySite(repoRoot, sourceFile, node) {
 
 function registryViolation(code, site, correctiveAction) {
   return { code, site, correctiveAction };
+}
+
+function exemptionSite(index) {
+  return `typedRegistry.exemptions[${String(index)}]`;
+}
+
+function validExpiryDate(value) {
+  if (typeof value !== "string" || !EXEMPTION_DATE.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function invalidExemptionField(exemption) {
+  if (typeof exemption !== "object" || exemption === null || Array.isArray(exemption)) {
+    return "record";
+  }
+  if (!Object.keys(exemption).every((key) => EXEMPTION_KEYS.has(key))) return "unknown-key";
+  const checks = [
+    ["contractKind", exemption.contractKind === "activity-log-exemption"],
+    ["schemaVersion", exemption.schemaVersion === 1],
+    ["id", typeof exemption.id === "string" && REGISTRATION_TOKEN.test(exemption.id)],
+    [
+      "operation",
+      typeof exemption.operation === "string" && OP_NAME_PATTERN.test(exemption.operation),
+    ],
+    [
+      "failureClass",
+      typeof exemption.failureClass === "string" && REGISTRATION_TOKEN.test(exemption.failureClass),
+    ],
+    ["boundary", EXEMPTION_BOUNDARIES.has(exemption.boundary)],
+    ["owner", typeof exemption.owner === "string" && REGISTRATION_TOKEN.test(exemption.owner)],
+    [
+      "reason",
+      typeof exemption.reason === "string" &&
+        exemption.reason.trim().length >= 16 &&
+        exemption.reason.length <= 512,
+    ],
+    ["trackingIssue", Number.isInteger(exemption.trackingIssue) && exemption.trackingIssue > 0],
+    ["expiresOn", validExpiryDate(exemption.expiresOn)],
+  ];
+  return checks.find(([, valid]) => !valid)?.[0];
+}
+
+function exemptionViolation(code, index, detail, correctiveAction) {
+  return {
+    ...registryViolation(code, exemptionSite(index), correctiveAction),
+    detail,
+  };
+}
+
+function exemptionScopeViolation(exemption, operations, index) {
+  const operation = operations.find((candidate) => candidate.op === exemption.operation);
+  if (operation === undefined) {
+    return exemptionViolation(
+      "exemption-unknown-operation",
+      index,
+      exemption.operation,
+      "Scope the exemption to one registered production operation.",
+    );
+  }
+  if (!operation.failureClasses.includes(exemption.failureClass)) {
+    return exemptionViolation(
+      "exemption-failure-class-mismatch",
+      index,
+      exemption.failureClass,
+      "Scope the exemption to a failure class declared by the selected operation.",
+    );
+  }
+  return undefined;
+}
+
+function validateExemptionEntry(exemption, index, operations, today, ids) {
+  const violations = [];
+  const invalidField = invalidExemptionField(exemption);
+  if (invalidField !== undefined) {
+    return [
+      exemptionViolation(
+        "exemption-invalid",
+        index,
+        invalidField,
+        "Provide every bounded exemption field and remove any authorization-like extra key.",
+      ),
+    ];
+  }
+  if (ids.has(exemption.id)) {
+    violations.push(
+      exemptionViolation(
+        "exemption-duplicate",
+        index,
+        exemption.id,
+        "Give each reviewed exemption one stable unique id.",
+      ),
+    );
+  }
+  ids.add(exemption.id);
+  if (exemption.expiresOn < today) {
+    violations.push(
+      exemptionViolation(
+        "exemption-expired",
+        index,
+        exemption.expiresOn,
+        "Remove the expired exemption or complete the linked remediation before release.",
+      ),
+    );
+  }
+  const scopeViolation = exemptionScopeViolation(exemption, operations, index);
+  if (scopeViolation !== undefined) violations.push(scopeViolation);
+  return violations;
+}
+
+export function validateActivityLogRegistryExemptions(exemptions, operations, now = new Date()) {
+  if (
+    !Array.isArray(exemptions) ||
+    exemptions.length > ACTIVITY_LOG_EXEMPTION_SCHEMA.maximumEntries
+  ) {
+    return [
+      registryViolation(
+        "exemption-registry-invalid",
+        "typedRegistry.exemptions",
+        "Keep the reviewed exemption registry as a bounded array of exact records.",
+      ),
+    ];
+  }
+  const today = now.toISOString().slice(0, 10);
+  const ids = new Set();
+  return exemptions.flatMap((exemption, index) =>
+    validateExemptionEntry(exemption, index, operations, today, ids),
+  );
 }
 
 function visitSource(sourceFile, visit) {
@@ -444,7 +596,9 @@ function diagnosticSite(repoRoot, diagnostic) {
 function typedRegistryDiagnostics(program, repoRoot) {
   const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
   return diagnostics
-    .filter((diagnostic) => diagnostic.file !== undefined && relevantRegistrySource(diagnostic.file))
+    .filter(
+      (diagnostic) => diagnostic.file !== undefined && relevantRegistrySource(diagnostic.file),
+    )
     .map((diagnostic) => ({
       ...registryViolation(
         "typescript-diagnostic",
@@ -479,6 +633,20 @@ function validFieldContractValues(contract) {
   return !invalidClosedStringArray(contract.values);
 }
 
+function fieldContractIsBounded(contract) {
+  if (contract.type === "string-array") {
+    return (
+      contract.maxItems !== undefined &&
+      (contract.maxLength !== undefined || contract.values !== undefined)
+    );
+  }
+  if (contract.type !== "string") return true;
+  if (contract.dataClass === "completeness-state" || contract.dataClass === "loss-state") {
+    return true;
+  }
+  return contract.maxLength !== undefined || contract.values !== undefined;
+}
+
 function invalidFieldContract(name, contract) {
   if (!REGISTRATION_FIELD_NAME.test(name)) return name;
   if (!validFieldContractShape(contract)) return name;
@@ -490,6 +658,7 @@ function invalidFieldContract(name, contract) {
     !invalidOptionalBound(contract.maxLength, 8192),
     !invalidOptionalBound(contract.maxItems, 64),
     validFieldContractValues(contract),
+    fieldContractIsBounded(contract),
   ];
   return valid.every(Boolean) ? undefined : name;
 }
@@ -614,6 +783,109 @@ function addMissingEmitterViolations(context) {
   }
 }
 
+function operationContextFields(operation) {
+  return Object.entries(operation.fields)
+    .filter(([name]) => name !== "completeness" && name !== "loss")
+    .map(([name, contract]) => ({
+      name,
+      type: contract.type,
+      dataClass: contract.dataClass,
+      required: contract.required,
+    }))
+    .toSorted((left, right) => compareCodepoints(left.name, right.name));
+}
+
+function operationEvidenceClasses(operation) {
+  return [...new Set(Object.values(operation.fields).map((field) => field.dataClass))].toSorted(
+    compareCodepoints,
+  );
+}
+
+function operationCoverageMissing(operation) {
+  const missing = [];
+  if (operation.fields.completeness?.required !== true) missing.push("lifecycle-evidence");
+  if (operation.fields.loss?.required !== true) missing.push("loss-evidence");
+  if (operation.proofIds.length === 0) missing.push("executable-proof");
+  return missing;
+}
+
+function failureClassOperation(operation) {
+  return {
+    op: operation.op,
+    owner: operation.owner,
+    category: operation.category,
+    lifecycle: operation.lifecycle,
+    causal: operation.causal,
+    analyzerProjection: operation.analyzerProjection,
+    safeContextFields: operationContextFields(operation),
+    evidenceClasses: operationEvidenceClasses(operation),
+    frameCauseEvidence: {
+      frames: operation.fields.frames !== undefined,
+      causeChain: operation.fields.causeChain !== undefined,
+    },
+    proofIds: operation.proofIds,
+    replayReferences: operation.proofIds.filter((proofId) => /replay|seed|fixture/u.test(proofId)),
+    missingObligations: operationCoverageMissing(operation),
+  };
+}
+
+function failureClassEntry(failureClass, operations) {
+  const members = operations
+    .filter((operation) => operation.failureClasses.includes(failureClass))
+    .toSorted((left, right) => compareCodepoints(left.op, right.op));
+  const coveredOperations = members.map(failureClassOperation);
+  const missingObligations = [
+    ...new Set(coveredOperations.flatMap((operation) => operation.missingObligations)),
+  ].toSorted(compareCodepoints);
+  return {
+    failureClass,
+    productSurfaces: [...new Set(members.map((operation) => operation.owner))].toSorted(
+      compareCodepoints,
+    ),
+    lifecycleTransitions: [...new Set(members.map((operation) => operation.lifecycle))].toSorted(
+      compareCodepoints,
+    ),
+    causalEdges: members.map((operation) => ({ op: operation.op, mode: operation.causal })),
+    lossSignals: members
+      .filter(
+        (operation) => operation.lifecycle === "loss" || operation.fields.loss?.required === true,
+      )
+      .map((operation) => operation.op),
+    operations: coveredOperations,
+    missingObligations,
+    completeness: missingObligations.length === 0 ? "complete" : "incomplete",
+  };
+}
+
+function failureClassCoverage(operations) {
+  const failureClasses = [
+    ...new Set(operations.flatMap((operation) => operation.failureClasses)),
+  ].toSorted(compareCodepoints);
+  const classes = failureClasses.map((failureClass) => failureClassEntry(failureClass, operations));
+  const completeClassCount = classes.filter((entry) => entry.completeness === "complete").length;
+  return {
+    schemaVersion: 1,
+    releaseExpectation: "100%-complete",
+    supportedClassCount: classes.length,
+    completeClassCount,
+    completeness: completeClassCount === classes.length ? "complete" : "incomplete",
+    classes,
+  };
+}
+
+function failureClassCoverageViolations(coverage) {
+  return coverage.classes
+    .filter((entry) => entry.completeness !== "complete")
+    .map((entry) => ({
+      ...registryViolation(
+        "failure-class-incomplete",
+        `typedRegistry.failureClassCoverage.${entry.failureClass}`,
+        "Add the missing registered completeness, loss, and executable proof obligations.",
+      ),
+      detail: entry.missingObligations.join(","),
+    }));
+}
+
 export function generateTypedActivityLogRegistry(repoRoot = REPO_ROOT) {
   const program = typedRegistryProgram(repoRoot);
   const checker = program.getTypeChecker();
@@ -629,12 +901,24 @@ export function generateTypedActivityLogRegistry(repoRoot = REPO_ROOT) {
   addDuplicateRegistrationViolations(context);
   addMissingEmitterViolations(context);
 
-  const sortedOperations = operations.toSorted((left, right) => compareCodepoints(left.op, right.op));
+  const sortedOperations = operations.toSorted((left, right) =>
+    compareCodepoints(left.op, right.op),
+  );
+  const exemptions = [...ACTIVITY_LOG_REGISTRY_EXEMPTIONS];
+  const failureCoverage = failureClassCoverage(sortedOperations);
+  violations.push(
+    ...validateActivityLogRegistryExemptions(exemptions, sortedOperations),
+    ...failureClassCoverageViolations(failureCoverage),
+  );
   return {
     schemaVersion: 1,
     schemaDigest: activityLogSchemaDigest(),
-    catalogDigest: sha256(JSON.stringify(sortedOperations)),
+    catalogDigest: sha256(JSON.stringify({ operations: sortedOperations, exemptions })),
+    obligationCategories: ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
     operations: sortedOperations,
+    exemptionSchema: ACTIVITY_LOG_EXEMPTION_SCHEMA,
+    exemptions,
+    failureClassCoverage: failureCoverage,
     violations: violations.toSorted((left, right) => compareCodepoints(left.site, right.site)),
   };
 }

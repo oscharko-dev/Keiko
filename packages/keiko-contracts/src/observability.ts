@@ -143,18 +143,13 @@ export const ACTIVITY_LOG_COMPATIBILITY_STATES = [
 ] as const;
 export type ActivityLogCompatibilityState = (typeof ACTIVITY_LOG_COMPATIBILITY_STATES)[number];
 
-export const ACTIVITY_LOG_WRITER_CAPABILITY_STATES = [
-  "active",
-  "degraded",
-  "unavailable",
-] as const;
+export const ACTIVITY_LOG_WRITER_CAPABILITY_STATES = ["active", "degraded", "unavailable"] as const;
 export type ActivityLogWriterCapabilityState =
   (typeof ACTIVITY_LOG_WRITER_CAPABILITY_STATES)[number];
 
 export function isActivityLogErrorKind(value: unknown): value is ActivityLogErrorKind {
   return (
-    typeof value === "string" &&
-    (ACTIVITY_LOG_ERROR_KINDS as readonly string[]).includes(value)
+    typeof value === "string" && (ACTIVITY_LOG_ERROR_KINDS as readonly string[]).includes(value)
   );
 }
 
@@ -180,6 +175,49 @@ export type ActivityLogAnalyzerProjection = (typeof ACTIVITY_LOG_ANALYZER_PROJEC
 
 export const ACTIVITY_LOG_RELEASE_IMPACTS = ["none", "patch", "minor", "major"] as const;
 export type ActivityLogReleaseImpact = (typeof ACTIVITY_LOG_RELEASE_IMPACTS)[number];
+
+export const ACTIVITY_LOG_EXEMPTION_BOUNDARIES = ["platform", "durability"] as const;
+export type ActivityLogExemptionBoundary = (typeof ACTIVITY_LOG_EXEMPTION_BOUNDARIES)[number];
+
+// Stable machine categories consumed by the permanent implementation gate. They describe the
+// contract obligations, not one epic or one scanner implementation.
+export const ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS = [
+  "typed-operation-registration",
+  "closed-bounded-fields",
+  "causal-correlation",
+  "lifecycle-evidence",
+  "failure-evidence",
+  "loss-evidence",
+  "analyzer-projection",
+  "executable-proof",
+  "release-impact",
+] as const;
+export type ActivityLogImplementationObligation =
+  (typeof ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS)[number];
+
+/**
+ * A narrowly reviewed exception to one failure-class proof at one registered operation.
+ *
+ * The shape cannot authorize fields, data classes, unknown operations, silent loss, or incomplete
+ * evidence. Those concerns stay governed by the operation schema. The registry generator validates
+ * the exact operation/failure-class pair, tracking issue, owner, technical reason, and expiry.
+ */
+export interface ActivityLogRegistryExemption {
+  readonly contractKind: "activity-log-exemption";
+  readonly schemaVersion: 1;
+  readonly id: string;
+  readonly operation: string;
+  readonly failureClass: string;
+  readonly boundary: ActivityLogExemptionBoundary;
+  readonly owner: string;
+  readonly reason: string;
+  readonly trackingIssue: number;
+  readonly expiresOn: string;
+}
+
+// Intentionally empty. Any future entry is compiled into the authoritative generated registry and
+// must pass its expiry/scope validator; there is no second exemption file or runtime override.
+export const ACTIVITY_LOG_REGISTRY_EXEMPTIONS: readonly ActivityLogRegistryExemption[] = [];
 
 export interface ActivityLogOperationRegistration {
   readonly contractKind: "activity-log-operation";
@@ -260,12 +298,15 @@ type ActivityLogFieldValue<Contract extends ActivityLogFieldContract> =
           ? Contract["values"][number]
           : ActivityLogPrimitiveValue<Contract>;
 
-type RequiredActivityLogFieldNames<Fields extends Readonly<Record<string, ActivityLogFieldContract>>> = {
+type RequiredActivityLogFieldNames<
+  Fields extends Readonly<Record<string, ActivityLogFieldContract>>,
+> = {
   [Name in keyof Fields]: Fields[Name]["required"] extends true ? Name : never;
 }[keyof Fields];
 
-type OptionalActivityLogFieldNames<Fields extends Readonly<Record<string, ActivityLogFieldContract>>> =
-  Exclude<keyof Fields, RequiredActivityLogFieldNames<Fields>>;
+type OptionalActivityLogFieldNames<
+  Fields extends Readonly<Record<string, ActivityLogFieldContract>>,
+> = Exclude<keyof Fields, RequiredActivityLogFieldNames<Fields>>;
 
 export type ActivityLogFields<Registration extends ActivityLogOperationRegistration> = {
   readonly [Name in RequiredActivityLogFieldNames<Registration["fields"]>]: ActivityLogFieldValue<
@@ -338,7 +379,8 @@ function fieldFailure(
   contract: ActivityLogFieldContract,
   value: unknown,
 ): ActivityLogEventFailureKind | undefined {
-  if (contract.type === "boolean") return typeof value === "boolean" ? undefined : "invalid-field-type";
+  if (contract.type === "boolean")
+    return typeof value === "boolean" ? undefined : "invalid-field-type";
   if (contract.type === "string") {
     return typeof value === "string" ? stringFieldFailure(contract, value) : "invalid-field-type";
   }
@@ -463,7 +505,9 @@ function registeredEventEnvelope(
     throw new ActivityLogEventValidationError("invalid-field-type");
   }
   return {
-    ...(event.level !== undefined ? { level: event.level as ActivityLogEventEnvelope["level"] } : {}),
+    ...(event.level !== undefined
+      ? { level: event.level as ActivityLogEventEnvelope["level"] }
+      : {}),
     ...(typeof event.correlationId === "string" ? { correlationId: event.correlationId } : {}),
     ...(typeof event.parentCorrelationId === "string"
       ? { parentCorrelationId: event.parentCorrelationId }

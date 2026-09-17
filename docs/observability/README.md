@@ -57,6 +57,19 @@ the physical sink validates the same contract again immediately before serializa
 therefore cannot add arbitrary metadata, widen a field after construction, or use an unregistered
 operation as an escape hatch.
 
+`typedRegistry.obligationCategories` is the stable machine vocabulary for future implementation
+gates. `typedRegistry.failureClassCoverage` groups the same operation declarations into a generated
+matrix of owning product surfaces, lifecycle transitions, causal edges, safe context fields,
+frame/cause availability, loss signals, analyzer projections, and executable proof or replay
+references. The release expectation is `100%-complete`; a class missing required completeness,
+loss, or proof evidence is an authoritative registry violation.
+
+`typedRegistry.exemptions` is governed by its adjacent `exemptionSchema`. The list is intentionally
+empty by default. A reviewed entry may cover only one exact registered operation/failure-class
+pair at an unavoidable platform or durability boundary, and must include an owner, technical
+reason, linked issue, and expiry. Unknown or broad scope, stale/expired records, and extra keys that
+attempt to authorize fields, prohibited data, silent loss, or incomplete evidence fail closed.
+
 ## Redaction scope, stated honestly
 
 Every field this log can carry passes through `redactLogFields` before it reaches disk. That

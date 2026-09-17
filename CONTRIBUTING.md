@@ -41,6 +41,13 @@ Tests for changed behavior assert the emitted line and the support-analyzer proj
 and check the catalog with `npm run generate:op-catalog` and `npm run check:op-catalog`; error-path
 changes also run `npm run check:error-observability` during the verification phase.
 
+The generated registry also publishes the stable implementation-obligation categories and the
+failure-class coverage matrix consumed by permanent quality gates. Its release expectation is
+100% complete. Exemptions are not comments or wildcards: the sole registry exemption contract is
+limited to one registered operation/failure-class pair and requires an owner, technical reason,
+linked tracking issue, unavoidable platform or durability boundary, and expiry. It cannot permit
+unknown fields, prohibited data, silent loss, or incomplete evidence.
+
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into
