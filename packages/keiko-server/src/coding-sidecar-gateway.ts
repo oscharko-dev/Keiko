@@ -1,5 +1,5 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   findConfiguredCapability,
   resolveCodingSafeSidecarGatewayProfile,
@@ -238,7 +238,6 @@ const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION = defineActivityLogOper
 // activity-log line carrying the REASON, so a defect is reconstructable from the log alone instead
 // of only the opaque HTTP status the client saw. `reason` is this closed vocabulary — never a raw
 // message — and is threaded through every 400/403 rejection path below via `logGatewayRejection`.
-const CODING_SIDECAR_GATEWAY_REJECTED_OP = "coding-sidecar.gateway.rejected";
 // The readiness projection (`/api/coding-sidecar/gateway/profile`) demoting an otherwise
 // "available" profile because its context window cannot survive a real request gets its own op:
 // it is not a per-request rejection, it is a standing state of the profile itself.
@@ -269,21 +268,133 @@ type CodingSidecarGatewayRejectionReason =
   | "spend-budget-exceeded"
   | "unclassified-rejection";
 
+const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.rejected",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logGatewayRejection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "request-too-large",
+        "body-not-json",
+        "body-empty-messages",
+        "message-shape-invalid",
+        "content-part-unsupported",
+        "tools-not-openai-compatible",
+        "invalid-sampling",
+        "input-messages-exceeded",
+        "prompt-tokens-exceeded",
+        "invalid-model",
+        "tool-contract-drift",
+        "tool-contract-missing",
+        "tool-contract-empty",
+        "origin-not-allowed",
+        "runtime-prompt-budget-denied",
+        "capability-authenticator-unavailable",
+        "capability-missing",
+        "capability-invalid",
+        "spend-bound-unavailable",
+        "spend-ledger-unavailable",
+        "spend-budget-invalid",
+        "spend-pricing-unavailable",
+        "spend-budget-exceeded",
+        "unclassified-rejection",
+      ],
+    },
+    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    expectedToolCount: { type: "integer", dataClass: "count", required: false },
+    receivedToolCount: { type: "integer", dataClass: "count", required: false },
+    unexpectedToolCount: { type: "integer", dataClass: "count", required: false },
+    missingToolCount: { type: "integer", dataClass: "count", required: false },
+    toolMismatchSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    estimatedPromptTokens: { type: "integer", dataClass: "count", required: false },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: false },
+    inputMessageCount: { type: "integer", dataClass: "count", required: false },
+    maxInputMessages: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-sidecar-gateway-rejection"],
+  proofIds: ["coding-sidecar.gateway.rejected.line"],
+  releaseImpact: "patch",
+});
+
+type GatewayRejectionEvidence = Partial<{
+  readonly expectedToolCount: number;
+  readonly receivedToolCount: number;
+  readonly unexpectedToolCount: number;
+  readonly missingToolCount: number;
+  readonly toolMismatchSha256: string;
+  readonly estimatedPromptTokens: number;
+  readonly maxPromptTokens: number;
+  readonly inputMessageCount: number;
+  readonly maxInputMessages: number;
+}>;
+
+function gatewayRejectionErrorKind(
+  reason: CodingSidecarGatewayRejectionReason,
+):
+  | "invalid-request"
+  | "validation-failed"
+  | "permission-denied"
+  | "authority-denied"
+  | "unavailable" {
+  if (reason === "capability-missing" || reason === "capability-invalid") {
+    return "permission-denied";
+  }
+  if (
+    reason === "origin-not-allowed" ||
+    reason === "runtime-prompt-budget-denied" ||
+    reason === "spend-budget-exceeded" ||
+    reason.startsWith("tool-contract-")
+  ) {
+    return "authority-denied";
+  }
+  if (reason.includes("unavailable") || reason === "spend-ledger-unavailable") {
+    return "unavailable";
+  }
+  return reason === "unclassified-rejection" ? "validation-failed" : "invalid-request";
+}
+
 /** Body-free: `reason` is closed, `runId` and every `extra` field are counts/ids, never text. */
 function logGatewayRejection(
   ctx: RouteContext,
   runId: string | undefined,
   status: number,
   reason: CodingSidecarGatewayRejectionReason,
-  extra?: Readonly<Record<string, unknown>>,
+  evidence: GatewayRejectionEvidence = {},
 ): void {
-  getServerLogger().warn({
-    category: "gateway",
-    op: CODING_SIDECAR_GATEWAY_REJECTED_OP,
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status,
-    extra: { reason, ...(runId === undefined ? {} : { runId }), ...extra },
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_REJECTED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        status,
+        errorKind: gatewayRejectionErrorKind(reason),
+      },
+      {
+        reason,
+        ...(runId === undefined ? {} : { runId }),
+        ...evidence,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 // One row per message literal `badRequest`/`validationErrorForChatRequest` actually builds — a
@@ -1328,16 +1439,26 @@ function toolContractRejectionReason(tools: readonly ToolDefinition[] | undefine
  * Identifiers only — the mismatching tool NAMES, never a schema or a body — so the activity-log
  * line this feeds stays body-free (AGENTS.md §8) while still naming exactly which tools drifted.
  */
+function toolNameSetDigest(names: readonly string[]): string {
+  const hash = createHash("sha256");
+  hash.update("keiko.coding-sidecar.tool-mismatch.v1\0");
+  for (const name of [...names].sort(compareStrings)) hash.update(`${String(name.length)}:${name}`);
+  return hash.digest("hex");
+}
+
 function toolContractMismatch(
   tools: readonly ToolDefinition[] | undefined,
-): Readonly<Record<string, unknown>> {
+): GatewayRejectionEvidence {
   const expected = new Set<string>(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
   const received = new Set(tools?.map((tool) => tool.name) ?? []);
+  const unexpected = [...received].filter((name) => !expected.has(name));
+  const missing = [...expected].filter((name) => !received.has(name));
   return {
     expectedToolCount: expected.size,
     receivedToolCount: received.size,
-    unexpectedToolNames: [...received].filter((name) => !expected.has(name)),
-    missingToolNames: [...expected].filter((name) => !received.has(name)),
+    unexpectedToolCount: unexpected.length,
+    missingToolCount: missing.length,
+    toolMismatchSha256: toolNameSetDigest([...unexpected, "--missing--", ...missing]),
   };
 }
 
