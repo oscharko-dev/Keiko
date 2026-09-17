@@ -32,8 +32,15 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
-import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import type {
+  PrDescriptionApplicationReason,
+  PrDescriptionApplicationStatus,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { GITHUB_ISSUE_NUMBER_MAX } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { isGitHubIssueReaderAuthorized } from "../coding-context/githubIssueReaderAuthorization.js";
 import type { GitPullRequestBodyAdapter } from "@oscharko-dev/keiko-tools";
@@ -834,6 +841,135 @@ async function prepare<V extends BaseFields>(
 
 type ApplyLifecyclePhase = "started" | "succeeded" | "blocked" | "failed";
 
+const APPLY_FIELDS = {
+  hasProposalId: { type: "boolean", dataClass: "closed-enum", required: false },
+  reason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "applied",
+      "reconciled",
+      "partial-applied",
+      "fallback-applied",
+      "approval-required",
+      "approval-invalid",
+      "authority-denied",
+      "receipt-refused",
+      "policy-blocked",
+      "invalid-request",
+      "malformed-region",
+      "unsafe-content",
+      "stale-pr",
+      "stale-snapshot",
+      "body-changed",
+      "expired",
+      "provider-failed",
+      "recovery-required",
+      "unchanged-after-write",
+    ],
+  },
+  state: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["current", "partial", "fallback", "blocked", "stale", "failed"],
+  },
+} as const;
+
+const APPLY_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.apply.started",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prDescriptionRoutes.logApplyLifecycle",
+  fields: APPLY_FIELDS,
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["pr-description-apply"],
+  proofIds: ["pr-description.apply.started"],
+  releaseImpact: "patch",
+});
+const APPLY_SUCCEEDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.apply.succeeded",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prDescriptionRoutes.logApplyLifecycle",
+  fields: APPLY_FIELDS,
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["pr-description-apply"],
+  proofIds: ["pr-description.apply.succeeded"],
+  releaseImpact: "patch",
+});
+const APPLY_BLOCKED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.apply.blocked",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prDescriptionRoutes.logApplyLifecycle",
+  fields: APPLY_FIELDS,
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-apply-blocked"],
+  proofIds: ["pr-description.apply.blocked"],
+  releaseImpact: "patch",
+});
+const APPLY_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.apply.failed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prDescriptionRoutes.logApplyLifecycle",
+  fields: APPLY_FIELDS,
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-apply-failed"],
+  proofIds: ["pr-description.apply.failed"],
+  releaseImpact: "patch",
+});
+
+const MODEL_EGRESS_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.model-egress.denied",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prDescriptionRoutes.logModelEgressDenied",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-model-egress"],
+  proofIds: ["pr-description.model-egress.denied"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_REPOSITORY_MISMATCH_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.repository.mismatch",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prDescriptionRoutes.logRepositoryMismatch",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-repository-binding"],
+  proofIds: ["pr-description.repository.mismatch"],
+  releaseImpact: "patch",
+});
+
 // Owner audit finding b2-12 (PR #3394): a template-literal `op` is invisible to
 // `generate-op-catalog.mjs` (recorded as `<dynamic>`), so none of the four concrete ops below could
 // be looked up by `keiko support analyze` (AGENTS.md §8). One literal `activityLog.write` call per
@@ -842,42 +978,37 @@ function logApplyLifecycle(
   activityLog: ServerLogSink,
   correlationId: string,
   phase: ApplyLifecyclePhase,
-  extra?: Record<string, unknown>,
+  extra: {
+    readonly hasProposalId?: boolean;
+    readonly reason?: PrDescriptionApplicationReason;
+    readonly state?: PrDescriptionApplicationStatus["state"];
+  } = {},
 ): void {
+  const envelope = { correlationId } as const;
   switch (phase) {
     case "started":
-      activityLog.write({
-        category: "process",
-        op: "pr-description.apply.started",
-        correlationId,
-        extra,
-      });
+      activityLog.write(activityLogEvent(APPLY_STARTED_OPERATION, envelope, extra));
       return;
     case "succeeded":
-      activityLog.write({
-        category: "process",
-        op: "pr-description.apply.succeeded",
-        correlationId,
-        extra,
-      });
+      activityLog.write(activityLogEvent(APPLY_SUCCEEDED_OPERATION, envelope, extra));
       return;
     case "blocked":
-      activityLog.write({
-        category: "process",
-        op: "pr-description.apply.blocked",
-        correlationId,
-        extra,
-      });
+      activityLog.write(
+        activityLogEvent(
+          APPLY_BLOCKED_OPERATION,
+          { ...envelope, level: "warn", errorKind: "conflict" },
+          extra,
+        ),
+      );
       return;
     case "failed":
-      activityLog.write({
-        category: "process",
-        op: "pr-description.apply.failed",
-        correlationId,
-        level: "warn",
-        errorKind: "internal",
-        extra,
-      });
+      activityLog.write(
+        activityLogEvent(
+          APPLY_FAILED_OPERATION,
+          { ...envelope, level: "warn", errorKind: "internal" },
+          extra,
+        ),
+      );
       return;
   }
 }
@@ -887,14 +1018,13 @@ function logApplyLifecycle(
 // authority decision uses — body-free (no PR content, no snapshot text), correlated. `op` is new;
 // the integrator regenerates docs/observability/op-catalog.generated.json (AGENTS.md §8).
 function logModelEgressDenied(activityLog: ServerLogSink, correlationId: string): void {
-  activityLog.write({
-    category: "security",
-    op: "pr-description.model-egress.denied",
-    correlationId,
-    level: "warn",
-    status: 403,
-    errorKind: "permission",
-  });
+  activityLog.write(
+    activityLogEvent(
+      MODEL_EGRESS_DENIED_OPERATION,
+      { correlationId, level: "warn", status: 403, errorKind: "permission-denied" },
+      {},
+    ),
+  );
 }
 
 // #3384 B5-8: the client-supplied `ownerAndRepo` is not the mutation target on its own say-so —
@@ -902,14 +1032,13 @@ function logModelEgressDenied(activityLog: ServerLogSink, correlationId: string)
 // PR-lifecycle route (`prepareGitDeliveryRequest`'s `ownerAndRepoOf` seam) applies. Body-free,
 // security-categorized, correlated — matches every other Git delivery authority denial in this file.
 function logRepositoryMismatch(activityLog: ServerLogSink, correlationId: string): void {
-  activityLog.write({
-    category: "security",
-    op: "pr-description.repository.mismatch",
-    correlationId,
-    level: "warn",
-    status: 403,
-    errorKind: "permission",
-  });
+  activityLog.write(
+    activityLogEvent(
+      PR_DESCRIPTION_REPOSITORY_MISMATCH_OPERATION,
+      { correlationId, level: "warn", status: 403, errorKind: "permission-denied" },
+      {},
+    ),
+  );
 }
 
 // ─── Handlers ───────────────────────────────────────────────────────────────────────────────────
