@@ -695,7 +695,7 @@ describe("publishSafeArtifactFileSet", () => {
     expect(readFileSync(path, "utf8")).toBe("report\n");
   });
 
-  it("idempotently recovers an exact target-only terminal state without writing", async () => {
+  it("refuses an exact pre-existing target without writing", async () => {
     const base = freshDir();
     const path = join(base, "support.jsonl");
     writeFileSync(path, "report\n", { mode: FILE_MODE });
@@ -705,21 +705,17 @@ describe("publishSafeArtifactFileSet", () => {
     vi.doMock("node:fs", () => ({ ...actual, writeSync: write }));
     const isolated = await import("./fs-hardening.js");
 
-    expect(
+    expect(() =>
       isolated.publishSafeArtifactFileSet(
         [{ path, contents: "report\n", artifactClass: "support-report" }],
         { commitPath: path, trustedRoot: base },
       ),
-    ).toEqual({
-      status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
-    });
+    ).toThrow(expect.objectContaining({ kind: "target-exists" }));
     expect(write).not.toHaveBeenCalled();
     expect(readdirSync(base)).toEqual(["support.jsonl"]);
   });
 
-  it("reconstructs a crash after final marker unlink as an exact target-only recovery", async () => {
+  it("keeps a complete target-only crash state but fails closed without its marker", async () => {
     const base = freshDir();
     const path = join(base, "support.jsonl");
     await leaveLinkedPublication(base, path);
@@ -728,16 +724,13 @@ describe("publishSafeArtifactFileSet", () => {
     unlinkSync(join(base, stage ?? "missing"));
     expect(statSync(path).nlink).toBe(1);
 
-    expect(
+    expect(() =>
       publishSafeArtifactFileSet([{ path, contents: "report", artifactClass: "support-report" }], {
         commitPath: path,
         trustedRoot: base,
       }),
-    ).toEqual({
-      status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
-    });
+    ).toThrow(expect.objectContaining({ kind: "target-exists" }));
+    expect(readFileSync(path, "utf8")).toBe("report");
     expect(readdirSync(base)).toEqual(["support.jsonl"]);
   });
 
@@ -755,20 +748,20 @@ describe("publishSafeArtifactFileSet", () => {
         ],
         { commitPath: manifest, trustedRoot: base },
       ),
-    ).toThrow(expect.objectContaining({ kind: "recovery-conflict" }));
+    ).toThrow(expect.objectContaining({ kind: "target-exists" }));
     expect(readFileSync(manifest, "utf8")).toBe("manifest");
     expect(existsSync(integrity)).toBe(false);
     expect(publicationStages(base)).toHaveLength(0);
   });
 
-  it("recovers only when the complete multi-file target set matches exactly", () => {
+  it("refuses a complete multi-file target set when no recovery marker remains", () => {
     const base = freshDir();
     const manifest = join(base, "manifest.json");
     const integrity = join(base, "integrity.json");
     writeFileSync(manifest, "manifest", { mode: FILE_MODE });
     writeFileSync(integrity, "digest", { mode: FILE_MODE });
 
-    expect(
+    expect(() =>
       publishSafeArtifactFileSet(
         [
           { path: manifest, contents: "manifest", artifactClass: "manifest" },
@@ -776,11 +769,7 @@ describe("publishSafeArtifactFileSet", () => {
         ],
         { commitPath: manifest, trustedRoot: base },
       ),
-    ).toEqual({
-      status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
-    });
+    ).toThrow(expect.objectContaining({ kind: "target-exists" }));
     expect(readdirSync(base).sort()).toEqual(["integrity.json", "manifest.json"]);
   });
 
@@ -801,7 +790,7 @@ describe("publishSafeArtifactFileSet", () => {
         commitPath: path,
         trustedRoot: base,
       }),
-    ).toThrow(expect.objectContaining({ kind: "recovery-conflict" }));
+    ).toThrow(expect.objectContaining({ kind: "target-exists" }));
     expect(readFileSync(path, "utf8")).toBe("report");
   });
 
@@ -820,7 +809,7 @@ describe("publishSafeArtifactFileSet", () => {
           [{ path, contents: "report", artifactClass: "support-report" }],
           { commitPath: path, trustedRoot: base },
         ),
-      ).toThrow(expect.objectContaining({ kind: "unsafe-target" }));
+      ).toThrow(expect.objectContaining({ kind: "target-exists" }));
     }
     expect(readFileSync(victim, "utf8")).toBe("report");
   });
@@ -828,19 +817,36 @@ describe("publishSafeArtifactFileSet", () => {
   it("revalidates target identity after reading exact recovery bytes", async () => {
     const base = freshDir();
     const path = join(base, "support.jsonl");
-    const displaced = join(base, "support-displaced.jsonl");
-    writeFileSync(path, "report", { mode: FILE_MODE });
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-    let swapped = false;
     vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (): never => {
+        throw Object.assign(new Error("interrupted"), { code: "EINTR" });
+      },
+    }));
+    const interrupted = await import("./fs-hardening.js");
+    expect(() =>
+      interrupted.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: base },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    const [stageName] = publicationStages(base);
+    expect(stageName).toBeDefined();
+    const stage = join(base, stageName ?? "missing");
+    const displaced = join(base, "stage-displaced");
+    let swapped = false;
     vi.doMock("node:fs", () => ({
       ...actual,
       readSync: (...args: Parameters<typeof actual.readSync>): number => {
         const read = Reflect.apply(actual.readSync, actual, args);
         if (!swapped) {
           swapped = true;
-          renameSync(path, displaced);
-          writeFileSync(path, "report", { mode: FILE_MODE });
+          renameSync(stage, displaced);
+          writeFileSync(stage, "report", { mode: FILE_MODE });
         }
         return read;
       },

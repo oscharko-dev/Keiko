@@ -21,7 +21,6 @@ import {
   mkdirSync,
   openSync,
   readSync,
-  readdirSync,
   realpathSync,
   unlinkSync,
   writeSync,
@@ -545,7 +544,6 @@ export interface ReplaceSafeArtifactFileOptions {
 interface PreparedPublicationEntry {
   readonly path: string;
   readonly stagePath: string;
-  readonly publicationId: string;
   readonly bytes: Buffer;
   readonly artifactClass: SafeArtifactClass;
   readonly trustedRoot: string;
@@ -591,7 +589,6 @@ function preparePublicationEntries(
   return ordered.map((entry, index) => ({
     path: resolve(entry.path),
     stagePath: join(parent, `.keiko-publish-${id}-${String(index)}.stage`),
-    publicationId: id,
     bytes:
       typeof entry.contents === "string"
         ? Buffer.from(entry.contents, "utf8")
@@ -1068,56 +1065,12 @@ function publicationArtifactClass(entries: readonly PreparedPublicationEntry[]):
   return entries[0]?.artifactClass ?? "manifest";
 }
 
-function hasUnexpectedPublicationStage(entries: readonly PreparedPublicationEntry[]): boolean {
-  const first = entries[0];
-  if (first === undefined) return false;
-  const expected = new Set(entries.map((entry) => entry.stagePath));
-  const prefix = `.keiko-publish-${first.publicationId}-`;
-  const guards = captureDirectoryGuards(first.trustedRoot, first.stagePath, first.artifactClass);
-  try {
-    const unexpected = readdirSync(dirname(first.stagePath)).some((name) => {
-      const candidate = join(dirname(first.stagePath), name);
-      return name.startsWith(prefix) && name.endsWith(".stage") && !expected.has(candidate);
-    });
-    if (!guards.every(directoryGuardStillMatches)) {
-      throw safeFileError(first.artifactClass, "target-mutated");
-    }
-    closeDirectoryGuards(guards, first.artifactClass);
-    return unexpected;
-  } catch (error) {
-    closeDirectoryGuardsIgnoringErrors(guards);
-    if (error instanceof SafeArtifactFileError) throw error;
-    throw safeFileError(first.artifactClass, "open-failed");
-  }
-}
-
-function exactTerminalPublication(
-  entries: readonly PreparedPublicationEntry[],
-): SafeArtifactPublicationResult | undefined {
-  const existing = entries.filter((entry) => pathExists(entry.path, entry.artifactClass));
-  if (existing.length === 0) return undefined;
-  const artifactClass = publicationArtifactClass(entries);
-  if (existing.length !== entries.length || hasUnexpectedPublicationStage(entries)) {
-    throw safeFileError(artifactClass, "recovery-conflict");
-  }
-  for (const entry of entries) {
-    if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
-      throw safeFileError(entry.artifactClass, "target-exists");
-    }
-  }
-  const first = entries[0];
-  if (first === undefined) throw safeFileError(artifactClass, "invalid-publication");
-  const durabilityAssurance = syncDirectory(dirname(first.path), first.trustedRoot, artifactClass);
-  return {
-    status: "recovered",
-    permissionAssurance: safeArtifactPermissionAssurance(),
-    durabilityAssurance,
-  };
-}
-
 /**
  * Publishes related files without replacement; the designated commit artifact appears last.
  * Filesystems without same-directory hard links fail closed as `publish-unsupported`.
+ * A complete target-only state after loss of the final marker remains intact but is deliberately
+ * ambiguous and therefore fails `target-exists`; only a durable deterministic stage authorizes
+ * automatic recovery.
  */
 export function publishSafeArtifactFileSet(
   entries: readonly SafeArtifactPublicationEntry[],
@@ -1126,9 +1079,8 @@ export function publishSafeArtifactFileSet(
   validatePublication(entries, options);
   const prepared = preparePublicationEntries(entries, options.commitPath, options.trustedRoot);
   const recovering = publicationHasPath(prepared, "stagePath");
-  if (!recovering) {
-    const terminal = exactTerminalPublication(prepared);
-    if (terminal !== undefined) return terminal;
+  if (!recovering && publicationHasPath(prepared, "path")) {
+    throw safeFileError(publicationArtifactClass(prepared), "target-exists");
   }
   for (const entry of prepared) ensurePreparedStage(entry, recovering);
   const parent = dirname(resolve(options.commitPath));
