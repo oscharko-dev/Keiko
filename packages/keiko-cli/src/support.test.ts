@@ -12,10 +12,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -39,6 +40,20 @@ import {
   type SupportCliDeps,
 } from "./support.js";
 import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
+
+const BUILT_CLI_ENTRY = fileURLToPath(new URL("../../../dist/cli/index.js", import.meta.url));
+
+function runBuiltSupportCli(
+  cwd: string,
+  stateDir: string,
+  nodeArgs: readonly string[] = [],
+): SpawnSyncReturns<string> {
+  return spawnSync(
+    process.execPath,
+    [...nodeArgs, BUILT_CLI_ENTRY, "support", "export", "--state-dir", stateDir],
+    { cwd, encoding: "utf8", env: { ...process.env, KEIKO_HOME: dirname(stateDir) } },
+  );
+}
 
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
   const outChunks: string[] = [];
@@ -329,6 +344,59 @@ describe("runSupportCli export", () => {
     // "default vs. override" without the absolute path.
     expect(manifest.auditSummary).toEqual({ ok: HEALTHY_AUDIT.ok, classes: HEALTHY_AUDIT.classes });
     expect(written).not.toContain(HEALTHY_AUDIT.stateDir);
+  });
+
+  it("publishes a fresh default report on two normal built-CLI runs", () => {
+    const first = runBuiltSupportCli(outDir, stateDir);
+    expect(first.status).toBe(0);
+    const firstReports = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
+    expect(firstReports).toHaveLength(1);
+    writeFileSync(
+      join(stateDir, "logs", "server.log"),
+      `${JSON.stringify({ op: "between-built-runs", correlationId: "built-proof" })}\n`,
+    );
+
+    const second = runBuiltSupportCli(outDir, stateDir);
+    expect(second.status).toBe(0);
+    const secondReports = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
+    expect(secondReports).toHaveLength(2);
+    expect(new Set(secondReports).size).toBe(2);
+    expect(second.stdout).toContain("Wrote ");
+    expect(readdirSync(outDir).filter((name) => name.endsWith(".consumed"))).toHaveLength(1);
+  });
+
+  it("recovers exact built-CLI bytes after death before acknowledgement", () => {
+    const preload = join(outDir, "crash-before-ack.mjs");
+    writeFileSync(
+      preload,
+      `
+        const originalWrite = process.stdout.write.bind(process.stdout);
+        process.stdout.write = (chunk, ...args) => {
+          const result = originalWrite(chunk, ...args);
+          if (String(chunk).startsWith("Wrote ")) process.kill(process.pid, "SIGKILL");
+          return result;
+        };
+      `,
+    );
+    const interrupted = runBuiltSupportCli(outDir, stateDir, ["--import", preload]);
+    expect(interrupted.status).not.toBe(0);
+    const [reportName] = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
+    expect(reportName).toBeDefined();
+    if (reportName === undefined) throw new Error("expected interrupted report");
+    const reportPath = join(outDir, reportName);
+    const priorBytes = readFileSync(reportPath);
+    expect(readdirSync(outDir).filter((name) => name.endsWith(".complete"))).toHaveLength(1);
+    writeFileSync(
+      join(stateDir, "logs", "server.log"),
+      `${JSON.stringify({ op: "after-built-crash", correlationId: "built-proof" })}\n`,
+    );
+
+    const resumed = runBuiltSupportCli(outDir, stateDir);
+    expect(resumed.status).toBe(0);
+    expect(resumed.stdout).toContain("Recovered support report at ");
+    expect(readdirSync(outDir).filter((name) => name.endsWith(".jsonl"))).toEqual([reportName]);
+    expect(readFileSync(reportPath).equals(priorBytes)).toBe(true);
+    expect(readdirSync(outDir).filter((name) => name.endsWith(".consumed"))).toHaveLength(1);
   });
 
   it("refuses to replace a pre-existing support report or create its integrity sidecar", async () => {

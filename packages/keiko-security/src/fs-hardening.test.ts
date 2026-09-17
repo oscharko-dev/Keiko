@@ -802,7 +802,7 @@ describe("publishSafeArtifactFileSet", () => {
     expect(publicationStages(base)).toEqual([`.keiko-publish-${slot}.complete`]);
   });
 
-  it("does not let a reused live PID block an expired owner lease", async () => {
+  it("never takes over an expired owner lease while the recorded PID remains live", async () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
     const integrity = join(base, "support.jsonl.sha256");
@@ -839,14 +839,19 @@ describe("publishSafeArtifactFileSet", () => {
     vi.doUnmock("node:fs");
     vi.resetModules();
     vi.useRealTimers();
+    const before = readdirSync(base).sort();
 
     const peerScript = `
       import { recoverSafeArtifactFileSet } from "@oscharko-dev/keiko-security/fs-hardening";
-      const result = recoverSafeArtifactFileSet({
-        publicationSlot: process.env.KEIKO_TEST_PUBLICATION_SLOT,
-        trustedRoot: process.env.KEIKO_TEST_PUBLICATION_ROOT,
-      });
-      process.exit(result.status === "recovered" ? 0 : 2);
+      try {
+        recoverSafeArtifactFileSet({
+          publicationSlot: process.env.KEIKO_TEST_PUBLICATION_SLOT,
+          trustedRoot: process.env.KEIKO_TEST_PUBLICATION_ROOT,
+        });
+        process.exit(2);
+      } catch (error) {
+        process.exit(error?.kind === "publish-unsupported" ? 0 : 3);
+      }
     `;
     expect(() =>
       execFileSync(process.execPath, ["--input-type=module", "--eval", peerScript], {
@@ -858,9 +863,9 @@ describe("publishSafeArtifactFileSet", () => {
         },
       }),
     ).not.toThrow();
-    expect(readFileSync(report, "utf8")).toBe("report");
+    expect(readdirSync(base).sort()).toEqual(before);
+    expect(existsSync(report)).toBe(false);
     expect(readFileSync(integrity, "utf8")).toBe("digest");
-    expect(publicationStages(base)).toEqual([`.keiko-publish-${slot}.complete`]);
   });
 
   it("keeps one bounded recovery locator when hard-link publication is unsupported", async () => {

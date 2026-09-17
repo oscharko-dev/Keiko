@@ -596,8 +596,8 @@ const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
 const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const PUBLICATION_OWNER_TOKEN_PATTERN = /^[0-9a-f]{24}$/u;
 // The owner file and in-process token identify one synchronous publish call, not a process. A peer
-// fails closed while that call is live; a crashed owner's reused PID can delay recovery only until
-// this bounded lease expires. Publication contents are independently capped below.
+// fails closed while that call is live. Once a still-live foreign PID outlives this bounded lease,
+// recovery becomes explicitly unsupported rather than risking takeover of an active operation.
 const PUBLICATION_OWNER_LEASE_MS = 10 * 60 * 1000;
 const activePublicationOwnerTokens = new Set<string>();
 const MAX_PUBLICATION_ENTRIES = 16;
@@ -1851,18 +1851,22 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-function publicationOwnerIsActive(intent: PublicationIntent): boolean {
+function publicationOwnerFailureKind(
+  intent: PublicationIntent,
+): SafeArtifactFileFailureKind | undefined {
   if (intent.ownerPid === process.pid) {
-    return activePublicationOwnerTokens.has(intent.ownerToken);
+    return activePublicationOwnerTokens.has(intent.ownerToken) ? "recovery-conflict" : undefined;
   }
-  return intent.ownerExpiresAt > Date.now() && processIsAlive(intent.ownerPid);
+  if (!processIsAlive(intent.ownerPid)) return undefined;
+  return intent.ownerExpiresAt > Date.now() ? "recovery-conflict" : "publish-unsupported";
 }
 
 function recoverPublicationOwner(root: string, slot: string): SafeArtifactDurabilityAssurance {
   const path = ownerPath(root, slot);
   if (!pathExists(path, "manifest")) return "verified";
   const intent = readPublicationIntent(path, root);
-  if (publicationOwnerIsActive(intent)) throw safeFileError("manifest", "recovery-conflict");
+  const failureKind = publicationOwnerFailureKind(intent);
+  if (failureKind !== undefined) throw safeFileError("manifest", failureKind);
   return releasePublicationOwner(intent, { publicationSlot: slot, trustedRoot: root });
 }
 
