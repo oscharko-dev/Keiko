@@ -7,6 +7,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -25,6 +27,7 @@ import {
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
   replaceSafeArtifactFile,
+  safeArtifactPermissionAssurance,
 } from "./fs-hardening.js";
 
 const cleanups: string[] = [];
@@ -74,10 +77,45 @@ async function leaveLinkedPublication(base: string, path: string): Promise<void>
   vi.resetModules();
 }
 
+function publicationStages(base: string): readonly string[] {
+  return readdirSync(base).filter((name) => name.startsWith(".keiko-publish-"));
+}
+
+async function failPublicationFsyncAt(base: string, path: string, failAt: number): Promise<void> {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  let calls = 0;
+  vi.resetModules();
+  vi.doMock("node:fs", () => ({
+    ...actual,
+    fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
+      calls += 1;
+      if (calls === failAt)
+        throw Object.assign(new Error(`fsync failed: ${path}`), { code: "EIO" });
+      Reflect.apply(actual.fsyncSync, actual, args);
+    },
+  }));
+  const isolated = await import("./fs-hardening.js");
+  expect(() =>
+    isolated.publishSafeArtifactFileSet(
+      [{ path, contents: "report", artifactClass: "support-report" }],
+      { commitPath: path, trustedRoot: base },
+    ),
+  ).toThrow(expect.objectContaining({ kind: "durability-failed" }));
+  vi.doUnmock("node:fs");
+  vi.resetModules();
+}
+
 describe("mode constants", () => {
   it("pins DIR_MODE to 0o700 and FILE_MODE to 0o600", () => {
     expect(DIR_MODE).toBe(0o700);
     expect(FILE_MODE).toBe(0o600);
+  });
+
+  it("maps invalid runtime error fields into the closed body-free vocabulary", () => {
+    const error = new SafeArtifactFileError("/private/customer/path", "raw syscall prose");
+    expect(error).toMatchObject({ artifactClass: "manifest", kind: "open-failed" });
+    expect(String(error)).not.toContain("customer");
+    expect(String(error)).not.toContain("syscall prose");
   });
 });
 
@@ -203,6 +241,24 @@ describe("chmod-failure swallow (mocked node:fs)", () => {
 });
 
 describe("openSafeArtifactFile", () => {
+  it("rejects a writable POSIX ancestor before creating the target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const writable = join(base, "writable");
+    const path = join(writable, "artifact");
+    mkdirSync(writable, { mode: 0o777 });
+    chmodSync(writable, 0o777);
+
+    expect(() =>
+      openSafeArtifactFile(path, {
+        artifactClass: "activity-log",
+        mode: "exclusive-create",
+        trustedRoot: base,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "unsafe-ancestor" }));
+    expect(existsSync(path)).toBe(false);
+  });
+
   it("rejects paths outside the declared root and symlinked ancestors", () => {
     const base = freshDir();
     const outside = freshDir();
@@ -343,7 +399,7 @@ describe("openSafeArtifactFile", () => {
   });
 
   it("uses the explicit symlink fallback for mocked Windows reparse points", async () => {
-    const base = freshDir();
+    const base = realpathSync(freshDir());
     const victim = join(base, "victim");
     const target = join(base, "reparse");
     writeFileSync(victim, "keep", { mode: FILE_MODE });
@@ -386,16 +442,86 @@ describe("openSafeArtifactFile", () => {
     expect(thrown).toEqual(expect.objectContaining({ kind: "close-failed" }));
     expect(String(thrown)).not.toContain(base);
   });
+
+  it("writes no content through a temporary parent redirect that is restored", async () => {
+    const base = freshDir();
+    const parent = join(base, "reports");
+    const displaced = join(base, "reports-displaced");
+    const escape = freshDir();
+    const path = join(parent, "report.json");
+    mkdirSync(parent);
+    writeFileSync(join(escape, "report.json"), "keep", { mode: FILE_MODE });
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      openSync: (...args: Parameters<typeof actual.openSync>): number => {
+        if (String(args[0]) !== path) return Reflect.apply(actual.openSync, actual, args);
+        renameSync(parent, displaced);
+        symlinkSync(escape, parent);
+        try {
+          return Reflect.apply(actual.openSync, actual, args);
+        } finally {
+          rmSync(parent);
+          renameSync(displaced, parent);
+        }
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() =>
+      isolated.openSafeArtifactFile(path, {
+        artifactClass: "support-report",
+        mode: "exclusive-create",
+        trustedRoot: base,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "target-exists" }));
+    expect(readFileSync(join(escape, "report.json"), "utf8")).toBe("keep");
+    expect(existsSync(path)).toBe(false);
+  });
 });
 
 describe("publishSafeArtifactFileSet", () => {
+  it.each(["darwin", "win32"] as const)(
+    "rejects case-folded duplicate destinations on %s before writing",
+    (platform) => {
+      const base = freshDir();
+      const upper = join(base, "Report.json");
+      const lower = join(base, "report.json");
+      setPlatform(platform);
+      expect(() =>
+        publishSafeArtifactFileSet(
+          [
+            { path: upper, contents: "one", artifactClass: "manifest" },
+            { path: lower, contents: "two", artifactClass: "integrity-artifact" },
+          ],
+          { commitPath: upper, trustedRoot: base },
+        ),
+      ).toThrow(expect.objectContaining({ kind: "invalid-publication" }));
+      expect(existsSync(upper)).toBe(false);
+      expect(existsSync(lower)).toBe(false);
+    },
+  );
+
+  it("reports the reviewed Windows ACL residual as platform-inherited", () => {
+    const base = realpathSync(freshDir());
+    const path = join(base, "report.json");
+    setPlatform("win32");
+    expect(safeArtifactPermissionAssurance()).toBe("platform-inherited");
+    expect(
+      publishSafeArtifactFileSet([{ path, contents: "report", artifactClass: "support-report" }], {
+        commitPath: path,
+        trustedRoot: base,
+      }),
+    ).toEqual({ status: "published", permissionAssurance: "platform-inherited" });
+  });
+
   it("publishes the commit artifact last and recovers an interrupted publication", async () => {
     const base = freshDir();
-    const bundle = join(base, "bundle.jsonl");
-    const sidecar = `${bundle}.sha256`;
+    const manifest = join(base, "manifest.json");
+    const integrity = join(base, "integrity.json");
     const entries = [
-      { path: bundle, contents: "bundle\n", artifactClass: "support-report" as const },
-      { path: sidecar, contents: "digest\n", artifactClass: "integrity-artifact" as const },
+      { path: manifest, contents: "manifest\n", artifactClass: "manifest" as const },
+      { path: integrity, contents: "digest\n", artifactClass: "integrity-artifact" as const },
     ];
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let links = 0;
@@ -413,25 +539,40 @@ describe("publishSafeArtifactFileSet", () => {
     const isolated = await import("./fs-hardening.js");
 
     expect(() =>
-      isolated.publishSafeArtifactFileSet(entries, { commitPath: bundle, trustedRoot: base }),
+      isolated.publishSafeArtifactFileSet(entries, { commitPath: manifest, trustedRoot: base }),
     ).toThrow(
       expect.objectContaining<Partial<InstanceType<typeof SafeArtifactFileError>>>({
         kind: "publish-failed",
       }),
     );
-    expect(destinations).toEqual([sidecar, bundle]);
-    expect(existsSync(bundle)).toBe(false);
-    expect(readFileSync(sidecar, "utf8")).toBe("digest\n");
+    expect(destinations).toEqual([integrity, manifest]);
+    expect(existsSync(manifest)).toBe(false);
+    expect(readFileSync(integrity, "utf8")).toBe("digest\n");
     vi.doUnmock("node:fs");
     vi.resetModules();
 
-    expect(publishSafeArtifactFileSet(entries, { commitPath: bundle, trustedRoot: base })).toEqual({
+    expect(
+      publishSafeArtifactFileSet(entries, { commitPath: manifest, trustedRoot: base }),
+    ).toEqual({
       status: "recovered",
+      permissionAssurance: "verified-private",
     });
-    expect(readFileSync(bundle, "utf8")).toBe("bundle\n");
-    expect(readFileSync(sidecar, "utf8")).toBe("digest\n");
-    expect(statSync(bundle).nlink).toBe(1);
-    expect(statSync(sidecar).nlink).toBe(1);
+    expect(readFileSync(manifest, "utf8")).toBe("manifest\n");
+    expect(readFileSync(integrity, "utf8")).toBe("digest\n");
+    expect(statSync(manifest).nlink).toBe(1);
+    expect(statSync(integrity).nlink).toBe(1);
+  });
+
+  it("publishes a single support report with explicit permission assurance", () => {
+    const base = freshDir();
+    const path = join(base, "support.jsonl");
+    expect(
+      publishSafeArtifactFileSet(
+        [{ path, contents: "report\n", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: base },
+      ),
+    ).toEqual({ status: "published", permissionAssurance: "verified-private" });
+    expect(readFileSync(path, "utf8")).toBe("report\n");
   });
 
   it("refuses an existing target by default without replacing its bytes", () => {
@@ -536,7 +677,7 @@ describe("publishSafeArtifactFileSet", () => {
         commitPath: path,
         trustedRoot: base,
       }),
-    ).toEqual({ status: "recovered" });
+    ).toEqual({ status: "recovered", permissionAssurance: "verified-private" });
     expect(readFileSync(path, "utf8")).toBe("report");
   });
 
@@ -565,7 +706,71 @@ describe("publishSafeArtifactFileSet", () => {
         commitPath: path,
         trustedRoot: base,
       }),
-    ).toEqual({ status: "recovered" });
+    ).toEqual({ status: "recovered", permissionAssurance: "verified-private" });
+  });
+
+  it("retries after the post-link directory fsync fails with markers intact", async () => {
+    const base = freshDir();
+    const path = join(base, "report.json");
+    await failPublicationFsyncAt(base, path, 4);
+    expect(publicationStages(base)).toHaveLength(1);
+    expect(statSync(path).nlink).toBe(2);
+    expect(
+      publishSafeArtifactFileSet([{ path, contents: "report", artifactClass: "support-report" }], {
+        commitPath: path,
+        trustedRoot: base,
+      }),
+    ).toEqual({ status: "recovered", permissionAssurance: "verified-private" });
+    expect(publicationStages(base)).toHaveLength(0);
+  });
+
+  it("restores a marker when unlink succeeds but reports failure", async () => {
+    const base = freshDir();
+    const path = join(base, "report.json");
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let failed = false;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
+        Reflect.apply(actual.unlinkSync, actual, args);
+        if (!failed) {
+          failed = true;
+          throw Object.assign(new Error(`unlink failed: ${path}`), { code: "EIO" });
+        }
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: base },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    expect(publicationStages(base)).toHaveLength(1);
+    expect(
+      publishSafeArtifactFileSet([{ path, contents: "report", artifactClass: "support-report" }], {
+        commitPath: path,
+        trustedRoot: base,
+      }),
+    ).toEqual({ status: "recovered", permissionAssurance: "verified-private" });
+  });
+
+  it("retries after final cleanup fsync by durably restoring the commit marker", async () => {
+    const base = freshDir();
+    const path = join(base, "report.json");
+    await failPublicationFsyncAt(base, path, 7);
+    expect(publicationStages(base)).toHaveLength(1);
+    expect(statSync(path).nlink).toBe(2);
+    expect(
+      publishSafeArtifactFileSet([{ path, contents: "report", artifactClass: "support-report" }], {
+        commitPath: path,
+        trustedRoot: base,
+      }),
+    ).toEqual({ status: "recovered", permissionAssurance: "verified-private" });
+    expect(publicationStages(base)).toHaveLength(0);
   });
 
   it("recovers a crash after link and before recovery-marker unlink", async () => {
@@ -578,7 +783,7 @@ describe("publishSafeArtifactFileSet", () => {
         commitPath: path,
         trustedRoot: base,
       }),
-    ).toEqual({ status: "recovered" });
+    ).toEqual({ status: "recovered", permissionAssurance: "verified-private" });
     expect(readFileSync(path, "utf8")).toBe("report");
     expect(statSync(path).nlink).toBe(1);
   });
@@ -602,34 +807,37 @@ describe("publishSafeArtifactFileSet", () => {
         [{ path, contents: "report", artifactClass: "support-report" }],
         { commitPath: path, trustedRoot: base },
       ),
-    ).toEqual({ status: "recovered" });
+    ).toEqual({ status: "recovered", permissionAssurance: "verified-private" });
     expect(readFileSync(path, "utf8")).toBe("report");
   });
 
-  it("classifies unsupported hard-link publication without path disclosure", async () => {
-    const base = freshDir();
-    const path = join(base, "report.json");
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-    vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (): never => {
-        throw Object.assign(new Error(`cross-device: ${path}`), { code: "EXDEV" });
-      },
-    }));
-    const isolated = await import("./fs-hardening.js");
-    let thrown: unknown;
-    try {
-      isolated.publishSafeArtifactFileSet(
-        [{ path, contents: "report", artifactClass: "support-report" }],
-        { commitPath: path, trustedRoot: base },
-      );
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toEqual(expect.objectContaining({ kind: "publish-unsupported" }));
-    expect(String(thrown)).not.toContain(base);
-  });
+  it.each(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"])(
+    "classifies unsupported hard-link code %s without path disclosure",
+    async (code) => {
+      const base = freshDir();
+      const path = join(base, "report.json");
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.resetModules();
+      vi.doMock("node:fs", () => ({
+        ...actual,
+        linkSync: (): never => {
+          throw Object.assign(new Error(`unsupported: ${path}`), { code });
+        },
+      }));
+      const isolated = await import("./fs-hardening.js");
+      let thrown: unknown;
+      try {
+        isolated.publishSafeArtifactFileSet(
+          [{ path, contents: "report", artifactClass: "support-report" }],
+          { commitPath: path, trustedRoot: base },
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toEqual(expect.objectContaining({ kind: "publish-unsupported" }));
+      expect(String(thrown)).not.toContain(base);
+    },
+  );
 
   it("maps an initial path inspection failure without path disclosure", async () => {
     const base = freshDir();
@@ -691,6 +899,129 @@ describe("replaceSafeArtifactFile", () => {
     expect(readFileSync(path, "utf8")).toBe("new");
     expect(statSync(path).nlink).toBe(1);
     expect(statSync(path).mode & 0o777).toBe(FILE_MODE);
+  });
+
+  it("reuses an exact staged replacement after a transient rename failure", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const path = join(base, "manifest.json");
+    writeFileSync(path, "old", { mode: FILE_MODE });
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let failRename = true;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      renameSync: (...args: Parameters<typeof actual.renameSync>): void => {
+        if (failRename && String(args[0]).includes(".keiko-replace-")) {
+          failRename = false;
+          throw Object.assign(new Error(`rename failed: ${path}`), { code: "EIO" });
+        }
+        Reflect.apply(actual.renameSync, actual, args);
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() => {
+      isolated.replaceSafeArtifactFile(path, "new", {
+        artifactClass: "manifest",
+        trustedRoot: base,
+      });
+    }).toThrow(expect.objectContaining({ kind: "replace-failed" }));
+    isolated.replaceSafeArtifactFile(path, "new", {
+      artifactClass: "manifest",
+      trustedRoot: base,
+    });
+    expect(readFileSync(path, "utf8")).toBe("new");
+    expect(readdirSync(base).some((name) => name.startsWith(".keiko-replace-"))).toBe(false);
+  });
+
+  it("reuses an exact staged replacement after a transient directory fsync failure", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const path = join(base, "manifest.json");
+    writeFileSync(path, "old", { mode: FILE_MODE });
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let fsyncCalls = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
+        fsyncCalls += 1;
+        if (fsyncCalls === 2)
+          throw Object.assign(new Error(`fsync failed: ${path}`), { code: "EIO" });
+        Reflect.apply(actual.fsyncSync, actual, args);
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() => {
+      isolated.replaceSafeArtifactFile(path, "new", {
+        artifactClass: "manifest",
+        trustedRoot: base,
+      });
+    }).toThrow(expect.objectContaining({ kind: "durability-failed" }));
+    isolated.replaceSafeArtifactFile(path, "new", {
+      artifactClass: "manifest",
+      trustedRoot: base,
+    });
+    expect(readFileSync(path, "utf8")).toBe("new");
+  });
+
+  it("revalidates staged bytes immediately before replacement", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const path = join(base, "manifest.json");
+    writeFileSync(path, "old", { mode: FILE_MODE });
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let stageOpens = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      openSync: (...args: Parameters<typeof actual.openSync>): number => {
+        if (String(args[0]).includes(".keiko-replace-")) {
+          stageOpens += 1;
+          if (stageOpens === 2) writeFileSync(String(args[0]), "attacker", { mode: FILE_MODE });
+        }
+        return Reflect.apply(actual.openSync, actual, args);
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() => {
+      isolated.replaceSafeArtifactFile(path, "new", {
+        artifactClass: "manifest",
+        trustedRoot: base,
+      });
+    }).toThrow(expect.objectContaining({ kind: "recovery-conflict" }));
+    expect(readFileSync(path, "utf8")).toBe("old");
+  });
+
+  it("detects an absolute-path parent replacement across rename", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const parent = join(base, "artifacts");
+    const displaced = join(base, "artifacts-displaced");
+    const path = join(parent, "manifest.json");
+    mkdirSync(parent);
+    writeFileSync(path, "old", { mode: FILE_MODE });
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      renameSync: (...args: Parameters<typeof actual.renameSync>): void => {
+        Reflect.apply(actual.renameSync, actual, args);
+        if (String(args[0]).includes(".keiko-replace-")) {
+          renameSync(parent, displaced);
+          mkdirSync(parent);
+          writeFileSync(path, "old", { mode: FILE_MODE });
+        }
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() => {
+      isolated.replaceSafeArtifactFile(path, "new", {
+        artifactClass: "manifest",
+        trustedRoot: base,
+      });
+    }).toThrow(expect.objectContaining({ kind: "target-mutated" }));
+    expect(readFileSync(path, "utf8")).toBe("old");
   });
 
   it("refuses a hard-linked replacement target without changing its bytes or mode", (ctx) => {
