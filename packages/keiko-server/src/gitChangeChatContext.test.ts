@@ -223,7 +223,10 @@ describe("Git-change Chat shared description core", () => {
     expect(setup.chat).not.toHaveBeenCalled();
     expect(
       setup.events.find((entry) => entry.op === "pr-description.chat.unavailable"),
-    ).toMatchObject({ errorKind: "snapshot-unavailable" });
+    ).toMatchObject({
+      errorKind: "unavailable",
+      extra: { reason: "snapshot-unavailable" },
+    });
   });
 
   it("discards a provider response when exact authority narrows during the call", async () => {
