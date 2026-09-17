@@ -22,7 +22,14 @@
 // bodies, API keys, or headers — counts, sizes, statuses, durations, and closed-union decision
 // labels only.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  ACTIVITY_LOG_EVENT_REGISTRATION,
+  activityLogEvent,
+  activityLogEventRegistration,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type ModelGatewayLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -97,13 +104,36 @@ export function resolveLogSink(sink: ModelGatewayLogSink | undefined): ModelGate
 // test double never inherits another test's state, and nothing is retained.
 const REPORTED_FAILED_SINKS = new WeakSet<ModelGatewayLogSink>();
 
+const GATEWAY_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.log.sink-failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "observability.reportFailedLogSink",
+  fields: {
+    droppedOp: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 128,
+    },
+  },
+  causal: "none",
+  lifecycle: "loss",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-sink-failure"],
+  proofIds: ["model-gateway.log-sink-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
   return {
     write(event: ModelGatewayLogEvent): void {
       try {
         sink.write(event);
       } catch (cause) {
-        reportFailedLogSink(sink, event.op, cause);
+        reportFailedLogSink(sink, event, cause);
       }
     },
     enabled(level: ModelGatewayLogLevel): boolean {
@@ -119,18 +149,28 @@ function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
   };
 }
 
-function reportFailedLogSink(sink: ModelGatewayLogSink, droppedOp: string, cause: unknown): void {
+function reportFailedLogSink(
+  sink: ModelGatewayLogSink,
+  droppedEvent: ModelGatewayLogEvent,
+  cause: unknown,
+): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;
   REPORTED_FAILED_SINKS.add(sink);
-  const errorKind = logErrorKind(cause);
+  const errorKind = activityLogErrorKind(cause);
   try {
-    sink.write({
-      level: "error",
-      category: "gateway",
-      op: "gateway.log.sink-failed",
-      errorKind,
-      extra: { droppedOp },
-    });
+    sink.write(
+      activityLogEvent(
+        GATEWAY_LOG_SINK_FAILED_OPERATION,
+        {
+          level: "error",
+          errorKind,
+          ...(droppedEvent.correlationId === undefined
+            ? {}
+            : { correlationId: droppedEvent.correlationId }),
+        },
+        { droppedOp: droppedEvent.op },
+      ),
+    );
     return;
   } catch {
     // The transport refuses this shape too, so it is the transport that is down.
@@ -139,7 +179,7 @@ function reportFailedLogSink(sink: ModelGatewayLogSink, droppedOp: string, cause
     process.emitWarning("Keiko activity log sink is failing; log lines are being dropped.", {
       type: "KeikoActivityLog",
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: `op=${droppedOp} errorKind=${errorKind}`,
+      detail: `op=${droppedEvent.op} errorKind=${errorKind}`,
     });
   } catch {
     // The process warning channel is the last one there is.
@@ -186,12 +226,29 @@ export function withCorrelationId(
   }
   return {
     write(event: ModelGatewayLogEvent): void {
-      sink.write(event.correlationId === undefined ? { ...event, correlationId } : event);
+      sink.write(event.correlationId === undefined ? correlatedEvent(event, correlationId) : event);
     },
     enabled(level: ModelGatewayLogLevel): boolean {
       return logLevelEnabled(sink, level);
     },
   };
+}
+
+function correlatedEvent(
+  event: ModelGatewayLogEvent,
+  correlationId: string,
+): ModelGatewayLogEvent {
+  const correlated = { ...event, correlationId };
+  const registration = activityLogEventRegistration(event);
+  if (registration !== undefined) {
+    Object.defineProperty(correlated, ACTIVITY_LOG_EVENT_REGISTRATION, {
+      value: registration,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  }
+  return correlated;
 }
 
 // Monotonic elapsed milliseconds. `performance.now` rather than `Date.now` so a wall-clock step
@@ -236,6 +293,19 @@ export function logErrorKind(error: unknown): string {
     return "unknown";
   }
   return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
+}
+
+export function activityLogErrorKind(error: unknown): ActivityLogErrorKind {
+  const kind = logErrorKind(error).toLowerCase();
+  if (kind.includes("timeout") || kind === "etimedout") return "timeout";
+  if (kind.includes("cancel") || kind.includes("abort")) return "cancelled";
+  if (kind.includes("rate") || kind === "429") return "rate-limited";
+  if (kind.includes("valid") || kind.includes("schema")) return "validation-failed";
+  if (kind.includes("permission") || kind.includes("forbidden")) return "permission-denied";
+  if (kind.includes("authority")) return "authority-denied";
+  if (kind.includes("conflict")) return "conflict";
+  if (kind.includes("unavailable") || kind.includes("econn")) return "unavailable";
+  return kind === "unknown" ? "unknown" : "internal";
 }
 
 // `scheme://host:port` and nothing else. Credentials, path, query, and fragment are dropped rather
