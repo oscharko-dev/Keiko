@@ -171,7 +171,12 @@ describe("local-knowledge remediation store", () => {
     const quarantine = events.find((event) => event.op === "knowledge.store.quarantined");
     expect(quarantine).toBeDefined();
     expect(quarantine?.level).toBe("error");
-    expect(quarantine?.extra).toMatchObject({ reopened: true });
+    expect(quarantine?.extra).toMatchObject({
+      completeness: "complete",
+      failureKind: "ERR_SQLITE_ERROR",
+      loss: "none",
+      reopenState: "reopened",
+    });
     // Evidence, not content: the line classifies the failure and never names the file it moved.
     expect(JSON.stringify(quarantine)).not.toContain(tmp);
   });

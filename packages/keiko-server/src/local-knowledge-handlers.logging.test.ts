@@ -347,10 +347,10 @@ describe("the composed embedding adapter carries the process activity log", () =
     expect(sink.events.map((event) => event.category)).toContain("http");
     expect(
       sink.events.find((event) => event.category === "embedding" && event.status === 500),
-    ).toMatchObject({ level: "warn", errorKind: "http-error" });
+    ).toMatchObject({ level: "warn", errorKind: "unavailable" });
   });
 
-  it("keeps the endpoint host on the line and the api key off it", async () => {
+  it("keeps only the endpoint digest on the line and the api key off it", async () => {
     const tmp = tempWorkspace();
     const adapter = localKnowledgeEmbeddingAdapterForProvider(depsFor(tmp), embeddingProvider());
     const sink = capture();
@@ -364,7 +364,10 @@ describe("the composed embedding adapter carries the process activity log", () =
     });
 
     const serialised = sink.lines().join("");
-    expect(serialised).toContain("https://gateway.example.test");
+    expect(
+      sink.events.some((event) => /^[a-f0-9]{64}$/u.test(String(event.extra?.endpointDigest))),
+    ).toBe(true);
+    expect(serialised).not.toContain("https://gateway.example.test");
     expect(serialised).not.toContain(["sk", "secret", "value"].join("-"));
     expect(serialised).not.toContain("one chunk");
   });

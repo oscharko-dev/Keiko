@@ -90,7 +90,7 @@ function successfulOutcome(results: readonly { readonly index: number }[]): Rera
 function expectUnboundedRerankEvidence(sink: BufferedServerLogSink): void {
   expect(sink.events.find((event) => event.op === "gateway.spend.rejected")).toMatchObject({
     correlationId: "rerank-batch-budget",
-    errorKind: "GATEWAY_CONFIG_INVALID",
+    errorKind: "validation-failed",
     extra: { reason: "spend-bound-unavailable", frames: expect.any(Array) as unknown },
   });
   const evidence = JSON.stringify(sink.events);
