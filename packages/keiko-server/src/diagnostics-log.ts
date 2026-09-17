@@ -406,9 +406,14 @@ function closedDiagnosticErrorKind(errorClass: string): ActivityLogErrorKind {
   return "internal";
 }
 
+function activityLogDiagnosticOperation(operation: string): string {
+  const label = diagnosticLabel(operation, OPERATION_LABEL_SHAPE, "server.operation");
+  return label.replace(" ", ":");
+}
+
 function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEvent {
   const fields = {
-    diagnosticOperation: record.operation,
+    diagnosticOperation: activityLogDiagnosticOperation(record.operation),
     diagnosticErrorClass: record.errorClass,
     ...diagnosticActivityLogFields(record),
     completeness: "complete",

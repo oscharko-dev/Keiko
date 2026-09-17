@@ -226,6 +226,24 @@ describe("diagnostic records on the activity log", () => {
     expect(Object.keys(line)).not.toContain("retryAfterMs");
   });
 
+  it("projects a route operation as a body-free route template", () => {
+    defaultServerDiagnosticSink.record({
+      correlationId: "req-route-1f2e3d",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "POST /api/gateway/setup",
+      source: "gateway-setup.discovery",
+      errorClass: "GatewayError",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    });
+
+    expect(readActivityLine(stateDir)).toMatchObject({
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "POST:/api/gateway/setup",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
   // `parentCorrelationId` is shape-guarded, not merely redacted, the same way `server-log.ts`'s
   // `applyEnvelopeFields` guards its own `parentCorrelationId` envelope field: a value that does
   // not fit `isValidCorrelationId`'s shape (`^[A-Za-z0-9._-]{8,128}$`) is dropped outright rather
@@ -267,7 +285,8 @@ describe("diagnostic records on the activity log", () => {
     expect(readActivityLine(stateDir)).toMatchObject({
       level: "error",
       category: "diagnostic",
-      op: "knowledge.index",
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "knowledge.index",
     });
   });
   it("bounds `code` at the writer: a colon-joined machine token passes, whitespace or over-length is dropped", () => {
