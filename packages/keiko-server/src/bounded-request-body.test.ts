@@ -267,7 +267,15 @@ describe("bounded request body activity log", () => {
   it("classifies a stream failure without reading its message", async () => {
     const sink = captureServerLog("info");
     const stream = new PassThrough();
-    const failure = Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    const failure = Object.assign(
+      new Error("connection reset by peer", { cause: new TypeError("private parser detail") }),
+      { code: "ECONNRESET" },
+    );
+    failure.stack = [
+      "Error: connection reset by peer",
+      "    at readChunk (file:///Users/someone/app/packages/keiko-server/dist/bounded-request-body.js:208:11)",
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+    ].join("\n");
     const outcome = readBoundedRequestBody(asRequest(stream), 128_000, undefined, "req-corr-02");
 
     stream.emit("error", failure);
@@ -281,10 +289,13 @@ describe("bounded request body activity log", () => {
       maxBytes: 128_000,
       receivedBytes: 0,
       failureKind: "ECONNRESET",
+      frames: ["packages/keiko-server/dist/bounded-request-body.js:208:11"],
+      causeChain: ["TypeError"],
       completeness: "complete",
       loss: "none",
     });
     expect(JSON.stringify(sink.events)).not.toContain("connection reset");
+    expect(JSON.stringify(sink.events)).not.toContain("private parser detail");
     stream.destroy();
   });
 

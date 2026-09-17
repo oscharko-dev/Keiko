@@ -6,6 +6,7 @@ import {
 
 import { correlationIdOrUnknown } from "./correlation.js";
 import { errorKindOf, getServerLogger } from "./observability/index.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
 // A raw Node header value: absent, a single value, or (for a repeated header) several. Shared by
 // every helper below that reads `Content-Type` off a request, so the union is spelled once.
@@ -67,8 +68,8 @@ function requestAlreadyTerminated(req: IncomingMessage): boolean {
 
 // The three outcomes this reader can reach, as an operator sees them. Only counts and a
 // classification cross the boundary: `receivedBytes` is the number of bytes observed before the
-// decision, never a byte of the body itself, and the error is reduced through `errorKindOf`, which
-// reads `code`/`name` and never a message.
+// decision, never a byte of the body itself, and errors are reduced through `errorKindOf`,
+// `keikoStackFrames`, and `causeChain`, which never retain a message or an absolute path.
 interface BoundedBodyOutcomeFields {
   readonly maxBytes: number;
   readonly receivedBytes: number;
@@ -133,6 +134,20 @@ const HTTP_REQUEST_BODY_FAILED_OPERATION = defineActivityLogOperation({
     maxBytes: { type: "integer", dataClass: "count", required: true },
     receivedBytes: { type: "integer", dataClass: "count", required: true },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -203,6 +218,8 @@ function logBodyFailed(
   fields: BoundedBodyOutcomeFields,
   error: unknown,
 ): void {
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
   getServerLogger().warn(
     activityLogEvent(
       HTTP_REQUEST_BODY_FAILED_OPERATION,
@@ -210,6 +227,8 @@ function logBodyFailed(
       {
         ...fields,
         failureKind: errorKindOf(error),
+        ...(frames.length === 0 ? {} : { frames }),
+        ...(chain.length === 0 ? {} : { causeChain: chain }),
         completeness: "complete",
         loss: "none",
       },
