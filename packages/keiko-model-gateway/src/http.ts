@@ -9,14 +9,20 @@ import { connect as netConnect, isIP } from "node:net";
 import type { LookupFunction, Socket } from "node:net";
 import * as tls from "node:tls";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import {
   classifyOutboundHost,
   normalizeHost,
   outboundAddressBlockedReason,
   outboundTargetBlockedReason,
 } from "./egress-policy.js";
 import {
+  activityLogErrorKind,
+  logCorrelationId,
   logEndpointHost,
-  logErrorKind,
   logLevelEnabled,
   logTimer,
   resolveLogSink,
@@ -44,6 +50,152 @@ const NATIVE_FETCH = globalThis.fetch;
 export const MAX_RESPONSE_BYTES = 10_000_000;
 const HTTPS_PROXY_TUNNEL_IDLE_TTL_MS = 30_000;
 const MAX_IDLE_HTTPS_PROXY_TUNNELS_PER_KEY = 2;
+
+const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.tls.trust-failed",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.tlsTrustFailure",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    afterCaBundleFallback: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-tls-trust"],
+  proofIds: ["http.gateway-tls-trust-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.tls.ca-bundle-fallback",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.fetchDirectWithCaFallback",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-tls-trust"],
+  proofIds: ["http.gateway-tls-ca-fallback.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.egress.planned",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.planGatewayProxy",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    proxied: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    proxyEndpointDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    transport: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["native", "injected"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-egress"],
+  proofIds: ["http.gateway-egress-planned.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_FETCH_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.fetch.started",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.logFetchStarted",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    method: { type: "string", dataClass: "opaque-id", required: true, maxLength: 32 },
+    requestBytes: { type: "integer", dataClass: "count", required: false },
+    timeoutMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "none",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-http-fetch"],
+  proofIds: ["http.gateway-fetch-started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_FETCH_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.fetch.completed",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.logFetchCompleted",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-http-fetch"],
+  proofIds: ["http.gateway-fetch-completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.fetch.failed",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.gatewayFetch",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    policyReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["undelegated-proxied-hostname"],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-http-fetch", "gateway-egress"],
+  proofIds: ["http.gateway-fetch-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function logEndpointDigest(url: string | URL | undefined): string | undefined {
+  const endpoint = logEndpointHost(url);
+  return endpoint === undefined ? undefined : sha256Hex(endpoint);
+}
 
 export interface GatewayFetchOptions extends RequestInit {
   readonly fetchImpl?: typeof fetch | undefined;
@@ -1174,13 +1326,23 @@ async function attemptCaBundleFallback(
     );
   } catch (fallbackError) {
     if (isRecoverableTlsTrustError(fallbackError)) {
-      plan.log.write({
-        level: "warn",
-        category: "http",
-        op: "http.gateway.tls.trust-failed",
-        errorKind: logErrorKind(fallbackError),
-        extra: { endpoint: logEndpointHost(url), afterCaBundleFallback: true },
-      });
+      const endpointDigest = logEndpointDigest(url);
+      plan.log.write(
+        activityLogEvent(
+          HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION,
+          {
+            level: "warn",
+            ...(logCorrelationId(plan.log) === undefined
+              ? {}
+              : { correlationId: logCorrelationId(plan.log) }),
+            errorKind: activityLogErrorKind(fallbackError),
+          },
+          {
+            ...(endpointDigest === undefined ? {} : { endpointDigest }),
+            afterCaBundleFallback: true,
+          },
+        ),
+      );
       throw tlsCaFailureError();
     }
     throw fallbackError;
@@ -1206,23 +1368,40 @@ async function fetchDirectWithCaFallback(
     if (plan.useCaFallback && recoverable) {
       // Degradation: the default trust store rejected the peer, so the call is retried against
       // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency.
-      plan.log.write({
-        level: "warn",
-        category: "http",
-        op: "http.gateway.tls.ca-bundle-fallback",
-        errorKind: logErrorKind(error),
-        extra: { endpoint: logEndpointHost(url) },
-      });
+      const endpointDigest = logEndpointDigest(url);
+      plan.log.write(
+        activityLogEvent(
+          HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION,
+          {
+            level: "warn",
+            ...(logCorrelationId(plan.log) === undefined
+              ? {}
+              : { correlationId: logCorrelationId(plan.log) }),
+            errorKind: activityLogErrorKind(error),
+          },
+          endpointDigest === undefined ? {} : { endpointDigest },
+        ),
+      );
       return attemptCaBundleFallback(url, init, plan);
     }
     if (recoverable) {
-      plan.log.write({
-        level: "warn",
-        category: "http",
-        op: "http.gateway.tls.trust-failed",
-        errorKind: logErrorKind(error),
-        extra: { endpoint: logEndpointHost(url), afterCaBundleFallback: false },
-      });
+      const endpointDigest = logEndpointDigest(url);
+      plan.log.write(
+        activityLogEvent(
+          HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION,
+          {
+            level: "warn",
+            ...(logCorrelationId(plan.log) === undefined
+              ? {}
+              : { correlationId: logCorrelationId(plan.log) }),
+            errorKind: activityLogErrorKind(error),
+          },
+          {
+            ...(endpointDigest === undefined ? {} : { endpointDigest }),
+            afterCaBundleFallback: false,
+          },
+        ),
+      );
       throw tlsCaFailureError();
     }
     throw error;
@@ -1344,17 +1523,25 @@ function planGatewayProxy(
   // running at the default `info` threshold pays a predicate call instead of two URL parses and
   // two allocations per request.
   if (logLevelEnabled(log, "debug")) {
-    log.write({
-      level: "debug",
-      category: "http",
-      op: "http.gateway.egress.planned",
-      extra: {
-        endpoint: logEndpointHost(target),
-        proxied: proxy !== undefined,
-        proxyEndpoint: logEndpointHost(proxy),
-        transport: usesRealTransport ? "native" : "injected",
-      },
-    });
+    const endpointDigest = logEndpointDigest(target);
+    const proxyEndpointDigest = logEndpointDigest(proxy);
+    log.write(
+      activityLogEvent(
+        HTTP_GATEWAY_EGRESS_PLANNED_OPERATION,
+        {
+          level: "debug",
+          ...(logCorrelationId(log) === undefined
+            ? {}
+            : { correlationId: logCorrelationId(log) }),
+        },
+        {
+          ...(endpointDigest === undefined ? {} : { endpointDigest }),
+          proxied: proxy !== undefined,
+          ...(proxyEndpointDigest === undefined ? {} : { proxyEndpointDigest }),
+          transport: usesRealTransport ? "native" : "injected",
+        },
+      ),
+    );
   }
   return { doFetch, target, usesRealTransport, proxy };
 }
@@ -1450,17 +1637,23 @@ function logFetchStarted(
   options: GatewayFetchOptions,
 ): void {
   if (!logLevelEnabled(log, "info")) return;
-  log.write({
-    level: "info",
-    category: "http",
-    op: "http.gateway.fetch.started",
-    extra: {
-      endpoint: logEndpointHost(url),
-      method: options.method ?? "GET",
-      requestBytes: requestBodyBytes(options.body),
-      timeoutMs: options.timeoutMs,
-    },
-  });
+  const endpointDigest = logEndpointDigest(url);
+  const requestBytes = requestBodyBytes(options.body);
+  log.write(
+    activityLogEvent(
+      HTTP_GATEWAY_FETCH_STARTED_OPERATION,
+      {
+        level: "info",
+        ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
+      },
+      {
+        ...(endpointDigest === undefined ? {} : { endpointDigest }),
+        method: options.method ?? "GET",
+        ...(requestBytes === undefined ? {} : { requestBytes }),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      },
+    ),
+  );
 }
 
 // THE OUTCOME LINE — `info` for a successful response, `warn` for an answered error.
@@ -1486,14 +1679,19 @@ function logFetchCompleted(
 ): void {
   const level = response.ok ? "info" : "warn";
   if (!logLevelEnabled(log, level)) return;
-  log.write({
-    level,
-    category: "http",
-    op: "http.gateway.fetch.completed",
-    status: response.status,
-    durationMs,
-    extra: { endpoint: logEndpointHost(url) },
-  });
+  const endpointDigest = logEndpointDigest(url);
+  log.write(
+    activityLogEvent(
+      HTTP_GATEWAY_FETCH_COMPLETED_OPERATION,
+      {
+        level,
+        ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
+        status: response.status,
+        durationMs,
+      },
+      endpointDigest === undefined ? {} : { endpointDigest },
+    ),
+  );
 }
 
 // Outcome line for one outbound gateway call, paired with the attempt line above. `errorKind`
@@ -1518,19 +1716,26 @@ export async function gatewayFetch(
     logFetchCompleted(log, url, response, elapsed());
     return response;
   } catch (error) {
-    log.write({
-      level: "warn",
-      category: "http",
-      op: "http.gateway.fetch.failed",
-      durationMs: elapsed(),
-      errorKind: logErrorKind(error),
-      extra: {
-        endpoint: logEndpointHost(url),
-        ...(error instanceof OutboundHttpEgressError && error.policyReason !== undefined
-          ? { policyReason: error.policyReason }
-          : {}),
-      },
-    });
+    const endpointDigest = logEndpointDigest(url);
+    log.write(
+      activityLogEvent(
+        HTTP_GATEWAY_FETCH_FAILED_OPERATION,
+        {
+          level: "warn",
+          ...(logCorrelationId(log) === undefined
+            ? {}
+            : { correlationId: logCorrelationId(log) }),
+          durationMs: elapsed(),
+          errorKind: activityLogErrorKind(error),
+        },
+        {
+          ...(endpointDigest === undefined ? {} : { endpointDigest }),
+          ...(error instanceof OutboundHttpEgressError && error.policyReason !== undefined
+            ? { policyReason: error.policyReason }
+            : {}),
+        },
+      ),
+    );
     throw error;
   }
 }

@@ -50,6 +50,7 @@ export interface ModelGatewayLogEvent {
 
 export interface ModelGatewayLogSink {
   readonly write: (event: ModelGatewayLogEvent) => void;
+  readonly correlationId?: string | undefined;
   // Cheap level predicate — the ONLY way a below-threshold event can cost nothing here.
   //
   // The sink that ultimately receives these events applies a threshold (`KEIKO_LOG_LEVEL`,
@@ -146,6 +147,7 @@ function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
         return true;
       }
     },
+    ...(sink.correlationId === undefined ? {} : { correlationId: sink.correlationId }),
   };
 }
 
@@ -231,7 +233,12 @@ export function withCorrelationId(
     enabled(level: ModelGatewayLogLevel): boolean {
       return logLevelEnabled(sink, level);
     },
+    correlationId,
   };
+}
+
+export function logCorrelationId(sink: ModelGatewayLogSink): string | undefined {
+  return sink.correlationId;
 }
 
 function correlatedEvent(
@@ -301,7 +308,9 @@ export function activityLogErrorKind(error: unknown): ActivityLogErrorKind {
   if (kind.includes("cancel") || kind.includes("abort")) return "cancelled";
   if (kind.includes("rate") || kind === "429") return "rate-limited";
   if (kind.includes("valid") || kind.includes("schema")) return "validation-failed";
-  if (kind.includes("permission") || kind.includes("forbidden")) return "permission-denied";
+  if (kind.includes("permission") || kind.includes("forbidden") || kind.includes("blocked")) {
+    return "permission-denied";
+  }
   if (kind.includes("authority")) return "authority-denied";
   if (kind.includes("conflict")) return "conflict";
   if (kind.includes("unavailable") || kind.includes("econn")) return "unavailable";
