@@ -31,6 +31,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   advanceRing,
   applyUsage,
   assembleContextPack,
@@ -157,6 +161,56 @@ import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
+
+const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.started",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.started",
+  fields: {
+    scopeKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["workspace-root", "directory", "files", "invalid"],
+    },
+    relativePathCount: { type: "integer", dataClass: "count", required: true },
+    explicitConnection: { type: "boolean", dataClass: "closed-enum", required: true },
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["natural-language", "exact-symbol", "file-pattern", "regex", "invalid"],
+    },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    inputStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["valid", "invalid"],
+    },
+    caseSensitive: { type: "boolean", dataClass: "closed-enum", required: false },
+    maxResults: { type: "integer", dataClass: "count", required: false },
+    searchCallsMax: { type: "integer", dataClass: "count", required: false },
+    filesReadMax: { type: "integer", dataClass: "count", required: false },
+    excerptBytesMax: { type: "integer", dataClass: "count", required: false },
+    modelInputTokensMax: { type: "integer", dataClass: "count", required: false },
+    modelOutputTokensMax: { type: "integer", dataClass: "count", required: false },
+    elapsedMsMax: { type: "integer", dataClass: "duration", required: false },
+    rerankCallsMax: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.started.line"],
+  releaseImpact: "patch",
+});
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -4707,6 +4761,27 @@ interface ConnectedContextActivityIdentity {
   readonly rerankCallsMax: ActivityNumber;
 }
 
+interface ConnectedContextCommonActivityFields {
+  readonly scopeKind: ActivityScopeKind;
+  readonly relativePathCount: number;
+  readonly explicitConnection: boolean;
+  readonly scopeIdentitySha256: string;
+  readonly queryKind: ActivityQueryKind;
+  readonly queryIdentitySha256: string;
+  readonly inputStatus: "valid" | "invalid";
+  readonly caseSensitive?: boolean | undefined;
+  readonly maxResults?: number | undefined;
+  readonly searchCallsMax?: number | undefined;
+  readonly filesReadMax?: number | undefined;
+  readonly excerptBytesMax?: number | undefined;
+  readonly modelInputTokensMax?: number | undefined;
+  readonly modelOutputTokensMax?: number | undefined;
+  readonly elapsedMsMax?: number | undefined;
+  readonly rerankCallsMax?: number | undefined;
+  readonly completeness: "complete";
+  readonly loss: "none";
+}
+
 function activityProperty(record: Readonly<Record<string, unknown>>, key: string): unknown {
   try {
     return record[key];
@@ -4722,7 +4797,7 @@ function activityString(record: Readonly<Record<string, unknown>>, key: string):
 
 function activityNumber(record: Readonly<Record<string, unknown>>, key: string): ActivityNumber {
   const value = activityProperty(record, key);
-  return typeof value === "number" && Number.isFinite(value) ? value : "invalid";
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : "invalid";
 }
 
 function activityBoolean(record: Readonly<Record<string, unknown>>, key: string): ActivityBoolean {
@@ -4842,9 +4917,32 @@ function connectedContextActivityIdentity(
   };
 }
 
+function validActivityNumber(value: ActivityNumber): number | undefined {
+  return value === "invalid" ? undefined : value;
+}
+
+function connectedContextInputStatus(
+  identity: ConnectedContextActivityIdentity,
+): "valid" | "invalid" {
+  const values: readonly (ActivityNumber | ActivityBoolean | ActivityScopeKind | ActivityQueryKind)[] = [
+    identity.scopeKind,
+    identity.queryKind,
+    identity.caseSensitive,
+    identity.maxResults,
+    identity.searchCallsMax,
+    identity.filesReadMax,
+    identity.excerptBytesMax,
+    identity.modelInputTokensMax,
+    identity.modelOutputTokensMax,
+    identity.elapsedMsMax,
+    identity.rerankCallsMax,
+  ];
+  return values.includes("invalid") ? "invalid" : "valid";
+}
+
 function commonActivityExtra(
   identity: ConnectedContextActivityIdentity,
-): Readonly<Record<string, unknown>> {
+): ConnectedContextCommonActivityFields {
   return {
     scopeKind: identity.scopeKind,
     relativePathCount: identity.relativePathCount,
@@ -4852,15 +4950,34 @@ function commonActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryKind: identity.queryKind,
     queryIdentitySha256: identity.queryIdentitySha256,
-    caseSensitive: identity.caseSensitive,
-    maxResults: identity.maxResults,
-    searchCallsMax: identity.searchCallsMax,
-    filesReadMax: identity.filesReadMax,
-    excerptBytesMax: identity.excerptBytesMax,
-    modelInputTokensMax: identity.modelInputTokensMax,
-    modelOutputTokensMax: identity.modelOutputTokensMax,
-    elapsedMsMax: identity.elapsedMsMax,
-    rerankCallsMax: identity.rerankCallsMax,
+    inputStatus: connectedContextInputStatus(identity),
+    ...(identity.caseSensitive === "invalid" ? {} : { caseSensitive: identity.caseSensitive }),
+    ...(validActivityNumber(identity.maxResults) === undefined
+      ? {}
+      : { maxResults: validActivityNumber(identity.maxResults) }),
+    ...(validActivityNumber(identity.searchCallsMax) === undefined
+      ? {}
+      : { searchCallsMax: validActivityNumber(identity.searchCallsMax) }),
+    ...(validActivityNumber(identity.filesReadMax) === undefined
+      ? {}
+      : { filesReadMax: validActivityNumber(identity.filesReadMax) }),
+    ...(validActivityNumber(identity.excerptBytesMax) === undefined
+      ? {}
+      : { excerptBytesMax: validActivityNumber(identity.excerptBytesMax) }),
+    ...(validActivityNumber(identity.modelInputTokensMax) === undefined
+      ? {}
+      : { modelInputTokensMax: validActivityNumber(identity.modelInputTokensMax) }),
+    ...(validActivityNumber(identity.modelOutputTokensMax) === undefined
+      ? {}
+      : { modelOutputTokensMax: validActivityNumber(identity.modelOutputTokensMax) }),
+    ...(validActivityNumber(identity.elapsedMsMax) === undefined
+      ? {}
+      : { elapsedMsMax: validActivityNumber(identity.elapsedMsMax) }),
+    ...(validActivityNumber(identity.rerankCallsMax) === undefined
+      ? {}
+      : { rerankCallsMax: validActivityNumber(identity.rerankCallsMax) }),
+    completeness: "complete",
+    loss: "none",
   };
 }
 
@@ -5045,12 +5162,13 @@ function createConnectedContextActivity(
   return {
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     started: (): void => {
-      logger.info(() => ({
-        category: "search",
-        op: "search.connected-context.started",
-        correlationId,
-        extra: commonActivityExtra(identity),
-      }));
+      logger.info(() =>
+        activityLogEvent(
+          SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION,
+          { correlationId },
+          commonActivityExtra(identity),
+        ),
+      );
     },
     completed: (execution): void => {
       logger.info(() => ({

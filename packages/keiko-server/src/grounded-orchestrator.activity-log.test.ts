@@ -23,6 +23,7 @@ import {
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { MicroIndex, RerankerSeam } from "@oscharko-dev/keiko-workflows";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
@@ -222,6 +223,11 @@ function lifecycleEvents(
   expect(started.op).toBe("search.connected-context.started");
   expect(terminal.op).toBe(terminalOp);
   expect(terminal.correlationId).toBe(started.correlationId);
+  expect(
+    activityLogEventRegistration(
+      started as unknown as Readonly<Record<PropertyKey, unknown>>,
+    ),
+  ).toBeDefined();
   return [started, terminal];
 }
 
@@ -324,6 +330,9 @@ function expectCommonExtra(
     scopeKind: input.scope.kind,
     relativePathCount: input.scope.relativePaths.length,
     explicitConnection: input.scope.explicitConnection === true,
+    inputStatus: "valid",
+    completeness: "complete",
+    loss: "none",
     ...expectedRequestExtra(input),
   });
   expectSha256(started.extra?.scopeIdentitySha256);

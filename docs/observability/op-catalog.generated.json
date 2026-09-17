@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "5c3a3626d0fe756f799ced51b242b233d949f47f344d8a8be24362b477b90b06",
+    "catalogDigest": "0e18f127eef1ef38de7bde6ef039c3ae7021b9622168b969e3e22c24c3959ba3",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -2359,6 +2359,119 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/server.ts:470",
         "emitterSites": ["packages/keiko-server/src/server.ts:563"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "search.connected-context.started",
+        "category": "search",
+        "owner": "keiko-server",
+        "emitter": "grounded-orchestrator.createConnectedContextActivity.started",
+        "fields": {
+          "scopeKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["workspace-root", "directory", "files", "invalid"]
+          },
+          "relativePathCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "explicitConnection": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "scopeIdentitySha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "queryKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["natural-language", "exact-symbol", "file-pattern", "regex", "invalid"]
+          },
+          "queryIdentitySha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "inputStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["valid", "invalid"]
+          },
+          "caseSensitive": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "maxResults": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "searchCallsMax": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "filesReadMax": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "excerptBytesMax": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "modelInputTokensMax": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "modelOutputTokensMax": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "elapsedMsMax": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "rerankCallsMax": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "start",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["connected-context-retrieval"],
+        "proofIds": ["search.connected-context.started.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:165",
+        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:5166"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -6719,37 +6832,37 @@
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5003",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5120",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5058",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5176",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.failed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5019",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5136",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.failed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5069",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5187",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5050",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:168",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5109",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5227",
       "package": "keiko-server"
     },
     {
