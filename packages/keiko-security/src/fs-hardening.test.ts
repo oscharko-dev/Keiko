@@ -726,6 +726,57 @@ describe("publishSafeArtifactFileSet", () => {
     }
   });
 
+  it("recovers complete targets when the final intent unlink was interrupted", async () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
+        if (String(args[0]).endsWith(".intent")) {
+          throw Object.assign(new Error("intent unlink interrupted"), { code: "EIO" });
+        }
+        Reflect.apply(actual.unlinkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./fs-hardening.js");
+    expect(() =>
+      interrupted.publishSafeArtifactFileSet(
+        [{ path: report, contents: "report", artifactClass: "support-report" }],
+        { commitPath: report, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    expect(readFileSync(report, "utf8")).toBe("report");
+    expect(statSync(report).nlink).toBe(1);
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual(
+      expect.objectContaining({ status: "recovered", commitPath: report, artifactCount: 1 }),
+    );
+    expect(readdirSync(base)).toEqual(["support.jsonl"]);
+  });
+
+  it.each([
+    ["malformed", "not-json\n"],
+    ["oversized", "x".repeat(64 * 1024 + 1)],
+  ])("keeps a %s fixed-slot intent fail-closed and bounded", (_kind, contents) => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const marker = join(base, `.keiko-publish-${slot}.intent`);
+    writeFileSync(marker, contents, { mode: FILE_MODE });
+
+    expect(() => recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toThrow(
+      expect.objectContaining({ kind: "recovery-conflict" }),
+    );
+    expect(readFileSync(marker, "utf8")).toBe(contents);
+    expect(existsSync(report)).toBe(false);
+    expect(readdirSync(base)).toEqual([`.keiko-publish-${slot}.intent`]);
+  });
+
   it.each(["darwin", "win32"] as const)(
     "rejects case-folded duplicate destinations on %s before writing",
     (platform) => {
