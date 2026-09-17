@@ -358,7 +358,7 @@ export function resolveDraftDeliveryTemplate(
         {
           correlationId: input.correlationId,
           level: "warn",
-          errorKind: error instanceof TemplateResolutionError ? "invalid-input" : "internal",
+          errorKind: error instanceof TemplateResolutionError ? "validation-failed" : "internal",
         },
         {
           state: "blocked",

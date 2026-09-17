@@ -90,7 +90,7 @@ function initializationErrorKind(outcome: InitializationOutcome): ActivityLogErr
   if (outcome === "unsafe-repository") return "unsafe-target";
   if (outcome === "already-initialized") return "conflict";
   if (outcome === "git-missing") return "unavailable";
-  if (outcome === "invalid-request") return "invalid-input";
+  if (outcome === "invalid-request") return "invalid-request";
   return "internal";
 }
 
