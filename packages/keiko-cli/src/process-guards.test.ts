@@ -188,6 +188,8 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
           failureKind: "ECONNRESET",
           frames: ["packages/keiko-cli/dist/run.js:12:4"],
           causeChain: ["TypeError"],
+          completeness: "complete",
+          loss: "none",
         },
       });
       // The activity-log write must land before stderr, which must land before exit.
@@ -216,7 +218,12 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
       });
       const [event] = writes as [{ errorKind: string; extra: Record<string, unknown> }];
       expect(event.errorKind).toBe("internal");
-      expect(event.extra).toEqual({ kind: "uncaught-exception", failureKind: "TypeError" });
+      expect(event.extra).toEqual({
+        kind: "uncaught-exception",
+        failureKind: "TypeError",
+        completeness: "complete",
+        loss: "none",
+      });
     } finally {
       cleanup();
     }
@@ -340,7 +347,7 @@ describe("installProcessGuards — a hung classifier import never keeps the proc
 // exit code and stderr. An unref'd timeout would let Node's empty-event-loop exit fire first: the
 // subprocess would exit 0 near-instantly with no stderr line at all, silently swallowing the
 // crash this file exists to report.
-const PROCESS_GUARDS_SOURCE_URL = new URL("./process-guards.ts", import.meta.url);
+const PROCESS_GUARDS_SOURCE_URL = new URL("../dist/process-guards.js", import.meta.url);
 
 function hungImportCrashScript(): string {
   const modulePath = JSON.stringify(PROCESS_GUARDS_SOURCE_URL.pathname);
@@ -432,7 +439,7 @@ describe("writeStderrDrained — the default sink actually drains (comment 38652
   // `process.exit()` reliably truncates to one buffer's worth, while draining through the write's
   // own callback (as `writeStderrDrained` does) reliably delivers every byte.
   it("delivers a full multi-megabyte write to a piped child before resolving", async () => {
-    const modulePath = JSON.stringify(new URL("./process-guards.ts", import.meta.url).pathname);
+    const modulePath = JSON.stringify(PROCESS_GUARDS_SOURCE_URL.pathname);
     const script = [
       `import { writeStderrDrained } from ${modulePath};`,
       "const big = Buffer.alloc(5 * 1024 * 1024, 88);", // 5 MiB of 'X'
