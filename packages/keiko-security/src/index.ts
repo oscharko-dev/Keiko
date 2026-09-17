@@ -27,7 +27,28 @@ export { sealString, openString, sealBytes, openBytes, isSealed } from "./secret
 
 // Shared filesystem-hardening primitives (0o700 dirs / 0o600 files) — one owner for the store/vault
 // packages that previously each carried a private copy [GEN-MAINT-COUPLING-005].
-export { DIR_MODE, FILE_MODE, ensureDirHardened, chmodIfPresent } from "./fs-hardening.js";
+export type {
+  OpenSafeArtifactFileOptions,
+  ReplaceSafeArtifactFileOptions,
+  SafeArtifactClass,
+  SafeArtifactFileFailureKind,
+  SafeArtifactOpenMode,
+  SafeArtifactPublicationEntry,
+  SafeArtifactPublicationOptions,
+  SafeArtifactPublicationResult,
+} from "./fs-hardening.js";
+export {
+  DIR_MODE,
+  FILE_MODE,
+  SAFE_ARTIFACT_CLASSES,
+  SafeArtifactFileError,
+  ensureDirHardened,
+  chmodIfPresent,
+  openSafeArtifactFile,
+  publishSafeArtifactFileSet,
+  replaceSafeArtifactFile,
+  verifySafeArtifactFileDescriptor,
+} from "./fs-hardening.js";
 
 // Shared Windows-gated atomic-publish rename [issue #3352]. Same owner as fs-hardening so CLI,
 // server, vault, and evidence cannot drift onto a private retry loop.

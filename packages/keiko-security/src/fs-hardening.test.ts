@@ -1,16 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DIR_MODE, FILE_MODE, chmodIfPresent, ensureDirHardened } from "./fs-hardening.js";
+import {
+  DIR_MODE,
+  FILE_MODE,
+  SafeArtifactFileError,
+  chmodIfPresent,
+  ensureDirHardened,
+  openSafeArtifactFile,
+  publishSafeArtifactFileSet,
+  replaceSafeArtifactFile,
+} from "./fs-hardening.js";
 
 const cleanups: string[] = [];
 const originalPlatform = process.platform;
@@ -158,5 +173,201 @@ describe("chmod-failure swallow (mocked node:fs)", () => {
     }).not.toThrow();
     vi.doUnmock("node:fs");
     vi.resetModules();
+  });
+});
+
+describe("openSafeArtifactFile", () => {
+  it("refuses final symlinks, hard links, and FIFOs without leaking the target path", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const victim = join(base, "victim");
+    writeFileSync(victim, "unchanged", { mode: FILE_MODE });
+    chmodSync(victim, 0o640);
+
+    const symlink = join(base, "symlink");
+    symlinkSync(victim, symlink);
+    const hardLink = join(base, "hard-link");
+    linkSync(victim, hardLink);
+    const fifo = join(base, "fifo");
+    execFileSync("mkfifo", [fifo]);
+
+    for (const hostile of [symlink, hardLink, fifo]) {
+      let thrown: unknown;
+      try {
+        openSafeArtifactFile(hostile, {
+          artifactClass: "activity-log",
+          mode: "append-existing-or-create",
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(SafeArtifactFileError);
+      expect(String(thrown)).not.toContain(hostile);
+      expect(String(thrown)).not.toContain("unchanged");
+    }
+    expect(readFileSync(victim, "utf8")).toBe("unchanged");
+    expect(statSync(victim).mode & 0o777).toBe(0o640);
+  });
+
+  it("creates an owner-only regular single-link file", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const path = join(freshDir(), "artifact");
+    const descriptor = openSafeArtifactFile(path, {
+      artifactClass: "support-bundle",
+      mode: "exclusive-create",
+    });
+    closeSync(descriptor);
+
+    const stat = statSync(path);
+    expect(stat.isFile()).toBe(true);
+    expect(stat.nlink).toBe(1);
+    expect(stat.mode & 0o777).toBe(FILE_MODE);
+  });
+
+  it("rejects a final pathname replaced after open instead of trusting a precheck", async () => {
+    const base = freshDir();
+    const path = join(base, "artifact");
+    const displaced = join(base, "displaced");
+    writeFileSync(path, "original", { mode: FILE_MODE });
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      openSync: (...args: Parameters<typeof actual.openSync>): number => {
+        const descriptor = Reflect.apply(actual.openSync, actual, args);
+        renameSync(path, displaced);
+        writeFileSync(path, "replacement", { mode: FILE_MODE });
+        return descriptor;
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.openSafeArtifactFile(path, {
+        artifactClass: "activity-log",
+        mode: "append-existing-or-create",
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<InstanceType<typeof SafeArtifactFileError>>>({
+        kind: "target-mutated",
+      }),
+    );
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+  });
+});
+
+describe("publishSafeArtifactFileSet", () => {
+  it("publishes the commit artifact last and recovers an interrupted publication", async () => {
+    const base = freshDir();
+    const bundle = join(base, "bundle.jsonl");
+    const sidecar = `${bundle}.sha256`;
+    const entries = [
+      { path: sidecar, contents: "digest\n", artifactClass: "support-integrity" as const },
+      { path: bundle, contents: "bundle\n", artifactClass: "support-bundle" as const },
+    ];
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("interrupted"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() => isolated.publishSafeArtifactFileSet(entries, { commitPath: bundle })).toThrow(
+      expect.objectContaining<Partial<InstanceType<typeof SafeArtifactFileError>>>({
+        kind: "publish-failed",
+      }),
+    );
+    expect(existsSync(bundle)).toBe(false);
+    expect(readFileSync(sidecar, "utf8")).toBe("digest\n");
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+
+    expect(publishSafeArtifactFileSet(entries, { commitPath: bundle })).toEqual({
+      status: "recovered",
+    });
+    expect(readFileSync(bundle, "utf8")).toBe("bundle\n");
+    expect(readFileSync(sidecar, "utf8")).toBe("digest\n");
+    expect(statSync(bundle).nlink).toBe(1);
+    expect(statSync(sidecar).nlink).toBe(1);
+  });
+
+  it("refuses an existing target by default without replacing its bytes", () => {
+    const base = freshDir();
+    const path = join(base, "fixture.ts");
+    writeFileSync(path, "keep", { mode: FILE_MODE });
+
+    expect(() =>
+      publishSafeArtifactFileSet([{ path, contents: "replace", artifactClass: "replay-fixture" }], {
+        commitPath: path,
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<InstanceType<typeof SafeArtifactFileError>>>({
+        kind: "target-exists",
+      }),
+    );
+    expect(readFileSync(path, "utf8")).toBe("keep");
+  });
+});
+
+describe("replaceSafeArtifactFile", () => {
+  it("atomically replaces only a verified private regular file", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const path = join(freshDir(), "manifest.json");
+    writeFileSync(path, "old", { mode: FILE_MODE });
+
+    replaceSafeArtifactFile(path, "new", { artifactClass: "manifest" });
+
+    expect(readFileSync(path, "utf8")).toBe("new");
+    expect(statSync(path).nlink).toBe(1);
+    expect(statSync(path).mode & 0o777).toBe(FILE_MODE);
+  });
+
+  it("refuses a hard-linked replacement target without changing its bytes or mode", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const victim = join(base, "victim");
+    const target = join(base, "manifest.json");
+    writeFileSync(victim, "keep", { mode: 0o640 });
+    chmodSync(victim, 0o640);
+    linkSync(victim, target);
+
+    expect(() => {
+      replaceSafeArtifactFile(target, "replacement", { artifactClass: "manifest" });
+    }).toThrow(
+      expect.objectContaining<Partial<InstanceType<typeof SafeArtifactFileError>>>({
+        kind: "unsafe-target",
+      }),
+    );
+    expect(readFileSync(victim, "utf8")).toBe("keep");
+    expect(statSync(victim).mode & 0o777).toBe(0o640);
+  });
+
+  it("refuses symlink and non-regular replacement targets", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const victim = join(base, "victim");
+    writeFileSync(victim, "keep", { mode: FILE_MODE });
+    const symlink = join(base, "manifest-link");
+    symlinkSync(victim, symlink);
+    const fifo = join(base, "manifest-fifo");
+    execFileSync("mkfifo", [fifo]);
+
+    for (const target of [symlink, fifo]) {
+      expect(() => {
+        replaceSafeArtifactFile(target, "replacement", { artifactClass: "manifest" });
+      }).toThrow(
+        expect.objectContaining<Partial<InstanceType<typeof SafeArtifactFileError>>>({
+          kind: "unsafe-target",
+        }),
+      );
+    }
+    expect(readFileSync(victim, "utf8")).toBe("keep");
   });
 });
