@@ -481,7 +481,7 @@ describe("managed Eclipse JDT LS provider", () => {
       }),
     ).toThrow();
     expect(events.find((event) => event.op === "lsp.java.version-probe.completed")).toMatchObject({
-      errorKind: "Error",
+      errorKind: "internal",
       extra: {
         executionBoundary: "governed-pre-spawn",
         outcome: "invocation-failed",
@@ -588,32 +588,36 @@ describe("managed Eclipse JDT LS provider", () => {
       probeResult({ stderr: 'openjdk version "17.0.12"', stdout: "" }),
       "unsupported-version",
       "JAVA_VERSION_UNSUPPORTED",
+      "validation-failed",
     ],
     [
       "malformed output",
       probeResult({ stderr: "not a java version", stdout: "" }),
       "malformed-output",
       "JAVA_VERSION_MALFORMED_OUTPUT",
+      "validation-failed",
     ],
     [
       "nonzero exit",
       probeResult({ exitCode: 2, stderr: "failure", stdout: "" }),
       "nonzero-exit",
       "JAVA_VERSION_NONZERO_EXIT",
+      "validation-failed",
     ],
     [
       "output cap",
       probeResult({ exitCode: null, truncated: true, stderr: "[output truncated]" }),
       "output-cap",
       "JAVA_VERSION_OUTPUT_CAP",
+      "validation-failed",
     ],
   ] as const)(
     "fails closed and logs the distinct %s probe outcome",
-    async (_name, result, outcome, errorKind) => {
+    async (_name, result, outcome, thrownCode, errorKind) => {
       const events = captureLog();
       await expect(
         executeProbe(probeSecurity({ runProbe: () => Promise.resolve(result) })),
-      ).rejects.toMatchObject({ code: errorKind });
+      ).rejects.toMatchObject({ code: thrownCode });
 
       const validation = events.find((event) => event.op === "lsp.java.version-probe.completed");
       expect(validation).toMatchObject({
@@ -626,14 +630,14 @@ describe("managed Eclipse JDT LS provider", () => {
   );
 
   it.each([
-    ["timeout", new CommandTimeoutError("timed out", 5_000), "TOOL_COMMAND_TIMEOUT"],
-    ["spawn-error", Object.assign(new Error("missing"), { code: "ENOENT" }), "ENOENT"],
+    ["timeout", new CommandTimeoutError("timed out", 5_000), "timeout"],
+    ["spawn-error", Object.assign(new Error("missing"), { code: "ENOENT" }), "unavailable"],
     [
       "invocation-failed",
       new CommandDeniedError("isolation unavailable", "java"),
-      "TOOL_COMMAND_DENIED",
+      "internal",
     ],
-    ["cancelled", new CommandCancelledError("cancelled"), "TOOL_COMMAND_CANCELLED"],
+    ["cancelled", new CommandCancelledError("cancelled"), "cancelled"],
   ] as const)(
     "logs the distinct %s rejection with errorKind",
     async (outcome, error, errorKind) => {
@@ -723,7 +727,7 @@ describe("managed Eclipse JDT LS provider", () => {
       expect(readdirSync(runtimeStateRoot)).toEqual([]);
       expect(events.find((event) => event.op === "lsp.java.version-probe.completed")).toMatchObject(
         {
-          errorKind: "Error",
+          errorKind: "internal",
           extra: {
             executionBoundary: "governed-pre-spawn",
             outcome: "invocation-failed",

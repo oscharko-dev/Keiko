@@ -18,6 +18,10 @@ import type {
   ManagedLspNegotiatedCapabilitySnapshot,
   ManagedLspLanguage,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { createLspTransport } from "./lspTransport.js";
@@ -49,6 +53,51 @@ import { createLspProtocolSession, type LspProtocolSession } from "./lspProtocol
 import type { LspSemanticTokenNegotiation } from "./lspSemanticTokens.js";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 import { processServerLogSink } from "../../process-log-sink.js";
+
+const LSP_PROCESS_OWNERSHIP_CHANGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.process.ownership.changed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspProcessManager.logChildOwnership",
+  fields: {
+    action: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "retained-unconfirmed",
+        "released-after-exit",
+        "durable-lease-acquired",
+        "durable-lease-released",
+        "durable-lease-restored",
+        "durable-state-unavailable",
+      ],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "process-live",
+        "exit-unconfirmed",
+        "tree-unconfirmed",
+        "resource-cleanup-failed",
+        "durable-quarantine",
+        "runtime-state-unavailable",
+      ],
+    },
+    generation: { type: "integer", dataClass: "count", required: false },
+    childPid: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["lsp-process-ownership"],
+  proofIds: ["lsp.process-ownership-changed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export interface LspProcessProtocolConfig {
   readonly language: ManagedLspLanguage;
@@ -353,17 +402,18 @@ function logChildOwnership(
   reason: OwnershipRetentionReason | LspRuntimeLeaseReason,
   generation?: number,
 ): void {
-  processServerLogSink().write({
-    category: "diagnostic",
-    op: "lsp.process.ownership.changed",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    extra: {
-      action,
-      reason,
-      ...(generation === undefined ? {} : { generation }),
-      ...(childPid === undefined ? {} : { childPid }),
-    },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_PROCESS_OWNERSHIP_CHANGED_OPERATION,
+      { correlationId: UNKNOWN_CORRELATION_ID },
+      {
+        action,
+        reason,
+        ...(generation === undefined ? {} : { generation }),
+        ...(childPid === undefined ? {} : { childPid }),
+      },
+    ),
+  );
 }
 
 function durableLeaseReason(reason: OwnershipRetentionReason): LspRuntimeLeaseReason {
