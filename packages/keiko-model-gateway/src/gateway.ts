@@ -226,7 +226,7 @@ const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
   fields: {
     requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
-    endpoint: { type: "string", dataClass: "opaque-id", required: false, maxLength: 512 },
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     costClass: {
       type: "string",
       dataClass: "closed-enum",
@@ -273,7 +273,7 @@ const GATEWAY_STREAM_STARTED_OPERATION = defineActivityLogOperation({
   fields: {
     requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
-    endpoint: { type: "string", dataClass: "opaque-id", required: false, maxLength: 512 },
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     costClass: {
       type: "string",
       dataClass: "closed-enum",
@@ -1028,10 +1028,11 @@ export class Gateway {
   ): void {
     if (!logLevelEnabled(this.log, "info")) return;
     const endpoint = logEndpointHost(route.provider.baseUrl);
+    const endpointDigest = endpoint === undefined ? undefined : sha256Hex(endpoint);
     const commonFields = {
       ...callIdFields(ids),
       modelId: route.provider.modelId,
-      ...(endpoint === undefined ? {} : { endpoint }),
+      ...(endpointDigest === undefined ? {} : { endpointDigest }),
       costClass: route.capability.costClass,
       timeoutMs: route.provider.timeoutMs,
       maxRetries: route.provider.maxRetries,

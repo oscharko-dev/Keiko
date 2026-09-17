@@ -1,5 +1,9 @@
 import { isGitChangeSnapshotReference } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   PR_DESCRIPTION_SECTION_KEYS,
   PR_DESCRIPTION_LANGUAGES,
   prDescriptionArtifactEvidence,
@@ -10,7 +14,7 @@ import {
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { findConfiguredCapability, selectConfiguredModel } from "../model-selection.js";
 import {
-  logErrorKind,
+  activityLogErrorKind,
   logTimer,
   resolveLogSink,
   withCorrelationId,
@@ -49,6 +53,336 @@ import {
 } from "./types.js";
 import type { GatewayCallRequest } from "../gateway.js";
 import type { ModelCapability, NormalizedResponse } from "../types.js";
+
+const PR_DESCRIPTION_MODEL_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.model.started",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "prDescription.generate.executeCall",
+  fields: {
+    callCount: { type: "integer", dataClass: "count", required: true },
+    structuredOutput: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    responseSchemaProfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "openai-strict-compatible-v1"],
+    },
+    responseSchemaOmittedKeywordCount: {
+      type: "integer",
+      dataClass: "count",
+      required: true,
+    },
+    inputBytes: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["pr-description-model-call"],
+  proofIds: ["pr-description.model-started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_MODEL_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.model.failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "prDescription.generate.executeCall",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "model-unavailable",
+        "invalid-model-output",
+        "unsafe-model-output",
+        "provider-failed",
+        "budget-exhausted",
+        "cancelled",
+        "timeout",
+        "snapshot-unavailable",
+        "invalid-snapshot",
+        "invalid-request",
+        "authority-denied",
+      ],
+    },
+    callCount: { type: "integer", dataClass: "count", required: true },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 64,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 64,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-model-call"],
+  proofIds: ["pr-description.model-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_MODEL_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.model.completed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "prDescription.generate.acceptResponse",
+  fields: {
+    callCount: { type: "integer", dataClass: "count", required: true },
+    accepted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "model-unavailable",
+        "invalid-model-output",
+        "unsafe-model-output",
+        "provider-failed",
+        "budget-exhausted",
+        "cancelled",
+        "timeout",
+        "snapshot-unavailable",
+        "invalid-snapshot",
+        "invalid-request",
+        "authority-denied",
+      ],
+    },
+    outputBytes: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["pr-description-model-call"],
+  proofIds: ["pr-description.model-completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_AUTHORITY_REVALIDATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.authority.revalidation.failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "prDescription.generate.authorityStillCurrent",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "model-unavailable",
+        "invalid-model-output",
+        "unsafe-model-output",
+        "provider-failed",
+        "budget-exhausted",
+        "cancelled",
+        "timeout",
+        "snapshot-unavailable",
+        "invalid-snapshot",
+        "invalid-request",
+        "authority-denied",
+      ],
+    },
+    callCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-authority"],
+  proofIds: ["pr-description.authority-revalidation-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_GENERATION_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.generation.completed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "prDescription.generate.completeGeneration",
+  fields: {
+    schemaVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 32 },
+    renderingVersion: {
+      type: "string",
+      dataClass: "safe-version",
+      required: true,
+      maxLength: 32,
+    },
+    snapshotDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    artifactDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "partial", "fallback", "failed"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "model-unavailable",
+        "invalid-model-output",
+        "unsafe-model-output",
+        "provider-failed",
+        "budget-exhausted",
+        "cancelled",
+        "timeout",
+        "snapshot-unavailable",
+        "invalid-snapshot",
+        "invalid-request",
+        "authority-denied",
+      ],
+    },
+    processedEvidenceCount: { type: "integer", dataClass: "count", required: true },
+    omittedEvidenceCount: { type: "integer", dataClass: "count", required: true },
+    callCount: { type: "integer", dataClass: "count", required: true },
+    inputBytes: { type: "integer", dataClass: "count", required: true },
+    outputBytes: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["pr-description-generation"],
+  proofIds: ["pr-description.generation-completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_GENERATION_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.generation.started",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "prDescription.generate.resolveAndGenerate",
+  fields: {
+    snapshotDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    authorityDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    evidenceCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["pr-description-generation"],
+  proofIds: ["pr-description.generation-started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_GENERATION_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.generation.unavailable",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "prDescription.generate.generatePrDescription",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "model-unavailable",
+        "invalid-model-output",
+        "unsafe-model-output",
+        "provider-failed",
+        "budget-exhausted",
+        "cancelled",
+        "timeout",
+        "snapshot-unavailable",
+        "invalid-snapshot",
+        "invalid-request",
+        "authority-denied",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "capability",
+  failureClasses: ["pr-description-generation"],
+  proofIds: ["pr-description.generation-unavailable.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_GENERATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.generation.failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "prDescription.generate.generatePrDescription",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "model-unavailable",
+        "invalid-model-output",
+        "unsafe-model-output",
+        "provider-failed",
+        "budget-exhausted",
+        "cancelled",
+        "timeout",
+        "snapshot-unavailable",
+        "invalid-snapshot",
+        "invalid-request",
+        "authority-denied",
+      ],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 64,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 64,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-generation"],
+  proofIds: ["pr-description.generation-failed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 interface Generation {
   readonly request: PrDescriptionRequest;
@@ -142,21 +476,23 @@ async function executeCall(
   call: GatewayCallRequest,
   evidenceIds: readonly string[],
 ): Promise<boolean> {
-  generation.log.write({
-    category: "gateway",
-    op: "pr-description.model.started",
-    extra: {
-      callCount: generation.calls,
-      structuredOutput: call.responseFormat !== undefined,
-      responseSchemaProfile:
-        call.responseFormat === undefined ? "none" : PR_DESCRIPTION_RESPONSE_SCHEMA_PROFILE,
-      responseSchemaOmittedKeywordCount:
-        call.responseFormat === undefined
-          ? 0
-          : PR_DESCRIPTION_RESPONSE_SCHEMA_OMITTED_KEYWORD_COUNT,
-      inputBytes: generation.inputBytes,
-    },
-  });
+  generation.log.write(
+    activityLogEvent(
+      PR_DESCRIPTION_MODEL_STARTED_OPERATION,
+      { correlationId: generation.request.authority.correlationId },
+      {
+        callCount: generation.calls,
+        structuredOutput: call.responseFormat !== undefined,
+        responseSchemaProfile:
+          call.responseFormat === undefined ? "none" : PR_DESCRIPTION_RESPONSE_SCHEMA_PROFILE,
+        responseSchemaOmittedKeywordCount:
+          call.responseFormat === undefined
+            ? 0
+            : PR_DESCRIPTION_RESPONSE_SCHEMA_OMITTED_KEYWORD_COUNT,
+        inputBytes: generation.inputBytes,
+      },
+    ),
+  );
   try {
     const response = await abortable(
       generation.deps.gateway.chat(call),
@@ -170,17 +506,21 @@ async function executeCall(
     generation.reason = generation.cancellation.signal.aborted
       ? cancellationReason(generation)
       : "provider-failed";
-    generation.log.write({
-      level: "warn",
-      category: "gateway",
-      op: "pr-description.model.failed",
-      errorKind: logErrorKind(error),
-      extra: {
-        reason: generation.reason,
-        callCount: generation.calls,
-        ...generation.deps.errorEvidence?.(error),
-      },
-    });
+    generation.log.write(
+      activityLogEvent(
+        PR_DESCRIPTION_MODEL_FAILED_OPERATION,
+        {
+          level: "warn",
+          correlationId: generation.request.authority.correlationId,
+          errorKind: activityLogErrorKind(error),
+        },
+        {
+          reason: generation.reason,
+          callCount: generation.calls,
+          ...generation.deps.errorEvidence?.(error),
+        },
+      ),
+    );
     generation.candidates.length = 0;
     return false;
   }
@@ -195,16 +535,18 @@ function rejectResponseAfterAuthorityChange(
   generation.modelId = call.modelId;
   generation.outputBytes += Buffer.byteLength(response.content, "utf8");
   generation.candidates.length = 0;
-  generation.log.write({
-    category: "gateway",
-    op: "pr-description.model.completed",
-    extra: {
-      callCount: generation.calls,
-      accepted: false,
-      reason: generation.reason,
-      outputBytes: generation.outputBytes,
-    },
-  });
+  generation.log.write(
+    activityLogEvent(
+      PR_DESCRIPTION_MODEL_COMPLETED_OPERATION,
+      { correlationId: generation.request.authority.correlationId },
+      {
+        callCount: generation.calls,
+        accepted: false,
+        reason: generation.reason,
+        outputBytes: generation.outputBytes,
+      },
+    ),
+  );
   return false;
 }
 
@@ -228,13 +570,17 @@ async function authorityStillCurrent(generation: Generation): Promise<boolean> {
   } catch (error) {
     generation.reason =
       error instanceof CancelledError ? cancellationReason(generation) : "authority-denied";
-    generation.log.write({
-      level: "warn",
-      category: "gateway",
-      op: "pr-description.authority.revalidation.failed",
-      errorKind: logErrorKind(error),
-      extra: { reason: generation.reason, callCount: generation.calls },
-    });
+    generation.log.write(
+      activityLogEvent(
+        PR_DESCRIPTION_AUTHORITY_REVALIDATION_FAILED_OPERATION,
+        {
+          level: "warn",
+          correlationId: generation.request.authority.correlationId,
+          errorKind: activityLogErrorKind(error),
+        },
+        { reason: generation.reason, callCount: generation.calls },
+      ),
+    );
     return false;
   }
 }
@@ -281,16 +627,18 @@ function acceptResponse(
   }
   const accepted = generation.reason === "none";
   if (!accepted) generation.candidates.length = 0;
-  generation.log.write({
-    category: "gateway",
-    op: "pr-description.model.completed",
-    extra: {
-      callCount: generation.calls,
-      accepted,
-      reason: generation.reason,
-      outputBytes: generation.outputBytes,
-    },
-  });
+  generation.log.write(
+    activityLogEvent(
+      PR_DESCRIPTION_MODEL_COMPLETED_OPERATION,
+      { correlationId: generation.request.authority.correlationId },
+      {
+        callCount: generation.calls,
+        accepted,
+        reason: generation.reason,
+        outputBytes: generation.outputBytes,
+      },
+    ),
+  );
   return accepted;
 }
 
@@ -389,17 +737,21 @@ function completeGeneration(generation: Generation): PrDescriptionGenerationResu
     reason: generation.reason,
     ...(generation.deps.branding === undefined ? {} : { branding: generation.deps.branding }),
   });
-  generation.log.write({
-    category: "gateway",
-    op: "pr-description.generation.completed",
-    durationMs: generation.elapsed(),
-    extra: {
-      ...prDescriptionArtifactEvidence(artifact),
-      callCount: generation.calls,
-      inputBytes: generation.inputBytes,
-      outputBytes: generation.outputBytes,
-    },
-  });
+  generation.log.write(
+    activityLogEvent(
+      PR_DESCRIPTION_GENERATION_COMPLETED_OPERATION,
+      {
+        correlationId: generation.request.authority.correlationId,
+        durationMs: generation.elapsed(),
+      },
+      {
+        ...prDescriptionArtifactEvidence(artifact),
+        callCount: generation.calls,
+        inputBytes: generation.inputBytes,
+        outputBytes: generation.outputBytes,
+      },
+    ),
+  );
   const usage = aggregateUsage(generation);
   return { status: "generated", artifact, ...(usage === undefined ? {} : { usage }) };
 }
@@ -435,15 +787,17 @@ async function resolveAndGenerate(
     outputBytes: 0,
     reason: "none",
   };
-  log.write({
-    category: "gateway",
-    op: "pr-description.generation.started",
-    extra: {
-      snapshotDigest: resolved.snapshot.snapshotDigest,
-      authorityDigest: request.authority.authorityDigest,
-      evidenceCount: resolved.evidence.length,
-    },
-  });
+  log.write(
+    activityLogEvent(
+      PR_DESCRIPTION_GENERATION_STARTED_OPERATION,
+      { correlationId: request.authority.correlationId },
+      {
+        snapshotDigest: resolved.snapshot.snapshotDigest,
+        authorityDigest: request.authority.authorityDigest,
+        evidenceCount: resolved.evidence.length,
+      },
+    ),
+  );
   await generateCandidates(generation);
   if (generation.reason === "authority-denied") {
     return { status: "unavailable", reason: generation.reason };
@@ -466,20 +820,26 @@ export async function generatePrDescription(
   try {
     const result = await resolveAndGenerate(request, deps, limits, cancellation, log);
     if (result.status === "unavailable")
-      log.write({
-        category: "gateway",
-        op: "pr-description.generation.unavailable",
-        extra: { reason: result.reason },
-      });
+      log.write(
+        activityLogEvent(
+          PR_DESCRIPTION_GENERATION_UNAVAILABLE_OPERATION,
+          { correlationId: request.authority.correlationId },
+          { reason: result.reason },
+        ),
+      );
     return result;
   } catch (error) {
     const reason = failedGenerationReason(cancellation);
-    log.write({
-      category: "gateway",
-      op: "pr-description.generation.failed",
-      errorKind: logErrorKind(error),
-      extra: { reason, ...deps.errorEvidence?.(error) },
-    });
+    log.write(
+      activityLogEvent(
+        PR_DESCRIPTION_GENERATION_FAILED_OPERATION,
+        {
+          correlationId: request.authority.correlationId,
+          errorKind: activityLogErrorKind(error),
+        },
+        { reason, ...deps.errorEvidence?.(error) },
+      ),
+    );
     return { status: "unavailable", reason };
   } finally {
     cancellation.dispose();

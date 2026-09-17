@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { Gateway } from "./gateway.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import { providerRequestBudgetMs } from "./resilience.js";
@@ -227,7 +228,7 @@ describe("Gateway.chat — activity log", () => {
     expect(started.correlationId).toBe(response.usage.requestId);
     expect(started.extra).toMatchObject({
       modelId: "example-chat-model",
-      endpoint: "https://provider.example",
+      endpointDigest: sha256Hex("https://provider.example"),
       timeoutMs: 30_000,
       maxRetries: 0,
       requestBudgetMs: providerRequestBudgetMs(provider()),
