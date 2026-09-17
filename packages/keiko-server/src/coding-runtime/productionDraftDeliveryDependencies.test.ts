@@ -13,7 +13,6 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { resolveGitHubIssue } from "../coding-context/githubIssueResolution.js";
 import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
-import { describeError } from "../diagnostics-log.js";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import type {
   DraftDeliveryDependencies,
@@ -738,7 +737,8 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       runId: "run-42",
       state: "unavailable",
       count: 0,
-      ...describeError(failure),
+      frames: expect.any(Array) as unknown,
+      causeChain: expect.any(Array) as unknown,
     });
     expect(JSON.stringify(f.events)).not.toContain("private failure detail");
   });

@@ -1,6 +1,11 @@
 import { realpathSync } from "node:fs";
 import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 import {
   canonicalGitHubPushUrl,
@@ -20,7 +25,6 @@ import {
   githubRemoteOwnerAndRepoFor,
   isGitHubIssueReaderAuthorized,
 } from "../coding-context/githubIssueReaderAuthorization.js";
-import { describeError } from "../diagnostics-log.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { redactEvidenceString } from "../deps.js";
 import { githubOwnerAndRepoFromRemoteUrl } from "../gitDelivery/branchProtectionPreflight.js";
@@ -35,6 +39,7 @@ import {
   resolveProjectWorkspace,
 } from "../gitDelivery/execution.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -54,6 +59,145 @@ function snapshotIsDeliverable(state: string): boolean {
 }
 
 type TargetFailure = Extract<DraftDeliveryTargetResolution, { ok: false }>;
+
+const GIT_DRAFT_RELATED_ISSUES_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-related-issues",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionDraftDeliveryDependencies.relatedIssues",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["resolved", "unavailable"],
+    },
+    count: { type: "integer", dataClass: "count", required: true },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-draft-related-issues"],
+  proofIds: ["git.draft-related-issues.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GIT_DRAFT_PUSH_PREPARATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-push.preparation",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionDraftDeliveryDependencies.preparationFailure",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["failed"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["git-publish-metadata-unavailable", "unclassified"],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: true,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-draft-push-preparation"],
+  proofIds: ["git.draft-push.preparation.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GIT_DRAFT_TARGET_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-target.resolved",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionDraftDeliveryDependencies.record",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready", "blocked"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "issue-drift", "remote-drift", "provider-failed", "authority-denied"],
+    },
+    issueBindingDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["git-draft-target-resolution"],
+  proofIds: ["git.draft-target.resolved.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function targetResolutionErrorKind(reason: TargetFailure["reason"]): ActivityLogErrorKind {
+  if (reason === "authority-denied") return "authority-denied";
+  if (reason === "provider-failed") return "unavailable";
+  return "conflict";
+}
 
 // One live-gated provider adapter serves the inspection reads and the Checks refresh's body reads and
 // writes (owner review on PR #3452).
@@ -451,14 +595,19 @@ class DraftDeliveryFactory {
       });
       return this.relatedIssues(context, "resolved", related);
     } catch (error) {
-      this.log.write({
-        category: "process",
-        op: "git.draft-related-issues",
-        correlationId: context.correlationId,
-        level: "warn",
-        errorKind: "internal",
-        extra: { runId: context.runId, state: "unavailable", count: 0, ...describeError(error) },
-      });
+      this.log.write(
+        activityLogEvent(
+          GIT_DRAFT_RELATED_ISSUES_OPERATION,
+          { correlationId: context.correlationId, level: "warn", errorKind: "internal" },
+          {
+            runId: context.runId,
+            state: "unavailable",
+            count: 0,
+            frames: keikoStackFrames(error),
+            causeChain: causeChain(error),
+          },
+        ),
+      );
       return [];
     }
   }
@@ -468,12 +617,16 @@ class DraftDeliveryFactory {
     state: "resolved" | "unavailable",
     related: readonly number[],
   ): readonly number[] {
-    this.log.write({
-      category: "process",
-      op: "git.draft-related-issues",
-      correlationId: context.correlationId,
-      extra: { runId: context.runId, state, count: related.length },
-    });
+    this.log.write(
+      activityLogEvent(
+        GIT_DRAFT_RELATED_ISSUES_OPERATION,
+        {
+          correlationId: context.correlationId,
+          ...(state === "unavailable" ? { level: "warn", errorKind: "unavailable" } : {}),
+        },
+        { runId: context.runId, state, count: related.length },
+      ),
+    );
     return related;
   }
 
@@ -492,23 +645,19 @@ class DraftDeliveryFactory {
   }
 
   public preparationFailure(context: DraftDeliveryRunContext, error: unknown): void {
-    this.log.write({
-      category: "security",
-      op: "git.draft-push.preparation",
-      correlationId: context.correlationId,
-      level: "warn",
-      errorKind: "internal",
-      extra: {
-        runId: context.runId,
-        state: "failed",
-        // The publish view throws closed slugs (`git-publish-metadata-unavailable`, …); the class
-        // alone ("Error") did not say which precondition failed (run 18, 2026-09-10).
-        ...(publishPreparationReason(error) === undefined
-          ? {}
-          : { reason: publishPreparationReason(error) }),
-        ...describeError(error),
-      },
-    });
+    this.log.write(
+      activityLogEvent(
+        GIT_DRAFT_PUSH_PREPARATION_OPERATION,
+        { correlationId: context.correlationId, level: "warn", errorKind: "internal" },
+        {
+          runId: context.runId,
+          state: "failed",
+          reason: publishPreparationReason(error),
+          frames: keikoStackFrames(error),
+          causeChain: causeChain(error),
+        },
+      ),
+    );
   }
 
   public checkedPushUrl(context: DraftDeliveryRunContext): string {
@@ -618,29 +767,39 @@ class DraftDeliveryFactory {
     result: DraftDeliveryTargetResolution,
     error?: unknown,
   ): void {
-    this.log.write({
-      category: "security",
-      op: "git.draft-target.resolved",
-      correlationId: context.correlationId,
-      level: result.ok ? "info" : "warn",
-      ...(error === undefined ? {} : { errorKind: "internal" }),
-      extra: {
-        runId: context.runId,
-        state: result.ok ? "ready" : "blocked",
-        reason: result.ok ? "completed" : result.reason,
-        issueBindingDigest: context.issueBinding.bindingDigest,
-        ...(error === undefined ? {} : describeError(error)),
-      },
-    });
+    this.log.write(
+      activityLogEvent(
+        GIT_DRAFT_TARGET_RESOLVED_OPERATION,
+        {
+          correlationId: context.correlationId,
+          level: result.ok ? "info" : "warn",
+          ...(result.ok
+            ? {}
+            : {
+                errorKind:
+                  error === undefined ? targetResolutionErrorKind(result.reason) : "internal",
+              }),
+        },
+        {
+          runId: context.runId,
+          state: result.ok ? "ready" : "blocked",
+          reason: result.ok ? "completed" : result.reason,
+          issueBindingDigest: context.issueBinding.bindingDigest,
+          ...(error === undefined
+            ? {}
+            : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+        },
+      ),
+    );
   }
 }
 
 // A closed `git-publish-*` slug from the publish view, or undefined for anything else — never free
 // text, so the preparation line stays body-free whatever an unexpected error carries.
-const PUBLISH_PREPARATION_REASON = /^git-publish-[a-z]+(?:-[a-z]+){0,6}$/u;
-
-function publishPreparationReason(error: unknown): string | undefined {
-  return error instanceof Error && PUBLISH_PREPARATION_REASON.test(error.message)
+function publishPreparationReason(
+  error: unknown,
+): "git-publish-metadata-unavailable" | "unclassified" {
+  return error instanceof Error && error.message === "git-publish-metadata-unavailable"
     ? error.message
-    : undefined;
+    : "unclassified";
 }
