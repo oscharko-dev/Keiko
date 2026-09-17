@@ -23,6 +23,10 @@ import {
   type MemoryUpdate,
   validateMemoryRecord,
 } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   JACCARD_DEFAULT,
@@ -74,6 +78,29 @@ interface ResolvedOptions {
   readonly summaryGenerator?: ConsolidationSummaryGenerator;
   readonly logSink?: ConsolidationLogSink;
 }
+
+const CONSOLIDATION_SUMMARY_FALLBACK_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "consolidation.summary.fallback",
+  category: "consolidation",
+  owner: "keiko-memory-consolidation",
+  emitter: "consolidate.logSummaryFallback",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["absent", "invalid-output", "union-not-preserved", "generator-threw"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["consolidation-summary-generation"],
+  proofIds: ["consolidation.summary.fallback.reason"],
+  releaseImpact: "patch",
+});
 
 const DEFAULT_ELIGIBLE_STATUSES: readonly MemoryStatus[] = ["accepted", "proposed", "conflicted"];
 const DEFAULT_REVIEWER_ID = "memory-consolidation" as MemoryReviewerId;
@@ -460,11 +487,14 @@ function summaryReviewerNote(
 // only, never the generated body, the union body, or any source content.
 function logSummaryFallback(resolved: ResolvedOptions, summary: GeneratedSummaryChoice): void {
   if (!summary.fallbackUsed || summary.summaryFallbackReason === undefined) return;
-  emitConsolidationLogEvent(resolved.logSink, {
-    category: "consolidation",
-    op: "consolidation.summary.fallback",
-    extra: { reason: summary.summaryFallbackReason },
-  });
+  emitConsolidationLogEvent(
+    resolved.logSink,
+    activityLogEvent(
+      CONSOLIDATION_SUMMARY_FALLBACK_OPERATION,
+      {},
+      { reason: summary.summaryFallbackReason },
+    ),
+  );
 }
 
 function buildSummaryUpdate(

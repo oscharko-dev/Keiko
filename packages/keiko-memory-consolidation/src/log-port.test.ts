@@ -172,8 +172,8 @@ describe("emitConsolidationLogEvent", () => {
       level: "error",
       category: "diagnostic",
       op: "consolidation.log.sink-failed",
-      errorKind: "ENOSPC",
-      extra: { droppedOp: "consolidation.summary.fallback" },
+      errorKind: "unavailable",
+      extra: { droppedOpDigest: "84515d8cbae7dcba", failureKind: "ENOSPC" },
     });
   });
 
@@ -216,7 +216,7 @@ describe("emitConsolidationLogEvent", () => {
     const calls: readonly (readonly unknown[])[] = warn.mock.calls;
     expect(calls[0]?.[1]).toMatchObject({
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: "op=consolidation.summary.fallback errorKind=ENOSPC",
+      detail: "opDigest=84515d8cbae7dcba errorKind=ENOSPC",
     });
 
     // Per sink, not per process: a replaced sink that also fails is a new fact about the log.
