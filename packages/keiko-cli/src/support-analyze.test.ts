@@ -18,6 +18,7 @@ import {
   type ServerLogSink,
 } from "@oscharko-dev/keiko-server";
 import { redactLogFields } from "@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle";
+import { formatServerLogLine } from "../../keiko-server/src/observability/server-log.js";
 
 import {
   analyzeLogText,
@@ -100,18 +101,30 @@ function productionLogCategory(op: string): ServerLogCategory {
   return category;
 }
 
-// Writes through the real file sink and returns what actually landed in `<stateDir>/logs/server.log`
-// — the same bytes `keiko support analyze` is handed — so redaction, field hoisting and the v2
-// envelope are all exercised rather than assumed.
+// The file sink contributes its real registered safe-open line. The supplied fixtures then cross
+// the production formatter without the physical sink's registration gate: this analyzer suite
+// deliberately needs legacy and adversarial record shapes, while server-log.test.ts separately
+// proves that those shapes cannot reach a current production file.
 function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => void): string {
   const stateDir = mkdtempSync(join(tmpdir(), prefix));
-  const sink = createFileServerLogSink(stateDir, { level: "debug" });
+  const fileSink = createFileServerLogSink(stateDir, { level: "debug" });
+  const fixtureLines: string[] = [];
+  let primed = false;
+  const fixtureSink: ServerLogSink = {
+    write(event): void {
+      if (!primed) {
+        fileSink.write(event);
+        primed = true;
+      }
+      fixtureLines.push(formatServerLogLine(event));
+    },
+  };
   try {
-    write(sink);
-    sink.close?.();
-    return readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    write(fixtureSink);
+    fileSink.close?.();
+    return `${readFileSync(join(stateDir, "logs", "server.log"), "utf8")}${fixtureLines.join("")}`;
   } finally {
-    sink.close?.();
+    fileSink.close?.();
     rmSync(stateDir, { recursive: true, force: true });
   }
 }
@@ -478,10 +491,8 @@ describe("analyzeLogText — raw log", () => {
   const result = analyzeLogText(FIXTURE_TEXT);
 
   it("reconstructs a serialized task-workspace lifecycle failure with correlation and taxonomy", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "keiko-support-task-workspace-"));
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
     const correlationId = "0123456789abcdef0123456789abcdef";
-    try {
+    const serialized = serializedActivityLog("keiko-support-task-workspace-", (sink) => {
       sink.write({
         level: "warn",
         category: "diagnostic",
@@ -496,27 +507,19 @@ describe("analyzeLogText — raw log", () => {
           worktreeCount: 1,
         },
       });
-      sink.close?.();
-
-      const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const timeline = findTimeline(analyzeLogText(serialized), correlationId);
-      expect(timeline?.correlationId).toBe(correlationId);
-      expect(timeline?.errorKinds).toEqual(["LOCK_CONTENTION"]);
-      expect(timeline?.lines[0]).toMatchObject({
-        category: "diagnostic",
-        op: "task-workspace.lifecycle",
-        errorKind: "LOCK_CONTENTION",
-        extra: { operation: "provision", outcome: "blocked", attempt: 2, worktreeCount: 1 },
-      });
-    } finally {
-      sink.close?.();
-      rmSync(stateDir, { recursive: true, force: true });
-    }
+    });
+    const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+    expect(timeline?.correlationId).toBe(correlationId);
+    expect(timeline?.errorKinds).toEqual(["LOCK_CONTENTION"]);
+    expect(timeline?.lines[0]).toMatchObject({
+      category: "diagnostic",
+      op: "task-workspace.lifecycle",
+      errorKind: "LOCK_CONTENTION",
+      extra: { operation: "provision", outcome: "blocked", attempt: 2, worktreeCount: 1 },
+    });
   });
 
   it("reconstructs connected-context work diagnostics on one support timeline", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "keiko-support-connected-context-"));
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
     const correlationId = "connected-context-support-timeline-0001";
     const scopeIdentitySha256 = "a".repeat(64);
     const queryIdentitySha256 = "b".repeat(64);
@@ -585,7 +588,7 @@ describe("analyzeLogText — raw log", () => {
       contentReadCalls: 64,
       contentReadBytes: 98_304,
     } as const;
-    try {
+    const serialized = serializedActivityLog("keiko-support-connected-context-", (sink) => {
       sink.write({
         category: productionLogCategory(CONNECTED_CONTEXT_STARTED),
         op: CONNECTED_CONTEXT_STARTED,
@@ -649,47 +652,42 @@ describe("analyzeLogText — raw log", () => {
           },
         },
       });
-      sink.close?.();
+    });
 
-      const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const timeline = findTimeline(analyzeLogText(serialized), correlationId);
-      expect(timeline?.lines.map((entry) => entry.op)).toEqual([
-        CONNECTED_CONTEXT_STARTED,
-        CONNECTED_CONTEXT_COMPLETED,
-      ]);
-      expect(timeline?.lines.map((entry) => entry.category)).toEqual([
-        productionLogCategory(CONNECTED_CONTEXT_STARTED),
-        productionLogCategory(CONNECTED_CONTEXT_COMPLETED),
-      ]);
-      expect(timeline?.lines[0]?.extra).toMatchObject({
-        explicitConnection: true,
-        scopeIdentitySha256,
-        ...requestShape,
-      });
-      expect(timeline?.lines[1]?.extra).toMatchObject({
-        activityDetailStatus: "complete",
-        explicitConnection: true,
-        scopeIdentitySha256,
-        ...requestShape,
-        plannedRingCount: 2,
-        selectionCounts: { selectedFileCount: 16, omittedCount: 4 },
-        structural: structuralCounters,
-        workspaceIndex: workspaceIndexCounters,
-        workspaceIo: workspaceIoCounters,
-        coverage: {
-          coverageStatus: "incomplete",
-          coverageReasons: ["file-cap"],
-          ...coverageCounters,
-        },
-        uncertainty: {
-          scopeIncompleteUncertaintyCount: 2,
-          toolUnavailableUncertaintyCount: 1,
-        },
-      });
-    } finally {
-      sink.close?.();
-      rmSync(stateDir, { recursive: true, force: true });
-    }
+    const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+    expect(timeline?.lines.map((entry) => entry.op)).toEqual([
+      CONNECTED_CONTEXT_STARTED,
+      CONNECTED_CONTEXT_COMPLETED,
+    ]);
+    expect(timeline?.lines.map((entry) => entry.category)).toEqual([
+      productionLogCategory(CONNECTED_CONTEXT_STARTED),
+      productionLogCategory(CONNECTED_CONTEXT_COMPLETED),
+    ]);
+    expect(timeline?.lines[0]?.extra).toMatchObject({
+      explicitConnection: true,
+      scopeIdentitySha256,
+      ...requestShape,
+    });
+    expect(timeline?.lines[1]?.extra).toMatchObject({
+      activityDetailStatus: "complete",
+      explicitConnection: true,
+      scopeIdentitySha256,
+      ...requestShape,
+      plannedRingCount: 2,
+      selectionCounts: { selectedFileCount: 16, omittedCount: 4 },
+      structural: structuralCounters,
+      workspaceIndex: workspaceIndexCounters,
+      workspaceIo: workspaceIoCounters,
+      coverage: {
+        coverageStatus: "incomplete",
+        coverageReasons: ["file-cap"],
+        ...coverageCounters,
+      },
+      uncertainty: {
+        scopeIncompleteUncertaintyCount: 2,
+        toolUnavailableUncertaintyCount: 1,
+      },
+    });
   });
 
   it("ranks process lifetimes by first appearance and orders each lifetime by seq; a pre-v2 line ranks by its own file position", () => {
@@ -1330,6 +1328,7 @@ describe("analyzeLogText — legacy line accounting and warnings", () => {
     expect(result.legacyLineCount).toBe(2);
     expect(result.warnings).toEqual([
       "2 line(s) predate the v2 envelope and were ordered by file position",
+      "2 corrupt Activity Log line(s)",
     ]);
   });
 });
@@ -1340,6 +1339,8 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
     category: "gateway",
     op: "gateway.instance.reused",
     generation: 1,
+    completeness: "complete",
+    loss: "none",
     schemaVersion: 2,
     registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
     schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
