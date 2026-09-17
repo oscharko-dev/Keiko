@@ -58,7 +58,11 @@ import {
   EMBEDDING_GATEWAY_UNAVAILABLE_CODE,
   runIndexingJob,
 } from "./orchestrator.js";
-import type { KnowledgeLogEvent, KnowledgeLogSink } from "../knowledge-log.js";
+import {
+  knowledgeLogCorrelationId,
+  type KnowledgeLogEvent,
+  type KnowledgeLogSink,
+} from "../knowledge-log.js";
 import { selectJobById, rowToIndexingJobRecord } from "./job-persist.js";
 import {
   countVectorsForCapsule,
@@ -3502,9 +3506,19 @@ describe("runIndexingJob — activity log", () => {
   it("announces the run before the four prologue steps that can throw or hang", async () => {
     const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
     const log = recordingSink();
+    const legacyJobId = "job-pro";
+    const correlationId = knowledgeLogCorrelationId(legacyJobId);
+    const adapter = happyAdapter();
+    const request = vi.spyOn(adapter, "request");
     try {
-      await drain(
-        runIndexingJob(buildOptions(fixture, { logSink: log.sink, idSource: () => "job-pro" })),
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: adapter,
+            logSink: log.sink,
+            idSource: () => legacyJobId,
+          }),
+        ),
       );
       // FIRST line of the file for this run — capsule resolution, source resolution, the
       // tokenizer load and the started-job write all happen after it.
@@ -3512,8 +3526,20 @@ describe("runIndexingJob — activity log", () => {
       const received = requireLine(log, "indexing.job.received");
       expect(received.level).toBe("info");
       expect(received.category).toBe("indexing");
-      // Correlated to the same job as every later line, before the job row exists.
-      expect(received.correlationId).toMatch(HEX_DIGEST);
+      // A legacy job id is normalized once before any layer sees it. Every Knowledge line and
+      // every gateway dispatch that carries a log context must use that exact sanctioned id,
+      // while the public job event retains the caller-visible job id.
+      expect(received.correlationId).toBe(correlationId);
+      expect(new Set(log.events.map((event) => event.correlationId))).toEqual(
+        new Set([correlationId]),
+      );
+      const gatewayCorrelationIds = request.mock.calls.flatMap(([input]) =>
+        input.logContext === undefined ? [] : [input.logContext.correlationId],
+      );
+      expect(gatewayCorrelationIds.length).toBeGreaterThan(0);
+      expect(new Set(gatewayCorrelationIds)).toEqual(new Set([correlationId]));
+      expect(events.find((event) => event.kind === "job-started")?.jobId).toBe(legacyJobId);
+      expect(selectJobById(fixture.store._internal.db, legacyJobId)?.id).toBe(legacyJobId);
       expect(extraOf(received).capsuleIdDigest).toMatch(HEX_DIGEST);
       expect(extraOf(received)).toMatchObject({ sourceIdFilterCount: 0, force: false });
       expect(extraOf(received)).not.toHaveProperty("documentIdDigest");

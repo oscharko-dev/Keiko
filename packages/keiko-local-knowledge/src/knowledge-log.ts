@@ -68,8 +68,9 @@ export function startKnowledgeLogTimer(): () => number {
 
 const ACTIVITY_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/u;
 
-// Injected test and embedding-job id sources predate the v2 envelope bound. Preserve valid ids
-// verbatim and reduce every legacy/out-of-range value to one stable, body-free correlation key.
+// Injected test and embedding-job id sources predate the v2 envelope bound. The job-owning
+// boundary calls this once, preserves valid ids verbatim, and carries the resulting stable,
+// body-free correlation key through every downstream logging and gateway layer.
 export function knowledgeLogCorrelationId(value: string): string {
   return ACTIVITY_CORRELATION_ID.test(value)
     ? value

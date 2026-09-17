@@ -114,7 +114,11 @@ import {
   type JobCounters,
 } from "./job-persist.js";
 import { embedChunkBatch, embeddingEndpointHost } from "./embedding-batcher.js";
-import { knowledgeErrorKind, startKnowledgeLogTimer } from "../knowledge-log.js";
+import {
+  knowledgeErrorKind,
+  knowledgeLogCorrelationId,
+  startKnowledgeLogTimer,
+} from "../knowledge-log.js";
 import {
   countVectorsForCapsule,
   countVectorsForDocument,
@@ -332,9 +336,9 @@ function emitProgress(options: IndexingOptions, event: IndexingEvent): void {
 //
 // CORRELATION. Concurrency is up to 4, so several documents and several embedding flushes are in
 // flight at once and a line without an owner cannot be attributed to the work that produced it.
-// Every line carries the run's `IndexingLogContext`: the job uuid verbatim in `correlationId`,
-// and the capsule (always) and document (where known) as DIGESTS — see the type's own note for
-// why the raw ids are not writable.
+// Every line carries the run's `IndexingLogContext`: the once-normalized job correlation in
+// `correlationId`, and the capsule (always) and document (where known) as DIGESTS — see the type's
+// own note for why the raw ids are not writable.
 const LOG_DIGEST_LENGTH = 16;
 
 // A truncated sha-256. 16 hex characters is 64 bits: collision-free across every capsule and
@@ -2429,6 +2433,7 @@ function buildInitialState(
   capsule: KnowledgeCapsule,
   sources: readonly KnowledgeSource[],
   jobId: string,
+  logContext: IndexingLogContext,
   startedAt: number,
   tokenizer: LocalKnowledgeTokenizer,
 ): RunState {
@@ -2438,7 +2443,7 @@ function buildInitialState(
     jobId,
     capsule,
     options,
-    logContext: { jobId, capsuleIdDigest: logDigest(String(capsule.id)) },
+    logContext,
     elapsed: startKnowledgeLogTimer(),
     batchSize: clampBatchSize(options.batchSize),
     concurrency: clampConcurrency(options.concurrency),
@@ -2956,13 +2961,17 @@ async function* runSourcesWithProgress(
 //
 // The capsule id is caller-supplied, so it is digested here by the same function the rest of the
 // run uses: the prologue line and every later line share one correlation key.
-function logJobReceived(options: IndexingOptions, jobId: string): void {
+function indexingLogContext(options: IndexingOptions, jobId: string): IndexingLogContext {
+  return {
+    jobId: knowledgeLogCorrelationId(jobId),
+    capsuleIdDigest: logDigest(String(options.capsuleId)),
+  };
+}
+
+function logJobReceived(options: IndexingOptions, context: IndexingLogContext): void {
   emitIndexingActivity(options.logSink, {
     op: "indexing.job.received",
-    context: {
-      jobId,
-      capsuleIdDigest: logDigest(String(options.capsuleId)),
-    },
+    context,
     sourceIdFilterCount: options.sourceIds?.length ?? 0,
     force: options.force === true,
     resume: options.resume === true,
@@ -2975,7 +2984,8 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
   // line uses. `idSource` is called exactly once here, as before.
   const idSource = options.idSource ?? ((): string => randomUUID());
   const jobId = idSource();
-  logJobReceived(options, jobId);
+  const logContext = indexingLogContext(options, jobId);
+  logJobReceived(options, logContext);
   const capsule = resolveCapsule(options);
   const sources = resolveSources(options, capsule);
   const startedAt = (options.now ?? options.store._internal.now)();
@@ -2984,7 +2994,15 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
     policyFailure === undefined
       ? await resolveIndexingTokenizer(options)
       : resolvePolicyFailureTokenizer(options);
-  const state = buildInitialState(options, capsule, sources, jobId, startedAt, tokenizer);
+  const state = buildInitialState(
+    options,
+    capsule,
+    sources,
+    jobId,
+    logContext,
+    startedAt,
+    tokenizer,
+  );
   persistStartedJob(state, sources);
   yield emitJobStarted(state, sources);
 
