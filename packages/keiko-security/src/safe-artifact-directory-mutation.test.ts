@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -25,7 +25,7 @@ function freshDirectory(): string {
   return path;
 }
 
-function runHelper(cwd: string, input: string): SpawnSyncReturns<null> {
+function runHelper(cwd: string, input: string): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, [helperPath], {
     cwd,
     input,

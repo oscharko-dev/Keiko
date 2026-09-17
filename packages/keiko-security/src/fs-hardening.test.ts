@@ -115,7 +115,7 @@ function mockedMutationResult(
     stderr: null,
     status,
     signal: null,
-  } as ReturnType<typeof import("node:child_process").spawnSync>;
+  } as unknown as ReturnType<typeof import("node:child_process").spawnSync>;
 }
 
 async function mockDirectoryMutation(hook: DirectoryMutationHook): Promise<void> {

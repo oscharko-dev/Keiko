@@ -136,7 +136,7 @@ function mutationProcessResult(
     stderr: null,
     status,
     signal,
-  } as ReturnType<(typeof import("node:child_process"))["spawnSync"]>;
+  } as unknown as ReturnType<(typeof import("node:child_process"))["spawnSync"]>;
 }
 
 async function crashDirectoryMutationAtLink(linkOrdinal: number): Promise<void> {
