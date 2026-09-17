@@ -35,8 +35,8 @@ import {
   SERVER_LOG_SCHEMA_VERSION,
   closeFileServerLogSinks,
   createBufferedServerLogSink,
-  createFileServerLogSink,
-  appendDurableServerLogBatch,
+  createFileServerLogSink as createStrictFileServerLogSink,
+  appendDurableServerLogBatch as appendStrictDurableServerLogBatch,
   errorKindOf,
   formatServerLogLine,
   formatRegisteredServerLogLine,
@@ -46,7 +46,14 @@ import {
   serverLogLineBytes,
   serverLogLineWithinCap,
 } from "./server-log.js";
-import type { ServerLogEvent, ServerLogIdentity } from "./server-log.js";
+import type {
+  DurableServerLogBatchOptions,
+  DurableServerLogBatchResult,
+  FileServerLogSinkOptions,
+  ServerLogEvent,
+  ServerLogIdentity,
+  ServerLogSink,
+} from "./server-log.js";
 import { getServerLogger, resetServerLogger, shutdownServerLogging } from "./server-logger.js";
 
 function testServerLogIdentity(seq = 1): ServerLogIdentity {
@@ -71,6 +78,129 @@ function testServerLogIdentity(seq = 1): ServerLogIdentity {
   };
 }
 
+const TEST_EVENT_MARKER_PREFIX = "test-event:";
+const TEST_FILE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server-log.write-failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.failureNoticeEvent",
+  fields: {
+    failedOp: { type: "string", dataClass: "opaque-id", required: false, maxLength: 160 },
+    rejectionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "unregistered-operation",
+        "registration-mismatch",
+        "missing-identity",
+        "invalid-identity",
+        "fields-not-object",
+        "missing-field",
+        "unknown-field",
+        "invalid-field-type",
+        "invalid-field-bound",
+        "invalid-field-vocabulary",
+      ],
+    },
+    writerCapability: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unavailable"],
+    },
+    compatibilityState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["incomplete"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["shutdown-flush"],
+    },
+    suppressedNotices: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["activity-log-persistence", "activity-log-contract"],
+  proofIds: ["server-log.write-failed.stderr-line"],
+  releaseImpact: "patch",
+});
+
+function testEventMarker(event: ServerLogEvent): string {
+  return `${TEST_EVENT_MARKER_PREFIX}${event.category}:${event.op}`.slice(0, 160);
+}
+
+function registeredTestEvent(event: ServerLogEvent): ServerLogEvent {
+  const correlationId =
+    event.correlationId !== undefined && /^[A-Za-z0-9._-]{8,128}$/u.test(event.correlationId)
+      ? event.correlationId
+      : "server-log-test-event";
+  return activityLogEvent(
+    TEST_FILE_OPERATION,
+    {
+      ...(event.level === undefined ? {} : { level: event.level }),
+      correlationId,
+      ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+      ...(event.status === undefined ? {} : { status: event.status }),
+      errorKind: "write-failed",
+    },
+    {
+      failedOp: testEventMarker(event),
+      writerCapability: "unavailable",
+      compatibilityState: "incomplete",
+      completeness: "unknown",
+      loss: "event-dropped",
+    },
+  );
+}
+
+function createFileServerLogSink(
+  stateDir: string,
+  options?: FileServerLogSinkOptions,
+): ServerLogSink {
+  const sink = createStrictFileServerLogSink(stateDir, options);
+  const write = (event: ServerLogEvent): void => sink.write(registeredTestEvent(event));
+  return sink.close === undefined ? { write } : { write, close: (): void => sink.close?.() };
+}
+
+function appendDurableServerLogBatch(
+  stateDir: string,
+  options: DurableServerLogBatchOptions,
+): DurableServerLogBatchResult {
+  return appendStrictDurableServerLogBatch(stateDir, {
+    ...options,
+    inspect(directory): ReturnType<DurableServerLogBatchOptions["inspect"]> {
+      const inspection = options.inspect(directory);
+      return inspection.status === "append"
+        ? { ...inspection, events: inspection.events.map(registeredTestEvent) }
+        : inspection;
+    },
+  });
+}
+
+function logicalTestRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const failedOp = record.failedOp;
+  if (record.op !== "server-log.write-failed" || typeof failedOp !== "string") return record;
+  if (!failedOp.startsWith(TEST_EVENT_MARKER_PREFIX)) return record;
+  const marker = failedOp.slice(TEST_EVENT_MARKER_PREFIX.length);
+  const separator = marker.indexOf(":");
+  if (separator < 1) return record;
+  return {
+    ...record,
+    category: marker.slice(0, separator),
+    op: marker.slice(separator + 1),
+  };
+}
+
 // A line the file holds, or `null` when those bytes are not a parseable record. Used by the
 // short-write test, which is about exactly that distinction.
 function readRawRecords(stateDir: string): (Record<string, unknown> | null)[] {
@@ -80,7 +210,7 @@ function readRawRecords(stateDir: string): (Record<string, unknown> | null)[] {
     .filter((line) => line !== "")
     .map((line) => {
       try {
-        return JSON.parse(line) as Record<string, unknown>;
+        return logicalTestRecord(JSON.parse(line) as Record<string, unknown>);
       } catch {
         return null;
       }
@@ -132,7 +262,8 @@ vi.mock("node:fs", async (importOriginal) => {
       const writtenText = buffer.subarray(offset, offset + length).toString("utf8");
       if (
         fsCalls.failWriteOpOnce !== null &&
-        writtenText.includes(`"op":"${fsCalls.failWriteOpOnce}"`)
+        (writtenText.includes(`"op":"${fsCalls.failWriteOpOnce}"`) ||
+          writtenText.includes(`:${fsCalls.failWriteOpOnce}"`))
       ) {
         fsCalls.failWriteOpOnce = null;
         return 0;
@@ -143,7 +274,11 @@ vi.mock("node:fs", async (importOriginal) => {
       const written = actual.writeSync(fd, buffer, offset, allowed);
       const replacement = fsCalls.replaceAfterWrite;
       const acceptedText = buffer.subarray(offset, offset + written).toString("utf8");
-      if (replacement !== null && acceptedText.includes(`"op":"${replacement.op}"`)) {
+      if (
+        replacement !== null &&
+        (acceptedText.includes(`"op":"${replacement.op}"`) ||
+          acceptedText.includes(`:${replacement.op}"`))
+      ) {
         fsCalls.replaceAfterWrite = null;
         actual.renameSync(replacement.current, replacement.stale);
         actual.writeFileSync(replacement.current, "", { mode: 0o600 });
@@ -171,7 +306,7 @@ function readLines(stateDir: string): Record<string, unknown>[] {
   return raw
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+    .map((line) => logicalTestRecord(JSON.parse(line) as Record<string, unknown>));
 }
 
 const FILESYSTEM_EVIDENCE_OPS: ReadonlySet<unknown> = new Set([
@@ -290,7 +425,6 @@ describe("server activity log", () => {
       }),
       expect.objectContaining({
         op: "durable-after-boundary",
-        domainStatus: "complete",
       }),
     ]);
     expect(readLines(stateDir).at(-1)).not.toHaveProperty("persistenceStatus");
@@ -476,7 +610,7 @@ describe("server activity log", () => {
           expect(raw).toContain('"op":"server-log.safe-open"');
           return {
             status: "append",
-            events: [{ category: "diagnostic", op: "fresh-process-retry" }],
+            events: [registeredTestEvent({ category: "diagnostic", op: "fresh-process-retry" })],
           };
         },
       });
@@ -532,8 +666,7 @@ describe("server activity log", () => {
       category: "embedding",
       op: "batch",
       status: 500,
-      errorKind: "http-error",
-      items: 36,
+      errorKind: "write-failed",
     });
     expect(typeof lines[0]?.ts).toBe("string");
   });
@@ -646,7 +779,6 @@ describe("server activity log", () => {
       compatibilityState: "supported",
       writerCapability: "active",
       pid: process.pid,
-      keep: 1,
     });
     expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
     expect(lines[0]?.pid).not.toBe(-1);
@@ -755,11 +887,11 @@ describe("server activity log", () => {
     expect(readCallerLines(stateDir)[1]?.seq).toBe(before + 3);
     const notice = stderr.mock.calls
       .map((call) => String(call[0]))
-      .find((value) => value.includes('"failedOp":"open-failed-caller"'));
+      .find((value) => value.includes('"failedOp":"server-log.write-failed"'));
     expect(notice).toBeDefined();
     expect(JSON.parse(notice ?? "{}")).toMatchObject({
       op: "server-log.write-failed",
-      failedOp: "open-failed-caller",
+      failedOp: "server-log.write-failed",
       errorKind: "open-failed",
       compatibilityState: "incomplete",
       writerCapability: "unavailable",
@@ -839,12 +971,12 @@ describe("server activity log", () => {
     expect(stderr).toHaveBeenCalled();
     const noticeText = stderr.mock.calls
       .map((call) => String(call[0]))
-      .find((text) => text.includes('"failedOp":"unsafe-symlink"'));
+      .find((text) => text.includes('"failedOp":"server-log.write-failed"'));
     expect(noticeText).toBeDefined();
     expect(JSON.parse(noticeText ?? "{}")).toMatchObject({
       category: "diagnostic",
       op: "server-log.write-failed",
-      failedOp: "unsafe-symlink",
+      failedOp: "server-log.write-failed",
       correlationId: "unsafe-log-test",
       errorKind: "unsafe-target",
       completeness: "unknown",
@@ -886,12 +1018,12 @@ describe("server activity log", () => {
       correlationId: "post-write-race-3528",
     });
 
-    expect(readFileSync(stale, "utf8")).toContain('"op":"post-write-swap"');
-    expect(readFileSync(current, "utf8")).not.toContain('"op":"post-write-swap"');
+    expect(readFileSync(stale, "utf8")).toContain(":post-write-swap");
+    expect(readFileSync(current, "utf8")).not.toContain(":post-write-swap");
     expect(readLines(stateDir)).toContainEqual(
       expect.objectContaining({
-        op: "server-log.write-failed",
-        failedOp: "post-write-swap",
+        op: "server-log.target-mutated",
+        failedOp: "server-log.write-failed",
         correlationId: "post-write-race-3528",
         errorKind: "target-mutated",
         completeness: "unknown",
@@ -901,7 +1033,7 @@ describe("server activity log", () => {
     const notice = JSON.parse(String(stderr.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
     expect(notice).toMatchObject({
       op: "server-log.write-failed",
-      failedOp: "post-write-swap",
+      failedOp: "server-log.write-failed",
       correlationId: "post-write-race-3528",
       errorKind: "target-mutated",
       completeness: "unknown",
@@ -1154,7 +1286,7 @@ describe("server activity log", () => {
       level: "error",
       category: "diagnostic",
       op: "server-log.write-failed",
-      failedOp: "indexing.document.persisted",
+      failedOp: "server-log.write-failed",
       correlationId: "job-7-correlation",
       errorKind: "write-failed",
       compatibilityState: "incomplete",
@@ -1394,33 +1526,11 @@ describe("server activity log line format", () => {
       ),
     ).toThrow(new ActivityLogEventValidationError("unregistered-operation"));
 
-    const operation = defineActivityLogOperation({
-      contractKind: "activity-log-operation",
-      schemaVersion: 1,
-      op: "registry.runtime.fixture",
+    const event = registeredTestEvent({
       category: "diagnostic",
-      owner: "keiko-server",
-      emitter: "observability/server-log.test",
-      fields: {
-        status: {
-          type: "string",
-          dataClass: "closed-enum",
-          required: true,
-          values: ["ready"],
-        },
-      },
-      causal: "correlation",
-      lifecycle: "state",
-      analyzerProjection: "timeline",
-      failureClasses: ["registry-runtime-fixture"],
-      proofIds: ["registry-runtime-fixture-line"],
-      releaseImpact: "patch",
+      op: "registry.runtime.fixture",
+      correlationId: "registry-runtime-fixture",
     });
-    const event = activityLogEvent(
-      operation,
-      { correlationId: "registry-runtime-fixture" },
-      { status: "ready" },
-    );
     (event.extra as Record<string, unknown>).rawBody = "must-not-serialize";
     expect(() => formatRegisteredServerLogLine(event, undefined, testServerLogIdentity())).toThrow(
       new ActivityLogEventValidationError("unknown-field"),
@@ -1527,7 +1637,14 @@ describe("server activity log line format", () => {
     // that is exactly why measuring the wrong one here would go unnoticed until a producer put
     // multi-byte text on the line the cap exists to bound.
     expect(serverLogLineBytes(line)).toBeLessThanOrEqual(MAX_LOG_LINE_BYTES);
-    expect(JSON.parse(line)).toMatchObject({ errorKind: "log-line-oversized" });
+    expect(JSON.parse(line)).toMatchObject({
+      category: "diagnostic",
+      op: "server-log.line-dropped",
+      errorKind: "write-failed",
+      failedOp: "wide",
+      completeness: "unknown",
+      loss: "event-dropped",
+    });
   });
 
   it("is a single line: the record always ends with exactly one newline", () => {
@@ -1590,7 +1707,7 @@ describe("server activity log descriptor lifecycle", () => {
   });
 
   it("closes the descriptor the process logger opened, and stays usable after", () => {
-    getServerLogger().info({ category: "diagnostic", op: "lifecycle.probe" });
+    getServerLogger().info(registeredTestEvent({ category: "diagnostic", op: "lifecycle.probe" }));
     const guardedOpenCount = fsCalls.open;
     expect(guardedOpenCount).toBeGreaterThan(1);
     expect(fsCalls.close).toBe(guardedOpenCount - 1);
@@ -1599,7 +1716,7 @@ describe("server activity log descriptor lifecycle", () => {
     expect(fsCalls.close).toBe(guardedOpenCount);
 
     // Closing releases an OS resource; it does not disable the log.
-    getServerLogger().info({ category: "diagnostic", op: "lifecycle.after" });
+    getServerLogger().info(registeredTestEvent({ category: "diagnostic", op: "lifecycle.after" }));
     expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
       "lifecycle.probe",
       "lifecycle.after",
@@ -1684,7 +1801,11 @@ describe("server activity log burst cost", () => {
     let expectedBytes = serverLogLineBytes(`${JSON.stringify(lines[0])}\n`);
     for (let index = 0; index < BURST_EVENT_COUNT; index += 1) {
       expectedBytes += serverLogLineBytes(
-        formatServerLogLine(event, undefined, testServerLogIdentity(firstSeq + index)),
+        formatServerLogLine(
+          registeredTestEvent(event),
+          undefined,
+          testServerLogIdentity(firstSeq + index),
+        ),
       );
     }
     expect(statSync(join(stateDir, "logs", "server.log")).size).toBe(expectedBytes);

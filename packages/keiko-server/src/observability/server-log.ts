@@ -369,6 +369,65 @@ const SERVER_LOG_FAILURE_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const SERVER_LOG_LINE_DROPPED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server-log.line-dropped",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.oversizedLine",
+  fields: {
+    failedOp: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    droppedLineBytes: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["activity-log-contract"],
+  proofIds: ["server-log.line-dropped.registered-line"],
+  releaseImpact: "patch",
+});
+
+const SERVER_LOG_TARGET_MUTATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server-log.target-mutated",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.mutationEvidence",
+  fields: {
+    failedOp: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    artifactClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["activity-log"],
+    },
+    permissionAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["verified-private", "platform-inherited"],
+    },
+    containmentAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["private-root-guarded", "platform-inherited"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["activity-log-persistence"],
+  proofIds: ["server-log.target-mutated.registered-line"],
+  releaseImpact: "patch",
+});
+
 export interface ServerLogFailureContext {
   readonly op?: string | undefined;
   readonly correlationId?: string | undefined;
@@ -710,11 +769,28 @@ function oversizedLine(record: Record<string, unknown>, lineBytes: number): stri
   for (const field of SERVER_LOG_IDENTITY_FIELDS) {
     if (record[field] !== undefined) replacement[field] = record[field];
   }
-  replacement.level = record.level;
-  replacement.category = record.category;
-  replacement.op = record.op;
-  replacement.errorKind = "log-line-oversized";
-  replacement.droppedLineBytes = lineBytes;
+  const event = activityLogEvent(
+    SERVER_LOG_LINE_DROPPED_OPERATION,
+    {
+      level: "error",
+      correlationId:
+        typeof record.correlationId === "string"
+          ? correlationIdOrUnknown(record.correlationId)
+          : correlationIdOrUnknown(undefined),
+      errorKind: "write-failed",
+    },
+    {
+      failedOp: typeof record.op === "string" ? redactLogLabel(record.op) : "unknown",
+      droppedLineBytes: lineBytes,
+      completeness: "unknown",
+      loss: "event-dropped",
+    },
+  );
+  replacement.level = event.level;
+  replacement.category = event.category;
+  replacement.op = event.op;
+  Object.assign(replacement, event.extra);
+  applyEnvelopeFields(replacement, event);
   return `${JSON.stringify(replacement)}\n`;
 }
 
@@ -1098,13 +1174,14 @@ class PostWriteMutationError extends SafeArtifactFileError {
 }
 
 function mutationEvidence(event: ServerLogEvent): ServerLogEvent {
-  return {
-    level: "error",
-    category: "diagnostic",
-    op: LOG_FAILURE_NOTICE_OP,
-    correlationId: correlationIdOrUnknown(event.correlationId),
-    errorKind: "target-mutated",
-    extra: {
+  return activityLogEvent(
+    SERVER_LOG_TARGET_MUTATED_OPERATION,
+    {
+      level: "error",
+      correlationId: correlationIdOrUnknown(event.correlationId),
+      errorKind: "target-mutated",
+    },
+    {
       failedOp: redactLogLabel(event.op),
       artifactClass: "activity-log",
       permissionAssurance: safeArtifactPermissionAssurance(),
@@ -1112,7 +1189,7 @@ function mutationEvidence(event: ServerLogEvent): ServerLogEvent {
       completeness: "unknown",
       loss: "event-location-unknown",
     },
-  };
+  );
 }
 
 function persistPostWriteMutation(active: ActiveLog, event: ServerLogEvent): void {
