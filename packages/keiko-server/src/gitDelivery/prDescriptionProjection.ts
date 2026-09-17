@@ -18,6 +18,7 @@ import { gitDeliveryActivityErrorKind } from "./execution.js";
 import {
   PrDescriptionFailure,
   type PrDescriptionContext,
+  type PrDescriptionFailureDetail,
   type PrDescriptionServiceOptions,
 } from "./prDescriptionTypes.js";
 
@@ -144,7 +145,7 @@ export function descriptionFailureReason(error: unknown): PrDescriptionApplicati
   return error instanceof PrDescriptionFailure ? error.reason : "provider-failed";
 }
 /** The closed detail word a `PrDescriptionFailure` carries behind its generic reason, if any. */
-function failureDetail(error: unknown): { readonly detail?: string } {
+function failureDetail(error: unknown): { readonly detail?: PrDescriptionFailureDetail } {
   return error instanceof PrDescriptionFailure && error.detail !== undefined
     ? { detail: error.detail }
     : {};
@@ -171,11 +172,15 @@ export function logDescription(
       {
         phase,
         reason,
-        state: status?.state,
-        effect: status?.effect,
-        snapshotDigest: status?.binding.snapshotDigest,
-        artifactDigest: status?.binding.draftDigest,
-        bodyDigest: status?.binding.finalBodyDigest,
+        ...(status === undefined
+          ? {}
+          : {
+              state: status.state,
+              effect: status.effect,
+              snapshotDigest: status.binding.snapshotDigest,
+              artifactDigest: status.binding.draftDigest,
+              bodyDigest: status.binding.finalBodyDigest,
+            }),
         ...(failureKind === undefined ? {} : { failureKind }),
         ...(description === undefined
           ? {}
