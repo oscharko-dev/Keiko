@@ -35,7 +35,11 @@ import {
 } from "./support-analyze.js";
 
 function line(fields: Record<string, unknown>): string {
-  return JSON.stringify(fields);
+  const carriesIdentity = ["pid", "instanceId", "seq"].some((key) => fields[key] !== undefined);
+  return JSON.stringify({
+    ...(carriesIdentity && fields.schemaVersion === undefined ? { schemaVersion: 2 } : {}),
+    ...fields,
+  });
 }
 
 // ─── Driving the timeline contract from the production emitters, not from hand-written JSON ───────
@@ -1325,6 +1329,137 @@ describe("analyzeLogText — legacy line accounting and warnings", () => {
   });
 });
 
+describe("analyzeLogText — strict v2 identity and compatibility classification", () => {
+  const base = {
+    ts: T0,
+    category: "process",
+    op: "process.heartbeat",
+    schemaVersion: 2,
+    pid: 4242,
+    instanceId: "deadbeef",
+    seq: 1,
+  };
+
+  it("distinguishes supported, legacy, unsupported, corrupt, truncated, and incomplete evidence", () => {
+    const records = [
+      line(base),
+      line({ ts: T0, category: "process", op: "legacy.none" }),
+      line({ ...base, schemaVersion: 7, op: "future.unsupported" }),
+      line({ ...base, pid: 0, op: "identity.corrupt" }),
+      line({ ...base, seq: undefined, op: "identity.incomplete" }),
+      "{truncated",
+    ];
+
+    const result = analyzeLogText(records.join("\n"));
+
+    expect(result.evidence).toMatchObject({
+      classification: "corrupt",
+      supportedLineCount: 1,
+      legacyLineCount: 1,
+      unsupportedLineCount: 1,
+      corruptLineCount: 1,
+      truncatedLineCount: 1,
+      incompleteLineCount: 1,
+    });
+    expect(result.malformedLineCount).toBe(3);
+    expect(result.legacyLineCount).toBe(1);
+    expect(result.timelines).toEqual([]);
+  });
+
+  it.each([
+    ["missing schemaVersion", { schemaVersion: undefined }, "incomplete"],
+    ["missing pid", { pid: undefined }, "incomplete"],
+    ["missing instanceId", { instanceId: undefined }, "incomplete"],
+    ["missing seq", { seq: undefined }, "incomplete"],
+    ["fractional schemaVersion", { schemaVersion: 2.5 }, "corrupt"],
+    ["zero pid", { pid: 0 }, "corrupt"],
+    ["fractional pid", { pid: 1.5 }, "corrupt"],
+    ["oversized pid", { pid: 2_147_483_648 }, "corrupt"],
+    ["empty instanceId", { instanceId: "" }, "corrupt"],
+    ["unsafe instanceId", { instanceId: "contains space" }, "corrupt"],
+    ["zero seq", { seq: 0 }, "corrupt"],
+    ["fractional seq", { seq: 1.5 }, "corrupt"],
+    ["future schemaVersion", { schemaVersion: 3 }, "unsupported"],
+  ] as const)("classifies %s without accepting it as legacy", (_name, override, expected) => {
+    const result = analyzeLogText(`${line({ ...base, ...override })}\n`);
+
+    expect(result.evidence.classification).toBe(expected);
+    expect(result.evidence.legacyLineCount).toBe(0);
+    expect(result.processes).toEqual([]);
+  });
+
+  it("classifies an invalid terminal fragment as truncated but invalid terminated JSON as corrupt", () => {
+    const truncated = analyzeLogText("{partial");
+    const corrupt = analyzeLogText("{partial\n");
+
+    expect(truncated.evidence).toMatchObject({
+      classification: "truncated",
+      truncatedLineCount: 1,
+      corruptLineCount: 0,
+    });
+    expect(corrupt.evidence).toMatchObject({
+      classification: "corrupt",
+      truncatedLineCount: 0,
+      corruptLineCount: 1,
+    });
+  });
+});
+
+describe("analyzeLogText — process sequence integrity", () => {
+  it("reports gaps, duplicates, decreasing values, resets, and physical reorder deterministically", () => {
+    const event = (seq: number, op: string): string =>
+      line({
+        ts: T0,
+        category: "process",
+        op,
+        pid: 5151,
+        instanceId: "abc12345",
+        seq,
+      });
+    const result = analyzeLogText(
+      `${[event(1, "one"), event(3, "three"), event(3, "duplicate"), event(2, "down"), event(1, "reset")].join("\n")}\n`,
+    );
+
+    expect(result.evidence.classification).toBe("incomplete");
+    expect(result.evidence.sequenceAnomalies).toEqual([
+      expect.objectContaining({
+        kind: "gap",
+        fileIndex: 1,
+        previousSeq: 1,
+        seq: 3,
+        missingFrom: 2,
+        missingTo: 2,
+      }),
+      expect.objectContaining({ kind: "duplicate", fileIndex: 2, previousSeq: 3, seq: 3 }),
+      expect.objectContaining({ kind: "decreasing", fileIndex: 3, previousSeq: 3, seq: 2 }),
+      expect.objectContaining({ kind: "reorder", fileIndex: 3, previousSeq: 3, seq: 2 }),
+      expect.objectContaining({ kind: "duplicate", fileIndex: 4, previousSeq: 2, seq: 1 }),
+      expect.objectContaining({ kind: "reset", fileIndex: 4, previousSeq: 2, seq: 1 }),
+      expect.objectContaining({ kind: "decreasing", fileIndex: 4, previousSeq: 2, seq: 1 }),
+      expect.objectContaining({ kind: "reorder", fileIndex: 4, previousSeq: 2, seq: 1 }),
+    ]);
+    expect(renderHumanAllTimelines(result)).toContain(
+      "gap pid=5151 instanceId=abc12345 fileIndex=1 previousSeq=1 seq=3 missing=2-2",
+    );
+  });
+
+  it("reports a missing lifetime prefix as a gap from sequence one", () => {
+    const result = analyzeLogText(
+      `${line({ ts: T0, category: "process", op: "late", pid: 8, instanceId: "feedface", seq: 4 })}\n`,
+    );
+
+    expect(result.evidence.sequenceAnomalies).toEqual([
+      expect.objectContaining({
+        kind: "gap",
+        previousSeq: 0,
+        seq: 4,
+        missingFrom: 1,
+        missingTo: 3,
+      }),
+    ]);
+  });
+});
+
 describe("human-readable rendering — processes and warnings", () => {
   it("renders a warning line naming the legacy line count", () => {
     const rendered = renderHumanAllTimelines(analyzeLogText(FIXTURE_TEXT));
@@ -1565,6 +1700,16 @@ describe("human-readable rendering", () => {
         latestInstanceId: undefined,
         timelines: [],
         malformedLineCount: 0,
+        evidence: {
+          classification: "supported",
+          supportedLineCount: 0,
+          legacyLineCount: 0,
+          unsupportedLineCount: 0,
+          corruptLineCount: 0,
+          truncatedLineCount: 0,
+          incompleteLineCount: 0,
+          sequenceAnomalies: [],
+        },
         processes: [],
         legacyLineCount: 0,
         warnings: [],
