@@ -2,6 +2,64 @@
   "$schema": "keiko-op-catalog/1",
   "generatedBy": "scripts/generate-op-catalog.mjs",
   "operationContracts": ["docs/observability/tool-catalog-operations.v1.json"],
+  "typedRegistry": {
+    "schemaVersion": 1,
+    "operations": [
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "server-log.safe-open",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "observability/server-log.safeOpenEvidence",
+        "fields": {
+          "artifactClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["activity-log"]
+          },
+          "persistenceStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["opened"]
+          },
+          "permissionAssurance": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["verified-private", "platform-inherited"]
+          },
+          "containmentAssurance": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["private-root-guarded", "platform-inherited"]
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["activity-log-persistence"],
+        "proofIds": ["server-log.safe-open.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:641",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:685"]
+      }
+    ],
+    "violations": []
+  },
   "entries": [
     {
       "op": "<dynamic>",
@@ -1117,7 +1175,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1299",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1344",
       "package": "keiko-server"
     },
     {
@@ -3447,31 +3505,31 @@
     {
       "op": "server-log.rotation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:660",
+      "site": "packages/keiko-server/src/observability/server-log.ts:705",
       "package": "keiko-server"
     },
     {
       "op": "server-log.safe-open",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:640",
+      "site": "packages/keiko-server/src/observability/server-log.ts:644",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:355",
+      "site": "packages/keiko-server/src/observability/server-log.ts:359",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:381",
+      "site": "packages/keiko-server/src/observability/server-log.ts:385",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:729",
+      "site": "packages/keiko-server/src/observability/server-log.ts:774",
       "package": "keiko-server"
     },
     {

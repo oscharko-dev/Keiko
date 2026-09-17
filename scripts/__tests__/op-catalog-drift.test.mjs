@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { generateOpCatalog } from "../generate-op-catalog.mjs";
+import { generateOpCatalog, generateTypedActivityLogRegistry } from "../generate-op-catalog.mjs";
 import {
   TOOL_CATALOG_OPERATIONS_PATH,
   generateToolCatalogOperations,
@@ -49,6 +49,75 @@ function withFixturePackage(pkgName, fileContents, check) {
 }
 
 describe("op catalog drift", () => {
+  it("discovers a typed registration and emission with its exact owning source sites", () => {
+    withFixturePackage(
+      "zzz-fixture-typed-registry",
+      [
+        "function defineActivityLogOperation<const T>(value: T): T { return value; }",
+        "function activityLogEvent<const T>(registration: T, fields: Record<string, unknown>) {",
+        '  return { ...fields, contractKind: "activity-log-event" as const, registration };',
+        "}",
+        "const operation = defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const,',
+        "  schemaVersion: 1 as const,",
+        '  op: "fixture.registry.completed",',
+        '  category: "diagnostic",',
+        '  owner: "zzz-fixture-typed-registry",',
+        '  emitter: "fixture",',
+        "  fields: {},",
+        '  causal: "correlation",',
+        '  lifecycle: "end",',
+        '  analyzerProjection: "timeline",',
+        '  failureClasses: ["fixture-failure"],',
+        '  proofIds: ["fixture-proof"],',
+        '  releaseImpact: "patch",',
+        "});",
+        "activityLogEvent(operation, {});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry.violations).toEqual([]);
+        expect(registry.operations).toEqual([
+          expect.objectContaining({
+            op: "fixture.registry.completed",
+            owner: "zzz-fixture-typed-registry",
+            registrationSite: "packages/zzz-fixture-typed-registry/src/fixture.ts:5",
+            emitterSites: ["packages/zzz-fixture-typed-registry/src/fixture.ts:20"],
+          }),
+        ]);
+      },
+    );
+  });
+
+  it("fails closed with a corrective action for a dynamic typed registration", () => {
+    withFixturePackage(
+      "zzz-fixture-dynamic-registry",
+      [
+        "function defineActivityLogOperation<const T>(value: T): T { return value; }",
+        'const runtimeOp = process.env["FIXTURE_OP"];',
+        "defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const,',
+        "  schemaVersion: 1 as const,",
+        "  op: runtimeOp,",
+        '  category: "diagnostic",',
+        "});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toEqual([
+          expect.objectContaining({
+            code: "registration-not-literal",
+            site: "packages/zzz-fixture-dynamic-registry/src/fixture.ts:3",
+            correctiveAction: expect.stringContaining("defineActivityLogOperation"),
+          }),
+        ]);
+      },
+    );
+  });
+
   it("pins the separate future lifecycle contract without inventing runtime source sites", async () => {
     const catalog = generateCurrentOpCatalog();
     const bytes = readFileSync(join(repoRoot, TOOL_CATALOG_OPERATIONS_PATH), "utf8");

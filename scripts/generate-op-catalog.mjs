@@ -59,6 +59,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "prettier";
+import ts from "typescript";
 
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { isMainModule } from "./lib/is-main-module.mjs";
@@ -225,6 +226,183 @@ function packageNameFromRoot(root) {
   const match = /^packages\/([^/]+)\/src$/.exec(root);
   if (match?.[1] === undefined) throw new Error(`Unexpected scanned root shape: ${root}`);
   return match[1];
+}
+
+function sourceFilesForRegistry(repoRoot) {
+  return scannedPackageRoots(repoRoot).flatMap((root) =>
+    walkTsFiles(join(repoRoot, ...root.split("/"))),
+  );
+}
+
+function unwrapExpression(expression) {
+  let current = expression;
+  while (
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isParenthesizedExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function stringLiteralType(checker, node, propertyName) {
+  const property = checker.getTypeAtLocation(node).getProperty(propertyName);
+  if (property === undefined) return undefined;
+  const declaration = property.valueDeclaration ?? property.declarations?.[0] ?? node;
+  const type = checker.getTypeOfSymbolAtLocation(property, declaration);
+  return type.isStringLiteral() ? type.value : undefined;
+}
+
+function typedCallKind(checker, node) {
+  if (!ts.isCallExpression(node)) return undefined;
+  return stringLiteralType(checker, node, "contractKind");
+}
+
+function propertyNameText(name) {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
+  return undefined;
+}
+
+function literalPrimitive(value) {
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) return value.text;
+  if (ts.isNumericLiteral(value)) return Number(value.text);
+  if (value.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (value.kind === ts.SyntaxKind.FalseKeyword) return false;
+  return undefined;
+}
+
+function literalRegistryObject(value) {
+  const result = Object.create(null);
+  for (const property of value.properties) {
+    if (!ts.isPropertyAssignment(property)) return undefined;
+    const name = propertyNameText(property.name);
+    const propertyValue = literalRegistryValue(property.initializer);
+    if (name === undefined || propertyValue === undefined) return undefined;
+    result[name] = propertyValue;
+  }
+  return result;
+}
+
+function literalRegistryValue(expression) {
+  const value = unwrapExpression(expression);
+  const primitive = literalPrimitive(value);
+  if (primitive !== undefined) return primitive;
+  if (ts.isArrayLiteralExpression(value)) {
+    const items = value.elements.map((item) => literalRegistryValue(item));
+    return items.includes(undefined) ? undefined : items;
+  }
+  return ts.isObjectLiteralExpression(value) ? literalRegistryObject(value) : undefined;
+}
+
+function registrySite(repoRoot, sourceFile, node) {
+  const relPath = relative(repoRoot, sourceFile.fileName).replaceAll("\\", "/");
+  const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+  return `${relPath}:${String(line)}`;
+}
+
+function registryViolation(code, site, correctiveAction) {
+  return { code, site, correctiveAction };
+}
+
+function visitSource(sourceFile, visit) {
+  const walk = (node) => {
+    visit(node);
+    ts.forEachChild(node, walk);
+  };
+  walk(sourceFile);
+}
+
+function registrationSymbol(checker, call) {
+  const parent = call.parent;
+  if (!ts.isVariableDeclaration(parent) || !ts.isIdentifier(parent.name)) return undefined;
+  return checker.getSymbolAtLocation(parent.name);
+}
+
+function emittedRegistrationSymbol(checker, expression) {
+  const value = unwrapExpression(expression);
+  return ts.isIdentifier(value) ? checker.getSymbolAtLocation(value) : undefined;
+}
+
+function typedRegistryProgram(repoRoot) {
+  const rootNames = sourceFilesForRegistry(repoRoot);
+  return ts.createProgram({
+    rootNames,
+    options: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      skipLibCheck: true,
+      strict: true,
+    },
+  });
+}
+
+function collectTypedRegistration(context, sourceFile, node) {
+  if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
+  const site = registrySite(context.repoRoot, sourceFile, node);
+  const argument = node.arguments[0];
+  const value = argument === undefined ? undefined : literalRegistryValue(argument);
+  if (value === undefined || typeof value.op !== "string") {
+    context.violations.push(
+      registryViolation(
+        "registration-not-literal",
+        site,
+        "Pass one closed object literal with a literal op to defineActivityLogOperation.",
+      ),
+    );
+    return;
+  }
+  const operation = { ...value, registrationSite: site, emitterSites: [] };
+  context.operations.push(operation);
+  const symbol = registrationSymbol(context.checker, node);
+  if (symbol !== undefined) context.bySymbol.set(symbol, operation);
+}
+
+function collectTypedEmission(context, sourceFile, node) {
+  if (typedCallKind(context.checker, node) !== "activity-log-event") return;
+  const site = registrySite(context.repoRoot, sourceFile, node);
+  const argument = node.arguments[0];
+  const symbol =
+    argument === undefined ? undefined : emittedRegistrationSymbol(context.checker, argument);
+  const operation = symbol === undefined ? undefined : context.bySymbol.get(symbol);
+  if (operation === undefined) {
+    context.violations.push(
+      registryViolation(
+        "emission-unregistered",
+        site,
+        "Pass a local defineActivityLogOperation registration to activityLogEvent.",
+      ),
+    );
+    return;
+  }
+  operation.emitterSites.push(site);
+}
+
+function collectTypedSites(context, sourceFiles, collector) {
+  for (const sourceFile of sourceFiles) {
+    visitSource(sourceFile, (node) => collector(context, sourceFile, node));
+  }
+}
+
+export function generateTypedActivityLogRegistry(repoRoot = REPO_ROOT) {
+  const program = typedRegistryProgram(repoRoot);
+  const checker = program.getTypeChecker();
+  const operations = [];
+  const bySymbol = new Map();
+  const violations = [];
+  const sourceFiles = program
+    .getSourceFiles()
+    .filter((sourceFile) => sourceFile.fileName.startsWith(join(repoRoot, "packages")));
+  const context = { repoRoot, checker, operations, bySymbol, violations };
+  collectTypedSites(context, sourceFiles, collectTypedRegistration);
+  collectTypedSites(context, sourceFiles, collectTypedEmission);
+
+  return {
+    schemaVersion: 1,
+    operations: operations.toSorted((left, right) => compareCodepoints(left.op, right.op)),
+    violations: violations.toSorted((left, right) => compareCodepoints(left.site, right.site)),
+  };
 }
 
 // Recursively lists `.ts` source files under `dir`, skipping tests (co-located `*.test.ts` and
@@ -981,10 +1159,12 @@ export function generateOpCatalog(repoRoot = REPO_ROOT) {
     }
   }
   const sorted = entries.toSorted(compareEntries);
+  const typedRegistry = generateTypedActivityLogRegistry(repoRoot);
   return {
     $schema: "keiko-op-catalog/1",
     generatedBy: "scripts/generate-op-catalog.mjs",
     operationContracts: [TOOL_CATALOG_OPERATIONS_PATH],
+    typedRegistry,
     entries: sorted,
     operations: [
       ...new Set(sorted.map((entry) => entry.op).filter((op) => op !== "<dynamic>")),
@@ -1008,10 +1188,18 @@ async function main() {
   const dynamicCount = catalog.entries.filter((entry) => entry.op === "<dynamic>").length;
   console.log(
     `generate:op-catalog OK — ${catalog.entries.length} entries (${dynamicCount} dynamic), ` +
-      `${catalog.violations.length} operation-name violation(s). Wrote ${OUTPUT_RELATIVE_PATH}.`,
+      `${catalog.violations.length} operation-name violation(s), ` +
+      `${catalog.typedRegistry.violations.length} typed-registry violation(s). ` +
+      `Wrote ${OUTPUT_RELATIVE_PATH}.`,
   );
   if (catalog.violations.length > 0) {
     console.log(`  violations: ${JSON.stringify(catalog.violations)}`);
+  }
+  if (catalog.typedRegistry.violations.length > 0) {
+    console.error(
+      `  typed registry violations: ${JSON.stringify(catalog.typedRegistry.violations)}`,
+    );
+    process.exitCode = 1;
   }
 }
 

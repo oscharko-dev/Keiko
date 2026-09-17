@@ -43,7 +43,26 @@ export type { CodedHttpError, httpStatusFor } from "./http-error.js";
 // keiko-model-gateway and keiko-local-knowledge cannot drift into accepting different things
 // under the `errorKind` activity-log envelope field. Relocated from three independently
 // declared, byte-identical copies that were pinned only by a source-text drift test.
-export type { ERROR_KIND_PATTERN, classifyErrorKind, isErrorKind } from "./observability.js";
+export type {
+  ACTIVITY_LOG_ANALYZER_PROJECTIONS,
+  ACTIVITY_LOG_DATA_CLASSES,
+  ACTIVITY_LOG_FIELD_TYPES,
+  ACTIVITY_LOG_LIFECYCLE_PHASES,
+  ACTIVITY_LOG_RELEASE_IMPACTS,
+  ActivityLogAnalyzerProjection,
+  ActivityLogDataClass,
+  ActivityLogFieldContract,
+  ActivityLogFieldType,
+  ActivityLogLifecyclePhase,
+  ActivityLogOperationRegistration,
+  ActivityLogReleaseImpact,
+  ERROR_KIND_PATTERN,
+  RegisteredActivityLogEvent,
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  isErrorKind,
+} from "./observability.js";
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {

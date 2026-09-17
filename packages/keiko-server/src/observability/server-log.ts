@@ -48,7 +48,11 @@ import {
   safeArtifactPermissionAssurance,
 } from "@oscharko-dev/keiko-security/fs-hardening";
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
 import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
@@ -634,10 +638,51 @@ function writeEventRecord(
   writeRecord(active, handle, formatServerLogLine(event, undefined, identity));
 }
 
+const SERVER_LOG_SAFE_OPEN_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server-log.safe-open",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.safeOpenEvidence",
+  fields: {
+    artifactClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["activity-log"],
+    },
+    persistenceStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["opened"],
+    },
+    permissionAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["verified-private", "platform-inherited"],
+    },
+    containmentAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["private-root-guarded", "platform-inherited"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-persistence"],
+  proofIds: ["server-log.safe-open.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function safeOpenEvidence(): ServerLogEvent {
-  return {
-    category: "diagnostic",
-    op: "server-log.safe-open",
+  return activityLogEvent(SERVER_LOG_SAFE_OPEN_OPERATION, {
     correlationId: correlationIdOrUnknown(undefined),
     extra: {
       artifactClass: "activity-log",
@@ -647,7 +692,7 @@ function safeOpenEvidence(): ServerLogEvent {
       completeness: "complete",
       loss: "none",
     },
-  };
+  });
 }
 
 function rotationEvidence(
