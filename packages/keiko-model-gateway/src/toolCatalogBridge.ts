@@ -3,6 +3,10 @@ import type {
   ToolInvocationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   TOOL_CATALOG_LIMITS,
   type ToolResultReason,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -16,7 +20,183 @@ import {
 } from "@oscharko-dev/keiko-tool-catalog";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayRequest, NormalizedToolCall, ToolDefinition, UsageMetadata } from "./types.js";
-import { resolveLogSink, type ModelGatewayLogSink } from "./observability.js";
+import {
+  logCorrelationId,
+  resolveLogSink,
+  type ModelGatewayLogSink,
+} from "./observability.js";
+
+const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-catalog.rejected",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "toolCatalogBridge.reject",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["projection", "response"],
+    },
+    status: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["invalid"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "unknown-tool",
+        "unoffered-tool",
+        "ambiguous-alias",
+        "invalid-arguments",
+        "version-mismatch",
+        "projection-mismatch",
+        "unsupported-capability",
+        "cursor-invalid",
+        "cursor-expired",
+        "cursor-replayed",
+        "workspace-stale",
+        "replay-conflict",
+        "recovery-required",
+      ],
+    },
+    canonicalToolId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 256,
+    },
+    contractVersion: { type: "integer", dataClass: "count", required: false },
+    catalogReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "invalid-shape",
+        "input-bound",
+        "invalid-identity",
+        "duplicate-identity",
+        "invalid-schema",
+        "unsupported-schema",
+        "ambiguous-effects",
+        "missing-bounds",
+        "unsupported-dialect",
+        "unrepresentable-projection",
+        "incompatible-version",
+        "invalid-compatibility",
+        "expired-compatibility",
+        "result-contract-failed",
+      ],
+    },
+    missingRequired: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 64,
+    },
+    missingRequiredCount: { type: "integer", dataClass: "count", required: false },
+    invalidPaths: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 64,
+    },
+    invalidPathCount: { type: "integer", dataClass: "count", required: false },
+    unexpectedPropertyCount: { type: "integer", dataClass: "count", required: false },
+    droppedPathCount: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-tool-catalog"],
+  proofIds: ["gateway.tool-catalog-rejected.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-catalog.native-passthrough",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "toolCatalogBridge.bindCall",
+  fields: {
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 128 },
+    toolCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-tool-catalog"],
+  proofIds: ["gateway.tool-catalog-native.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_CATALOG_CALL_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-catalog.call-bound",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "toolCatalogBridge.bindCall",
+  fields: {
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 128 },
+    toolCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-tool-catalog"],
+  proofIds: ["gateway.tool-catalog-call-bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_CATALOG_PROJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-catalog.projected",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "toolCatalogBridge.prepare",
+  fields: {
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 128 },
+    toolCount: { type: "integer", dataClass: "count", required: true },
+    compatibility: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["bound"],
+    },
+    offerRemainingMs: { type: "number", dataClass: "duration", required: true },
+  },
+  causal: "none",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-tool-catalog"],
+  proofIds: ["gateway.tool-catalog-projected.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function toolCatalogEnvelope(
+  log: ModelGatewayLogSink,
+  level: "info" | "warn",
+  errorKind?: "validation-failed",
+): { readonly level: "info" | "warn"; readonly correlationId?: string; readonly errorKind?: "validation-failed" } {
+  const correlationId = logCorrelationId(log);
+  return {
+    level,
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(errorKind === undefined ? {} : { errorKind }),
+  };
+}
 
 export class GatewayToolCatalogError extends MalformedToolCallError {
   readonly status = "invalid";
@@ -206,13 +386,13 @@ function reject(
           retryableResponseRejection(phase, cause),
           repair,
         );
-  log.write({
-    level: "warn",
-    category: "gateway",
-    op: "gateway.tool-catalog.rejected",
-    errorKind: "validation",
-    extra: { phase, status: error.status, reason: error.reason, ...details },
-  });
+  log.write(
+    activityLogEvent(
+      TOOL_CATALOG_REJECTED_OPERATION,
+      toolCatalogEnvelope(log, "warn", "validation-failed"),
+      { phase, status: error.status, reason: error.reason, ...details },
+    ),
+  );
   throw error;
 }
 
@@ -261,24 +441,26 @@ function bindCall(
     captured = call;
     requireBridge(normalizer !== undefined, "unoffered-tool");
     if (isNativeExtensionAlias(normalizer, call.name)) {
-      log.write({
-        level: "info",
-        category: "gateway",
-        op: "gateway.tool-catalog.native-passthrough",
-        extra: {
-          projectionDigest: normalizer.binding.projection.projectionDigest,
-          toolCount: 1,
-        },
-      });
+      log.write(
+        activityLogEvent(
+          TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION,
+          toolCatalogEnvelope(log, "info"),
+          {
+            projectionDigest: normalizer.binding.projection.projectionDigest,
+            toolCount: 1,
+          },
+        ),
+      );
       return call;
     }
     const invocation = normalizer.bindAlias(call.name, call.arguments, now());
-    log.write({
-      level: "info",
-      category: "gateway",
-      op: "gateway.tool-catalog.call-bound",
-      extra: { projectionDigest: invocation.projectionDigest, toolCount: 1 },
-    });
+    log.write(
+      activityLogEvent(
+        TOOL_CATALOG_CALL_BOUND_OPERATION,
+        toolCatalogEnvelope(log, "info"),
+        { projectionDigest: invocation.projectionDigest, toolCount: 1 },
+      ),
+    );
     return Object.freeze({
       ...call,
       arguments: invocation.arguments as Record<string, unknown>,
@@ -376,20 +558,21 @@ function prepare(
   const normalizer = normalizerFor(advertisement);
   const tools = definitions(normalizer, now());
   requireBridge(oldTools === undefined, "projection-mismatch");
-  log.write({
-    level: "info",
-    category: "gateway",
-    op: "gateway.tool-catalog.projected",
-    extra: {
+  log.write(
+    activityLogEvent(
+      TOOL_CATALOG_PROJECTED_OPERATION,
+      toolCatalogEnvelope(log, "info"),
+      {
       projectionDigest: normalizer.binding.projection.projectionDigest,
       toolCount: tools.length,
       compatibility: advertisement.kind,
       // How long the advertised offer stays bindable from this point. Read next to the fetch's own
       // `durationMs` it reconstructs an `expired-compatibility` rejection from the log alone: a
       // response that took longer than this window was bound against an offer that had run out.
-      offerRemainingMs: Date.parse(advertisement.offered.expiresAt) - now(),
-    },
-  });
+        offerRemainingMs: Math.max(0, Date.parse(advertisement.offered.expiresAt) - now()),
+      },
+    ),
+  );
   return bridge(normalizer, tools, now, log);
 }
 /**
