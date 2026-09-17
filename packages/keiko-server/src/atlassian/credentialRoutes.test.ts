@@ -347,12 +347,13 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     expectNoSecretBytes(text);
     const body = JSON.parse(text) as { error: { code: string } };
     expect(body.error.code).toBe("CREDENTIAL_LIMIT_EXCEEDED");
-    // Activity log emitted with the closed error code + status; body-free (no submitted values).
+    // Activity log emits a closed envelope kind plus governed reason and status; body-free.
     const rejection = activityEvents.find((e) => e.op === "atlassian.credential.rejected");
     expect(rejection).toBeDefined();
     expect(rejection?.category).toBe("security");
-    expect(rejection?.errorKind).toBe("credential-limit-exceeded");
+    expect(rejection?.errorKind).toBe("rate-limited");
     expect(rejection?.status).toBe(429);
+    expect(rejection?.extra).toEqual({ reason: "credential-limit-exceeded" });
     // Nothing about the request body — mirror the response-body no-secret check on the sink.
     expectNoSecretBytes(JSON.stringify(activityEvents));
   });

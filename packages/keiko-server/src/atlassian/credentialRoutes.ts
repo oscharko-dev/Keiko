@@ -28,6 +28,11 @@ import {
   type AtlassianHttpPort,
 } from "@oscharko-dev/keiko-connectors";
 import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   contentFreeErrorClass,
@@ -39,6 +44,36 @@ import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 
 const MAX_CREDENTIAL_BODY_BYTES = 16_000;
+
+const ATLASSIAN_CREDENTIAL_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "atlassian.credential.rejected",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "atlassian.credentialRoutes.recordCustodyRejection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "invalid-input",
+        "unsupported-auth-scheme",
+        "credential-not-found",
+        "credential-limit-exceeded",
+        "credential-unreadable",
+        "vault-unavailable",
+      ],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["atlassian-credential-custody"],
+  proofIds: ["atlassian.credential.rejected.reason"],
+  releaseImpact: "patch",
+});
 
 // The injected handler dependencies (composed in deps.ts via wiring.ts). The custody surface is
 // write-only; the narrow execution resolver is NOT here — it lives inside the two port-factory
@@ -189,13 +224,17 @@ function recordCustodyRejection(
   status: number,
 ): void {
   try {
-    deps.activityLog?.write({
-      category: "security",
-      op: "atlassian.credential.rejected",
-      ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
-      status,
-      errorKind: errorCode,
-    });
+    deps.activityLog?.write(
+      activityLogEvent(
+        ATLASSIAN_CREDENTIAL_REJECTED_OPERATION,
+        {
+          ...(ctx.correlationId === undefined ? {} : { correlationId: ctx.correlationId }),
+          status,
+          errorKind: custodyRejectionErrorKind(errorCode),
+        },
+        { reason: errorCode },
+      ),
+    );
   } catch (error) {
     emitServerDiagnostic(deps.diagnostics, {
       correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
@@ -205,6 +244,23 @@ function recordCustodyRejection(
       errorClass: contentFreeErrorClass(error),
       message: "atlassian-credential-rejection-activity-log-failed",
     });
+  }
+}
+
+function custodyRejectionErrorKind(
+  errorCode: AtlassianCredentialCustodyError["code"],
+): ActivityLogErrorKind {
+  switch (errorCode) {
+    case "credential-limit-exceeded":
+      return "rate-limited";
+    case "credential-not-found":
+    case "vault-unavailable":
+      return "unavailable";
+    case "credential-unreadable":
+      return "read-failed";
+    case "invalid-input":
+    case "unsupported-auth-scheme":
+      return "validation-failed";
   }
 }
 
