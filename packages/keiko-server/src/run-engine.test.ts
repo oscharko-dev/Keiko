@@ -680,12 +680,17 @@ describe("run terminal outcome reaches server.log without any SSE consumer (#290
     expect(registry.get(result.runId)?.status).toBe("failed");
 
     const diagnosticLine = readServerLogLines().find(
-      (line) => line.op === "harness.run.failed" && line.correlationId === result.runId,
+      (line) =>
+        line.op === "server.diagnostic.failure" &&
+        line.diagnosticOperation === "harness.run.failed" &&
+        line.correlationId === result.runId,
     );
     expect(diagnosticLine).toMatchObject({
-      op: "harness.run.failed",
+      op: "server.diagnostic.failure",
       correlationId: result.runId,
-      errorKind: "HarnessRunFailed",
+      diagnosticOperation: "harness.run.failed",
+      diagnosticErrorClass: "HarnessRunFailed",
+      errorKind: "internal",
     });
   });
 });
