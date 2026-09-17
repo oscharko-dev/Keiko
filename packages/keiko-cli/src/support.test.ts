@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -15,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createInMemoryEvidenceStore,
@@ -29,7 +30,12 @@ import {
 } from "@oscharko-dev/keiko-server";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
-import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
+import {
+  parseSupportArgs,
+  runSupportCli,
+  supportPublicationContext,
+  type SupportCliDeps,
+} from "./support.js";
 import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
 
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
@@ -255,6 +261,8 @@ describe("runSupportCli export", () => {
   });
 
   afterEach(() => {
+    vi.doUnmock("node:fs");
+    vi.resetModules();
     rmSync(stateDir, { recursive: true, force: true });
     rmSync(outDir, { recursive: true, force: true });
   });
@@ -343,7 +351,7 @@ describe("runSupportCli export", () => {
       errorKind: "target-exists",
       publicationArtifactClass: "support-report",
       publicationPersistenceStatus: "failed",
-      publicationCompleteness: "partial",
+      publicationCompleteness: "unknown",
       publicationLoss: "none",
     });
     expect(String(failure?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
@@ -396,6 +404,88 @@ describe("runSupportCli export", () => {
     expect(existsSync(outPath)).toBe(false);
     expect(readFileSync(sidecarPath, "utf8")).toBe("operator-integrity\n");
     expect(c.err()).toContain("could not write the bundle: target-exists");
+  });
+
+  it("recovers the durable prior report before reading a changed clock or activity log", async () => {
+    const outPath = join(outDir, "recoverable-report.jsonl");
+    const context = supportPublicationContext(outDir, outPath);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./support.js");
+    const firstIo = makeIo();
+
+    expect(
+      await interrupted.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        firstIo.io,
+        AUDIT_ENV,
+        {
+          cwd: outDir,
+          now: () => new Date("2026-09-01T01:02:03.000Z"),
+          auditDeps: healthyAuditDeps(),
+          evidenceStore: createInMemoryEvidenceStore(),
+        },
+      ),
+    ).toBe(1);
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.sha256`)).toBe(true);
+    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(true);
+
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    writeFileSync(
+      join(stateDir, "logs", "server.log"),
+      `${JSON.stringify({ op: "post-interruption-log", correlationId: "post-interruption" })}\n`,
+      { flag: "a" },
+    );
+    const resumed = await import("./support.js");
+    const secondIo = makeIo();
+    expect(
+      await resumed.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        secondIo.io,
+        AUDIT_ENV,
+        {
+          cwd: outDir,
+          now: () => {
+            throw new Error("recovery must precede clock access");
+          },
+          auditDeps: healthyAuditDeps(),
+          evidenceStore: createInMemoryEvidenceStore(),
+        },
+      ),
+    ).toBe(0);
+
+    const report = readFileSync(outPath, "utf8");
+    expect(report).not.toContain("post-interruption-log");
+    expect(secondIo.out()).toContain(`Recovered support report at ${outPath}`);
+    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(false);
+    const expectedDigest = createHash("sha256").update(report).digest("hex");
+    expect(readFileSync(`${outPath}.sha256`, "utf8").trim()).toBe(expectedDigest);
+    const evidence = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.op === "support.export.publication")
+      .at(-1);
+    expect(evidence).toMatchObject({
+      publicationPersistenceStatus: "recovered",
+      publicationStatus: "recovered",
+      recoveryState: "recovered",
+      reportBytes: Buffer.byteLength(report),
+      reportSha256: expectedDigest,
+      publicationCompleteness: "complete",
+      publicationLoss: "none",
+    });
   });
 
   // Regression pin: `redactLogFields`'s field-NAME denylist matches only an exact normalized

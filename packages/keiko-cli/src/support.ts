@@ -19,7 +19,11 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   SafeArtifactFileError,
   publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
+  safeArtifactPublicationSlot,
+  type SafeArtifactFileFailureKind,
   type SafeArtifactPublicationResult,
+  type SafeArtifactRecoveryResult,
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
@@ -399,40 +403,117 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
 // content-free outcome and writes neither half — a bundle without its sidecar, or a sidecar for
 // bytes that were never actually persisted, are both worse than refusing the export.
 type BundlePublicationOutcome =
-  | { readonly status: "published"; readonly result: SafeArtifactPublicationResult }
-  | { readonly status: "failed"; readonly errorKind: string };
+  | {
+      readonly status: "published";
+      readonly result: SafeArtifactPublicationResult;
+      readonly reportBytes: number;
+      readonly reportSha256: string;
+      readonly recoveryState: "none" | "rolled-back";
+    }
+  | {
+      readonly status: "recovered";
+      readonly result: SafeArtifactPublicationResult & {
+        readonly status: "recovered";
+        readonly commitPath: string;
+      };
+      readonly reportBytes: number;
+      readonly reportSha256: string;
+      readonly recoveryState: "recovered";
+    }
+  | {
+      readonly status: "failed";
+      readonly errorKind: SafeArtifactFileFailureKind | "unknown";
+      readonly recoveryState: "conflict" | "none" | "rolled-back";
+    };
 
-function supportPublicationErrorKind(error: unknown): string {
+function supportPublicationErrorKind(error: unknown): SafeArtifactFileFailureKind | "unknown" {
   try {
     if (error instanceof SafeArtifactFileError) return error.kind;
   } catch {
-    return "open-failed";
+    return "unknown";
   }
-  return describeErrorKind(error);
+  return "unknown";
+}
+
+interface SupportPublicationContext {
+  readonly root: string;
+  readonly slot: string;
+}
+
+export function supportPublicationContext(
+  cwd: string,
+  outArg: string | undefined,
+): SupportPublicationContext {
+  const explicitPath = outArg === undefined ? undefined : resolve(cwd, outArg);
+  const root = explicitPath === undefined ? resolve(cwd) : dirname(explicitPath);
+  const namespace =
+    explicitPath === undefined ? "support-export/default" : "support-export/explicit";
+  return { root, slot: safeArtifactPublicationSlot(namespace, explicitPath ?? root) };
 }
 
 function publishSupportBundle(
   outPath: string,
   contents: string,
   io: CliIo,
+  context: SupportPublicationContext,
+  recoveryState: "none" | "rolled-back",
 ): BundlePublicationOutcome {
+  const reportSha256 = bundleSha256Hex(contents);
   try {
     const result = publishSafeArtifactFileSet(
       [
         { path: outPath, contents, artifactClass: "support-report" },
         {
           path: sha256SidecarPath(outPath),
-          contents: `${bundleSha256Hex(contents)}\n`,
+          contents: `${reportSha256}\n`,
           artifactClass: "integrity-artifact",
         },
       ],
-      { commitPath: outPath, trustedRoot: dirname(outPath) },
+      {
+        commitPath: outPath,
+        publicationSlot: context.slot,
+        trustedRoot: context.root,
+      },
     );
-    return { status: "published", result };
+    return {
+      status: "published",
+      result,
+      reportBytes: Buffer.byteLength(contents),
+      reportSha256,
+      recoveryState,
+    };
   } catch (error) {
     const errorKind = supportPublicationErrorKind(error);
     io.err(`keiko support export: could not write the bundle: ${errorKind}\n`);
-    return { status: "failed", errorKind };
+    return { status: "failed", errorKind, recoveryState };
+  }
+}
+
+type SupportRecoveryOutcome =
+  | { readonly status: "none" | "rolled-back" }
+  | Extract<BundlePublicationOutcome, { readonly status: "recovered" | "failed" }>;
+
+function recoverSupportBundle(
+  context: SupportPublicationContext,
+  io: CliIo,
+): SupportRecoveryOutcome {
+  try {
+    const result = recoverSafeArtifactFileSet({
+      publicationSlot: context.slot,
+      trustedRoot: context.root,
+    });
+    if (result.status !== "recovered") return { status: result.status };
+    return {
+      status: "recovered",
+      result,
+      reportBytes: result.commitByteCount,
+      reportSha256: result.commitSha256,
+      recoveryState: "recovered",
+    };
+  } catch (error) {
+    const errorKind = supportPublicationErrorKind(error);
+    io.err(`keiko support export: could not recover the prior publication: ${errorKind}\n`);
+    return { status: "failed", errorKind, recoveryState: "conflict" };
   }
 }
 
@@ -446,18 +527,20 @@ function emitSupportPublicationEvidence(
 ): void {
   const activityLog = server.createFileServerLogSink(stateDir);
   try {
+    const complete = outcome.status !== "failed";
     const common = {
       publicationArtifactClass: "support-report",
-      artifactCount: 2,
+      artifactCount: outcome.status === "failed" ? 0 : 2,
       persistenceStatus: outcome.status,
       publicationPersistenceStatus: outcome.status,
-      completeness: outcome.status === "published" ? "complete" : "partial",
-      publicationCompleteness: outcome.status === "published" ? "complete" : "partial",
+      completeness: complete ? "complete" : "unknown",
+      publicationCompleteness: complete ? "complete" : "unknown",
       loss: "none",
       publicationLoss: "none",
+      recoveryState: outcome.recoveryState,
     };
     activityLog.write(
-      outcome.status === "published"
+      outcome.status !== "failed"
         ? {
             category: "diagnostic",
             op: "support.export.publication",
@@ -467,6 +550,8 @@ function emitSupportPublicationEvidence(
               publicationStatus: outcome.result.status,
               permissionAssurance: outcome.result.permissionAssurance,
               durabilityAssurance: outcome.result.durabilityAssurance,
+              reportBytes: outcome.reportBytes,
+              reportSha256: outcome.reportSha256,
             },
           }
         : {
@@ -683,6 +768,100 @@ function assembleWave6Sections(
     : [configSnapshot, ...evidenceSections, uiLog.section];
 }
 
+async function recoveredSupportExportExitCode(
+  recovery: SupportRecoveryOutcome,
+  stateDir: string,
+  io: CliIo,
+): Promise<number | undefined> {
+  if (recovery.status === "none" || recovery.status === "rolled-back") return undefined;
+  const server = await loadServer();
+  emitSupportPublicationEvidence(server, stateDir, randomUUID(), recovery);
+  if (recovery.status === "failed") return 1;
+  io.out(`Recovered support report at ${recovery.result.commitPath}\n`);
+  return 0;
+}
+
+function publishedSupportExportExitCode(
+  publication: BundlePublicationOutcome,
+  server: LoadedServer,
+  stateDir: string,
+  lineCount: number,
+  outPath: string,
+  io: CliIo,
+): number {
+  emitSupportPublicationEvidence(server, stateDir, randomUUID(), publication);
+  if (publication.status === "failed") return 1;
+  io.out(`Wrote ${String(lineCount)} lines to ${outPath}\n`);
+  return 0;
+}
+
+interface FreshSupportExportContext {
+  readonly cwd: string;
+  readonly now: () => Date;
+  readonly stateDir: string;
+  readonly stateDirSource: StateDirSource;
+  readonly publication: SupportPublicationContext;
+  readonly recoveryState: "none" | "rolled-back";
+}
+
+async function publishFreshSupportExport(
+  args: ExportArgs,
+  io: CliIo,
+  env: EnvSource,
+  deps: SupportCliDeps,
+  context: FreshSupportExportContext,
+): Promise<number> {
+  const logContent = collectLogContent(
+    join(context.stateDir, "logs"),
+    args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
+  );
+  const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? join(context.stateDir, "evidence");
+  const evidenceIndexCount = await resolveEvidenceIndexCount(evidenceDir, deps);
+  const server = await loadServer();
+  let auditSummary;
+  try {
+    auditSummary = await auditLocalStateResult(context.stateDir, env, deps.auditDeps ?? {});
+  } catch (error) {
+    return reportAuditFailure(error, io);
+  }
+  reportStoreFingerprintProgress(io);
+  const stores = await server.collectStoreFingerprints({ stateDir: context.stateDir, env });
+  const uiLog = resolveUiLogInclusion(context.stateDir, args);
+  const evidenceSections = await resolveIncludedEvidenceSections(
+    evidenceDir,
+    args.includeEvidenceRunIds,
+    deps,
+  );
+  const generatedAtDate = context.now();
+  const manifest = buildSupportBundleManifest({
+    ...processProvenance(server, generatedAtDate, context.stateDirSource),
+    ...logContentManifestFields(logContent),
+    auditSummary,
+    evidenceIndexCount,
+    storeFingerprints: stores.fingerprints,
+    storesUnavailable: stores.unavailable,
+    sectionsExcluded: uiLog.excluded ? [UI_LOG_SECTION] : [],
+  });
+  const sections = assembleWave6Sections(env, server, uiLog, evidenceSections);
+  const lines = serializeBundleLines(manifest, sections, logContent.contentLines);
+  const outPath = resolveOutPath(context.cwd, args.out, generatedAtDate);
+  const publication = publishSupportBundle(
+    outPath,
+    bundleText(lines),
+    io,
+    context.publication,
+    context.recoveryState,
+  );
+  return publishedSupportExportExitCode(
+    publication,
+    server,
+    context.stateDir,
+    lines.length,
+    outPath,
+    io,
+  );
+}
+
 async function runSupportExport(
   args: ExportArgs,
   io: CliIo,
@@ -693,52 +872,18 @@ async function runSupportExport(
   const now = deps.now ?? ((): Date => new Date());
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
   const stateDirSource = resolveStateDirSource(env, args.stateDir);
-  const logContent = collectLogContent(
-    join(stateDir, "logs"),
-    args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
-  );
-  const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? join(stateDir, "evidence");
-  const evidenceIndexCount = await resolveEvidenceIndexCount(evidenceDir, deps);
-  // Not a hot path (`support analyze` never reaches this function), so loading the server module
-  // graph here is not the GEN-PERF-CLI-001 cost `ui.ts` guards against on every command dispatch.
-  const server = await loadServer();
-
-  let auditSummary;
-  try {
-    auditSummary = await auditLocalStateResult(stateDir, env, deps.auditDeps ?? {});
-  } catch (error) {
-    return reportAuditFailure(error, io);
-  }
-
-  // Deferred until after the audit's own fail-closed check: opening three real stores is real
-  // I/O, wasted if the export is about to be refused anyway.
-  reportStoreFingerprintProgress(io);
-  const storeFingerprintCollection = await server.collectStoreFingerprints({ stateDir, env });
-  const uiLog = resolveUiLogInclusion(stateDir, args);
-  const evidenceSections = await resolveIncludedEvidenceSections(
-    evidenceDir,
-    args.includeEvidenceRunIds,
-    deps,
-  );
-  const generatedAtDate = now();
-  const manifest = buildSupportBundleManifest({
-    ...processProvenance(server, generatedAtDate, stateDirSource),
-    ...logContentManifestFields(logContent),
-    auditSummary,
-    evidenceIndexCount,
-    storeFingerprints: storeFingerprintCollection.fingerprints,
-    storesUnavailable: storeFingerprintCollection.unavailable,
-    sectionsExcluded: uiLog.excluded ? [UI_LOG_SECTION] : [],
+  const publicationContext = supportPublicationContext(cwd, args.out);
+  const recovery = recoverSupportBundle(publicationContext, io);
+  const recoveredExitCode = await recoveredSupportExportExitCode(recovery, stateDir, io);
+  if (recoveredExitCode !== undefined) return recoveredExitCode;
+  return publishFreshSupportExport(args, io, env, deps, {
+    cwd,
+    now,
+    stateDir,
+    stateDirSource,
+    publication: publicationContext,
+    recoveryState: recovery.status,
   });
-
-  const sections = assembleWave6Sections(env, server, uiLog, evidenceSections);
-  const lines = serializeBundleLines(manifest, sections, logContent.contentLines);
-  const outPath = resolveOutPath(cwd, args.out, generatedAtDate);
-  const publication = publishSupportBundle(outPath, bundleText(lines), io);
-  emitSupportPublicationEvidence(server, stateDir, randomUUID(), publication);
-  if (publication.status === "failed") return 1;
-  io.out(`Wrote ${String(lines.length)} lines to ${outPath}\n`);
-  return 0;
 }
 
 function reportMissingCorrelationId(correlationId: string, io: CliIo): number {

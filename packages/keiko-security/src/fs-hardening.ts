@@ -548,6 +548,8 @@ export type SafeArtifactRecoveryResult =
       readonly status: "recovered";
       readonly commitPath: string;
       readonly artifactCount: number;
+      readonly commitByteCount: number;
+      readonly commitSha256: string;
       readonly permissionAssurance: SafeArtifactPermissionAssurance;
       readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
     }
@@ -1601,6 +1603,8 @@ function completeIntentRecovery(
     status: "recovered",
     commitPath: commit.path,
     artifactCount: prepared.length,
+    commitByteCount: intent.entries[intent.commitIndex]?.byteCount ?? 0,
+    commitSha256: intent.entries[intent.commitIndex]?.sha256 ?? publicationDigest(commit.bytes),
     permissionAssurance: result.permissionAssurance,
     durabilityAssurance: combineDurabilityAssurance(result.durabilityAssurance, intentCleanup),
   };
