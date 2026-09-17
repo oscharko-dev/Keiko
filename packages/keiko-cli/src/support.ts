@@ -11,13 +11,20 @@
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { emitSecurityLogEvent, securityErrorKind } from "@oscharko-dev/keiko-security";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
 import { flagValue } from "./cli-arg-parsing.js";
+import {
+  cliControlStateConflictsWithTarget,
+  cliTargetIdentitySha256,
+  resolveCliControlStateDir,
+} from "./cli-control-state.js";
 import {
   installLayoutOverrideEvidence,
   writeInstallLayoutOverrideEvidenceWithFactory,
@@ -29,7 +36,7 @@ import {
 // same lazily-loaded server module, via `server.collectStoreFingerprints`.
 import { loadEvidence, loadServer, loadToolLifecycle } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import type { CliSecurityLogSinkFactory } from "./security-log.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
 import {
   analyzeLogText,
@@ -127,6 +134,9 @@ export interface SupportCliDeps {
   /** Test seam for determining whether the newest raw-log process still exists. */
   readonly processIsRunning?: ((pid: number) => boolean) | undefined;
   readonly activityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  readonly controlActivityStateDir?: string | undefined;
+  readonly homedir?: (() => string) | undefined;
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 type SupportLogFreshness = "current" | "stale" | "unknown";
@@ -151,30 +161,104 @@ interface Assessment<T> {
   readonly warning?: string | undefined;
 }
 
+interface SupportRefusalContext {
+  readonly stateDir: string;
+  readonly controlStateDir: string;
+  readonly correlationId: string;
+  readonly factory: CliSecurityLogSinkFactory | undefined;
+}
+
+function emitSupportInstallLayoutRefusal(
+  context: SupportRefusalContext,
+  errorKind: string,
+  reason: string,
+): void {
+  try {
+    if (cliControlStateConflictsWithTarget(context.controlStateDir, context.stateDir)) return;
+  } catch {
+    return;
+  }
+  const sink = createCliSecurityLogSink(
+    context.controlStateDir,
+    context.factory,
+    context.correlationId,
+  );
+  emitSecurityLogEvent(sink, {
+    level: "error",
+    category: "diagnostic",
+    op: "cli.support.export.failed",
+    errorKind,
+    extra: { reason, targetSha256: cliTargetIdentitySha256(context.stateDir) },
+  });
+}
+
+function refuseSupportInstallLayout(
+  context: SupportRefusalContext,
+  errorKind: string,
+  reason: string,
+): "refused" {
+  emitSupportInstallLayoutRefusal(context, errorKind, reason);
+  return "refused";
+}
+
 function writeSupportInstallLayoutEvidence(
   stateDir: string,
   env: EnvSource,
-  factory: CliSecurityLogSinkFactory | undefined,
+  deps: SupportCliDeps,
 ): "ready" | "refused" {
-  if (installLayoutOverrideEvidence(env) === undefined) return "ready";
+  const evidence = installLayoutOverrideEvidence(env);
+  if (evidence === undefined) return "ready";
+  const controlStateDir =
+    deps.controlActivityStateDir ??
+    resolveCliControlStateDir(
+      deps.platform ?? process.platform,
+      (deps.homedir ?? defaultHomedir)(),
+    );
+  const context: SupportRefusalContext = {
+    stateDir,
+    controlStateDir,
+    correlationId: evidence.correlationId,
+    factory: deps.activityLogSinkFactory,
+  };
   try {
     const stateRoot = inspectStateRoot(stateDir);
-    if (stateRoot.status !== "absent" && stateRoot.status !== "directory") return "refused";
-    return writeInstallLayoutOverrideEvidenceWithFactory(factory, stateDir, env)
+    if (stateRoot.status === "symlink") {
+      return refuseSupportInstallLayout(
+        context,
+        "SupportStateRootSymlinkError",
+        "unsafe-state-root",
+      );
+    }
+    if (stateRoot.status === "not-directory") {
+      return refuseSupportInstallLayout(
+        context,
+        "SupportStateRootNotDirectoryError",
+        "unsafe-state-root",
+      );
+    }
+    return writeInstallLayoutOverrideEvidenceWithFactory(deps.activityLogSinkFactory, stateDir, env)
       ? "ready"
-      : "refused";
-  } catch {
-    return "refused";
+      : refuseSupportInstallLayout(
+          context,
+          "SupportActivityLogUnavailableError",
+          "activity-log-unavailable",
+        );
+  } catch (error) {
+    return refuseSupportInstallLayout(
+      context,
+      securityErrorKind(error),
+      "state-root-validation-failed",
+    );
   }
 }
 
 function prepareSupportInstallLayoutEvidence(
   stateDir: string,
   env: EnvSource,
-  factory: CliSecurityLogSinkFactory | undefined,
+  deps: SupportCliDeps,
   io: CliIo,
 ): boolean {
-  if (writeSupportInstallLayoutEvidence(stateDir, env, factory) === "ready") return true;
+  if (writeSupportInstallLayoutEvidence(stateDir, env, deps) === "ready") return true;
   io.err(
     "keiko support export: refusing to consume a normalized install path because durable " +
       "activity logging is unavailable.\n",
@@ -649,8 +733,7 @@ async function runSupportExport(
   const cwd = deps.cwd ?? process.cwd();
   const now = deps.now ?? ((): Date => new Date());
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
-  if (!prepareSupportInstallLayoutEvidence(stateDir, env, deps.activityLogSinkFactory, io))
-    return 1;
+  if (!prepareSupportInstallLayoutEvidence(stateDir, env, deps, io)) return 1;
   const logContent = collectLogContent(
     join(stateDir, "logs"),
     args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,

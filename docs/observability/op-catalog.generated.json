@@ -82,6 +82,12 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.support.export.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support.ts:189",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.uninstall.completed",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/uninstall.ts:851",
@@ -4043,6 +4049,7 @@
     "cli.lifecycle.stop-escalation-failed",
     "cli.lifecycle.stop-request-failed",
     "cli.lifecycle.stop-requested",
+    "cli.support.export.failed",
     "cli.uninstall.completed",
     "cli.uninstall.failed",
     "cli.uninstall.started",

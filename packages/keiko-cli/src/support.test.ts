@@ -20,6 +20,7 @@ import {
   type EvidenceManifest,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import {
   createNodeUiStore,
   SERVER_LOG_SCHEMA_VERSION,
@@ -364,6 +365,8 @@ describe("runSupportCli export", () => {
     symlinkSync(realStateDir, stateDir, "dir");
     let factoryCalls = 0;
     let auditorLoaded = false;
+    const controlStateDir = join(outDir, "control-state");
+    const events: SecurityLogEvent[] = [];
     const env = {
       ...AUDIT_ENV,
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
@@ -377,9 +380,11 @@ describe("runSupportCli export", () => {
       env,
       {
         cwd: outDir,
-        activityLogSinkFactory: () => {
+        controlActivityStateDir: controlStateDir,
+        activityLogSinkFactory: (sinkRoot) => {
+          expect(sinkRoot).toBe(controlStateDir);
           factoryCalls += 1;
-          return { write: (): void => undefined };
+          return { write: (event): void => void events.push(event) };
         },
         auditDeps: {
           loadAuditor: () => {
@@ -391,8 +396,17 @@ describe("runSupportCli export", () => {
     );
 
     expect(code).toBe(1);
-    expect(factoryCalls).toBe(0);
+    expect(factoryCalls).toBe(1);
     expect(auditorLoaded).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "cli.support.export.failed",
+      correlationId: env[INSTALL_LAYOUT_CORRELATION_ID_ENV],
+      errorKind: "SupportStateRootSymlinkError",
+    });
+    expect(events[0]?.extra?.reason).toBe("unsafe-state-root");
+    expect(events[0]?.extra?.targetSha256).toMatch(/^[0-9a-f]{64}$/u);
+    expect(JSON.stringify(events)).not.toContain(stateDir);
     expect(env[INSTALL_LAYOUT_OVERRIDES_ENV]).toBe("local-state-auditor");
     expect(existsSync(refusedOut)).toBe(false);
   });

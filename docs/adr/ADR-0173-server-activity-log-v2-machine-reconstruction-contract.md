@@ -175,6 +175,13 @@ failures are terminal failures, never successful zero-removal outcomes. Events i
 state and package targets only by SHA-256, and completion records whether state was absent, removed,
 retained, or would be removed/retained plus body-free affected/retained counts.
 
+`keiko support export` keeps successful install-layout normalization in the selected runtime log so
+the resulting bundle contains that evidence. When a pending normalization meets a symlink or
+non-directory state root, the export refuses before reading or exporting the target and emits
+`cli.support.export.failed` through the same fixed control-state log, provided canonical isolation
+from the selected target can be proved. If isolation itself cannot be proved, the same terminal-only
+limit above applies; the command never guesses at a writable evidence location.
+
 ### D3 — Keiko-code stack frames: dist-anchored, and why no source maps
 
 Stack frames and cause chains are added to `extra` as `frames?: readonly string[]` and
