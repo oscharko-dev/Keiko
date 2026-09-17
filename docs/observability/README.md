@@ -7,24 +7,22 @@ lifecycle, and how to read it with `keiko support export` / `keiko support analy
 consumer-facing counterpart to [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md),
 which records the design decisions behind everything described here.
 
-## File location, rotation, retention
+## File location and deferred rotation
 
 The log lives at `<stateDir>/logs/server.log` — `<stateDir>` is `./.keiko` by default, or wherever
 `--state-dir` / `KEIKO_STATE_DIR` points. It is JSON Lines: one `JSON.stringify`-serialized object
 per line, written synchronously so that the last line on disk before a hang or a crash is the last
 line the process actually reached.
 
-Rotation is day-based, keyed to the UTC calendar day, and **hard-link-atomic across processes**:
-at the first write after midnight UTC, the process links the finished day's file to
-`server-<YYYY-MM-DD>.log` (`link(2)`, which fails closed with `EEXIST` if a peer process already
-made that link) before starting a fresh `server.log`. This is why two Keiko processes sharing a
-state directory never race each other into overwriting a finished day's archive — a plain
-`rename` would lose that race; a hard link cannot. On a filesystem with no hard-link support
-(FAT/exFAT removable media), rotation falls back to a guarded rename instead of never rotating.
-
-Retention is a **rolling 7-day window** of rotated `server-<date>.log` files, pruned oldest-first
-on every rotation. The current, not-yet-rotated `server.log` is never counted against or dropped
-by retention.
+Rotation and retention are deliberately deferred to #3530's bounded append-only segment design.
+Node does not expose descriptor-relative rename/unlink operations, so mutating dated files through
+absolute paths leaves a final same-UID ancestor-substitution window. Keiko therefore keeps
+appending to the verified `server.log` instead of risking an overwrite or deletion outside the
+selected state root. At the first write after each UTC day boundary it emits one correlated
+`server-log.rotation` warning with `persistenceStatus: "deferred"`,
+`durabilityAssurance: "unchanged"`, and `retentionStatus: "deferred"`. No archive, stage, marker,
+or retention deletion is attempted. Operators should monitor the current file's growth until the
+append-only segment replacement lands.
 
 ## Log level
 

@@ -150,6 +150,10 @@ function parsePersistedLogLines(raw: string): readonly Readonly<Record<string, u
     .map((line) => JSON.parse(line) as Readonly<Record<string, unknown>>);
 }
 
+function producerLogLines(raw: string): readonly Readonly<Record<string, unknown>>[] {
+  return parsePersistedLogLines(raw).filter((line) => line.op !== "server-log.safe-open");
+}
+
 function advancingClock(): () => number {
   let current = FIXTURE_NOW_MS;
   return (): number => {
@@ -406,7 +410,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       activityLog.close?.();
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const persisted = parsePersistedLogLines(raw);
+      const persisted = producerLogLines(raw);
       expect(persisted).toHaveLength(2);
       const [started, completed] = persisted;
       if (started === undefined || completed === undefined) {
@@ -634,7 +638,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       activityLog.close?.();
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const persisted = parsePersistedLogLines(raw);
+      const persisted = producerLogLines(raw);
       expect(persisted).toHaveLength(2);
       expect(persisted[1]).toMatchObject({
         op: "search.connected-context.failed",

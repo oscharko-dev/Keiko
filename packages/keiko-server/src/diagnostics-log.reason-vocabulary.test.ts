@@ -17,8 +17,13 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
-  const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8").trim();
-  return JSON.parse(raw) as Record<string, unknown>;
+  const lines = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const activityLine = lines.find((line) => line.op !== "server-log.safe-open");
+  if (activityLine === undefined) throw new Error("expected a diagnostic activity line");
+  return activityLine;
 }
 
 const BASE_RECORD: ServerDiagnosticRecord = {

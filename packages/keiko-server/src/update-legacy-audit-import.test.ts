@@ -142,7 +142,8 @@ function canonicalLines(stateDir: string): Record<string, unknown>[] {
     .trim()
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((record) => record.op !== "server-log.safe-open");
 }
 
 describe("legacy update audit import", () => {

@@ -680,7 +680,7 @@ describe("run terminal outcome reaches server.log without any SSE consumer (#290
     expect(registry.get(result.runId)?.status).toBe("failed");
 
     const diagnosticLine = readServerLogLines().find(
-      (line) => line.category === "diagnostic" && line.correlationId === result.runId,
+      (line) => line.op === "harness.run.failed" && line.correlationId === result.runId,
     );
     expect(diagnosticLine).toMatchObject({
       op: "harness.run.failed",
