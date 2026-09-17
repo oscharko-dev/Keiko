@@ -2,6 +2,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  activityLogEvent,
+  activityLogEventRegistration,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { REDACTED_KEY } from "./log-redaction.js";
 import {
@@ -77,6 +82,43 @@ describe("server logger levels", () => {
 });
 
 describe("server logger bound context", () => {
+  it("preserves a typed registration while applying level and bound context", () => {
+    const operation = defineActivityLogOperation({
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "test.server-logger.registered",
+      category: "diagnostic",
+      owner: "keiko-server",
+      emitter: "observability/server-logger.test",
+      fields: { outcome: { type: "string", dataClass: "closed-enum", required: true } },
+      causal: "none",
+      lifecycle: "state",
+      analyzerProjection: "timeline",
+      failureClasses: ["test"],
+      proofIds: ["server-logger.registration-preserved"],
+      releaseImpact: "none",
+    } as const);
+    const sink = createBufferedServerLogSink();
+    const logger = createServerLogger({ sink, level: "debug" }).child({
+      correlationId: "req-registered",
+    });
+
+    logger.info(activityLogEvent(operation, {}, { outcome: "accepted" }));
+
+    const event = sink.events[0];
+    expect(event).toMatchObject({
+      level: "info",
+      correlationId: "req-registered",
+      op: "test.server-logger.registered",
+      extra: { outcome: "accepted" },
+    });
+    expect(
+      activityLogEventRegistration(
+        event as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBe(operation);
+  });
+
   it("merges the bound context into every event so callers name it once", () => {
     const sink = createBufferedServerLogSink();
     const logger = createServerLogger({ sink, level: "debug" }).child({
