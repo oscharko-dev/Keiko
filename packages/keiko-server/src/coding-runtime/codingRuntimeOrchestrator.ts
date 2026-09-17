@@ -63,7 +63,7 @@ import {
   describeError,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type {
   CodingRuntimeLaunchResolver,
   CodingRuntimeOrchestratorDeps,
@@ -99,6 +99,7 @@ import {
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
@@ -805,6 +806,93 @@ const CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
+const CODING_RUNTIME_DESCRIPTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.description",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.logDescriptionEvent",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    remoteDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    event: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "dispatched",
+        "coalesced",
+        "superseded",
+        "blocked",
+        "generated",
+        "failed",
+        "stale",
+        "reviewed",
+      ],
+    },
+    generationVersion: { type: "integer", dataClass: "count", required: false },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "generated",
+        "partial-generated",
+        "fallback-generated",
+        "fallback-output-refused",
+        "stale-snapshot",
+        "expired",
+        "authority-expired",
+        "model-egress-denied",
+        "budget-exhausted",
+        "generation-unavailable",
+        "interrupted",
+        "provider-failed",
+      ],
+    },
+    proposalRetained: { type: "boolean", dataClass: "closed-enum", required: false },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    gatewayRequestId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "integer", dataClass: "duration", required: false },
+    partialPromptTokens: { type: "integer", dataClass: "count", required: false },
+    partialCompletionTokens: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    generationBindingDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-description-generation"],
+  proofIds: ["coding-runtime.description.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function descriptionGenerationBinding(
   snapshot: CodingRuntimeSnapshot,
 ): WorkbenchDescriptionGenerationBinding {
@@ -1323,6 +1411,45 @@ function descriptionSettleOp(
   if (state === "failed") return "failed";
   if (state === "stale") return "stale";
   return state === "blocked" ? "blocked" : "generated";
+}
+
+type DescriptionLogEvent =
+  | "dispatched"
+  | "coalesced"
+  | "superseded"
+  | "blocked"
+  | "generated"
+  | "failed"
+  | "stale"
+  | "reviewed";
+
+interface DescriptionLogFields {
+  readonly generationVersion?: number;
+  readonly reason?: WorkbenchDescriptionReason;
+  readonly proposalRetained?: boolean;
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly gatewayRequestId?: string;
+  readonly httpStatus?: number;
+  readonly retryAfterMs?: number;
+  readonly partialPromptTokens?: number;
+  readonly partialCompletionTokens?: number;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+function descriptionLogErrorKind(
+  event: DescriptionLogEvent,
+  reason: WorkbenchDescriptionReason | undefined,
+): ActivityLogErrorKind | undefined {
+  if (event === "superseded" || event === "stale") return "conflict";
+  if (event === "failed") return "unavailable";
+  if (event !== "blocked") return undefined;
+  if (reason === "authority-expired" || reason === "model-egress-denied") {
+    return "authority-denied";
+  }
+  if (reason === "budget-exhausted") return "rate-limited";
+  return "unavailable";
 }
 
 interface RuntimeResultLogFields {
@@ -3458,9 +3585,13 @@ export class CodingRuntimeOrchestrator {
     const nowIso = this.now().toISOString();
     const decision = support.jobs.beginDispatch(scope, nowIso);
     if (decision.kind === "coalesced") {
-      this.logDescriptionEvent(scope, "coalesced", {
-        generationVersion: decision.status?.generationVersion,
-      });
+      this.logDescriptionEvent(
+        scope,
+        "coalesced",
+        decision.status?.generationVersion === undefined
+          ? {}
+          : { generationVersion: decision.status.generationVersion },
+      );
       return;
     }
     if (decision.kind === "budget-exhausted") {
@@ -3535,12 +3666,10 @@ export class CodingRuntimeOrchestrator {
           revision,
           this.now().toISOString(),
         );
-        this.logDescriptionEvent(
-          scope,
-          accepted ? "blocked" : "superseded",
-          { reason: "provider-failed" as const },
-          errorKindOf(error),
-        );
+        this.logDescriptionEvent(scope, accepted ? "blocked" : "superseded", {
+          reason: "provider-failed" as const,
+          ...runtimeDeliveryErrorFields(error),
+        });
       });
   }
 
@@ -3602,35 +3731,30 @@ export class CodingRuntimeOrchestrator {
     identity: Pick<WorkbenchDescriptionScope, "runId" | "generationBinding"> & {
       readonly remoteDigest?: string;
     },
-    event:
-      | "dispatched"
-      | "coalesced"
-      | "superseded"
-      | "blocked"
-      | "generated"
-      | "failed"
-      | "stale"
-      | "reviewed",
-    extra: Readonly<Record<string, unknown>>,
-    errorKind?: string,
+    event: DescriptionLogEvent,
+    extra: DescriptionLogFields,
   ): void {
-    this.deps.activityLog?.write({
-      category: "process",
-      op: "coding-runtime.description",
-      correlationId: runtimeDiagnosticCorrelationId(identity.runId),
-      ...(errorKind === undefined ? {} : { errorKind }),
-      extra: {
-        runId: identity.runId,
-        remoteDigest: identity.remoteDigest,
-        event,
-        ...extra,
-        ...(identity.generationBinding === undefined
-          ? {}
-          : {
-              generationBindingDigest: sha256Hex(canonicalise(identity.generationBinding)),
-            }),
-      },
-    });
+    const errorKind = descriptionLogErrorKind(event, extra.reason);
+    this.deps.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_DESCRIPTION_OPERATION,
+        {
+          correlationId: runtimeDiagnosticCorrelationId(identity.runId),
+          ...(errorKind === undefined ? {} : { errorKind }),
+        },
+        {
+          runId: identity.runId,
+          ...(identity.remoteDigest === undefined ? {} : { remoteDigest: identity.remoteDigest }),
+          event,
+          ...extra,
+          ...(identity.generationBinding === undefined
+            ? {}
+            : {
+                generationBindingDigest: sha256Hex(canonicalise(identity.generationBinding)),
+              }),
+        },
+      ),
+    );
   }
 
   private purgeExplicitlyEndedActivity(
