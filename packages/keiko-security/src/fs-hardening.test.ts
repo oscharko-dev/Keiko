@@ -1469,8 +1469,8 @@ describe("publishSafeArtifactFileSet", () => {
       ),
     ).toEqual({
       status: "published",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(readFileSync(path, "utf8")).toBe("report\n");
   });
@@ -1770,8 +1770,8 @@ describe("publishSafeArtifactFileSet", () => {
       }),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(readFileSync(path, "utf8")).toBe("report");
   });
@@ -1803,8 +1803,8 @@ describe("publishSafeArtifactFileSet", () => {
       }),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
   });
 
@@ -1821,8 +1821,8 @@ describe("publishSafeArtifactFileSet", () => {
       }),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(publicationStages(base)).toHaveLength(0);
   });
@@ -1860,8 +1860,8 @@ describe("publishSafeArtifactFileSet", () => {
       }),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
   });
 
@@ -1878,8 +1878,8 @@ describe("publishSafeArtifactFileSet", () => {
       }),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(publicationStages(base)).toHaveLength(0);
   });
@@ -1944,11 +1944,53 @@ describe("publishSafeArtifactFileSet", () => {
       }),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(readFileSync(path, "utf8")).toBe("report");
     expect(statSync(path).nlink).toBe(1);
+  });
+
+  it("restores the recovery marker when target revalidation fails after unlink", async () => {
+    const base = freshDir();
+    const path = join(base, "report.json");
+    await leaveLinkedPublication(base, path);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let stageRemoved = false;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
+        Reflect.apply(actual.unlinkSync, actual, args);
+        if (String(args[0]).endsWith(".stage")) stageRemoved = true;
+      },
+      readSync: (...args: Parameters<typeof actual.readSync>): number => {
+        if (stageRemoved) {
+          stageRemoved = false;
+          throw Object.assign(new Error("target revalidation failed"), { code: "EIO" });
+        }
+        return Reflect.apply(actual.readSync, actual, args);
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path, contents: "report", artifactClass: "support-report" }],
+        { commitPath: path, trustedRoot: base },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "read-failed" }));
+    expect(publicationStages(base)).toHaveLength(1);
+    expect(statSync(path).nlink).toBe(2);
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+
+    expect(
+      publishSafeArtifactFileSet([{ path, contents: "report", artifactClass: "support-report" }], {
+        commitPath: path,
+        trustedRoot: base,
+      }),
+    ).toEqual(expect.objectContaining({ status: "recovered" }));
   });
 
   it("loops short reads while validating linked recovery content", async () => {
@@ -1972,8 +2014,8 @@ describe("publishSafeArtifactFileSet", () => {
       ),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(readFileSync(path, "utf8")).toBe("report");
   });

@@ -1451,8 +1451,13 @@ function cleanupPublishedStage(entry: PreparedPublicationEntry): void {
     restoreRecoveryMarker(entry, dirname(entry.stagePath));
     throw safeFileError(entry.artifactClass, "publish-failed");
   }
-  if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
-    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  try {
+    if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+  } catch (error) {
+    restoreRecoveryMarker(entry, dirname(entry.stagePath));
+    throw error;
   }
 }
 
