@@ -23,6 +23,11 @@ import type {
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildVerificationPlan,
@@ -50,6 +55,7 @@ import {
 import {
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
+  type VerificationRunnerErrorCode,
   type ScriptTrustRefusal,
 } from "./verificationRunnerErrors.js";
 import type { Project, UiStore } from "../store/index.js";
@@ -72,6 +78,150 @@ const CATALOG_KINDS: readonly VerificationKind[] = [
   "build",
   "targeted-test",
 ];
+
+const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.verification.execute",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.verificationRunner.VerificationRunnerManagerImpl",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["selected", "completed", "refused"],
+    },
+    runnerId: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["vitest", "jest", "mocha", "node-test", "unknown"],
+    },
+    stepCount: { type: "integer", dataClass: "count", required: false },
+    trustBasis: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["own-root", "repository", "worktree-human-grant", "run-manifest"],
+    },
+    verificationStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "passed",
+        "failed",
+        "skipped",
+        "denied",
+        "timed-out",
+        "cancelled",
+        "resource-exceeded",
+      ],
+    },
+    passedCount: { type: "integer", dataClass: "count", required: false },
+    failedCount: { type: "integer", dataClass: "count", required: false },
+    skippedCount: { type: "integer", dataClass: "count", required: false },
+    deniedCount: { type: "integer", dataClass: "count", required: false },
+    timedOutCount: { type: "integer", dataClass: "count", required: false },
+    cancelledCount: { type: "integer", dataClass: "count", required: false },
+    resourceExceededCount: { type: "integer", dataClass: "count", required: false },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "PROJECT_NOT_FOUND",
+        "WORKSPACE_TRUST_REQUIRED",
+        "NO_RUNNABLE_STEPS",
+        "RUN_LIMIT_EXCEEDED",
+        "RUN_NOT_FOUND",
+        "BAD_REQUEST",
+        "PAYLOAD_TOO_LARGE",
+        "VERIFICATION_RUNNER_UNAVAILABLE",
+        "EVIDENCE_WRITE_FAILED",
+        "INTERNAL",
+      ],
+    },
+    trustRefusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "root-not-trusted",
+        "repository-not-trusted",
+        "worktree-manifest-drift",
+        "decision-failed",
+      ],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["verification-runner-refusal", "verification-runner-failure"],
+  proofIds: ["editor.verification-execute.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.verification.dependencies",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.verificationRunner.recordDependencyBootstrap",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "current", "installed", "refused", "failed", "timed-out", "cancelled"],
+    },
+    lockfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["present", "created", "absent"],
+    },
+    exitCode: { type: "integer", dataClass: "count", required: false },
+    durationMs: { type: "integer", dataClass: "duration", required: true },
+    egressAllowed: { type: "integer", dataClass: "count", required: false },
+    egressRefused: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["verification-dependency-bootstrap"],
+  proofIds: ["editor.verification-dependencies.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function verificationActivityErrorKind(code: VerificationRunnerErrorCode): ActivityLogErrorKind {
+  if (code === "WORKSPACE_TRUST_REQUIRED") return "authority-denied";
+  if (code === "RUN_LIMIT_EXCEEDED") return "rate-limited";
+  if (code === "VERIFICATION_RUNNER_UNAVAILABLE") return "unavailable";
+  if (code === "EVIDENCE_WRITE_FAILED") return "durability-failed";
+  if (code === "PROJECT_NOT_FOUND" || code === "RUN_NOT_FOUND") return "unavailable";
+  if (code === "NO_RUNNABLE_STEPS" || code === "BAD_REQUEST" || code === "PAYLOAD_TOO_LARGE") {
+    return "invalid-request";
+  }
+  return "internal";
+}
 
 function isScriptBackedKind(kind: VerificationKind): boolean {
   return kind !== "targeted-test";
@@ -581,17 +731,18 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     stepCount: number,
     trustBasis: ScriptTrustBasis | undefined,
   ): void {
-    this.activityLog.write({
-      category: "process",
-      op: "editor.verification.execute",
-      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-      extra: {
-        state: "selected",
-        runnerId: workspace.testFramework,
-        stepCount,
-        ...(trustBasis === undefined ? {} : { trustBasis }),
-      },
-    });
+    this.activityLog.write(
+      activityLogEvent(
+        EDITOR_VERIFICATION_EXECUTE_OPERATION,
+        { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID },
+        {
+          state: "selected",
+          runnerId: workspace.testFramework,
+          stepCount,
+          ...(trustBasis === undefined ? {} : { trustBasis }),
+        },
+      ),
+    );
   }
 
   // ADR-0043 D17: the dependency bootstrap's own body-free line — its state, whether a lockfile
@@ -601,24 +752,25 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private recordDependencyBootstrap(correlationId: string, report: VerificationReport): void {
     const dependencies = report.dependencies;
     if (dependencies === undefined) return;
-    this.activityLog.write({
-      category: "process",
-      op: "editor.verification.dependencies",
-      correlationId,
-      extra: {
-        state: dependencies.state,
-        lockfile: dependencies.lockfile,
-        exitCode: dependencies.exitCode,
-        durationMs: dependencies.durationMs,
-        // Tunnels the install opened to the approved registry, and destinations it was refused.
-        ...(dependencies.egress === undefined
-          ? {}
-          : {
-              egressAllowed: dependencies.egress.allowed,
-              egressRefused: dependencies.egress.refused,
-            }),
-      },
-    });
+    this.activityLog.write(
+      activityLogEvent(
+        EDITOR_VERIFICATION_DEPENDENCIES_OPERATION,
+        { correlationId },
+        {
+          state: dependencies.state,
+          lockfile: dependencies.lockfile,
+          ...(dependencies.exitCode === null ? {} : { exitCode: dependencies.exitCode }),
+          durationMs: dependencies.durationMs,
+          // Tunnels the install opened to the approved registry, and destinations it was refused.
+          ...(dependencies.egress === undefined
+            ? {}
+            : {
+                egressAllowed: dependencies.egress.allowed,
+                egressRefused: dependencies.egress.refused,
+              }),
+        },
+      ),
+    );
   }
 
   private recordRunnerCompletion(
@@ -626,24 +778,25 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     correlationId: string,
     report: VerificationReport,
   ): void {
-    this.activityLog.write({
-      category: "process",
-      op: "editor.verification.execute",
-      correlationId,
-      extra: {
-        state: "completed",
-        runnerId: workspace.testFramework,
-        verificationStatus: report.overallStatus,
-        stepCount: report.results.length,
-        passedCount: report.counts.passed,
-        failedCount: report.counts.failed,
-        skippedCount: report.counts.skipped,
-        deniedCount: report.counts.denied,
-        timedOutCount: report.counts["timed-out"],
-        cancelledCount: report.counts.cancelled,
-        resourceExceededCount: report.counts["resource-exceeded"],
-      },
-    });
+    this.activityLog.write(
+      activityLogEvent(
+        EDITOR_VERIFICATION_EXECUTE_OPERATION,
+        { correlationId },
+        {
+          state: "completed",
+          runnerId: workspace.testFramework,
+          verificationStatus: report.overallStatus,
+          stepCount: report.results.length,
+          passedCount: report.counts.passed,
+          failedCount: report.counts.failed,
+          skippedCount: report.counts.skipped,
+          deniedCount: report.counts.denied,
+          timedOutCount: report.counts["timed-out"],
+          cancelledCount: report.counts.cancelled,
+          resourceExceededCount: report.counts["resource-exceeded"],
+        },
+      ),
+    );
   }
 
   private recordRunnerFailure(
@@ -653,26 +806,29 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   ): void {
     const detail = describeError(error);
     const reason = error instanceof VerificationRunnerError ? error.code : "INTERNAL";
-    this.activityLog.write({
-      level: "warn",
-      category: "process",
-      op: "editor.verification.execute",
-      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-      errorKind: reason,
-      extra: {
-        state: "refused",
-        runnerId: workspace?.testFramework ?? "unknown",
-        reason,
-        // WHY script trust refused (ADR-0147 D3 vocabulary). Without it a worktree whose manifest
-        // the run itself rewrote read exactly like a repository nobody had trusted (run 8,
-        // 2026-09-10), and the operator was pointed at the wrong grant.
-        ...(error instanceof WorkspaceTrustRequiredError
-          ? { trustRefusal: error.trustRefusal }
-          : {}),
-        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
-        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
-      },
-    });
+    this.activityLog.write(
+      activityLogEvent(
+        EDITOR_VERIFICATION_EXECUTE_OPERATION,
+        {
+          level: "warn",
+          correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+          errorKind: verificationActivityErrorKind(reason),
+        },
+        {
+          state: "refused",
+          runnerId: workspace?.testFramework ?? "unknown",
+          reason,
+          // WHY script trust refused (ADR-0147 D3 vocabulary). Without it a worktree whose manifest
+          // the run itself rewrote read exactly like a repository nobody had trusted (run 8,
+          // 2026-09-10), and the operator was pointed at the wrong grant.
+          ...(error instanceof WorkspaceTrustRequiredError
+            ? { trustRefusal: error.trustRefusal }
+            : {}),
+          ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+          ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+        },
+      ),
+    );
   }
 
   private emitStepCompletions(runId: string, report: VerificationReport): void {
