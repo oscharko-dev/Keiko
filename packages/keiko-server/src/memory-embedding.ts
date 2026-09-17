@@ -284,6 +284,10 @@ export function memoryEmbeddingProviderIdentity(provider: ModelProviderConfig): 
   return `openai-compatible:${normalizedEndpointFingerprint(provider.baseUrl)}`;
 }
 
+function memoryEmbeddingProviderIdentityDigest(provider: ModelProviderConfig): string {
+  return createHash("sha256").update(memoryEmbeddingProviderIdentity(provider)).digest("hex");
+}
+
 function isQwen3EmbeddingModel(modelId: string): boolean {
   const normalized = modelId.toLocaleLowerCase("en-US");
   return normalized.includes("qwen3") && normalized.includes("embedding");
@@ -360,7 +364,7 @@ function logEmbeddingFailed(
       },
       {
         modelId: provider.modelId,
-        providerIdentity: memoryEmbeddingProviderIdentity(provider),
+        providerIdentity: memoryEmbeddingProviderIdentityDigest(provider),
         failureKind: errorKind,
       },
     ),
@@ -398,7 +402,7 @@ function logEmbeddingSucceeded(
       { durationMs },
       {
         modelId: provider.modelId,
-        providerIdentity: memoryEmbeddingProviderIdentity(provider),
+        providerIdentity: memoryEmbeddingProviderIdentityDigest(provider),
         embeddingKind: kind,
         dimensions,
       },

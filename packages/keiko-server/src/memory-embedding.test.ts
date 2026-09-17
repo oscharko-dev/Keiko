@@ -820,6 +820,8 @@ describe("memory embedding activity log", () => {
 
     expect(opsIn(atDebug)).toEqual(["embedding.memory.unavailable", "embedding.memory.succeeded"]);
     expect(atDebug.events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       reason: "no-embedding-capable-model",
       providerCount: 0,
     });
@@ -906,10 +908,11 @@ describe("memory embedding activity log", () => {
         category: "memory",
         op: "memory.embedding.store-rejected",
         correlationId: undefined,
+        parentCorrelationId: undefined,
         durationMs: undefined,
         status: undefined,
         errorKind: "unknown",
-        extra: { failureKind: "EDIMENSION" },
+        extra: { completeness: "complete", failureKind: "EDIMENSION", loss: "none" },
       },
     ]);
     expect(sink.lines().join("\n")).not.toContain("dimension mismatch");
@@ -932,6 +935,10 @@ describe("memory embedding activity log", () => {
     expect(vault.getEmbedding(stored.id)).toBeUndefined();
     expect(opsIn(sink)).toEqual(["memory.embedding.invalidated"]);
     expect(sink.events[0]?.level).toBe("warn");
-    expect(sink.events[0]?.extra).toEqual({ reason: "no-embedding" });
+    expect(sink.events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "no-embedding",
+    });
   });
 });
