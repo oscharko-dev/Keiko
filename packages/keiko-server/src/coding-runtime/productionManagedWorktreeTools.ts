@@ -32,7 +32,11 @@ import {
   VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
-import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
@@ -123,6 +127,225 @@ import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 const PROPOSAL_APPROVAL_POLL_MS = 25;
+
+const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.tool-availability.failed",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionManagedWorktreeTools.logOptionalToolAvailabilityFailure",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    optionalTool: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["keiko_research_fetch", "keiko_skill_discover", "keiko_skill", "keiko_child_agent"],
+    },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["research-egress-config", "child-model-resolution"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["configuration-resolution-failed"],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: true,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-tool-availability"],
+  proofIds: ["coding-runtime.tool-availability.failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_REPOSITORY_RERANK_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.repository-rerank",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionManagedWorktreeTools.repositoryRerank",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    ranking: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["lexical", "semantic", "hybrid"],
+    },
+    rerankedHits: { type: "integer", dataClass: "count", required: false },
+    lexicalHits: { type: "integer", dataClass: "count", required: false },
+    indexFreshness: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["fresh", "stale", "absent"],
+    },
+    fallbackReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "capability-not-offered",
+        "provider-absent",
+        "pod-absent",
+        "pod-unavailable",
+        "pod-no-fresh-candidates",
+        "pod-query-failed",
+        "authority-denied",
+        "budget-exhausted",
+      ],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pod-query-failed"],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-repository-rerank"],
+  proofIds: ["coding-runtime.repository-rerank.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_OPERATOR_DECISION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.operator-decision",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionManagedWorktreeTools.recordScriptTrustWait",
+  fields: {
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["workspace-script-trust"],
+    },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settled"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["granted", "cancelled", "expired", "unavailable"],
+    },
+    waitCeilingMs: { type: "integer", dataClass: "duration", required: true },
+    pollIntervalMs: { type: "integer", dataClass: "duration", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-runtime-operator-decision"],
+  proofIds: ["coding-runtime.operator-decision.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.verification",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionManagedWorktreeTools.verification",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-run", "target-bound"],
+    },
+    stepCount: { type: "integer", dataClass: "count", required: false },
+    steps: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 5,
+      values: [
+        "test:denied",
+        "test:cancelled",
+        "test:dependencies-unavailable",
+        "test:script-missing",
+        "test:skipped",
+        "targeted-test:denied",
+        "targeted-test:cancelled",
+        "targeted-test:dependencies-unavailable",
+        "targeted-test:script-missing",
+        "targeted-test:skipped",
+        "typecheck:denied",
+        "typecheck:cancelled",
+        "typecheck:dependencies-unavailable",
+        "typecheck:script-missing",
+        "typecheck:skipped",
+        "lint:denied",
+        "lint:cancelled",
+        "lint:dependencies-unavailable",
+        "lint:script-missing",
+        "lint:skipped",
+        "build:denied",
+        "build:cancelled",
+        "build:dependencies-unavailable",
+        "build:script-missing",
+        "build:skipped",
+      ],
+    },
+    verifierId: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+    targetCount: { type: "integer", dataClass: "count", required: false },
+    targetPathSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-verification"],
+  proofIds: ["coding-runtime.verification.emitted-line"],
+  releaseImpact: "patch",
+});
 
 type ProposalApprovalWaitOutcome = "approved" | "cancelled" | "expired" | "unavailable";
 
@@ -375,23 +598,26 @@ function logOptionalToolAvailabilityFailure(
   stage: "research-egress-config" | "child-model-resolution",
   error: unknown,
 ): void {
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "gateway",
-    op: "coding-runtime.tool-availability.failed",
-    correlationId: isValidCorrelationId(input.authorityRef.runId)
-      ? input.authorityRef.runId
-      : UNKNOWN_CORRELATION_ID,
-    level: "warn",
-    errorKind: contentFreeErrorClass(error),
-    extra: {
-      runId: input.authorityRef.runId,
-      optionalTool,
-      stage,
-      reason: "configuration-resolution-failed",
-      frames: keikoStackFrames(error),
-      causeChain: causeChain(error),
-    },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION,
+      {
+        correlationId: isValidCorrelationId(input.authorityRef.runId)
+          ? input.authorityRef.runId
+          : UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "internal",
+      },
+      {
+        runId: input.authorityRef.runId,
+        optionalTool,
+        stage,
+        reason: "configuration-resolution-failed",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
 }
 
 function resolvedChildModelPort(input: OptionalToolAvailabilityInput): ModelPort | undefined {
@@ -1013,24 +1239,27 @@ function logRerank(
   input: ProductionManagedWorktreeToolInput,
   provenance: CodingRepositorySearchProvenance,
 ): void {
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "gateway",
-    op: "coding-runtime.repository-rerank",
-    correlationId: isValidCorrelationId(input.authorityRef.runId)
-      ? input.authorityRef.runId
-      : UNKNOWN_CORRELATION_ID,
-    level: "info",
-    extra: {
-      runId: input.authorityRef.runId,
-      ranking: provenance.ranking,
-      rerankedHits: provenance.rerankedHits,
-      lexicalHits: provenance.lexicalHits,
-      indexFreshness: provenance.indexFreshness,
-      ...(provenance.fallbackReason === undefined
-        ? {}
-        : { fallbackReason: provenance.fallbackReason }),
-    },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_REPOSITORY_RERANK_OPERATION,
+      {
+        correlationId: isValidCorrelationId(input.authorityRef.runId)
+          ? input.authorityRef.runId
+          : UNKNOWN_CORRELATION_ID,
+        level: "info",
+      },
+      {
+        runId: input.authorityRef.runId,
+        ranking: provenance.ranking,
+        rerankedHits: provenance.rerankedHits,
+        lexicalHits: provenance.lexicalHits,
+        indexFreshness: provenance.indexFreshness,
+        ...(provenance.fallbackReason === undefined
+          ? {}
+          : { fallbackReason: provenance.fallbackReason }),
+      },
+    ),
+  );
 }
 
 interface RerankOutcome {
@@ -1088,19 +1317,18 @@ function recordRerankFailure(input: ProductionManagedWorktreeToolInput, error: u
   const correlationId = isValidCorrelationId(input.authorityRef.runId)
     ? input.authorityRef.runId
     : UNKNOWN_CORRELATION_ID;
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "gateway",
-    op: "coding-runtime.repository-rerank",
-    correlationId,
-    level: "warn",
-    errorKind: contentFreeErrorClass(error),
-    extra: {
-      runId: input.authorityRef.runId,
-      reason: "pod-query-failed",
-      frames: keikoStackFrames(error),
-      causeChain: causeChain(error),
-    },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_REPOSITORY_RERANK_OPERATION,
+      { correlationId, level: "warn", errorKind: "internal" },
+      {
+        runId: input.authorityRef.runId,
+        reason: "pod-query-failed",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
   emitServerDiagnostic(input.diagnostics, {
     correlationId,
     timestamp: new Date().toISOString(),
@@ -1453,19 +1681,29 @@ function recordScriptTrustWait(
   outcome: ScriptTrustWaitOutcome,
   waitCeilingMs: number,
 ): void {
-  (input.activityLog ?? processServerLogSink()).write({
-    level: outcome === "granted" ? "info" : "warn",
-    category: "process",
-    op: "coding-runtime.operator-decision",
-    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      decision: "workspace-script-trust",
-      state: "settled",
-      reason: outcome,
-      waitCeilingMs,
-      pollIntervalMs: SCRIPT_TRUST_POLL_MS,
-    },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_OPERATOR_DECISION_OPERATION,
+      {
+        level: outcome === "granted" ? "info" : "warn",
+        correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+        ...(outcome === "granted" ? {} : { errorKind: scriptTrustErrorKind(outcome) }),
+      },
+      {
+        decision: "workspace-script-trust",
+        state: "settled",
+        reason: outcome,
+        waitCeilingMs,
+        pollIntervalMs: SCRIPT_TRUST_POLL_MS,
+      },
+    ),
+  );
+}
+
+function scriptTrustErrorKind(outcome: ScriptTrustWaitOutcome): ActivityLogErrorKind {
+  if (outcome === "cancelled") return "cancelled";
+  if (outcome === "expired") return "timeout";
+  return outcome === "unavailable" ? "unavailable" : "internal";
 }
 
 function verificationOutcome(
@@ -1555,16 +1793,29 @@ function recordVerificationNotRun(
   input: ProductionManagedWorktreeToolInput,
   steps: readonly VerificationNotRunStep[],
 ): void {
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "coding-runtime.verification",
-    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      state: "not-run",
-      stepCount: steps.length,
-      steps: steps.map((step) => `${step.kind}:${step.reason}`),
-    },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      {
+        level: "warn",
+        correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+        errorKind: verificationNotRunErrorKind(steps),
+      },
+      {
+        state: "not-run",
+        stepCount: steps.length,
+        steps: steps.map((step) => `${step.kind}:${step.reason}`),
+      },
+    ),
+  );
+}
+
+function verificationNotRunErrorKind(
+  steps: readonly VerificationNotRunStep[],
+): ActivityLogErrorKind {
+  if (steps.some((step) => step.reason === "cancelled")) return "cancelled";
+  if (steps.some((step) => step.reason === "denied")) return "authority-denied";
+  return "unavailable";
 }
 
 // What the model is told about a run that did not pass: the failed step's structured locations
@@ -1707,17 +1958,18 @@ function recordVerificationTarget(
   kind: VerificationKind,
 ): void {
   if (request.targetPath === undefined) return;
-  (input.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "coding-runtime.verification",
-    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      state: "target-bound",
-      verifierId: kind,
-      targetCount: 1,
-      targetPathSha256: createHash("sha256").update(request.targetPath, "utf8").digest("hex"),
-    },
-  });
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      { correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID },
+      {
+        state: "target-bound",
+        verifierId: kind,
+        targetCount: 1,
+        targetPathSha256: createHash("sha256").update(request.targetPath, "utf8").digest("hex"),
+      },
+    ),
+  );
 }
 
 // The run id is the timeline every verification line belongs to; the tool action id carries the

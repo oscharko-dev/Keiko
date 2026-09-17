@@ -2553,7 +2553,7 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     const extra = event.extra ?? {};
     expect(event.op).toBe("coding-runtime.tool-availability.failed");
     expect(event.correlationId).toBe(runId);
-    expect(event.errorKind).toBe("Error");
+    expect(event.errorKind).toBe("internal");
     expect(extra.runId).toBe(runId);
     expect(extra.optionalTool).toBe("keiko_research_fetch");
     expect(extra.stage).toBe("research-egress-config");
@@ -2713,7 +2713,7 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     expect(events[0]).toMatchObject({
       op: "coding-runtime.tool-availability.failed",
       correlationId: runId,
-      errorKind: "Error",
+      errorKind: "internal",
       extra: {
         runId,
         optionalTool: "keiko_child_agent",
