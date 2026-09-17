@@ -211,7 +211,9 @@ function nestedExtra(
   const mapping = COMPLETION_FIELD_GROUPS[name];
   if (mapping === undefined) throw new TypeError(`expected ${name} activity object`);
   return Object.fromEntries(
-    Object.entries(mapping).map(([projectedName, fieldName]) => [projectedName, fields?.[fieldName]]),
+    Object.entries(mapping)
+      .filter(([, fieldName]) => fields?.[fieldName] !== undefined)
+      .map(([projectedName, fieldName]) => [projectedName, fields?.[fieldName]]),
   );
 }
 
@@ -253,6 +255,13 @@ const COMPLETION_FIELD_GROUPS: Readonly<
   structural: {
     contextCount: "structuralContextCount",
     candidateInventoryBuildCount: "structuralCandidateInventoryBuildCount",
+    candidateFileCount: "structuralCandidateFileCount",
+    candidateDirectoryCount: "structuralCandidateDirectoryCount",
+    codeIndexBuildCount: "structuralCodeIndexBuildCount",
+    symbolGraphBuildCount: "structuralSymbolGraphBuildCount",
+    importGraphBuildCount: "structuralImportGraphBuildCount",
+    endpointGraphBuildCount: "structuralEndpointGraphBuildCount",
+    fileSearchCount: "structuralFileSearchCount",
     textSearchCount: "structuralTextSearchCount",
   },
   workspaceIndex: {
@@ -270,6 +279,11 @@ const COMPLETION_FIELD_GROUPS: Readonly<
     saveFailures: "indexSaveFailures",
   },
   workspaceIo: {
+    readDirCalls: "workspaceIoReadDirCalls",
+    readDirEntries: "workspaceIoReadDirEntries",
+    statCalls: "workspaceIoStatCalls",
+    realPathCalls: "workspaceIoRealPathCalls",
+    existsCalls: "workspaceIoExistsCalls",
     contentReadCalls: "workspaceIoContentReadCalls",
     contentReadBytes: "workspaceIoContentReadBytes",
   },
@@ -292,13 +306,11 @@ function lifecycleEvents(
       started as unknown as Readonly<Record<PropertyKey, unknown>>,
     ),
   ).toBeDefined();
-  if (terminalOp === "search.connected-context.completed") {
-    expect(
-      activityLogEventRegistration(
-        terminal as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
-    ).toBeDefined();
-  }
+  expect(
+    activityLogEventRegistration(
+      terminal as unknown as Readonly<Record<PropertyKey, unknown>>,
+    ),
+  ).toBeDefined();
   return [started, terminal];
 }
 
@@ -696,13 +708,13 @@ describe("retrieveConnectedContextPack activity log", () => {
       expect(persisted[1]).toMatchObject({
         op: "search.connected-context.failed",
         correlationId: CORRELATION_ID,
-        errorKind: "TypeError",
+        errorKind: "internal",
         causeChain: ["RangeError"],
         outcome: "failed",
         retrievalPhase: "workspace-detection",
       });
       expectAnchoredFrames(persisted[1]?.frames);
-      expect(persisted[1]?.workspaceIndex).toMatchObject({
+      expect(nestedExtra(persisted[1], "workspaceIndex")).toMatchObject({
         providerStatus: "not-evaluated",
         searchMode: "not-evaluated",
       });
@@ -956,7 +968,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       level: "error",
       category: "search",
       correlationId: CORRELATION_ID,
-      errorKind: "TypeError",
+      errorKind: "internal",
       extra: {
         outcome: "failed",
         retrievalPhase: "workspace-detection",
@@ -1154,7 +1166,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const [started, failed] = lifecycleEvents(activityLog, "search.connected-context.failed");
     expect(failed).toMatchObject({
       level: "warn",
-      errorKind: "GATEWAY_CANCELLED",
+      errorKind: "cancelled",
       extra: {
         outcome: "cancelled",
         retrievalPhase: "request-validation",
@@ -1265,7 +1277,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const [, failed] = lifecycleEvents(activityLog, "search.connected-context.failed");
     expect(failed).toMatchObject({
       level: "warn",
-      errorKind: "GATEWAY_CANCELLED",
+      errorKind: "cancelled",
       extra: {
         activityDetailStatus: "complete",
         outcome: "cancelled",
@@ -1321,7 +1333,7 @@ describe("retrieveConnectedContextPack activity log", () => {
         op: "server-log.write-failed",
         failedOp: "search.connected-context.started",
         correlationId: CORRELATION_ID,
-        errorKind: "TypeError",
+        errorKind: "internal",
       });
       expect(String(stderr.mock.calls[0]?.[0])).not.toContain(FIXTURE_ROOT);
     } finally {
