@@ -86,6 +86,22 @@ describe("createIsolatedCliFailureSink", () => {
     expect(factoryCalls).toBe(0);
   });
 
+  it("refuses a target nested below the failure root before opening the factory", () => {
+    let factoryCalls = 0;
+    const sink = createIsolatedCliFailureSink(
+      "/control-failures/logs",
+      "/control-failures",
+      () => {
+        factoryCalls += 1;
+        return { write: (): void => undefined };
+      },
+      "00000000-0000-4000-8000-000000000001",
+    );
+
+    expect(sink).toBeUndefined();
+    expect(factoryCalls).toBe(0);
+  });
+
   it("preserves the invocation correlation when the failure root is isolated", () => {
     const events: SecurityLogEvent[] = [];
     const correlationId = "00000000-0000-4000-8000-000000000001";

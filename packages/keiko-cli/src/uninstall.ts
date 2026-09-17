@@ -40,7 +40,7 @@ import {
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import {
-  cliControlStateWouldMutateTarget,
+  cliControlStateConflictsWithTarget,
   cliTargetIdentitySha256,
   resolveCliControlFailureStateDir,
   resolveCliControlStateDir,
@@ -784,7 +784,7 @@ function prepareUninstallActivity(
   try {
     if (
       (opts.scopes.state || opts.scopes.launchers) &&
-      cliControlStateWouldMutateTarget(context.activityStateDir, stateDir)
+      cliControlStateConflictsWithTarget(context.activityStateDir, stateDir)
     ) {
       emitUninstallPreparationFailure(
         context,

@@ -8,8 +8,8 @@ import {
   WindowsSystemDirectoryError,
 } from "@oscharko-dev/keiko-security";
 import {
-  cliControlStateLexicallyWouldMutateTarget,
-  cliControlStateWouldMutateTarget,
+  cliControlStateConflictsWithTarget,
+  cliControlStateLexicallyConflictsWithTarget,
 } from "./cli-control-state.js";
 
 /** Builds the existing activity-log sink for the state directory selected by one CLI command. */
@@ -173,9 +173,9 @@ export function createIsolatedCliFailureSink(
   invocationCorrelationId: string | undefined,
 ): SecurityLogSink | undefined {
   try {
-    if (cliControlStateWouldMutateTarget(failureStateDir, targetDir)) return undefined;
+    if (cliControlStateConflictsWithTarget(failureStateDir, targetDir)) return undefined;
   } catch {
-    if (cliControlStateLexicallyWouldMutateTarget(failureStateDir, targetDir)) return undefined;
+    if (cliControlStateLexicallyConflictsWithTarget(failureStateDir, targetDir)) return undefined;
   }
   return createCliSecurityLogSink(failureStateDir, factory, invocationCorrelationId);
 }

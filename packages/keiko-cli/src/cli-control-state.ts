@@ -75,6 +75,16 @@ export function cliControlStateLexicallyWouldMutateTarget(
   return isAtOrBelow(resolve(controlStateDir), resolve(targetDir));
 }
 
+/** Conservative lexical conflict check used when canonical validation cannot complete. */
+export function cliControlStateLexicallyConflictsWithTarget(
+  controlStateDir: string,
+  targetDir: string,
+): boolean {
+  const control = resolve(controlStateDir);
+  const target = resolve(targetDir);
+  return isAtOrBelow(control, target) || isAtOrBelow(target, control);
+}
+
 /** True when writing the control log would write at or below the selected target tree. */
 export function cliControlStateWouldMutateTarget(
   controlStateDir: string,
@@ -83,4 +93,14 @@ export function cliControlStateWouldMutateTarget(
   const control = canonicalizeWithMissingTail(controlStateDir);
   const target = canonicalizeWithMissingTail(targetDir);
   return isAtOrBelow(control, target);
+}
+
+/** True when either the control state or selected target contains the other. */
+export function cliControlStateConflictsWithTarget(
+  controlStateDir: string,
+  targetDir: string,
+): boolean {
+  const control = canonicalizeWithMissingTail(controlStateDir);
+  const target = canonicalizeWithMissingTail(targetDir);
+  return isAtOrBelow(control, target) || isAtOrBelow(target, control);
 }

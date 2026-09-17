@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -354,6 +355,69 @@ describe("runSupportCli export", () => {
     );
     expect(bundle).toContain('"op":"cli.install-layout.normalized"');
     expect(bundle).toContain(`"correlationId":"${correlationId}"`);
+  });
+
+  it("refuses a pending install-layout correction before reading a symlinked state root", async () => {
+    const realStateDir = join(outDir, "real-state");
+    mkdirSync(realStateDir);
+    rmSync(stateDir, { recursive: true });
+    symlinkSync(realStateDir, stateDir, "dir");
+    let factoryCalls = 0;
+    let auditorLoaded = false;
+    const env = {
+      ...AUDIT_ENV,
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+    const refusedOut = join(outDir, "refused.jsonl");
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", refusedOut],
+      makeIo().io,
+      env,
+      {
+        cwd: outDir,
+        activityLogSinkFactory: () => {
+          factoryCalls += 1;
+          return { write: (): void => undefined };
+        },
+        auditDeps: {
+          loadAuditor: () => {
+            auditorLoaded = true;
+            return Promise.resolve({ auditLocalState: () => HEALTHY_AUDIT });
+          },
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(factoryCalls).toBe(0);
+    expect(auditorLoaded).toBe(false);
+    expect(env[INSTALL_LAYOUT_OVERRIDES_ENV]).toBe("local-state-auditor");
+    expect(existsSync(refusedOut)).toBe(false);
+  });
+
+  it("refuses a pending install-layout correction when no durable sink is available", async () => {
+    const env = {
+      ...AUDIT_ENV,
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+    let auditorLoaded = false;
+
+    const code = await runSupportCli(["export", "--state-dir", stateDir], makeIo().io, env, {
+      cwd: outDir,
+      auditDeps: {
+        loadAuditor: () => {
+          auditorLoaded = true;
+          return Promise.resolve({ auditLocalState: () => HEALTHY_AUDIT });
+        },
+      },
+    });
+
+    expect(code).toBe(1);
+    expect(auditorLoaded).toBe(false);
+    expect(env[INSTALL_LAYOUT_OVERRIDES_ENV]).toBe("local-state-auditor");
   });
 
   // Regression pin: `redactLogFields`'s field-NAME denylist matches only an exact normalized

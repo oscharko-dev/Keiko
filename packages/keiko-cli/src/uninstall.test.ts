@@ -516,6 +516,42 @@ describe("runUninstallCli — apply", () => {
     expect(extraOf(events[0]).targetSha256).toMatch(/^[0-9a-f]{64}$/u);
   });
 
+  it("refuses before opening a control sink that contains the selected state tree", async () => {
+    const root = makeRoot();
+    const activityStateDir = join(root, "control-state");
+    const stateDir = join(activityStateDir, ".keiko");
+    mkdirSync(stateDir, { recursive: true });
+    const failureActivityStateDir = join(root, "control-failures");
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+
+    await expect(
+      runUninstallCli(
+        ["--state", "--state-dir", stateDir],
+        makeIo().io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          activityStateDir,
+          failureActivityStateDir,
+          securityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
+        },
+      ),
+    ).resolves.toBe(1);
+    expect(existsSync(stateDir)).toBe(true);
+    expect(sinkRoots).toEqual([failureActivityStateDir]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "cli.uninstall.failed",
+        errorKind: "UninstallControlStateOverlapError",
+      }),
+    ]);
+  });
+
   it("uses the refusal log when opening the primary control sink fails", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);

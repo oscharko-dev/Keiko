@@ -293,6 +293,44 @@ describe("runAuditCli", () => {
     }
   });
 
+  it("refuses before opening a control sink that contains the audited target", async () => {
+    const c = makeIo();
+    const root = mkdtempSync(join(tmpdir(), "keiko-audit-parent-overlap-"));
+    const activityStateDir = join(root, "control");
+    const stateDir = join(activityStateDir, "logs");
+    const failureActivityStateDir = join(root, "control-failures");
+    mkdirSync(stateDir, { recursive: true });
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+    let auditorLoaded = false;
+    try {
+      expect(
+        await runAuditCli(["local-state", "--state-dir", stateDir], c.io, env, {
+          activityStateDir,
+          failureActivityStateDir,
+          activityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
+          loadAuditor: () => {
+            auditorLoaded = true;
+            return Promise.resolve({ auditLocalState: () => HEALTHY });
+          },
+        }),
+      ).toBe(1);
+      expect(sinkRoots).toEqual([failureActivityStateDir]);
+      expect(auditorLoaded).toBe(false);
+      expect(events).toEqual([
+        expect.objectContaining({
+          op: "cli.audit.failed",
+          errorKind: "AuditControlStateOverlapError",
+        }),
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("logs a body-free failure when the auditor cannot produce a result", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-audit-failure-log-"));
     const events: SecurityLogEvent[] = [];

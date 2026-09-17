@@ -8,7 +8,7 @@ import {
 } from "@oscharko-dev/keiko-security";
 
 import {
-  cliControlStateWouldMutateTarget,
+  cliControlStateConflictsWithTarget,
   cliTargetIdentitySha256,
   resolveCliControlFailureStateDir,
   resolveCliControlStateDir,
@@ -467,7 +467,7 @@ function prepareAuditActivity(
 ): PreparedAuditActivity {
   const context = resolveAuditActivityContext(stateDir, env, deps);
   try {
-    if (cliControlStateWouldMutateTarget(context.activityStateDir, stateDir)) {
+    if (cliControlStateConflictsWithTarget(context.activityStateDir, stateDir)) {
       refuseAuditActivity(context, "AuditControlStateOverlapError", "control-state-overlap");
       io.err(
         "keiko audit: refusing to run because the reserved CLI control state overlaps the " +

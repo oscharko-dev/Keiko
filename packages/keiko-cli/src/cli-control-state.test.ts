@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  cliControlStateConflictsWithTarget,
+  cliControlStateLexicallyConflictsWithTarget,
   cliControlStateLexicallyWouldMutateTarget,
   cliControlStateWouldMutateTarget,
   cliTargetIdentitySha256,
@@ -39,6 +41,8 @@ describe("resolveCliControlStateDir", () => {
   it("provides a conservative lexical check when canonical validation cannot complete", () => {
     expect(cliControlStateLexicallyWouldMutateTarget("/state/control", "/state")).toBe(true);
     expect(cliControlStateLexicallyWouldMutateTarget("/control", "/state")).toBe(false);
+    expect(cliControlStateLexicallyConflictsWithTarget("/state", "/state/logs")).toBe(true);
+    expect(cliControlStateLexicallyConflictsWithTarget("/control", "/state")).toBe(false);
   });
 });
 
@@ -53,6 +57,21 @@ describe("cliControlStateWouldMutateTarget", () => {
       expect(cliControlStateWouldMutateTarget(join(target, "control"), target)).toBe(true);
       expect(cliControlStateWouldMutateTarget(join(alias, "control"), target)).toBe(true);
       expect(cliControlStateWouldMutateTarget(join(root, "control"), target)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects a selected target nested below the canonical control root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-control-parent-overlap-"));
+    const control = join(root, "control");
+    const alias = join(root, "alias");
+    mkdirSync(control);
+    symlinkSync(control, alias, "dir");
+    try {
+      expect(cliControlStateConflictsWithTarget(control, join(control, "logs"))).toBe(true);
+      expect(cliControlStateConflictsWithTarget(alias, join(control, "logs"))).toBe(true);
+      expect(cliControlStateConflictsWithTarget(control, join(root, "target"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
