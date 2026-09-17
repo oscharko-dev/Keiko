@@ -1674,7 +1674,7 @@ function auditTargetFields(
 ):
   | { readonly targetPath: string | null }
   | { readonly targetBasename: string; readonly targetPathHash: string }
-  | Record<never, never> {
+  | Partial<Record<"targetPath" | "targetBasename" | "targetPathHash", never>> {
   if (runtimeOrigin) return {};
   if (isEditorAgentRootBoundaryDenial(decision.denyReason)) return {};
   if (queryPath !== undefined) {

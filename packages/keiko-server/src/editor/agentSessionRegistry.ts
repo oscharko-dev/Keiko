@@ -162,7 +162,7 @@ function lifecycleFailure(
 
 function resultRootAttribution(
   action: EditorAgentAction,
-): Pick<EditorAgentActionResult, "rootAttribution"> | Record<never, never> {
+): Partial<Pick<EditorAgentActionResult, "rootAttribution">> {
   const binding = action.rootBinding;
   return binding === undefined
     ? {}

@@ -187,9 +187,7 @@ export type ToolLifecycleTerminal = {
     ToolLifecycleSettlement & {
       readonly status: Status;
       readonly reason: ToolResultReason<Status>;
-    } & (Status extends "failed"
-      ? ToolLifecycleFailureDiagnostics
-      : Readonly<Record<never, never>>);
+    } & (Status extends "failed" ? ToolLifecycleFailureDiagnostics : unknown);
 }[ToolResultStatus];
 export type ToolLifecycleDiscarded = ToolLifecycleIdentity & {
   readonly op: typeof TOOL_LIFECYCLE_OPERATIONS.discarded;

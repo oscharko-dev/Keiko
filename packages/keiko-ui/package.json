@@ -63,8 +63,8 @@
     "diff": "9.0.0",
     "monaco-editor": "0.56.0",
     "next": "16.3.4",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@testing-library/dom": "10.4.1",
@@ -72,11 +72,11 @@
     "@testing-library/react": "16.3.3",
     "@testing-library/user-event": "14.6.7",
     "@types/jest-axe": "3.5.9",
-    "@types/node": "26.4.1",
-    "@types/react": "19.2.18",
-    "@types/react-dom": "19.2.7",
+    "@types/node": "26.5.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",
-    "autoprefixer": "^10.5.3",
+    "autoprefixer": "^10.5.5",
     "axe-core": "4.12.1",
     "eslint": "^10.8.1",
     "eslint-config-next": "16.3.4",
