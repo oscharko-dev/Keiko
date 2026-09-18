@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
-  ACTIVITY_LOG_EVENT_REGISTRATION,
   activityLogEvent,
-  activityLogEventRegistration,
   defineActivityLogOperation,
+  withActivityLogCorrelation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   emitSecurityLogEvent,
@@ -296,17 +295,7 @@ export function createCliSecurityLogSink(
       // eagerly creating `<stateDir>/logs` here would run before those fail-closed checks and would
       // also mutate an otherwise read-only command that emits nothing.
       downstream ??= factory(stateDir);
-      const forwarded = { ...event, correlationId: invocationCorrelationId };
-      const registration = activityLogEventRegistration(event);
-      if (registration !== undefined) {
-        Object.defineProperty(forwarded, ACTIVITY_LOG_EVENT_REGISTRATION, {
-          value: registration,
-          enumerable: false,
-          configurable: false,
-          writable: false,
-        });
-      }
-      downstream.write(forwarded);
+      downstream.write(withActivityLogCorrelation(event, invocationCorrelationId));
     },
   };
 }

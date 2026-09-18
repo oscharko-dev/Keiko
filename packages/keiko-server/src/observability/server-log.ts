@@ -784,7 +784,7 @@ export function formatRegisteredServerLogLine(
     throw new ActivityLogEventValidationError("missing-identity");
   }
   validateServerLogIdentity(identity);
-  validateRegisteredActivityLogEvent(event as unknown as Readonly<Record<PropertyKey, unknown>>);
+  validateRegisteredActivityLogEvent(event);
   return formatServerLogLine(event, now, identity);
 }
 

@@ -92,6 +92,7 @@ export type {
   activityLogOperationSchema,
   activityLogEvent,
   activityLogEventRegistration,
+  attachActivityLogEventRegistration,
   classifyErrorKind,
   defineActivityLogOperation,
   isErrorKind,
@@ -99,6 +100,7 @@ export type {
   validateActivityLogOperationFields,
   validateActivityLogOperationRecord,
   validateRegisteredActivityLogEvent,
+  withActivityLogCorrelation,
 } from "./observability.js";
 
 // ─── Harness ───────────────────────────────────────────────────────────────────

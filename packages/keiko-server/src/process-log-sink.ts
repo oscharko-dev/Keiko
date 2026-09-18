@@ -34,10 +34,9 @@ import type {
 } from "@oscharko-dev/keiko-memory-consolidation";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
-  ACTIVITY_LOG_EVENT_REGISTRATION,
   activityLogEvent,
-  activityLogEventRegistration,
   defineActivityLogOperation,
+  withActivityLogCorrelation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
@@ -74,23 +73,6 @@ export function processServerLogSink(): ProcessServerLogSink {
   return PROCESS_SERVER_LOG_SINK;
 }
 
-function withCorrelation<Event extends object>(
-  event: Event,
-  correlationId: string,
-): Event & { readonly correlationId: string } {
-  const forwarded = { ...event, correlationId };
-  const registration = activityLogEventRegistration(event);
-  if (registration !== undefined) {
-    Object.defineProperty(forwarded, ACTIVITY_LOG_EVENT_REGISTRATION, {
-      value: registration,
-      enumerable: false,
-      configurable: false,
-      writable: false,
-    });
-  }
-  return forwarded;
-}
-
 /**
  * Binds one operation correlation without capturing the process logger. Producer-owned ids win,
  * so a domain operation that already carries a narrower request/run id is never relabelled as the
@@ -100,7 +82,7 @@ export function processServerLogSinkFor(correlationId: string): ProcessServerLog
   const sink = processServerLogSink();
   return {
     write(event: ServerLogEvent): void {
-      sink.write(withCorrelation(event, event.correlationId ?? correlationId));
+      sink.write(withActivityLogCorrelation(event, event.correlationId ?? correlationId));
     },
     enabled(level: ServerLogLevel): boolean {
       return sink.enabled(level);
@@ -121,7 +103,7 @@ export function consolidationLogSinkFor(correlationId: string): ConsolidationLog
   const sink = processServerLogSink();
   return {
     write(event: ConsolidationLogEvent): void {
-      sink.write(withCorrelation(event, event.correlationId ?? correlationId));
+      sink.write(withActivityLogCorrelation(event, event.correlationId ?? correlationId));
     },
   };
 }

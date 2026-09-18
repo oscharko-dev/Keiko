@@ -23,11 +23,10 @@
 // labels only.
 
 import {
-  ACTIVITY_LOG_EVENT_REGISTRATION,
   activityLogEvent,
-  activityLogEventRegistration,
   classifyErrorKind,
   defineActivityLogOperation,
+  withActivityLogCorrelation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
@@ -243,17 +242,7 @@ export function logCorrelationId(sink: ModelGatewayLogSink): string | undefined 
 }
 
 function correlatedEvent(event: ModelGatewayLogEvent, correlationId: string): ModelGatewayLogEvent {
-  const correlated = { ...event, correlationId };
-  const registration = activityLogEventRegistration(event);
-  if (registration !== undefined) {
-    Object.defineProperty(correlated, ACTIVITY_LOG_EVENT_REGISTRATION, {
-      value: registration,
-      enumerable: false,
-      configurable: false,
-      writable: false,
-    });
-  }
-  return correlated;
+  return withActivityLogCorrelation(event, correlationId);
 }
 
 // Monotonic elapsed milliseconds. `performance.now` rather than `Date.now` so a wall-clock step

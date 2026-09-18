@@ -26,8 +26,8 @@
 
 import { performance } from "node:perf_hooks";
 import {
-  ACTIVITY_LOG_EVENT_REGISTRATION,
   activityLogEventRegistration,
+  attachActivityLogEventRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { resolveServerLogThreshold, serverLogLevelEnabled } from "./log-level.js";
@@ -173,15 +173,7 @@ function buildEvent(
     errorKind: input.errorKind,
     extra: mergeExtra(binding, input, registeredFields),
   };
-  if (registration !== undefined) {
-    Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
-      value: registration,
-      enumerable: false,
-      configurable: false,
-      writable: false,
-    });
-  }
-  return event;
+  return attachActivityLogEventRegistration(event, registration);
 }
 
 export interface ServerLoggerOptions {

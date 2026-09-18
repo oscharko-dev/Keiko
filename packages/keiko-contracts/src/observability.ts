@@ -754,6 +754,36 @@ export function activityLogEventRegistration(
     : undefined;
 }
 
+/** Marks an event built outside `activityLogEvent()` with its canonical registration. */
+export function attachActivityLogEventRegistration<Event extends object>(
+  event: Event,
+  registration: ActivityLogOperationRegistration | undefined,
+): Event {
+  if (registration !== undefined) {
+    Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
+      value: registration,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  }
+  return event;
+}
+
+/**
+ * Copies an event with a new correlation id. A plain spread drops the non-enumerable registration
+ * marker, which makes the sink reject the copy as unregistered, so every rebind goes through here.
+ */
+export function withActivityLogCorrelation<Event extends object>(
+  event: Event,
+  correlationId: string,
+): Event & { readonly correlationId: string } {
+  return attachActivityLogEventRegistration(
+    { ...event, correlationId },
+    activityLogEventRegistration(event),
+  );
+}
+
 function activityLogEventRejection(
   event: Readonly<Record<PropertyKey, unknown>>,
 ): ActivityLogEventFailureKind | undefined {
@@ -937,8 +967,11 @@ function registeredEventFields(
 }
 
 export function validateRegisteredActivityLogEvent(
-  event: Readonly<Record<PropertyKey, unknown>>,
+  candidate: object,
 ): ActivityLogOperationRegistration {
+  // Interface-typed events (ServerLogEvent, SecurityLogEvent, ...) carry no index signature, so the
+  // public signature accepts any object and the runtime checks below treat it as an open record.
+  const event = candidate as Readonly<Record<PropertyKey, unknown>>;
   const rejection = activityLogEventRejection(event);
   if (rejection !== undefined) throw new ActivityLogEventValidationError(rejection);
   const registration = activityLogEventRegistration(event);
@@ -1040,13 +1073,7 @@ export function activityLogEvent<
       ["op"]: registration.op,
       extra: normalizedFields,
     };
-    Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
-      value: registration,
-      enumerable: false,
-      configurable: false,
-      writable: false,
-    });
-    return event;
+    return attachActivityLogEventRegistration(event, registration);
   } catch (error) {
     return rejectedActivityLogEvent<Registration>(error);
   }
