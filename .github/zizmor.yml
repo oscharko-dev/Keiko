@@ -56,11 +56,11 @@ rules:
       - infra-failure-retry.yml:25
       # ADR-0177 D9: release-advance.yml must see that the release request, the stable tag build, or a
       # release-required check workflow completed, and `workflow_run` is the only trigger GitHub offers
-      # for that. It is not the classic misuse: it checks out `github.event.repository.default_branch`
-      # (never the triggering run's head), runs only committed repository code, reads no value of the
-      # triggering run, skips every pull-request run in its job condition, and holds no secret. Its only
-      # write grant is `actions: write`, which dispatches release.yml on a tag; that run's authorize job
-      # refuses every commit no allowlisted release owner requested with the release button.
+      # for that. It is not the classic misuse: it checks out `github.sha`, the default-branch commit
+      # its own definition came from (never the triggering run's head), runs only committed repository
+      # code, reads no value of the triggering run, skips every pull-request run in its job condition,
+      # and holds no secret. Its only write grant is `actions: write`, which dispatches release.yml on a
+      # tag; that run's authorize job refuses every commit no allowlisted release owner requested.
       - release-advance.yml:18
   adhoc-packages:
     ignore:

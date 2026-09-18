@@ -196,7 +196,8 @@ publishes; it only has to be verifiable by it.
   commit as before.
 - **The trust boundary.** A token with `actions: write` alone can dispatch `release.yml`, but it can
   only publish a commit an allowlisted owner requested, on a tag only the owner and the release tag
-  App may write. `release-advance.yml` checks out the default branch, runs only committed code, reads
+  App may write. `release-advance.yml` checks out `github.sha`, the default-branch commit its own
+  definition came from, runs only committed code, reads
   no value of the triggering run and holds no secret; its only write grant is `actions: write`.
 
 ## Consequences
