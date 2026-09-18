@@ -571,7 +571,7 @@ export function scanFailurePaths(repoRoot = REPO_ROOT) {
 }
 
 function failurePathKey(entry) {
-  return `${entry.path} ${entry.owner} ${entry.kind}`;
+  return `${entry.path}\u0000${entry.owner}\u0000${entry.kind}`;
 }
 
 function validRegisterEntry(entry) {
