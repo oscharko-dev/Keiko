@@ -174,8 +174,10 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:knowledge-m2-closeout",
   "npm run check:context-quality",
   // Server error observability gate (Step 11, RB-6 / GEN-OBS-DIAGNOSTICS-901): the top-level 500 must
-  // carry a correlation id + logged cause. Goes red against a bare error-swallowing `.catch`.
-  "npm run check:error-observability",
+  // carry a correlation id + logged cause. Goes red against a bare error-swallowing `.catch`. It runs
+  // inside the Activity Log implementation gate, whose composition and required-job placement are
+  // pinned step by step in check-activity-log.test.mjs.
+  "npm run check:activity-log",
   // Editor bundle release evidence (Step 06, RB-3).
   "npm run check:editor-release-evidence",
   "npm run check:update-ui-evidence",
