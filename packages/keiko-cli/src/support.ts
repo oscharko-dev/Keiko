@@ -3,7 +3,7 @@
 // existing, hardened pieces into one redacted `.jsonl` bundle: the in-process `AuditResult`
 // `keiko audit local-state --json` already produces, the evidence-index count from
 // `listEvidence`, and a verbatim copy of `<state-dir>/logs/server*.log`. `analyze` groups a
-// bundle's (or a raw server.log's) lines by correlationId into reconstructed timelines.
+// bundle's (or a raw Activity Log file's) lines by correlationId into reconstructed timelines.
 //
 // This file owns argv parsing, stdout/stderr, environment/state-dir resolution, and calling the
 // audit/evidence subsystems. The exporter's and analyzer's own logic — file discovery, size-budget

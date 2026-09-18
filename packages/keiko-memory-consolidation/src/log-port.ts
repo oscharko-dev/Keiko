@@ -126,7 +126,11 @@ export function emitConsolidationLogEvent(
   sink: ConsolidationLogSink | undefined,
   event: ConsolidationLogEvent,
 ): void {
-  if (sink === undefined) return;
+  if (sink === undefined) {
+    // An unwired port loses the event it was handed; the loss is counted like any other (#3532).
+    recordActivityLogLoss("port-unwired");
+    return;
+  }
   try {
     sink.write(event);
   } catch (cause) {

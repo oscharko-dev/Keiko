@@ -82,7 +82,8 @@ export function logLevelEnabled(sink: ModelGatewayLogSink, level: ModelGatewayLo
 // level, so a gated site wired to no sink at all does not even build the event it would discard.
 export const nullModelGatewayLogSink: ModelGatewayLogSink = Object.freeze({
   write(_event: ModelGatewayLogEvent): void {
-    // Explicit no-op: the default for every unwired call site.
+    // The default for every unwired call site: the event is lost, and counted as such (#3532).
+    recordActivityLogLoss("port-unwired");
   },
   enabled(_level: ModelGatewayLogLevel): boolean {
     return false;

@@ -186,6 +186,7 @@ process-wide ledger:
 | `persistence-failed`                                                                                                             | The file sink dropped an event after a failed append.                                     |
 | `diagnostic-sink-failed`                                                                                                         | A server diagnostic record could not be delivered.                                        |
 | `port-sink-failed`                                                                                                               | A domain package's log port threw. Every failure counts, not only the first.              |
+| `port-unwired`                                                                                                                   | A domain package's log port had no sink wired, so the event went nowhere.                 |
 | `client-rejected`, `client-rate-suppressed`                                                                                      | The BFF refused a malformed or oversized browser report, or its rate limiter dropped one. |
 | `client-buffer-evicted`, `client-post-throttled`, `client-post-failed`, `client-rejection-suppressed`, `client-error-suppressed` | The browser reported loss on its own side of the transport.                               |
 | `collector-dropped`                                                                                                              | The CLI's deferred security-event collector dropped events.                               |
@@ -204,9 +205,17 @@ counts with its next report, and once more when the page is hidden.
 - `unavailable`: the registry identity is incoherent, or the log cannot be written at all.
 
 The reasons are closed too: `catalog-mismatch`, `sink-unwritable`, `storage-pressure`,
-`budget-exceeded`, `port-unwired` and `level-silent`. The startup check runs before the server
-listens and persists an `activity-log.readiness` line through the real append path. The heartbeat
-re-evaluates it and logs every transition.
+`budget-exceeded`, `port-unwired`, `level-silent` and `storage-check-failed` (the storage could not
+be inspected at all, for example an unlistable `logs/` directory; readiness reports it as degraded
+and never passes the underlying error, which can name a path, to any surface). The startup check
+runs before the server listens and persists an `activity-log.readiness` line through the real
+append path. The heartbeat re-evaluates it and logs every transition.
+
+Readiness covers the segment store through its health report: writability, the byte budget and
+storage pressure, including blocked retention. Segment manifests are not a readiness input. They
+are derived metadata that a query rebuilds whenever one is missing or stale, and they are never on
+the path that writes or reads evidence, so their state cannot make evidence unwritable or
+unreadable. `keiko support manifest verify` reports it.
 
 | Where to read it                   | What it shows                                                        |
 | ---------------------------------- | -------------------------------------------------------------------- |
@@ -355,6 +364,16 @@ and asserts four things:
 
 Every failure class maps to the scenario of its surface and mode. There is no separate journey per
 class.
+
+**One command runs the whole gate.** `npm run check:activity-log` builds the packages and then
+runs `check:op-catalog`, the scenario matrix, `check:error-observability`, `arch:check`,
+`arch:check:negative` and `check:release-impact`. The catalog, proof and scenario checks cover the
+full registered inventory on every run, and `check:error-observability` checks every `catch` in the
+whole tree, never only a diff. Failure paths older than that check are listed in
+`legacy-failure-path-register.json`, which may only shrink: a failure path outside it fails the
+gate wherever it is, and an entry whose path is gone fails it too until
+`node scripts/check-error-observability.mjs --prune-register` removes it. Required CI runs the gate
+on every pull request.
 
 ## Redaction scope, stated honestly
 

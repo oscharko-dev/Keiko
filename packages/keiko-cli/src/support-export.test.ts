@@ -22,7 +22,6 @@ import {
   buildConfigSnapshotSection,
   buildEvidenceManifestSection,
   buildSupportBundleManifest,
-  buildUiLogSection,
   DEFAULT_MAX_BUNDLE_BYTES,
   describeErrorKind,
   discoverServerLogFiles,
@@ -774,13 +773,6 @@ describe("buildSupportBundleManifest", () => {
 });
 
 describe("Wave 6 section builders", () => {
-  it("buildUiLogSection wraps verbatim content with the ui-log $section tag", () => {
-    expect(buildUiLogSection("TypeError: boom\n")).toEqual({
-      $section: "ui-log",
-      content: "TypeError: boom\n",
-    });
-  });
-
   it("buildConfigSnapshotSection wraps the caller-supplied (already-redacted) fields", () => {
     const fields = { KEIKO_STATE_DIR: "[redacted-path]" };
     expect(buildConfigSnapshotSection(fields)).toEqual({
@@ -872,14 +864,16 @@ describe("serializeBundleLines and bundleText", () => {
   it("places every $section record between the manifest and the raw content lines, in order", () => {
     const manifest = buildSupportBundleManifest(baseManifestInput());
     const configSnapshot = buildConfigSnapshotSection({ KEIKO_STATE_DIR: "[redacted-path]" });
-    const uiLog = buildUiLogSection("crash text\n");
+    const evidence = buildEvidenceManifestSection("run-a", {
+      runId: "run-a",
+    } as unknown as EvidenceManifest);
 
-    const lines = serializeBundleLines(manifest, [configSnapshot, uiLog], ["raw-log-line"]);
+    const lines = serializeBundleLines(manifest, [configSnapshot, evidence], ["raw-log-line"]);
 
     expect(lines).toEqual([
       JSON.stringify(manifest),
       JSON.stringify(configSnapshot),
-      JSON.stringify(uiLog),
+      JSON.stringify(evidence),
       "raw-log-line",
     ]);
   });

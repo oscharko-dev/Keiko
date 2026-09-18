@@ -1071,6 +1071,7 @@ export const EN_MESSAGES = {
   "footer.diagnosticsReasonBudgetExceeded": "log storage budget exceeded",
   "footer.diagnosticsReasonPortUnwired": "a log port is not connected",
   "footer.diagnosticsReasonLevelSilent": "logging is set to silent",
+  "footer.diagnosticsReasonStorageCheckFailed": "log storage cannot be checked",
   "footer.windowSingular": "{count} window",
   "footer.windowPlural": "{count} windows",
   "footer.openWindows": "Open windows",

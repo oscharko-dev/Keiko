@@ -398,7 +398,8 @@ system that exists, never beside it:
   classes and vocabularies, causal/lifecycle semantics, analyzer projection, failure classes,
   proof ids, and release impact. The generator resolves those canonical APIs through TypeScript
   symbols; same-shaped local helpers, unresolved dynamic calls, duplicate registrations,
-  registrations without an emitter, and unregistered emitters fail closed. Run
+  registrations without an emitter, unregistered emitters, and an emission outside the operation's
+  owner package (a bypass of its owning port) fail closed. Run
   `npm run generate:op-catalog` and commit the regenerated
   [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
   `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
@@ -428,7 +429,11 @@ system that exists, never beside it:
   closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
   `extra.causeChain`) and a correlation id on every failure line. A `catch` that logs nothing, or
   logs free text, loses the defect for good; `check:error-observability` pins the named sites and
-  every new failure path is held to the same shape.
+  checks every `catch` in the whole tree on every run. Failure paths that predate that full-tree
+  check are listed in a register that may only shrink
+  (`docs/observability/legacy-failure-path-register.json`): never add to it, and after fixing a
+  listed path run `node scripts/check-error-observability.mjs --prune-register` and commit the
+  smaller file.
 - **The persisted identity is complete or the write fails closed.** Every persisted v2 record is
   stamped at the central sink with schema/registry versions and digests, product/build/release and
   safe platform classes, compatibility and writer-capability states, plus

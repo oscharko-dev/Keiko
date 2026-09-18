@@ -2,7 +2,7 @@
 // pinned window, the public/private projections the CLI prints, and the report/dismiss actions,
 // all through the production server module (no mocks of the store or the analyzer).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,14 +19,22 @@ import {
   resetServerLogFailureNotices,
 } from "@oscharko-dev/keiko-server/observability/server-log";
 import type { CliIo } from "./runner.js";
+import { ACTIVITY_LOG_READ_CHUNK_BYTES } from "./activity-log-line-reader.js";
 import { loadServer } from "./lazy-modules.js";
 import { runSupportCli } from "./support.js";
+import { analyzeLogText } from "./support-analyze.js";
 import {
   MAX_SUPPORT_INCIDENT_WINDOW_BYTES,
   SupportIncidentWindowError,
   parseSupportIncidentArgs,
-  readSupportIncidentWindow,
+  resolveSupportIncidentEvidence,
 } from "./support-incident.js";
+import {
+  fixtureLine,
+  fixtureProcess,
+  segmentIdentity,
+  writeFixtureSegment,
+} from "./test-support/activity-log-segments.js";
 
 const INCIDENT_ID = "0123456789abcdef0123456789abcdef";
 // A registered failure whose class requires nothing but the failure line itself.
@@ -219,24 +227,148 @@ describe("keiko support incident", () => {
 
   it("analyzes the window whole or not at all", () => {
     expect(() =>
-      readSupportIncidentWindow([
-        {
-          segmentId: "20260918T120000000Z-4242-0a1b2c3d-000001",
-          state: "sealed",
-          sizeBytes: MAX_SUPPORT_INCIDENT_WINDOW_BYTES + 1,
-          path: join(stateDir, "logs", "activity-20260918T120000000Z-4242-0a1b2c3d-000001.jsonl"),
-        },
-      ]),
+      resolveSupportIncidentEvidence(
+        [
+          {
+            segmentId: "20260918T120000000Z-4242-0a1b2c3d-000001",
+            state: "sealed",
+            sizeBytes: MAX_SUPPORT_INCIDENT_WINDOW_BYTES + 1,
+            path: join(stateDir, "logs", "activity-20260918T120000000Z-4242-0a1b2c3d-000001.jsonl"),
+          },
+        ],
+        stateDir,
+      ),
     ).toThrow(SupportIncidentWindowError);
     expect(() =>
-      readSupportIncidentWindow([
-        {
-          segmentId: "20260918T120000000Z-4242-0a1b2c3d-000001",
-          state: "sealed",
-          sizeBytes: 10,
-          path: join(stateDir, "logs", "activity-20260918T120000000Z-4242-0a1b2c3d-000001.jsonl"),
-        },
-      ]),
+      resolveSupportIncidentEvidence(
+        [
+          {
+            segmentId: "20260918T120000000Z-4242-0a1b2c3d-000001",
+            state: "sealed",
+            sizeBytes: 10,
+            path: join(stateDir, "logs", "activity-20260918T120000000Z-4242-0a1b2c3d-000001.jsonl"),
+          },
+        ],
+        stateDir,
+      ),
     ).toThrow(SupportIncidentWindowError);
+  });
+
+  // Audit (#3531): `readSupportIncidentWindow` used to join every covered segment's lines into one
+  // in-memory string (up to MAX_SUPPORT_INCIDENT_WINDOW_BYTES) before handing it to the analyzer.
+  // `resolveSupportIncidentEvidence` must stream instead: never a whole-file read, only bounded
+  // chunks, and the exact same analysis result a whole-text read would have produced.
+  it("streams a multi-segment window in bounded chunks and never reads a segment whole", () => {
+    const process = fixtureProcess(7101, "deadbeef");
+    const t0 = Date.UTC(2026, 8, 18, 9, 0, 0);
+    const bulkLines = (atMs: number, count: number): string[] =>
+      Array.from({ length: count }, (_unused, index) =>
+        fixtureLine(process, atMs + index, {
+          op: "client.diagnostic",
+          correlationId: `corr-bulk-${String(index).padStart(6, "0")}`,
+        }),
+      );
+    const first = writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, t0, 1),
+      bulkLines(t0, 300),
+    );
+    const second = writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, t0 + 400_000, 2),
+      bulkLines(t0 + 400_000, 300),
+    );
+    const segments = [
+      { segmentId: "s1", state: "sealed" as const, sizeBytes: statSync(first).size, path: first },
+      { segmentId: "s2", state: "sealed" as const, sizeBytes: statSync(second).size, path: second },
+    ];
+    // The fixture must genuinely exceed several read chunks, or a bug that reads the whole segment
+    // in one call could still pass by accident.
+    expect(segments[0].sizeBytes + segments[1].sizeBytes).toBeGreaterThan(
+      ACTIVITY_LOG_READ_CHUNK_BYTES * 2,
+    );
+
+    // `readActivityLogFileLines`'s own observability seam (never used in production) reports every
+    // raw chunk it reads, in order, before yielding the lines inside it — the same seam
+    // `support-segment-scan.ts`'s `ActivityLogScanner` uses to size its manifest digests. Recording
+    // every chunk's size here proves the window is genuinely pulled through many bounded reads,
+    // never accumulated into one buffer sized to the window.
+    const chunkSizes: number[] = [];
+    const analysis = resolveSupportIncidentEvidence(segments, stateDir, (chunk) => {
+      chunkSizes.push(chunk.length);
+    });
+
+    // Several chunks, each within the bound — never one read sized to the whole window (or even to
+    // one whole segment, both of which exceed one chunk by construction, asserted above).
+    expect(chunkSizes.length).toBeGreaterThan(2);
+    for (const size of chunkSizes) {
+      expect(size).toBeLessThanOrEqual(ACTIVITY_LOG_READ_CHUNK_BYTES);
+    }
+    expect(chunkSizes.reduce((sum, size) => sum + size, 0)).toBe(
+      segments[0].sizeBytes + segments[1].sizeBytes,
+    );
+    // The whole-file primitive (`readKeptFiles`/`readVerifiedLogText`'s own `readFileSync`) is
+    // structurally unreachable from this path: `support-incident.ts` no longer imports it at all.
+    expect(readFileSync(join(import.meta.dirname, "support-incident.ts"), "utf8")).not.toContain(
+      "support-export.js",
+    );
+    expect(analysis.evidence.supportedLineCount).toBe(600);
+
+    // Same verdict the whole-text (pre-migration) reconstruction would have produced for this
+    // well-formed window: the migration changes memory shape only, never a result.
+    const wholeText = readFileSync(first, "utf8") + readFileSync(second, "utf8");
+    expect(analysis).toEqual(analyzeLogText(wholeText));
+  });
+
+  // The pre-migration reconstruction (`readKeptFiles` rejoining every kept line with its own
+  // trailing "\n") always reported the LAST line of the window as terminated, even when the
+  // covered active segment's own tail was torn — the rejoin masked it. `resolveSupportIncidentEvidence`
+  // preserves that exact verdict (forces `terminated: true` on every line it yields) rather than
+  // silently starting to report a torn tail as `truncated`, which would be a result change this
+  // audit is not chartered to make.
+  it("matches the pre-migration reconstruction's masking of a torn active-segment tail", () => {
+    const process = fixtureProcess(7202, "deadbee2");
+    const t0 = Date.UTC(2026, 8, 18, 9, 30, 0);
+    const sealedPath = writeFixtureSegment(stateDir, segmentIdentity(process, t0, 1), [
+      fixtureLine(process, t0, { op: "client.diagnostic", correlationId: "corr-torn-000001" }),
+    ]);
+    const activePath = writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, t0 + 1000, 2),
+      [fixtureLine(process, t0 + 1000, { op: "client.diagnostic", correlationId: "corr-torn-2" })],
+      { state: "active", tail: '{"ts":"2026-09-18T09:30:02.000Z","op":"client.d' },
+    );
+    const segments = [
+      {
+        segmentId: "s1",
+        state: "sealed" as const,
+        sizeBytes: statSync(sealedPath).size,
+        path: sealedPath,
+      },
+      {
+        segmentId: "s2",
+        state: "active" as const,
+        sizeBytes: statSync(activePath).size,
+        path: activePath,
+      },
+    ];
+
+    const analysis = resolveSupportIncidentEvidence(segments, stateDir);
+
+    // The old reconstruction's own join: every kept line (including a torn tail) rejoined with its
+    // own trailing "\n" before analysis, exactly as `readSupportIncidentWindow` used to build its
+    // `windowText`.
+    const rejoinedLines = [
+      ...readFileSync(sealedPath, "utf8").split("\n").filter(Boolean),
+      ...readFileSync(activePath, "utf8").split("\n").filter(Boolean),
+    ];
+    const rejoinedText = rejoinedLines.map((line) => `${line}\n`).join("");
+    expect(analysis).toEqual(analyzeLogText(rejoinedText));
+    // The torn fragment is invalid JSON either way, but WHICH rejected evidence class it gets is
+    // exactly the quirk being preserved: `invalidJsonEvidence` reads a forced-terminated line as
+    // `corrupt` (a complete-but-malformed record), never as `truncated` (an incomplete one) — the
+    // one distinction a real bounded reader would have reported correctly.
+    expect(analysis.evidence.corruptLineCount).toBe(1);
+    expect(analysis.evidence.truncatedLineCount).toBe(0);
   });
 });

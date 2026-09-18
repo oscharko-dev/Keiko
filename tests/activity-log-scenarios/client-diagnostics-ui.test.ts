@@ -292,7 +292,10 @@ describe("Activity Log scenario: ui", () => {
       "process.heartbeat",
     );
     const record = parsedLine(heartbeats[0]);
-    expect(record.eventLoopDelayP99Ms).toBeGreaterThanOrEqual(6_000);
+    // Exact, not toBeGreaterThanOrEqual: the fake histogram deterministically returns
+    // 6_000 * 1_000_000 ns, so only `toBe(6_000)` can catch a broken ns-to-ms conversion (e.g. a
+    // missing or doubled /1_000_000, or a units mix-up) — >= 6_000 accepts any larger value too.
+    expect(record.eventLoopDelayP99Ms).toBe(6_000);
     expect(typeof record.rssBytes).toBe("number");
   });
 });

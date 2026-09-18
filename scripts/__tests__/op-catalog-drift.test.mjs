@@ -27,7 +27,11 @@ import {
 import { failureSurfaceInventoryDrift } from "../lib/activity-log-failure-surface-inventory.mjs";
 import { withTypedRegistryFixture } from "./support/typed-registry-fixture.mjs";
 import {
-  newFailurePathFindings,
+  failurePathRegisterDiff,
+  parseFailurePathRegister,
+  prunedFailurePathRegister,
+  scanFailurePaths,
+  serializeFailurePathRegister,
   unregisteredFailurePathViolations,
 } from "../check-error-observability.mjs";
 import {
@@ -414,22 +418,85 @@ describe("new failure-path observability", () => {
     ).toEqual(["Store.constructor", "Store.get value", "Store.load", "Store.save", "Store.flush"]);
   });
 
+  // #3540: the rule runs over the whole tree against a register of legacy failure paths that may
+  // only shrink; no base ref or diff decides what is checked.
   it("does not let a fixed catch in one method hide a new one in another", () => {
-    const base = [
-      "class Store {",
-      "  load() { try { run(); } catch {} }",
-      "  save() { try { run(); } catch (error) { reportFailure(error); } }",
-      "}",
-    ].join("\n");
+    const path = "packages/fixture/src/store.ts";
+    const register = [{ path, owner: "Store.load", kind: "unregistered-catch", count: 1 }];
     const head = [
       "class Store {",
       "  load() { try { run(); } catch (error) { reportFailure(error); } }",
       "  save() { try { run(); } catch {} }",
       "}",
     ].join("\n");
-    expect(newFailurePathFindings(base, head, "packages/fixture/src/store.ts")).toEqual([
+    const { unregistered, stale } = failurePathRegisterDiff(
+      unregisteredFailurePathViolations(head, path),
+      register,
+    );
+    expect(unregistered).toEqual([
       expect.objectContaining({ owner: "Store.save", kind: "unregistered-catch" }),
     ]);
+    expect(stale).toEqual([expect.objectContaining({ owner: "Store.load" })]);
+  });
+
+  it("fails a second silent catch in a registered owner, and prunes only downward", () => {
+    const path = "packages/fixture/src/store.ts";
+    const register = [{ path, owner: "load", kind: "unregistered-catch", count: 1 }];
+    const findings = unregisteredFailurePathViolations(
+      "function load() { try { a(); } catch {} try { b(); } catch {} }",
+      path,
+    );
+    expect(failurePathRegisterDiff(findings, register).unregistered).toHaveLength(2);
+    expect(prunedFailurePathRegister(findings, register)).toEqual(register);
+    expect(prunedFailurePathRegister(findings.slice(0, 1), [{ ...register[0], count: 3 }])).toEqual(
+      register,
+    );
+    expect(prunedFailurePathRegister([], register)).toEqual([]);
+  });
+
+  it("accepts only the exact register shape that pruning writes", () => {
+    const entry = { path: "packages/a/src/x.ts", owner: "f", kind: "unregistered-catch", count: 1 };
+    const later = { ...entry, owner: "g" };
+    expect(parseFailurePathRegister(serializeFailurePathRegister([entry, later]))).toEqual([
+      entry,
+      later,
+    ]);
+    for (const entries of [
+      [later, entry],
+      [entry, entry],
+      [{ ...entry, count: 0 }],
+      [{ ...entry, extra: true }],
+      [{ ...entry, kind: "other" }],
+      [{ ...entry, path: "src/x.ts" }],
+    ]) {
+      expect(() => parseFailurePathRegister(serializeFailurePathRegister(entries))).toThrow(
+        "error-observability-register-invalid",
+      );
+    }
+  });
+
+  it("scans every production file on disk, tracked or not, and skips tests and build output", () => {
+    const root = mkdtempSync(join(tmpdir(), "failure-path-scan-"));
+    try {
+      const silent = "export function run(): void { try { go(); } catch {} }\n";
+      for (const path of [
+        "packages/pkg/src/a.ts",
+        "packages/pkg/src/a.test.ts",
+        "packages/pkg/src/b.d.ts",
+        "packages/pkg/src/__tests__/c.ts",
+        "packages/pkg/dist/d.ts",
+        "packages/pkg/node_modules/e/index.ts",
+        "packages/pkg/.next/f.ts",
+      ]) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), silent, "utf8");
+      }
+      expect(scanFailurePaths(root).map((finding) => finding.path)).toEqual([
+        "packages/pkg/src/a.ts",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("permits only an exact reviewed cleanup boundary", () => {

@@ -569,6 +569,14 @@ const REGISTRY_MUTATIONS = [
     code: "emission-unregistered",
   },
   {
+    // The emission stays in this package while the registration names another owner: the event
+    // no longer reaches the log through its owning package's port.
+    name: "owner-bypass",
+    obligation: "typed-operation-registration",
+    mutate: edit('  owner: "zzz-gate-owner-bypass",', '  owner: "zzz-gate-baseline",'),
+    code: "emission-outside-owner",
+  },
+  {
     name: "dynamic-operation",
     obligation: "typed-operation-registration",
     mutate: edit('op: "fixture.gate.dynamic-operation",', 'op: ["fixture", "gate"].join("."),'),

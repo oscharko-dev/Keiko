@@ -1,7 +1,7 @@
 // Diagnostic readiness (#3532): evaluated before the server accepts work, persisted through the
 // observable production append path, and exposed on /api/health as a closed, body-free block.
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -138,6 +138,53 @@ describe("diagnostic readiness", () => {
       storageHealth: () => healthyStorage({ writable: false }),
     });
     expect(snapshot).toMatchObject({ readiness: "unavailable", reasons: ["sink-unwritable"] });
+  });
+
+  // Review 4050605306: a throwing storage check froze the last "ready" snapshot, and on a cold start
+  // it carried the state directory's path out through GET /api/health.
+  it("reduces a throwing storage check to storage-check-failed instead of keeping a stale ready", () => {
+    checkActivityLogReadiness({ stateDir });
+    expect(currentActivityLogReadiness().readiness).toBe("ready");
+    const failing = (): ActivityLogStoreHealth => {
+      throw new Error(`EACCES: permission denied, scandir '${join(stateDir, "logs")}'`);
+    };
+    const next = refreshActivityLogReadiness({ stateDir, storageHealth: failing });
+    expect(next).toMatchObject({ readiness: "degraded", reasons: ["storage-check-failed"] });
+    expect(currentActivityLogReadiness()).toMatchObject({
+      readiness: "degraded",
+      reasons: ["storage-check-failed"],
+    });
+    const transition = readinessLines(stateDir).at(-1) ?? "";
+    expect(
+      expectActivityLogProof("activity-log.readiness.transition-line", transition),
+    ).toMatchObject({ readiness: "degraded", reasons: ["storage-check-failed"] });
+    expect(transition).not.toContain(stateDir);
+  });
+
+  it("answers GET /api/health on a cold start whose log directory cannot be listed", async (ctx) => {
+    // POSIX permission bits, which root reads straight through.
+    if (process.platform === "win32" || process.getuid?.() === 0) ctx.skip();
+    const logs = join(stateDir, "logs");
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    chmodSync(logs, 0o000);
+    try {
+      const route = API_ROUTES.find(
+        (entry) => entry.method === "GET" && entry.pattern === "/api/health",
+      );
+      const result = (await route?.handler({} as RouteContext, {} as UiHandlerDeps)) as {
+        readonly status: number;
+        readonly body: { readonly diagnostics: unknown };
+      };
+      expect(result.status).toBe(200);
+      expect(isActivityLogReadinessSnapshot(result.body.diagnostics)).toBe(true);
+      expect(result.body.diagnostics).toMatchObject({
+        readiness: expect.not.stringMatching(/^ready$/u) as unknown,
+        reasons: expect.arrayContaining(["storage-check-failed"]) as unknown,
+      });
+      expect(JSON.stringify(result.body)).not.toContain(stateDir);
+    } finally {
+      chmodSync(logs, 0o700);
+    }
   });
 
   it("reports an unwired port when the process logger writes to another directory", () => {

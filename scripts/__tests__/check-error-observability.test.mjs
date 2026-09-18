@@ -208,7 +208,7 @@ describe("check-error-observability gate — runProbe / runServerTopLevelSite / 
     }
   });
 
-  it("main(): a new unregistered failure path fails the gate before any probe runs", async () => {
+  it("main(): a failure path outside the legacy register fails the gate before any probe runs", async () => {
     const originalExitCode = process.exitCode;
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -218,13 +218,15 @@ describe("check-error-observability gate — runProbe / runServerTopLevelSite / 
     const finding = {
       path: "packages/fixture/src/failure.ts",
       line: 7,
+      owner: "retry",
       kind: "unregistered-catch",
     };
     try {
       await expect(main(() => [finding])).rejects.toThrow("process.exit(1)");
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(String(errorSpy.mock.calls[0]?.[0])).toContain(
-        "new unregistered failure path(s): packages/fixture/src/failure.ts:7 (unregistered-catch)",
+        "failure path(s) outside docs/observability/legacy-failure-path-register.json: " +
+          "packages/fixture/src/failure.ts:7 retry (unregistered-catch)",
       );
       expect(logSpy).not.toHaveBeenCalled();
     } finally {
