@@ -1,4 +1,8 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { resolveHostExecutable } from "./host-executable.mjs";
 
 // One command moves the product version everywhere it lives mechanically: the root manifest, every
 // workspace manifest, every dependency pin between workspace packages, the exported
@@ -76,6 +80,59 @@ export function versionedSource(text, version) {
   return text.replace(VERSION_CONSTANT, (_match, head, tail) => `${head}${version}${tail}`);
 }
 
+const LOCKFILE_VERSION_PLACEHOLDER = "0.0.0-version-normalized";
+// The root manifest ("") and exactly this repository's configured workspace glob
+// (package.json "workspaces": ["packages/*"]) -- never "no resolved field", which npm also uses for
+// a bundled node_modules/* dependency (`inBundle: true`, no `resolved`). That shape would
+// misclassify a real, unreviewed dependency change as harmless workspace version noise and let
+// normalizedLockfileText normalize it away (#3555 review).
+const WORKSPACE_LOCKFILE_PATH = /^packages\/[^/]+$/u;
+
+function isWorkspaceLockfilePath(path) {
+  return path === "" || WORKSPACE_LOCKFILE_PATH.test(path);
+}
+
+function workspaceLockfileEntries(packages) {
+  return Object.entries(packages)
+    .filter(
+      ([path, entry]) =>
+        isWorkspaceLockfilePath(path) && entry !== null && typeof entry === "object",
+    )
+    .map(([, entry]) => entry);
+}
+
+function normalizeWorkspaceLockfileEntry(entry, workspaceNames) {
+  if (typeof entry.version === "string") entry.version = LOCKFILE_VERSION_PLACEHOLDER;
+  for (const field of DEPENDENCY_FIELDS) {
+    const dependencies = entry[field];
+    if (dependencies === null || typeof dependencies !== "object") continue;
+    for (const name of Object.keys(dependencies)) {
+      if (workspaceNames.has(name)) dependencies[name] = LOCKFILE_VERSION_PLACEHOLDER;
+    }
+  }
+}
+
+/**
+ * `text` with every workspace package's own `version` field, and every dependency pin ON a
+ * workspace package, replaced by a fixed placeholder. A workspace-local `packages/*` entry (and
+ * the root `""` entry) is identified by its lockfile path, exactly this repository's configured
+ * workspace glob -- never by content shape. This module moves exactly these fields on a version
+ * bump and nothing else a lockfile refresh can reach, so the normalized text is unchanged across a
+ * version-only bump while any other lockfile change -- a real dependency added, removed or
+ * re-resolved, third-party version bumped, a bundled node_modules/* entry with no `resolved` -- still
+ * moves it.
+ */
+export function normalizedLockfileText(text) {
+  const lockfile = JSON.parse(text);
+  if (typeof lockfile.version === "string") lockfile.version = LOCKFILE_VERSION_PLACEHOLDER;
+  const packages = lockfile.packages;
+  if (packages === null || typeof packages !== "object") return text;
+  const entries = workspaceLockfileEntries(packages);
+  const workspaceNames = new Set(entries.map((entry) => entry.name).filter(Boolean));
+  for (const entry of entries) normalizeWorkspaceLockfileEntry(entry, workspaceNames);
+  return JSON.stringify(lockfile);
+}
+
 function rewrite(path, readText, writeText, produce) {
   const before = readText(path);
   const after = produce(before);
@@ -139,6 +196,25 @@ export function applySetVersion({
     "scripts/check-version-consistency.mjs",
   ]);
   return changed;
+}
+
+/**
+ * The real Node.js/host seams applySetVersion needs, minus `root` and `version`: every CLI that
+ * moves the product version (scripts/set-version.mjs, the release button's version-bump fallback)
+ * wires the same file system and host executables, so this is the one place that does it.
+ */
+export function nodeSetVersionHost() {
+  return {
+    listWorkspaceDirs: (packagesDir) =>
+      readdirSync(packagesDir)
+        .map((name) => join(packagesDir, name))
+        .filter((dir) => statSync(dir).isDirectory() && existsSync(join(dir, "package.json"))),
+    readOptionalText: (path) => (existsSync(path) ? readFileSync(path, "utf8") : undefined),
+    readText: (path) => readFileSync(path, "utf8"),
+    spawn: (executable, args, cwd) =>
+      spawnSync(resolveHostExecutable(executable), args, { cwd, encoding: "utf8" }),
+    writeText: (path, text) => writeFileSync(path, text, "utf8"),
+  };
 }
 
 /**

@@ -5,18 +5,29 @@ This repository has a dedicated, human-authorized release workflow at
 
 ## Operator contract
 
-A stable release is one prepared version on `dev` and one press of the release button (ADR-0177 D9):
+A stable release is one press of the release button, on a `dev` that carries a reviewed
+release-impact entry for whatever version comes next (ADR-0177 D9):
 
-1. Prepare the version on `dev`: `npm run set-version -- <version>` moves every mechanical spot, and
-   the release-impact catalog entry carries the release-owner approval. On each green `dev` push,
-   `release-candidate.yml` points `v<version>` at that commit through the release tag GitHub App, and
-   the tag push builds the stable portable assets beside CI.
+1. `release-impact.catalog.json` carries a reviewed entry for the version to release, written ahead
+   of time as part of the normal review of the change that needs it (KEIKO-0118) — never as a
+   separate release-time step. On each green `dev` push whose current version is approved and not yet
+   published, `release-candidate.yml` points `v<version>` at that commit through the release tag
+   GitHub App, and the tag push builds the stable portable assets beside CI.
 2. Press the button: `npm run release`, or **Actions → Release → Run workflow** on `dev`. Nothing
-   else is supplied. The run's `request` job authorizes exactly the `dev` commit it was started on and
-   points `v<version>` at it. It fails at once, naming the reason, when that commit cannot be
-   released: a version that is not approved, a version npm or GitHub already carries, or a publish of
-   the tag that is still running.
-3. Nothing after that is manual. `release-advance.yml` runs whenever the request, the tag build, or a
+   else is supplied. The run's `request` job authorizes exactly the `dev` commit it was started on.
+   - If the current version is not yet published, it points `v<version>` at that commit. It fails at
+     once, naming the reason, when that commit cannot be released: a version that is not approved, or
+     a publish of the tag that is still running.
+   - If the current version is already published, there is nothing to request yet: the job moves the
+     checkout to the lowest stable version the catalog already carries a reviewed entry for
+     (`scripts/set-version.mjs`, run mechanically — no operator command), opens a
+     `release/bump-<version>` pull request to `dev` as the release App, and arms native auto-merge,
+     instead of failing. It fails only when no reviewed entry exists yet for a newer version.
+3. Nothing after that is manual. If step 2 opened a version-bump pull request, its merge (once CI is
+   green) is recognized as the same button press across that one merge — a version-bump PR can only
+   have been opened by the release App's own identity, from this same owner-gated job, targeting
+   `dev` from the reserved branch prefix, carrying exactly the one mechanical commit
+   `set-version.mjs` produces. `release-advance.yml` runs whenever the request, the tag build, or a
    release-required check workflow completes, and dispatches `release.yml` on the tag as soon as the
    requested commit is built and every release-required check is green. Its `authorize` job accepts
    that dispatch only for a commit an allowlisted owner requested, and the publish job releases the

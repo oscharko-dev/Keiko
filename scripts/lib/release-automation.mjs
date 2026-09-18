@@ -15,16 +15,18 @@
 import { Buffer } from "node:buffer";
 
 import { evaluateRequiredChecks, parseRequiredChecks } from "../verify-release-required-checks.mjs";
+import { readFound } from "./github-api.mjs";
 import {
   isOwnerReleaseRequest,
   isReleaseOwner,
   npmHasVersion,
-  readFound,
+  readDevHead,
   readReleaseDispatchRuns,
   releaseExists,
   releaseOwners,
   remoteTagCommit,
 } from "./release-candidate.mjs";
+import { readVersionBumpAuthorization } from "./release-version-bump.mjs";
 
 export const AUTOMATION_ACTOR = "github-actions[bot]";
 const PORTABLE_ASSETS_WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
@@ -264,10 +266,46 @@ function publishAttemptAfter(releaseRuns, request, tag) {
   )[0];
 }
 
+function versionBumpCandidate(runGh, repository, runNpm) {
+  const devHeadSha = readDevHead(runGh, repository);
+  if (devHeadSha === undefined) return undefined;
+  const rootPackage = readRootPackageAt(runGh, repository, devHeadSha);
+  const tag = `v${String(rootPackage.version)}`;
+  if (!STABLE_TAG.test(tag)) return undefined;
+  const published =
+    npmHasVersion(runNpm, rootPackage.name, rootPackage.version) ||
+    releaseExists(runGh, repository, tag);
+  if (published) return undefined;
+  const remoteTagSha = remoteTagCommit(runGh, repository, tag);
+  if (remoteTagSha === undefined) return undefined;
+  const authorization = readVersionBumpAuthorization(runGh, repository, remoteTagSha);
+  return authorization === undefined ? undefined : { head_sha: remoteTagSha };
+}
+
+/**
+ * The request equivalent of an owner button press, derived instead from a merged version-bump PR
+ * (scripts/lib/release-version-bump.mjs): dev's current version is unpublished, its tag is already
+ * positioned there (release-candidate.mjs's own per-push tracking does that once the target
+ * version's catalog entry is reviewed and releaseHeld recognizes the same authorization), and that
+ * commit can only be the merge of a PR the release App opened from the owner+dev-gated request job.
+ * Undefined when any of that is not, or not yet, true, or when reading it failed for any reason --
+ * this path is speculative, so any failure here falls back to the classic dispatch-run request,
+ * which is what a direct button press on an existing candidate produces and remains published
+ * forever once its version ships. It carries the fail-closed guarantee, unchanged.
+ */
+function versionBumpRequest(runGh, repository, runNpm) {
+  try {
+    return versionBumpCandidate(runGh, repository, runNpm);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Reads every fact releaseAdvancePlan() needs, stopping at the first one that decides. */
 export function gatherAdvanceFacts({ owners, repository, requiredChecks, runGh, runNpm }) {
   const releaseRuns = readReleaseDispatchRuns(runGh, repository);
-  const request = newestOwnerRequest(releaseRuns, owners);
+  const request =
+    versionBumpRequest(runGh, repository, runNpm) ?? newestOwnerRequest(releaseRuns, owners);
   if (request === undefined) return { request };
   requireCommitSha(request.head_sha, "the requested commit");
   const rootPackage = readRootPackageAt(runGh, repository, request.head_sha);

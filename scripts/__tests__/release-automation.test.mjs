@@ -17,6 +17,8 @@ import {
   runReleaseAuthorize,
 } from "../lib/release-automation.mjs";
 import { isOwnerReleaseRequest, releaseOwners } from "../lib/release-candidate.mjs";
+import { VERSION_BUMP_APP_LOGIN } from "../lib/release-version-bump.mjs";
+import { versionedManifest } from "../lib/set-version.mjs";
 
 // ADR-0177 D9. Until 1.0.5 the stable build ended in a handoff that printed a long
 // `gh workflow run release.yml ... -f portable_assets_run_id=...` command, and the owner had to wait
@@ -403,10 +405,17 @@ describe("gatherAdvanceFacts", () => {
     });
   }
 
-  it("reads only the release runs while nothing is requested", () => {
+  it("reads only the release runs and the dev head while nothing is requested", () => {
+    // The release-run listing is read first, then versionBumpRequest() tries dev's head
+    // (readDevHead) and, finding no route stubbed for it here, falls back to the (empty) classic
+    // listing already read -- the same fail-closed-to-classic path a real "dev head unreadable"
+    // response takes ("falls back to the classic request when the dev head cannot be read" below).
     const github = fakeGithub({ [RUNS_PATH]: ok({ workflow_runs: [] }) });
     expect(gather(github)).toStrictEqual({ request: undefined });
-    expect(github.calls).toStrictEqual([["api", RUNS_PATH]]);
+    expect(github.calls).toStrictEqual([
+      ["api", RUNS_PATH],
+      ["api", `repos/${REPO}/git/ref/heads/dev`],
+    ]);
   });
 
   it("stops at a published version", () => {
@@ -444,6 +453,104 @@ describe("gatherAdvanceFacts", () => {
       [`repos/${REPO}/contents/package.json?ref=${SHA}`]: packageFile("1.0.6-rc.1"),
     });
     expect(() => gather(github)).toThrow("v1.0.6-rc.1 is not a stable release tag");
+  });
+
+  describe("the version-bump path (dev already published)", () => {
+    const BUMP_SHA = "c".repeat(40);
+    const BUMP_PARENT_SHA = "d".repeat(40);
+    const BUMP_TAG = "v1.0.6";
+    const authorizationPr = (overrides = {}) => ({
+      base: { ref: "dev" },
+      commits: 1,
+      head: { ref: "release/bump-1.0.6" },
+      merge_commit_sha: BUMP_SHA,
+      merged: true,
+      number: 42,
+      user: { login: VERSION_BUMP_APP_LOGIN },
+      ...overrides,
+    });
+    const parentManifest = { name: "@oscharko-dev/keiko", version: "1.0.5" };
+    const headManifest = versionedManifest(JSON.stringify(parentManifest), new Set(), "1.0.6");
+    const lockfile = (version) =>
+      ok({
+        content: Buffer.from(
+          JSON.stringify({
+            version,
+            lockfileVersion: 3,
+            packages: { "": { name: "@oscharko-dev/keiko", version } },
+          }),
+        ).toString("base64"),
+        encoding: "base64",
+      });
+
+    // A genuine, verifiable mechanical bump for readVersionBumpAuthorization's content check
+    // (#3555 review): no workspace packages, so `packages` at the parent is an empty listing.
+    function bumpGithub(overrides = {}) {
+      return fakeGithub({
+        [`repos/${REPO}/actions/workflows/portable-assets.yml/runs?event=push&head_sha=${BUMP_SHA}&per_page=100`]:
+          ok({ workflow_runs: [build({ head_branch: BUMP_TAG, head_sha: BUMP_SHA })] }),
+        [`repos/${REPO}/commits/${BUMP_SHA}`]: ok({
+          files: [
+            { filename: "package.json", status: "modified" },
+            { filename: "package-lock.json", status: "modified" },
+          ],
+          parents: [{ sha: BUMP_PARENT_SHA }],
+        }),
+        [`repos/${REPO}/commits/${BUMP_SHA}/check-runs?filter=latest&per_page=100&page=1`]: ok({
+          check_runs: [checkRun("ci"), checkRun("ui")],
+        }),
+        [`repos/${REPO}/commits/${BUMP_SHA}/pulls`]: ok([authorizationPr()]),
+        [`repos/${REPO}/commits/${BUMP_SHA}/status`]: ok({ statuses: [] }),
+        [`repos/${REPO}/contents/package-lock.json?ref=${BUMP_PARENT_SHA}`]: lockfile("1.0.5"),
+        [`repos/${REPO}/contents/package-lock.json?ref=${BUMP_SHA}`]: lockfile("1.0.6"),
+        [`repos/${REPO}/contents/package.json?ref=${BUMP_PARENT_SHA}`]: ok({
+          content: Buffer.from(JSON.stringify(parentManifest)).toString("base64"),
+          encoding: "base64",
+        }),
+        [`repos/${REPO}/contents/package.json?ref=${BUMP_SHA}`]: ok({
+          content: Buffer.from(headManifest).toString("base64"),
+          encoding: "base64",
+        }),
+        [`repos/${REPO}/contents/packages?ref=${BUMP_PARENT_SHA}`]: ok([]),
+        [`repos/${REPO}/git/ref/heads/dev`]: ok({ object: { sha: BUMP_SHA, type: "commit" } }),
+        [`repos/${REPO}/git/ref/tags/${BUMP_TAG}`]: ok({
+          object: { sha: BUMP_SHA, type: "commit" },
+        }),
+        [`repos/${REPO}/pulls/42`]: ok(authorizationPr()),
+        [`repos/${REPO}/releases/tags/${BUMP_TAG}`]: NOT_FOUND,
+        ...overrides,
+      });
+    }
+
+    it("treats a merged, App-authored version-bump PR as the request, ahead of any classic one", () => {
+      const facts = gather(bumpGithub());
+      expect(facts).toMatchObject({
+        remoteTagSha: BUMP_SHA,
+        request: { head_sha: BUMP_SHA },
+        tag: BUMP_TAG,
+      });
+    });
+
+    it.each([
+      ["the PR was not opened by the release App", { user: { login: "someone-else" } }],
+      ["the PR targets a different base branch", { base: { ref: "release/1.0" } }],
+      ["the PR carries more than one commit", { commits: 2 }],
+      ["the PR is not merged", { merged: false }],
+      ["the branch is not the reserved prefix", { head: { ref: "release/1.0" } }],
+    ])("falls back to the classic request when %s", (_label, override) => {
+      const github = bumpGithub({ [`repos/${REPO}/pulls/42`]: ok(authorizationPr(override)) });
+      expect(gather(github).request).toStrictEqual(request());
+    });
+
+    it("falls back to the classic request when the dev head cannot be read", () => {
+      const github = bumpGithub({ [`repos/${REPO}/git/ref/heads/dev`]: NOT_FOUND });
+      expect(gather(github).request).toStrictEqual(request());
+    });
+
+    it("does not treat an already-published version-bump target as a request", () => {
+      const github = bumpGithub({ [`repos/${REPO}/releases/tags/${BUMP_TAG}`]: ok({ id: 1 }) });
+      expect(gather(github).request).toStrictEqual(request());
+    });
   });
 });
 
