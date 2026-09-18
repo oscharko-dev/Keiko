@@ -39,6 +39,8 @@ const FIXTURE_DIGEST = "a".repeat(64);
 export interface RuntimeFixtureState {
   state: CodingWorkbenchRuntimeStateName;
   revision: number;
+  approvalDecisions: number;
+  editorSnapshotRegistrations: number;
   recoveryAcknowledged: boolean;
   streamConnections: number;
   readonly validationErrors: string[];
@@ -317,6 +319,8 @@ export function createRuntimeFixture(options: LiveRuntimeFixtureOptions): Runtim
   return {
     state: options.initialState ?? "idle",
     revision: 1,
+    approvalDecisions: 0,
+    editorSnapshotRegistrations: 0,
     recoveryAcknowledged: false,
     streamConnections: 0,
     validationErrors: [],
