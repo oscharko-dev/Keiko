@@ -21,6 +21,14 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TEST_FILE = /^(?:packages\/[a-z0-9-]+\/src|tests)\/[\w./-]+\.test\.(?:ts|tsx|mts)$/u;
 
+function isContainedTestFile(file) {
+  return (
+    typeof file === "string" &&
+    TEST_FILE.test(file) &&
+    !file.split("/").some((segment) => segment === "." || segment === "..")
+  );
+}
+
 function compareCodepoints(left, right) {
   if (left === right) return 0;
   return left < right ? -1 : 1;
@@ -33,7 +41,7 @@ export function activityLogScenarioFiles(inventory) {
     throw new TypeError("activity-log scenarios: the inventory has no scenarios map");
   }
   const files = Object.values(scenarios).flatMap((entry) => {
-    if (!Array.isArray(entry) || !entry.every((file) => TEST_FILE.test(file))) {
+    if (!Array.isArray(entry) || !entry.every(isContainedTestFile)) {
       throw new TypeError("activity-log scenarios: the inventory names a non-test path");
     }
     return entry;

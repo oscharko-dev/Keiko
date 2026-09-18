@@ -52,6 +52,11 @@ describe("activity-log scenario execution", () => {
     ["a scenarios list", { scenarios: [CRASH_SCENARIO] }],
     ["a non-test path", { scenarios: { "bff.loss": ["packages/keiko-server/src/server.ts"] } }],
     ["an escaping path", { scenarios: { "bff.loss": ["../outside/evil.test.ts"] } }],
+    [
+      "a traversal inside the tests root",
+      { scenarios: { "bff.loss": ["tests/../../evil.test.ts"] } },
+    ],
+    ["a non-string entry", { scenarios: { "bff.loss": [42] } }],
     ["a non-array entry", { scenarios: { "bff.loss": CRASH_SCENARIO } }],
   ])("fails closed on %s", (_label, value) => {
     expect(() => activityLogScenarioFiles(value)).toThrow(TypeError);
