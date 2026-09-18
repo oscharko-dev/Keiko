@@ -46,6 +46,7 @@ import {
   drainSupportIncidentCandidates,
   listSupportIncidents,
   observeSupportIncidentTrigger,
+  readSupportIncident,
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
   setSupportIncidentTriggerForTests,
@@ -112,7 +113,9 @@ describe("SupportIncident candidates", () => {
   }
 
   function storeNames(): readonly string[] {
-    return readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME)).toSorted();
+    return [...readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))].sort((left, right) =>
+      left.localeCompare(right, "en-US"),
+    );
   }
 
   describe("the user-initiated trigger", () => {
@@ -307,6 +310,16 @@ describe("SupportIncident candidates", () => {
         defectFingerprint: record.fingerprint.defectFingerprint,
         openIncidentCount: 0,
       });
+    });
+
+    it("reads one open record by id and nothing else", () => {
+      const { record } = created(recordUserReportedIncident(stateDir));
+      expect(readSupportIncident(stateDir, record.incidentId)).toEqual(record);
+      expect(readSupportIncident(stateDir, "0".repeat(32))).toBeUndefined();
+      expect(readSupportIncident(stateDir, "../../escape")).toBeUndefined();
+      expect(
+        readSupportIncident(stateDir, record.incidentId, { nowMs: record.expiresAtMs }),
+      ).toBeUndefined();
     });
 
     it("recovers a torn record left by a crash mid-write", () => {

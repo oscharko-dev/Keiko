@@ -456,6 +456,7 @@ export { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 export {
   dismissSupportIncident,
   listSupportIncidents,
+  readSupportIncident,
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
   supportIncidentSegmentFiles,

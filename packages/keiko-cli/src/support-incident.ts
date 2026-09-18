@@ -220,7 +220,7 @@ export function resolveSupportIncident(
 function renderFields(title: string, fields: object): string {
   const rows = Object.entries(fields).map(
     ([key, value]: [string, unknown]) =>
-      `  ${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`,
+      `  ${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`,
   );
   return `${title}\n${rows.join("\n")}\n`;
 }
@@ -285,11 +285,10 @@ function findRecord(
   context: IncidentContext,
   incidentId: string,
 ): SupportIncidentRecord | undefined {
-  const record = context.server
-    .listSupportIncidents(context.stateDir)
-    .find((candidate) => candidate.incidentId === incidentId);
-  if (record === undefined)
+  const record = context.server.readSupportIncident(context.stateDir, incidentId);
+  if (record === undefined) {
     context.io.err(`keiko support incident: no open incident ${incidentId}\n`);
+  }
   return record;
 }
 

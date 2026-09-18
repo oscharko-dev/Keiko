@@ -74,6 +74,7 @@ import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 import {
   ensureSupportIncidentDirectory,
   listSupportIncidentEntries,
+  readSupportIncidentRecord,
   supportIncidentDirectory,
   removeSupportIncidentRecord,
   serializeSupportIncidentRecord,
@@ -804,6 +805,21 @@ export function listSupportIncidents(
   return sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), correlationId).flatMap(
     (entry) => (entry.record === undefined ? [] : [entry.record]),
   );
+}
+
+/**
+ * One open incident record by id: `undefined` when the id is malformed, unknown, expired, or its
+ * record is unreadable. Read-only — expiry removal happens in `listSupportIncidents`.
+ */
+export function readSupportIncident(
+  stateDir: string,
+  incidentId: string,
+  options: Pick<SupportIncidentOptions, "nowMs"> = {},
+): SupportIncidentRecord | undefined {
+  const record = readSupportIncidentRecord(stateDir, incidentId);
+  return record !== undefined && record.expiresAtMs > (options.nowMs ?? Date.now())
+    ? record
+    : undefined;
 }
 
 export interface SupportIncidentSegmentFile extends SupportIncidentSegmentReference {
