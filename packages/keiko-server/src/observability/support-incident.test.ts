@@ -93,6 +93,12 @@ import {
   resetServerLogFailureNotices,
   type ServerLogEvent,
 } from "./server-log.js";
+// A namespace import alongside the named one above: vi.spyOn needs a live binding it can swap for
+// exactly one call (#3533 audit, dismiss's declared "not-pinned"/"rejected" pin-release outcomes).
+// server-log.ts imports support-incident.ts back for the sink's trigger hook, so a factory-based
+// vi.mock("./server-log.js", ...) here never took effect against that circular import; spying on
+// the resolved namespace after both modules finish loading works around it.
+import * as serverLogModule from "./server-log.js";
 import {
   claimSupportIncidentFingerprint,
   claimSupportIncidentSlot,
@@ -576,6 +582,46 @@ describe("SupportIncident candidates", () => {
         pinId: record.pin.pinId,
         expiryReason: "released",
         correlationId: "dismiss-action-1",
+      });
+    });
+
+    it("reports a not-pinned release when the candidate's own pin was never created (#3533 audit)", () => {
+      vi.spyOn(serverLogModule, "pinActivityLogWindow").mockReturnValueOnce({
+        status: "rejected",
+        reason: "storage-unavailable",
+      });
+      const { record } = created(recordUserReportedIncident(stateDir));
+      expect(record.pin).toMatchObject({ status: "rejected", pinnedSegmentCount: 0 });
+      expect(record.pin.pinId).toBeUndefined();
+
+      expect(dismissSupportIncident(stateDir, record.incidentId)).toBe("dismissed");
+      const line = expectActivityLogProof(
+        "support.incident.dismissed.emitted-line",
+        lines("support.incident.dismissed")[0] ?? "",
+      );
+      expect(line).toMatchObject({ incidentId: record.incidentId, pinRelease: "not-pinned" });
+      // No pin ever existed, so nothing to expire either.
+      expect(lines("activity-log.pin.expired")).toHaveLength(0);
+    });
+
+    it("reports a rejected release when releasing the pin itself fails (#3533 audit)", () => {
+      const { record } = created(recordUserReportedIncident(stateDir));
+      expect(record.pin.status).toBe("pinned");
+      vi.spyOn(serverLogModule, "releaseActivityLogPin").mockReturnValueOnce({
+        status: "rejected",
+        reason: "not-found",
+      });
+
+      expect(dismissSupportIncident(stateDir, record.incidentId)).toBe("dismissed");
+      expect(listSupportIncidents(stateDir)).toEqual([]); // the record itself is still removed
+      const line = expectActivityLogProof(
+        "support.incident.dismissed.emitted-line",
+        lines("support.incident.dismissed")[0] ?? "",
+      );
+      expect(line).toMatchObject({
+        incidentId: record.incidentId,
+        pinRelease: "rejected",
+        completeness: "partial",
       });
     });
 
