@@ -28,6 +28,7 @@ import {
   activityLogSegmentFileName,
   type ActivityLogSegmentState,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   createInMemoryEvidenceStore,
   type EvidenceManifest,
@@ -2264,6 +2265,44 @@ describe("runSupportCli analyze", () => {
     const humanRun = makeIo();
     expect(await runSupportCli(["analyze", filePath, "--clusters"], humanRun.io)).toBe(0);
     expect(humanRun.err()).toBe("");
+  });
+
+  // Audit (#3531): analyze's JSON lacked the provenance block query and export already carry.
+  // Added additively to both analyze JSON forms: every pre-existing field stays exactly as it was.
+  it("carries provenance (productVersion, registryVersion, schemaDigest, catalogDigest) in both analyze JSON forms", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const expectedProvenance = {
+      productVersion: KEIKO_PRODUCT_VERSION,
+      registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+      schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+      catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+    };
+
+    const wholeFileRun = makeIo();
+    expect(await runSupportCli(["analyze", filePath, "--json"], wholeFileRun.io)).toBe(0);
+    const wholeFile = JSON.parse(wholeFileRun.out()) as {
+      readonly kind: string;
+      readonly provenance: unknown;
+      readonly clusters: unknown;
+    };
+    expect(wholeFile.kind).toBe("keiko.support.analyze");
+    expect(wholeFile.provenance).toEqual(expectedProvenance);
+    // Additive: the field this audit's own test already relies on stays present and unchanged.
+    expect(wholeFile.clusters).toBeDefined();
+
+    const timelineRun = makeIo();
+    expect(
+      await runSupportCli(["analyze", filePath, "--correlation-id", "req-1", "--json"], timelineRun.io),
+    ).toBe(0);
+    const timeline = JSON.parse(timelineRun.out()) as {
+      readonly kind: string;
+      readonly provenance: unknown;
+      readonly correlationId: string;
+    };
+    expect(timeline.kind).toBe("keiko.support.analyze-timeline");
+    expect(timeline.provenance).toEqual(expectedProvenance);
+    expect(timeline.correlationId).toBe("req-1");
   });
 
   it("prints a ReproductionSeed via --seed", async () => {

@@ -19,7 +19,10 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
   type ActivityLogFields,
+  ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_DIRECTORY_NAME,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   DIAGNOSTIC_SUFFICIENCY_STATUSES,
   parseActivityLogFileName,
@@ -1818,6 +1821,26 @@ const SUPPORT_ANALYZE_KIND = "keiko.support.analyze";
 const SUPPORT_ANALYZE_TIMELINE_KIND = "keiko.support.analyze-timeline";
 const SUPPORT_ANALYZE_SCHEMA_VERSION = 1;
 
+// The same provenance shape `keiko support query` and `export`'s selection carry (#3531 audit):
+// which build and registry produced this analysis, so a report read later, or on another machine,
+// can be judged against the exact catalog that classified it. Additive: every existing field of
+// both JSON forms stays unchanged.
+interface SupportAnalyzeProvenance {
+  readonly productVersion: string;
+  readonly registryVersion: number;
+  readonly schemaDigest: string;
+  readonly catalogDigest: string;
+}
+
+function analyzeProvenance(): SupportAnalyzeProvenance {
+  return {
+    productVersion: KEIKO_PRODUCT_VERSION,
+    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+  };
+}
+
 function emitSingleTimeline(
   timeline: LogTimeline,
   result: AnalyzeAllResult,
@@ -1829,6 +1852,7 @@ function emitSingleTimeline(
     const payload = {
       kind: SUPPORT_ANALYZE_TIMELINE_KIND,
       schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION,
+      provenance: analyzeProvenance(),
       ...timeline,
       malformedLineCount: result.malformedLineCount,
       sufficiency: timelineSufficiency(result, timeline),
@@ -1842,7 +1866,11 @@ function emitSingleTimeline(
 }
 
 function emitAllTimelines(result: SupportAnalysisReport, json: boolean, io: CliIo): number {
-  const payload = { kind: SUPPORT_ANALYZE_KIND, schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION };
+  const payload = {
+    kind: SUPPORT_ANALYZE_KIND,
+    schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION,
+    provenance: analyzeProvenance(),
+  };
   io.out(
     json
       ? `${JSON.stringify({ ...payload, ...result })}\n`
