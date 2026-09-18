@@ -46,6 +46,12 @@ as summaries. Diagnostic readiness is a closed state that `/api/health`, `keiko 
 and a fatal crash leaves `process.fatal` (D7). The raw `ui.log` channel is retired, and the support
 bundle never carries it (D8, D9).
 
+Amended by #3531 on 2026-09-18: `keiko support query` and selective `keiko support export` read the
+segmented log in bounded memory through derived, rebuildable per-segment manifests, and select an
+operation's whole registered causal closure or report it `insufficient`; required evidence is never
+cut to fit a budget (D16). `keiko support analyze` reads its input through the same bounded line
+reader.
+
 ## Context
 
 `<stateDir>/logs/server.log` (JSON lines, `KEIKO_LOG_LEVEL`-gated, always on) shipped in #3230. It
@@ -1037,6 +1043,43 @@ coverage. The store is owner-private, closed-grammar and quota-bounded (32 open 
 reserved for explicit reports, 4 KiB each), and candidates expire after 14 days. Acknowledge, dismiss
 and report remain explicit human actions; nothing is disclosed automatically.
 
+### D16 — Queries select whole causal closures through derived segment manifests
+
+`keiko support query`, selective `keiko support export` and incident resolution share one streaming
+engine (#3531). It never loads a whole segment or the whole log. It streams candidate segments line
+by line and retains only the selected events, up to a report budget.
+
+**Manifests are derived metadata, not a second log.** Each sealed segment has one manifest in the
+owner-private, closed-grammar store `<stateDir>/activity-log-manifests/`
+(`manifest-<segmentId>.json`, at most 256 KiB). It carries the schema and catalog versions, the safe
+time range, the process and sequence ranges, the registered categories, operations, error kinds and
+failure classes with counts, the loss and integrity state, a Bloom filter over the correlation keys
+(hash bits only) and a SHA-256 digest. An `incidentId` or `defectFingerprint` appears only when a
+registered operation that declares that field carries it; a sealed segment is never touched to add
+one. Every value is a pure function of the segment's bytes and the build's catalog, so deleting the
+store and rebuilding it reproduces every manifest byte for byte. A stored manifest is accepted only
+when it re-serializes to its own bytes and its digest matches; anything else is rebuilt. Only the
+query, export and rebuild commands write manifests, never the Activity Log writer, and each pass
+removes the manifests of segments that retention deleted, so the store follows the log's own bound.
+
+**A closure is selected whole.** A correlation, an incident or a defect fingerprint selects the
+registered causal closure: the roots, every ancestor over `parentCorrelationId` and every
+descendant, and never an unrelated correlation. A narrow context adds only the uncorrelated process
+signals of the closure's own process lifetimes within a configured window (default 5 seconds). A
+user-reported incident also selects its pinned window and takes every correlation in it as a root.
+
+**Nothing required is truncated.** A closure that does not fit the budget returns no events and is
+`insufficient` with `report-budget-exceeded`; evidence retention removed is
+`evidence-not-retained`; an unreadable candidate segment is `segment-unreadable`. Only optional
+context may be dropped, declared as `context-truncated`. Every result carries its provenance,
+integrity, coverage, loss and truncation, and exactly one sufficiency status from the per-class
+projection `keiko support analyze` uses.
+
+**No database.** Manifests and streaming meet the measured need: a checked-in long-history test
+bounds peak memory and proves that manifest-pruned segment bodies are never opened. A database
+requires recorded measurements that manifests are insufficient and an explicit re-scope of epic
+#3527.
+
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract
@@ -1136,6 +1179,10 @@ rather than left implicit across the Decision section:
    (state, closed reasons, writer) and its `activity-log.loss` summaries (lost events per closed
    reason, written when the counters change and always at exit) (D6). A timeline gap during a period with a non-zero loss
    count is lost evidence, not evidence that nothing happened.
+10. **For one operation in a long history**, run `keiko support query --correlation-id <id> --json`
+    (or `--incident`, `--defect-fingerprint`) instead of reading whole segments. It returns the
+    operation's whole registered causal closure with its sufficiency, or `insufficient` with a
+    closed reason when the closure does not fit or is no longer retained (D16).
 
 ## Consequences
 

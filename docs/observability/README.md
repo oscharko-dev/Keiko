@@ -635,6 +635,71 @@ or window not resolvable, `2` usage error.
   (`support.incident.rejected`) and never evicts an existing one. Candidates expire after 14 days
   (`support.incident.expired`).
 
+## Querying the log and selective export
+
+`keiko support query` answers a question about the Activity Log of one state directory without
+loading the log. It reads line by line and keeps only what it selects, so a long history needs
+bounded memory. There are two kinds of question:
+
+- **A causal closure.** `--correlation-id`, `--incident` or `--defect-fingerprint` selects one
+  operation and everything causally connected to it: every ancestor reached over
+  `parentCorrelationId` and every descendant, such as a background job the request started.
+  Unrelated correlations, siblings included, are never selected. A narrow context is added: the
+  uncorrelated process signals (lifecycle, resource, loss, backpressure, disk) of the same process
+  lifetimes, within `--context-ms` (default 5000) of the closure. An incident or fingerprint is
+  resolved through the local support incidents. A reported incident also selects its whole pinned
+  window and treats every correlation in it as a root.
+- **Matching events.** `--parent-correlation-id`, `--op`, `--error-kind`, `--failure-class`, `--from`
+  and `--to` select single events and combine with AND.
+
+| Command                                      | What it does                                                           |
+| -------------------------------------------- | ---------------------------------------------------------------------- |
+| `keiko support query --correlation-id <id>`  | Prints the causal closure of one operation.                            |
+| `keiko support query --incident <id>`        | Prints the causal closure of an incident.                              |
+| `keiko support query --op <op> --from <iso>` | Prints the matching events.                                            |
+| `keiko support export --correlation-id <id>` | Writes a report with only that closure.                                |
+| `keiko support manifest rebuild`             | Derives every segment manifest again and replaces the stored one.      |
+| `keiko support manifest verify`              | Derives them without writing and reports stored manifests that differ. |
+
+`keiko support export` also takes `--incident` and `--defect-fingerprint`. The `query` and
+`manifest` commands accept `--state-dir` and `--json`. Every result states exactly one diagnostic
+sufficiency, `complete`, `degraded` or `insufficient`, with closed reasons, from the same projection
+`keiko support analyze` uses. `--json` prints the versioned machine form (`keiko.support.query`,
+schema version 1): the provenance (product version, registry version, schema and catalog digests,
+manifest schema version), the segments read and skipped, the closure's correlations and edges, and
+the integrity, coverage, loss and truncation of the selection. The human output is derived from it.
+
+- **Nothing required is cut to fit.** `--max-bytes` (default 16 MiB) bounds the selection. A closure
+  that does not fit returns no events and is `insufficient` with `report-budget-exceeded`. Only the
+  optional context may be dropped, and that is declared as `context-truncated` (`degraded`). A
+  selection whose evidence retention already removed, or that was never written, is `insufficient`
+  with `evidence-not-retained`; a candidate segment that cannot be read makes it `insufficient` with
+  `segment-unreadable`. Selective export follows the same rule: a selection that does not fit its
+  `--max-bytes` or cannot be found writes nothing, and the command exits 1. The report's manifest
+  line states the selection and its sufficiency.
+- **Exit codes.** `query` exits `0` when it printed a result, whatever its sufficiency; `1` when the
+  selection cannot be resolved, the log cannot be listed, or the query's own evidence cannot be
+  written; `2` on a usage error. `manifest verify` exits `1` when a stored manifest differs from its
+  segment or a segment cannot be read. A segment that has no manifest yet is not an error: the next
+  query builds it.
+- **Manifests.** Each sealed segment has a derived, rebuildable manifest in
+  `<stateDir>/activity-log-manifests/` (owner-only), one `manifest-<segmentId>.json` of at most
+  256 KiB. It holds safe metadata only: the time, process and sequence ranges, the registered
+  categories, operations, error kinds and failure classes with counts, the loss and integrity
+  state, a Bloom filter over correlation ids (hash bits only), and a SHA-256 digest. A query uses it
+  to skip, without opening it, a segment that cannot match. A manifest is computed from the
+  segment's bytes and the build's catalog alone, so a rebuild reproduces it byte for byte. The
+  Activity Log writer never writes one: query, export and rebuild do, and they remove the manifests
+  of segments retention has deleted. A missing, torn or stale manifest is rebuilt, and deleting the
+  directory is always safe.
+- **Bounds.** A checked-in long-history test builds 40 sealed segments of 2 MiB and runs the built
+  command under a 112 MiB heap cap. Peak resident memory may grow by at most 32 MiB over the same
+  command on an empty state directory, and instrumented reads prove that segments the manifests rule
+  out are never opened.
+- **Evidence.** `support.query.completed`, `support.query.failed` and `support.manifest.rebuilt`
+  record the query class, candidate and result counts, selected bytes, truncation, integrity and
+  loss, never the query text, an event body, a name or a path.
+
 ## See also
 
 - [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) — the full

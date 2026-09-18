@@ -496,7 +496,10 @@ already recorded:
    manifest and — with `--include-evidence` — evidence manifests), or one raw Activity Log file
    from `<stateDir>/logs/` (a segment or a legacy file); the analyzer auto-detects which it was
    handed. If Keiko recorded a local incident candidate, `keiko support incident show <id> --json`
-   names its defect fingerprint, correlations and pinned evidence window.
+   names its defect fingerprint, correlations and pinned evidence window. For one operation,
+   `keiko support export --correlation-id <id>` (or `--incident <id>`) writes only its registered
+   causal closure, and `keiko support query --correlation-id <id> --json` returns it directly; both
+   report `insufficient` with a closed reason rather than cut required evidence to fit.
 2. **Reconstruct.** `keiko support analyze bundle.jsonl` prints every timeline;
    `--correlation-id <id> --json` narrows to one as a machine-readable `LogTimeline`; `--clusters`
    groups every parsed line of the file by category, `op` and `errorKind` (errors and successes
