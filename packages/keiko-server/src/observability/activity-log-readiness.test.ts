@@ -177,9 +177,9 @@ describe("diagnostic readiness", () => {
     // Unchanged conditions write nothing further.
     const before = readinessLines(stateDir).length;
     expect(refreshActivityLogReadiness({ stateDir }).readiness).toBe("ready");
-    expect(readinessLines(stateDir).length).toBe(before + 1);
+    expect(readinessLines(stateDir)).toHaveLength(before + 1);
     refreshActivityLogReadiness({ stateDir });
-    expect(readinessLines(stateDir).length).toBe(before + 1);
+    expect(readinessLines(stateDir)).toHaveLength(before + 1);
   });
 
   it("reports an injected test writer as such, without a write probe", () => {
