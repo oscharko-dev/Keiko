@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "eb92a86e55eccda42f9f7d77db4db09e70a13c537b5ba9d09d52a41d85dbbcc0",
+    "catalogDigest": "3052d7d49ece744979ddd50801e3a41fec63be72ee68f7452ef40ff7344b2cc2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -15047,22 +15047,38 @@
             "dataClass": "loss-state",
             "required": true
           },
-          "endpointDigest": {
+          "endpointClass": {
             "type": "string",
-            "dataClass": "digest",
+            "dataClass": "closed-enum",
             "required": false,
-            "maxLength": 64
+            "values": [
+              "hostname",
+              "public",
+              "loopback",
+              "private",
+              "link-local",
+              "metadata",
+              "multicast"
+            ]
           },
           "proxied": {
             "type": "boolean",
             "dataClass": "closed-enum",
             "required": true
           },
-          "proxyEndpointDigest": {
+          "proxyEndpointClass": {
             "type": "string",
-            "dataClass": "digest",
+            "dataClass": "closed-enum",
             "required": false,
-            "maxLength": 64
+            "values": [
+              "hostname",
+              "public",
+              "loopback",
+              "private",
+              "link-local",
+              "metadata",
+              "multicast"
+            ]
           },
           "transport": {
             "type": "string",
@@ -15077,8 +15093,8 @@
         "failureClasses": ["gateway-egress"],
         "proofIds": ["http.gateway-egress-planned.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:95",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1522"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:104",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1558"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15098,11 +15114,19 @@
             "dataClass": "loss-state",
             "required": true
           },
-          "endpointDigest": {
+          "endpointClass": {
             "type": "string",
-            "dataClass": "digest",
+            "dataClass": "closed-enum",
             "required": false,
-            "maxLength": 64
+            "values": [
+              "hostname",
+              "public",
+              "loopback",
+              "private",
+              "link-local",
+              "metadata",
+              "multicast"
+            ]
           }
         },
         "causal": "none",
@@ -15111,8 +15135,8 @@
         "failureClasses": ["gateway-http-fetch"],
         "proofIds": ["http.gateway-fetch-completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:151",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1675"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:170",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1711"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15132,11 +15156,19 @@
             "dataClass": "loss-state",
             "required": true
           },
-          "endpointDigest": {
+          "endpointClass": {
             "type": "string",
-            "dataClass": "digest",
+            "dataClass": "closed-enum",
             "required": false,
-            "maxLength": 64
+            "values": [
+              "hostname",
+              "public",
+              "loopback",
+              "private",
+              "link-local",
+              "metadata",
+              "multicast"
+            ]
           },
           "policyReason": {
             "type": "string",
@@ -15151,8 +15183,8 @@
         "failureClasses": ["gateway-http-fetch", "gateway-egress"],
         "proofIds": ["http.gateway-fetch-failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:169",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1712"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:193",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1748"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15172,11 +15204,19 @@
             "dataClass": "loss-state",
             "required": true
           },
-          "endpointDigest": {
+          "endpointClass": {
             "type": "string",
-            "dataClass": "digest",
+            "dataClass": "closed-enum",
             "required": false,
-            "maxLength": 64
+            "values": [
+              "hostname",
+              "public",
+              "loopback",
+              "private",
+              "link-local",
+              "metadata",
+              "multicast"
+            ]
           },
           "method": {
             "type": "string",
@@ -15201,8 +15241,8 @@
         "failureClasses": ["gateway-http-fetch"],
         "proofIds": ["http.gateway-fetch-started.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:130",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1634"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:144",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1670"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15222,11 +15262,19 @@
             "dataClass": "loss-state",
             "required": true
           },
-          "endpointDigest": {
+          "endpointClass": {
             "type": "string",
-            "dataClass": "digest",
+            "dataClass": "closed-enum",
             "required": false,
-            "maxLength": 64
+            "values": [
+              "hostname",
+              "public",
+              "loopback",
+              "private",
+              "link-local",
+              "metadata",
+              "multicast"
+            ]
           }
         },
         "causal": "none",
@@ -15235,8 +15283,8 @@
         "failureClasses": ["gateway-tls-trust"],
         "proofIds": ["http.gateway-tls-ca-fallback.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:77",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1339"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:81",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1375"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15256,11 +15304,19 @@
             "dataClass": "loss-state",
             "required": true
           },
-          "endpointDigest": {
+          "endpointClass": {
             "type": "string",
-            "dataClass": "digest",
+            "dataClass": "closed-enum",
             "required": false,
-            "maxLength": 64
+            "values": [
+              "hostname",
+              "public",
+              "loopback",
+              "private",
+              "link-local",
+              "metadata",
+              "multicast"
+            ]
           },
           "afterCaBundleFallback": {
             "type": "boolean",
@@ -15274,8 +15330,8 @@
         "failureClasses": ["gateway-tls-trust"],
         "proofIds": ["http.gateway-tls-trust-failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:54",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1320"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:53",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1356"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35207,9 +35263,9 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
-                  "name": "endpointDigest",
+                  "name": "endpointClass",
                   "type": "string",
-                  "dataClass": "digest",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -35219,9 +35275,9 @@
                   "required": true
                 },
                 {
-                  "name": "proxyEndpointDigest",
+                  "name": "proxyEndpointClass",
                   "type": "string",
-                  "dataClass": "digest",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -35231,7 +35287,7 @@
                   "required": true
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -35249,9 +35305,9 @@
               "analyzerProjection": "failure-cluster",
               "safeContextFields": [
                 {
-                  "name": "endpointDigest",
+                  "name": "endpointClass",
                   "type": "string",
-                  "dataClass": "digest",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -35261,7 +35317,7 @@
                   "required": false
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -35307,13 +35363,13 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
-                  "name": "endpointDigest",
+                  "name": "endpointClass",
                   "type": "string",
-                  "dataClass": "digest",
+                  "dataClass": "closed-enum",
                   "required": false
                 }
               ],
-              "evidenceClasses": ["completeness-state", "digest", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -35331,9 +35387,9 @@
               "analyzerProjection": "failure-cluster",
               "safeContextFields": [
                 {
-                  "name": "endpointDigest",
+                  "name": "endpointClass",
                   "type": "string",
-                  "dataClass": "digest",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -35343,7 +35399,7 @@
                   "required": false
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -35361,9 +35417,9 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
-                  "name": "endpointDigest",
+                  "name": "endpointClass",
                   "type": "string",
-                  "dataClass": "digest",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -35386,9 +35442,9 @@
                 }
               ],
               "evidenceClasses": [
+                "closed-enum",
                 "completeness-state",
                 "count",
-                "digest",
                 "duration",
                 "loss-state",
                 "opaque-id"
@@ -36607,13 +36663,13 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
-                  "name": "endpointDigest",
+                  "name": "endpointClass",
                   "type": "string",
-                  "dataClass": "digest",
+                  "dataClass": "closed-enum",
                   "required": false
                 }
               ],
-              "evidenceClasses": ["completeness-state", "digest", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -36637,13 +36693,13 @@
                   "required": true
                 },
                 {
-                  "name": "endpointDigest",
+                  "name": "endpointClass",
                   "type": "string",
-                  "dataClass": "digest",
+                  "dataClass": "closed-enum",
                   "required": false
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
@@ -52322,37 +52378,37 @@
     {
       "op": "http.gateway.egress.planned",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:98",
+      "site": "packages/keiko-model-gateway/src/http.ts:107",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.completed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:154",
+      "site": "packages/keiko-model-gateway/src/http.ts:173",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:172",
+      "site": "packages/keiko-model-gateway/src/http.ts:196",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.started",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:133",
+      "site": "packages/keiko-model-gateway/src/http.ts:147",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.ca-bundle-fallback",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:80",
+      "site": "packages/keiko-model-gateway/src/http.ts:84",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.trust-failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:57",
+      "site": "packages/keiko-model-gateway/src/http.ts:56",
       "package": "keiko-model-gateway"
     },
     {

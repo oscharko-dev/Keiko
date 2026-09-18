@@ -12,17 +12,16 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   classifyOutboundHost,
   normalizeHost,
   outboundAddressBlockedReason,
   outboundTargetBlockedReason,
 } from "./egress-policy.js";
+import type { OutboundTargetClass } from "./egress-policy.js";
 import {
   activityLogErrorKind,
   logCorrelationId,
-  logEndpointHost,
   logLevelEnabled,
   logTimer,
   resolveLogSink,
@@ -59,7 +58,12 @@ const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.tlsTrustFailure",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
     afterCaBundleFallback: {
       type: "boolean",
       dataClass: "closed-enum",
@@ -82,7 +86,12 @@ const HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.fetchDirectWithCaFallback",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
   },
   causal: "none",
   lifecycle: "state",
@@ -100,17 +109,22 @@ const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.planGatewayProxy",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
     proxied: {
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
     },
-    proxyEndpointDigest: {
+    proxyEndpointClass: {
       type: "string",
-      dataClass: "digest",
+      dataClass: "closed-enum",
       required: false,
-      maxLength: 64,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
     },
     transport: {
       type: "string",
@@ -135,7 +149,12 @@ const HTTP_GATEWAY_FETCH_STARTED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.logFetchStarted",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
     method: { type: "string", dataClass: "opaque-id", required: true, maxLength: 32 },
     requestBytes: { type: "integer", dataClass: "count", required: false },
     timeoutMs: { type: "number", dataClass: "duration", required: false },
@@ -156,7 +175,12 @@ const HTTP_GATEWAY_FETCH_COMPLETED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.logFetchCompleted",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
   },
   causal: "none",
   lifecycle: "end",
@@ -174,7 +198,12 @@ const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
   owner: "keiko-model-gateway",
   emitter: "http.gatewayFetch",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
     policyReason: {
       type: "string",
       dataClass: "closed-enum",
@@ -190,9 +219,16 @@ const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function logEndpointDigest(url: string | URL | undefined): string | undefined {
-  const endpoint = logEndpointHost(url);
-  return endpoint === undefined ? undefined : sha256Hex(endpoint);
+type LogEndpointClass = OutboundTargetClass | "hostname";
+
+function logEndpointClass(url: string | URL | undefined): LogEndpointClass | undefined {
+  if (url === undefined) return undefined;
+  try {
+    const parsed = typeof url === "string" ? new URL(url) : url;
+    return classifyOutboundHost(parsed.hostname) ?? "hostname";
+  } catch {
+    return undefined;
+  }
 }
 
 export interface GatewayFetchOptions extends RequestInit {
@@ -1314,7 +1350,7 @@ function logTlsTrustFailure(
   error: unknown,
   afterCaBundleFallback: boolean,
 ): void {
-  const endpointDigest = logEndpointDigest(url);
+  const endpointClass = logEndpointClass(url);
   const correlationId = logCorrelationId(plan.log);
   plan.log.write(
     activityLogEvent(
@@ -1325,7 +1361,7 @@ function logTlsTrustFailure(
         errorKind: activityLogErrorKind(error),
       },
       {
-        ...(endpointDigest === undefined ? {} : { endpointDigest }),
+        ...(endpointClass === undefined ? {} : { endpointClass }),
         afterCaBundleFallback,
       },
     ),
@@ -1333,7 +1369,7 @@ function logTlsTrustFailure(
 }
 
 function logTlsCaFallback(url: string, plan: DirectFetchPlan, error: unknown): void {
-  const endpointDigest = logEndpointDigest(url);
+  const endpointClass = logEndpointClass(url);
   const correlationId = logCorrelationId(plan.log);
   plan.log.write(
     activityLogEvent(
@@ -1343,7 +1379,7 @@ function logTlsCaFallback(url: string, plan: DirectFetchPlan, error: unknown): v
         ...(correlationId === undefined ? {} : { correlationId }),
         errorKind: activityLogErrorKind(error),
       },
-      endpointDigest === undefined ? {} : { endpointDigest },
+      endpointClass === undefined ? {} : { endpointClass },
     ),
   );
 }
@@ -1509,15 +1545,15 @@ function planGatewayProxy(
   const proxy = proxyRaw === undefined ? undefined : parseProxyUrl(proxyRaw);
   // WHICH ROUTE this call took is the first question asked of a stuck outbound request, and it is
   // decided entirely by configuration the operator cannot see from the failure. Both endpoints are
-  // reduced to scheme://host:port — a proxy URL may carry credentials in its userinfo.
+  // reduced to a closed address class — a proxy URL may carry credentials in its userinfo.
   //
   // Gated: this is a `debug` line on the hot path of every outbound call, and the two
-  // `logEndpointHost` calls below each parse a URL. Asking the sink first means an operator
+  // endpoint-classification calls below each parse a URL. Asking the sink first means an operator
   // running at the default `info` threshold pays a predicate call instead of two URL parses and
   // two allocations per request.
   if (logLevelEnabled(log, "debug")) {
-    const endpointDigest = logEndpointDigest(target);
-    const proxyEndpointDigest = logEndpointDigest(proxy);
+    const endpointClass = logEndpointClass(target);
+    const proxyEndpointClass = logEndpointClass(proxy);
     log.write(
       activityLogEvent(
         HTTP_GATEWAY_EGRESS_PLANNED_OPERATION,
@@ -1526,9 +1562,9 @@ function planGatewayProxy(
           ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
         },
         {
-          ...(endpointDigest === undefined ? {} : { endpointDigest }),
+          ...(endpointClass === undefined ? {} : { endpointClass }),
           proxied: proxy !== undefined,
-          ...(proxyEndpointDigest === undefined ? {} : { proxyEndpointDigest }),
+          ...(proxyEndpointClass === undefined ? {} : { proxyEndpointClass }),
           transport: usesRealTransport ? "native" : "injected",
         },
       ),
@@ -1618,7 +1654,7 @@ function requestBodyBytes(body: BodyInit | null | undefined): number | undefined
 // connection and then goes quiet), and it produces no completion, no failure, and therefore no
 // evidence at all: the log stays empty for precisely the window an operator is staring at. This
 // line is written BEFORE the socket work starts, so a stuck call leaves a `started` with no
-// matching `completed` — which names both the endpoint and the deadline it is hanging against.
+// matching `completed` — which names both the endpoint class and the deadline it is hanging against.
 //
 // `info`, not `debug`: a line only readable after an operator has already reproduced the hang
 // under a raised threshold is not evidence of the hang.
@@ -1628,7 +1664,7 @@ function logFetchStarted(
   options: GatewayFetchOptions,
 ): void {
   if (!logLevelEnabled(log, "info")) return;
-  const endpointDigest = logEndpointDigest(url);
+  const endpointClass = logEndpointClass(url);
   const requestBytes = requestBodyBytes(options.body);
   log.write(
     activityLogEvent(
@@ -1638,7 +1674,7 @@ function logFetchStarted(
         ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
       },
       {
-        ...(endpointDigest === undefined ? {} : { endpointDigest }),
+        ...(endpointClass === undefined ? {} : { endpointClass }),
         method: options.method ?? "GET",
         ...(requestBytes === undefined ? {} : { requestBytes }),
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
@@ -1670,7 +1706,7 @@ function logFetchCompleted(
 ): void {
   const level = response.ok ? "info" : "warn";
   if (!logLevelEnabled(log, level)) return;
-  const endpointDigest = logEndpointDigest(url);
+  const endpointClass = logEndpointClass(url);
   log.write(
     activityLogEvent(
       HTTP_GATEWAY_FETCH_COMPLETED_OPERATION,
@@ -1680,7 +1716,7 @@ function logFetchCompleted(
         status: response.status,
         durationMs,
       },
-      endpointDigest === undefined ? {} : { endpointDigest },
+      endpointClass === undefined ? {} : { endpointClass },
     ),
   );
 }
@@ -1707,7 +1743,7 @@ export async function gatewayFetch(
     logFetchCompleted(log, url, response, elapsed());
     return response;
   } catch (error) {
-    const endpointDigest = logEndpointDigest(url);
+    const endpointClass = logEndpointClass(url);
     log.write(
       activityLogEvent(
         HTTP_GATEWAY_FETCH_FAILED_OPERATION,
@@ -1718,7 +1754,7 @@ export async function gatewayFetch(
           errorKind: activityLogErrorKind(error),
         },
         {
-          ...(endpointDigest === undefined ? {} : { endpointDigest }),
+          ...(endpointClass === undefined ? {} : { endpointClass }),
           ...(error instanceof OutboundHttpEgressError && error.policyReason !== undefined
             ? { policyReason: error.policyReason }
             : {}),

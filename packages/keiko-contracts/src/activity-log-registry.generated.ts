@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "eb92a86e55eccda42f9f7d77db4db09e70a13c537b5ba9d09d52a41d85dbbcc0" as const;
+  "3052d7d49ece744979ddd50801e3a41fec63be72ee68f7452ef40ff7344b2cc2" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -14326,22 +14326,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      endpointDigest: {
+      endpointClass: {
         type: "string",
-        dataClass: "digest",
+        dataClass: "closed-enum",
         required: false,
-        maxLength: 64,
+        values: [
+          "hostname",
+          "public",
+          "loopback",
+          "private",
+          "link-local",
+          "metadata",
+          "multicast",
+        ],
       },
       proxied: {
         type: "boolean",
         dataClass: "closed-enum",
         required: true,
       },
-      proxyEndpointDigest: {
+      proxyEndpointClass: {
         type: "string",
-        dataClass: "digest",
+        dataClass: "closed-enum",
         required: false,
-        maxLength: 64,
+        values: [
+          "hostname",
+          "public",
+          "loopback",
+          "private",
+          "link-local",
+          "metadata",
+          "multicast",
+        ],
       },
       transport: {
         type: "string",
@@ -14375,11 +14391,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      endpointDigest: {
+      endpointClass: {
         type: "string",
-        dataClass: "digest",
+        dataClass: "closed-enum",
         required: false,
-        maxLength: 64,
+        values: [
+          "hostname",
+          "public",
+          "loopback",
+          "private",
+          "link-local",
+          "metadata",
+          "multicast",
+        ],
       },
     },
     causal: "none",
@@ -14407,11 +14431,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      endpointDigest: {
+      endpointClass: {
         type: "string",
-        dataClass: "digest",
+        dataClass: "closed-enum",
         required: false,
-        maxLength: 64,
+        values: [
+          "hostname",
+          "public",
+          "loopback",
+          "private",
+          "link-local",
+          "metadata",
+          "multicast",
+        ],
       },
       policyReason: {
         type: "string",
@@ -14445,11 +14477,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      endpointDigest: {
+      endpointClass: {
         type: "string",
-        dataClass: "digest",
+        dataClass: "closed-enum",
         required: false,
-        maxLength: 64,
+        values: [
+          "hostname",
+          "public",
+          "loopback",
+          "private",
+          "link-local",
+          "metadata",
+          "multicast",
+        ],
       },
       method: {
         type: "string",
@@ -14493,11 +14533,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      endpointDigest: {
+      endpointClass: {
         type: "string",
-        dataClass: "digest",
+        dataClass: "closed-enum",
         required: false,
-        maxLength: 64,
+        values: [
+          "hostname",
+          "public",
+          "loopback",
+          "private",
+          "link-local",
+          "metadata",
+          "multicast",
+        ],
       },
     },
     causal: "none",
@@ -14525,11 +14573,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      endpointDigest: {
+      endpointClass: {
         type: "string",
-        dataClass: "digest",
+        dataClass: "closed-enum",
         required: false,
-        maxLength: 64,
+        values: [
+          "hostname",
+          "public",
+          "loopback",
+          "private",
+          "link-local",
+          "metadata",
+          "multicast",
+        ],
       },
       afterCaBundleFallback: {
         type: "boolean",
@@ -33892,9 +33948,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "endpointDigest",
+              name: "endpointClass",
               type: "string",
-              dataClass: "digest",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -33904,9 +33960,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
-              name: "proxyEndpointDigest",
+              name: "proxyEndpointClass",
               type: "string",
-              dataClass: "digest",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -33916,7 +33972,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -33934,9 +33990,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
-              name: "endpointDigest",
+              name: "endpointClass",
               type: "string",
-              dataClass: "digest",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -33946,7 +34002,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -33992,13 +34048,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "endpointDigest",
+              name: "endpointClass",
               type: "string",
-              dataClass: "digest",
+              dataClass: "closed-enum",
               required: false,
             },
           ],
-          evidenceClasses: ["completeness-state", "digest", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -34016,9 +34072,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
-              name: "endpointDigest",
+              name: "endpointClass",
               type: "string",
-              dataClass: "digest",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -34028,7 +34084,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -34046,9 +34102,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "endpointDigest",
+              name: "endpointClass",
               type: "string",
-              dataClass: "digest",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -34071,9 +34127,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
           ],
           evidenceClasses: [
+            "closed-enum",
             "completeness-state",
             "count",
-            "digest",
             "duration",
             "loss-state",
             "opaque-id",
@@ -35279,13 +35335,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "endpointDigest",
+              name: "endpointClass",
               type: "string",
-              dataClass: "digest",
+              dataClass: "closed-enum",
               required: false,
             },
           ],
-          evidenceClasses: ["completeness-state", "digest", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -35309,13 +35365,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
-              name: "endpointDigest",
+              name: "endpointClass",
               type: "string",
-              dataClass: "digest",
+              dataClass: "closed-enum",
               required: false,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

@@ -65,11 +65,12 @@ describe("gatewayFetch — activity log", () => {
     expect(started.level).toBe("info");
     expect(started.category).toBe("http");
     expect(started.extra).toMatchObject({
+      endpointClass: "hostname",
       method: "POST",
       requestBytes: 33,
       timeoutMs: 4_000,
     });
-    expect(started.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(started.extra).not.toHaveProperty("endpointDigest");
     // The body is measured, never carried; the query string carried a key.
     expect(JSON.stringify(started)).not.toContain("private document text");
     expect(JSON.stringify(started)).not.toContain("sk-live");
@@ -141,7 +142,7 @@ describe("gatewayFetch — activity log", () => {
   });
 
   // The port's level predicate, from the transport's side: a sink that declines `debug` must
-  // never be handed one — the `logEndpointHost` parse behind the route-planning line is pure waste
+  // never be handed one — the endpoint parse behind the route-planning line is pure waste
   // when nobody is reading at that level.
   it("materialises no debug event at all for a sink that declines debug", async () => {
     const events: ModelGatewayLogEvent[] = [];
@@ -185,10 +186,11 @@ describe("gatewayFetch — activity log", () => {
     expect(planned.level).toBe("debug");
     expect(planned.category).toBe("http");
     expect(planned.extra).toMatchObject({
+      endpointClass: "hostname",
       proxied: false,
       transport: "injected",
     });
-    expect(planned.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(planned.extra).not.toHaveProperty("endpointDigest");
     // The query string carried a key; it must not reach the line.
     expect(JSON.stringify(planned)).not.toContain("sk-live");
   });
@@ -311,7 +313,8 @@ describe("gatewayFetch — activity log", () => {
     const failed = eventFor(log.events, "http.gateway.fetch.failed");
     expect(failed.level).toBe("warn");
     expect(failed.errorKind).toBe("permission-denied");
-    expect(failed.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(failed.extra?.endpointClass).toBe("loopback");
+    expect(failed.extra).not.toHaveProperty("endpointDigest");
     expect(JSON.stringify(failed)).not.toContain("127.0.0.1");
     expect(ops(log.events)).not.toContain("http.gateway.fetch.completed");
   });
