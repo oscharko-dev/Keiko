@@ -504,11 +504,19 @@ const contractsDistModule = pathToFileURL(
   ),
 ).href;
 
+// A forever writer that stops by itself exits with this code, so a test can tell it from a kill.
+const WRITER_WORKER_STOPPED_ITSELF = 75;
+// Longer than any test waits before it kills a forever writer on purpose (their timeouts are 60 s).
+const WRITER_WORKER_LIFETIME_MS = 90_000;
+
 // A real Keiko writer process built from dist: `count` events and a clean close, or `forever` until
 // it is killed. Every event names its worker and index, so no line can be attributed to the wrong
-// process.
+// process. A forever writer whose test failed before killing it must not spin on: it stops by itself
+// at the end of its lifetime, or as soon as the process that spawned it (`parentPid`) is gone. On
+// #3554 ten writers from failed runs outlived their tests and held ten cores for two hours.
 const WRITER_WORKER_SOURCE = `
-const [moduleUrl, contractsUrl, stateDir, workerId, count, mode, pinMode] = process.argv.slice(1);
+const [moduleUrl, contractsUrl, stateDir, workerId, count, mode, pinMode, lifetimeMs, parentPid] =
+  process.argv.slice(1);
 const { createFileServerLogSink, pinActivityLogWindow } = await import(moduleUrl);
 const { activityLogEvent, defineActivityLogOperation } = await import(contractsUrl);
 const operation = defineActivityLogOperation(${JSON.stringify(TEST_FILE_OPERATION)});
@@ -523,7 +531,13 @@ const event = (index) => activityLogEvent(operation, {
 });
 const sink = createFileServerLogSink(stateDir, { level: "debug" });
 if (mode === "forever") {
-  for (let index = 0; ; index += 1) sink.write(event(index));
+  const stopAtMs = Date.now() + Number(lifetimeMs);
+  for (let index = 0; ; index += 1) {
+    sink.write(event(index));
+    if (index % 64 === 0 && (Date.now() > stopAtMs || process.ppid !== Number(parentPid))) {
+      process.exit(${String(WRITER_WORKER_STOPPED_ITSELF)});
+    }
+  }
 }
 for (let index = 0; index < Number(count); index += 1) {
   sink.write(event(index));
@@ -544,30 +558,58 @@ interface WriterWorker {
   readonly exit: Promise<number | null>;
 }
 
+interface WriterWorkerOptions {
+  readonly count: number;
+  readonly mode: "count" | "forever";
+  readonly env: Readonly<Record<string, string>>;
+  readonly pin?: boolean;
+  readonly lifetimeMs?: number;
+}
+
+// Every writer a test spawned that has not exited yet. A test that fails or times out before its
+// own kill leaves its writer here until killLiveWriterWorkers ends it.
+const liveWriterWorkers = new Set<WriterWorker>();
+
+async function killLiveWriterWorkers(): Promise<void> {
+  const workers = [...liveWriterWorkers];
+  for (const worker of workers) worker.child.kill("SIGKILL");
+  await Promise.all(workers.map((worker) => worker.exit.catch(() => null)));
+}
+
+// A suite that spawns writers kills them first thing in its own afterEach, before it removes the
+// directory they write to: Vitest skips the enclosing hooks once an inner one throws, and a removal
+// racing a live writer does throw. This file-level hook is the backstop for any other suite.
+afterEach(killLiveWriterWorkers);
+
+// The worker's arguments without its trailing parent pid, which whoever spawns it appends.
+function writerWorkerArgs(
+  stateDir: string,
+  workerId: number,
+  options: WriterWorkerOptions,
+): string[] {
+  return [
+    "--input-type=module",
+    "-e",
+    WRITER_WORKER_SOURCE,
+    serverLogDistModule,
+    contractsDistModule,
+    stateDir,
+    String(workerId),
+    String(options.count),
+    options.mode,
+    options.pin === true ? "pin" : "none",
+    String(options.lifetimeMs ?? WRITER_WORKER_LIFETIME_MS),
+  ];
+}
+
 function startWriterWorker(
   stateDir: string,
   workerId: number,
-  options: {
-    readonly count: number;
-    readonly mode: "count" | "forever";
-    readonly env: Readonly<Record<string, string>>;
-    readonly pin?: boolean;
-  },
+  options: WriterWorkerOptions,
 ): WriterWorker {
   const child = spawn(
     process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      WRITER_WORKER_SOURCE,
-      serverLogDistModule,
-      contractsDistModule,
-      stateDir,
-      String(workerId),
-      String(options.count),
-      options.mode,
-      options.pin === true ? "pin" : "none",
-    ],
+    [...writerWorkerArgs(stateDir, workerId, options), String(process.pid)],
     { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...options.env } },
   );
   const exit = new Promise<number | null>((resolveExit, reject) => {
@@ -576,7 +618,55 @@ function startWriterWorker(
       resolveExit(code);
     });
   });
-  return { child, exit };
+  const worker = { child, exit };
+  liveWriterWorkers.add(worker);
+  const forget = (): void => {
+    liveWriterWorkers.delete(worker);
+  };
+  exit.then(forget, forget);
+  return worker;
+}
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+// Spawns a forever writer through a short-lived relay process that exits at once, which leaves the
+// writer exactly as a killed test runner leaves it: alive, with its parent gone. Resolves the pid.
+const ORPHANING_RELAY_SOURCE = `
+import { spawn } from "node:child_process";
+const [command, ...args] = process.argv.slice(1);
+const writer = spawn(command, [...args, String(process.pid)], { stdio: "ignore" });
+writer.once("spawn", () => {
+  process.stdout.write(String(writer.pid) + "\\n", () => process.exit(0));
+});
+`;
+
+async function startOrphanedForeverWriter(stateDir: string): Promise<number> {
+  const args = writerWorkerArgs(stateDir, 7, { count: 0, mode: "forever", env: {} });
+  const relay = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", ORPHANING_RELAY_SOURCE, process.execPath, ...args],
+    { stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...storageEnv({}) } },
+  );
+  let output = "";
+  relay.stdout.on("data", (chunk: Buffer) => {
+    output += chunk.toString("utf8");
+  });
+  const code = await new Promise<number | null>((resolveExit, reject) => {
+    relay.once("error", reject);
+    relay.once("exit", resolveExit);
+  });
+  const pid = Number(output.trim());
+  if (code !== 0 || !Number.isInteger(pid) || pid <= 0) {
+    throw new Error("the relay did not report its writer");
+  }
+  return pid;
 }
 
 async function waitFor<T>(probe: () => T | undefined, timeoutMs = 20_000): Promise<T> {
@@ -1576,6 +1666,43 @@ describe("errorKindOf (ADR-0173 D11 hardened reflection)", () => {
 const SMALL_SEGMENT = 32 * 1024;
 const SMALL_BUDGET = 128 * 1024;
 
+// #3554: a forever writer must never outlive the test that started it, whether that test fails
+// before its kill or the whole runner dies.
+describe("activity log writer workers never outlive their test", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-server-log-worker-"));
+  });
+
+  afterEach(async () => {
+    // First: a writer still running would recreate files while the directory is removed.
+    await killLiveWriterWorkers();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("stops a forever writer by itself at the end of its lifetime", async () => {
+    const worker = startWriterWorker(stateDir, 5, {
+      count: 0,
+      mode: "forever",
+      env: storageEnv({}),
+      lifetimeMs: 200,
+    });
+    expect(await worker.exit).toBe(WRITER_WORKER_STOPPED_ITSELF);
+  }, 30_000);
+
+  it("stops a forever writer as soon as the process that spawned it is gone", async (ctx) => {
+    // Windows keeps a dead parent's pid, so there only the lifetime bounds a writer.
+    if (process.platform === "win32") ctx.skip();
+    const pid = await startOrphanedForeverWriter(stateDir);
+    try {
+      await waitFor(() => (processIsRunning(pid) ? undefined : true), 10_000);
+    } finally {
+      if (processIsRunning(pid)) process.kill(pid, "SIGKILL");
+    }
+  }, 30_000);
+});
+
 describe("activity log segment lifecycle", () => {
   let stateDir: string;
 
@@ -1587,7 +1714,9 @@ describe("activity log segment lifecycle", () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // First: a writer still running would recreate files while the directory is removed.
+    await killLiveWriterWorkers();
     closeFileServerLogSinks();
     resetFsKnobs();
     rmSync(stateDir, { recursive: true, force: true });
@@ -2278,7 +2407,9 @@ describe("activity log retention pins", () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // First: a writer still running would recreate files while the directory is removed.
+    await killLiveWriterWorkers();
     closeFileServerLogSinks();
     resetFsKnobs();
     rmSync(stateDir, { recursive: true, force: true });
