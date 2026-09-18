@@ -3,7 +3,7 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { closeFileServerLogSinks } from "@oscharko-dev/keiko-server";
 import {
   expectActivityLogProof,
@@ -64,6 +64,13 @@ function lineOf(stateDir: string, op: string): string {
   return lines[0] ?? "";
 }
 
+// The support commands reach keiko-server through `loadServer()`, the whole server module graph
+// imported lazily. That first import is the slowest step of this suite and, under coverage or on a
+// slow filesystem, can alone exceed the per-test budget of whichever test runs first. Pay it once
+// here, bounded on the hook as in portable-macos-activation.test.ts, so a real hang still fails.
+beforeAll(async () => {
+  await loadServer();
+}, 60_000);
 describe("support query activity log proofs (#3531)", () => {
   it("persists support.manifest.rebuilt and support.query.completed for one correlated query", async () => {
     const stateDir = stateWithHistory();

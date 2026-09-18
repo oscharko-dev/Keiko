@@ -10,11 +10,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { closeFileServerLogSinks, recordUserReportedIncident } from "@oscharko-dev/keiko-server";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
+import { loadServer } from "./lazy-modules.js";
 import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
 import { analyzeLogText } from "./support-analyze.js";
 import {
@@ -88,6 +89,13 @@ function exportDeps(cwd: string): SupportCliDeps {
 
 const AUDIT_ENV = { KEIKO_LOCAL_STATE_AUDITOR: "/opt/keiko/scripts/lib/local-state-audit.mjs" };
 
+// The support commands reach keiko-server through `loadServer()`, the whole server module graph
+// imported lazily. That first import is the slowest step of this suite and, under coverage or on a
+// slow filesystem, can alone exceed the per-test budget of whichever test runs first. Pay it once
+// here, bounded on the hook as in portable-macos-activation.test.ts, so a real hang still fails.
+beforeAll(async () => {
+  await loadServer();
+}, 60_000);
 describe("keiko support query/manifest argument parsing (#3531)", () => {
   it.each([
     [["query"], "needs a selector"],

@@ -5,7 +5,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
@@ -19,6 +19,7 @@ import {
   resetServerLogFailureNotices,
 } from "@oscharko-dev/keiko-server/observability/server-log";
 import type { CliIo } from "./runner.js";
+import { loadServer } from "./lazy-modules.js";
 import { runSupportCli } from "./support.js";
 import {
   MAX_SUPPORT_INCIDENT_WINDOW_BYTES,
@@ -56,6 +57,13 @@ async function run(
   return { code, out: capture.out(), err: capture.err() };
 }
 
+// The support commands reach keiko-server through `loadServer()`, the whole server module graph
+// imported lazily. That first import is the slowest step of this suite and, under coverage or on a
+// slow filesystem, can alone exceed the per-test budget of whichever test runs first. Pay it once
+// here, bounded on the hook as in portable-macos-activation.test.ts, so a real hang still fails.
+beforeAll(async () => {
+  await loadServer();
+}, 60_000);
 describe("parseSupportIncidentArgs", () => {
   it("parses every subcommand and its flags", () => {
     expect(parseSupportIncidentArgs(["list", "--json"])).toEqual({
