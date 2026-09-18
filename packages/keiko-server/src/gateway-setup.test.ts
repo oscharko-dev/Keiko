@@ -9626,6 +9626,61 @@ describe("gateway setup writes the process activity log", () => {
       deps.store.close();
     }
   });
+
+  // A temporarily unreachable chat deployment is saved with an "unverified" tool-calling proof. The
+  // probe path logs every conclusion it reaches; this one must leave the same line, or the log
+  // cannot say why a deployment that was just set up refuses tools.
+  it("records the unverified tool-calling status a temporary chat admission persists", async () => {
+    const uiDir = await tempDir("keiko-gw-activity-transient-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-activity-transient-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("provider unavailable"), { code: "ETIMEDOUT" })),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const result = await handleGatewaySetup(
+        ctx(
+          {
+            baseUrl: "https://gateway.example.com/v1",
+            apiKey: "test-token",
+            deploymentNames: ["temporarily-offline"],
+          },
+          "corr-temporary-admission",
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      const proof = requiredCapability(
+        requiredGatewayConfig(deps),
+        "temporarily-offline",
+      ).toolCallingVerification;
+      expect(proof?.status).toBe("unverified");
+      expect(
+        sink.events.filter((event) => event.op === "gateway.tool-calling.verification"),
+      ).toMatchObject([
+        {
+          category: "gateway",
+          correlationId: "corr-temporary-admission",
+          status: 503,
+          errorKind: "unavailable",
+          extra: {
+            verificationStatus: "unverified",
+            configurationFingerprint: proof?.configurationFingerprint,
+          },
+        },
+      ]);
+    } finally {
+      deps.store.close();
+    }
+  });
 });
 
 describe("gateway setup embedding spend ceiling", () => {
