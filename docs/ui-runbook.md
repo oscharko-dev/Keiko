@@ -92,12 +92,12 @@ Keiko selects only configured chat models that pass the gateway smoke test. Non-
 
 ## Local Files
 
-| Path                   | Purpose                                                   |
-| ---------------------- | --------------------------------------------------------- |
-| `.keiko/ui.pid`        | Background UI process id.                                 |
-| `.keiko/ui.log`        | Local UI process log.                                     |
-| `.keiko/evidence/`     | Project-local evidence when configured for the workspace. |
-| `~/.keiko/keiko-ui.db` | Local UI state database.                                  |
+| Path                   | Purpose                                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `.keiko/ui.pid`        | Background UI process id.                                                                          |
+| `.keiko/logs/`         | Redacted Activity Log segments. Read them with `keiko support export` and `keiko support analyze`. |
+| `.keiko/evidence/`     | Project-local evidence when configured for the workspace.                                          |
+| `~/.keiko/keiko-ui.db` | Local UI state database.                                                                           |
 
 Keep `.keiko/`, runtime config files, and API tokens out of version control.
 
@@ -117,7 +117,7 @@ Path validation is host-independent for these structural rules; the directory ex
 
 | Symptom                | Check                                                                                |
 | ---------------------- | ------------------------------------------------------------------------------------ |
-| UI is not reachable    | Run `keiko status` and inspect `.keiko/ui.log`.                                      |
+| UI is not reachable    | Run `keiko status`, then `keiko support analyze` on a `keiko support export` bundle. |
 | Port conflict          | Stop the conflicting process or start Keiko with another port.                       |
 | No model appears       | Re-run Settings credential test and confirm the gateway exposes chat models.         |
 | Credential test fails  | Confirm the base URL points to an OpenAI-compatible API and that the token is valid. |
