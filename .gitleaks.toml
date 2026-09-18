@@ -71,11 +71,8 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "PR #3554: the RFC 6455 section 1.2 example Sec-WebSocket-Key (base64 of the public string `the sample nonce`) in one immutable history commit of the live-dictation proof test. The generic-api-key rule reads `TEST_WS_KEY = ...` as a key. No credential was involved; the fixture derives the value from the RFC's nonce at runtime afterwards, and `dev` branch protection forbids rewriting the commit. Scoped to the exact commit, file, and fixture line so every other finding remains enforced."
+description = "PR #3554: the RFC 6455 section 1.2 example Sec-WebSocket-Key (base64 of the public string `the sample nonce`) as a literal in the history of the live-dictation proof test. The generic-api-key rule reads `TEST_WS_KEY = ...` as a key. No credential was involved, and the fixture now derives the value from the RFC's nonce at runtime, so the squash-merged tree carries no literal. Scoped by content, not by commit, so it holds for any history shape: only that exact public test-vector line in that one file is exempt, and every other finding in the file remains enforced."
 condition = "AND"
-commits = [
-  "cf6fedf28d0adfb5ea88a5562d0ea727c95c2dbf",
-]
 paths = [
   '''packages/keiko-server/src/voice-live-dictation\.test\.ts''',
 ]

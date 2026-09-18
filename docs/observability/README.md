@@ -186,6 +186,7 @@ process-wide ledger:
 | `persistence-failed`                                                                                                             | The file sink dropped an event after a failed append.                                     |
 | `diagnostic-sink-failed`                                                                                                         | A server diagnostic record could not be delivered.                                        |
 | `port-sink-failed`                                                                                                               | A domain package's log port threw. Every failure counts, not only the first.              |
+| `port-unwired`                                                                                                                   | A domain package's log port had no sink wired, so the event went nowhere.                 |
 | `client-rejected`, `client-rate-suppressed`                                                                                      | The BFF refused a malformed or oversized browser report, or its rate limiter dropped one. |
 | `client-buffer-evicted`, `client-post-throttled`, `client-post-failed`, `client-rejection-suppressed`, `client-error-suppressed` | The browser reported loss on its own side of the transport.                               |
 | `collector-dropped`                                                                                                              | The CLI's deferred security-event collector dropped events.                               |
@@ -204,9 +205,17 @@ counts with its next report, and once more when the page is hidden.
 - `unavailable`: the registry identity is incoherent, or the log cannot be written at all.
 
 The reasons are closed too: `catalog-mismatch`, `sink-unwritable`, `storage-pressure`,
-`budget-exceeded`, `port-unwired` and `level-silent`. The startup check runs before the server
-listens and persists an `activity-log.readiness` line through the real append path. The heartbeat
-re-evaluates it and logs every transition.
+`budget-exceeded`, `port-unwired`, `level-silent` and `storage-check-failed` (the storage could not
+be inspected at all, for example an unlistable `logs/` directory; readiness reports it as degraded
+and never passes the underlying error, which can name a path, to any surface). The startup check
+runs before the server listens and persists an `activity-log.readiness` line through the real
+append path. The heartbeat re-evaluates it and logs every transition.
+
+Readiness covers the segment store through its health report: writability, the byte budget and
+storage pressure, including blocked retention. Segment manifests are not a readiness input. They
+are derived metadata that a query rebuilds whenever one is missing or stale, and they are never on
+the path that writes or reads evidence, so their state cannot make evidence unwritable or
+unreadable. `keiko support manifest verify` reports it.
 
 | Where to read it                   | What it shows                                                        |
 | ---------------------------------- | -------------------------------------------------------------------- |
@@ -355,6 +364,16 @@ and asserts four things:
 
 Every failure class maps to the scenario of its surface and mode. There is no separate journey per
 class.
+
+**One command runs the whole gate.** `npm run check:activity-log` builds the packages and then
+runs `check:op-catalog`, the scenario matrix, `check:error-observability`, `arch:check`,
+`arch:check:negative` and `check:release-impact`. The catalog, proof and scenario checks cover the
+full registered inventory on every run, and `check:error-observability` checks every `catch` in the
+whole tree, never only a diff. Failure paths older than that check are listed in
+`legacy-failure-path-register.json`, which may only shrink: a failure path outside it fails the
+gate wherever it is, and an entry whose path is gone fails it too until
+`node scripts/check-error-observability.mjs --prune-register` removes it. Required CI runs the gate
+on every pull request.
 
 ## Redaction scope, stated honestly
 
@@ -605,9 +624,14 @@ A candidate is created in two ways:
   failure event; every report is its own occurrence.
 
 Each candidate pins the Activity Log from 15 minutes before to 5 minutes after the incident, across
-every process, including segments sealed later in that window. The pin expires with the candidate
-after 14 days, is released by `dismiss`, and holds only within `KEIKO_LOG_PIN_QUOTA_BYTES`; the
-candidate shows `pinned`, `quota-exceeded` or `rejected`.
+every process, including segments sealed later in that window. For the automatic trigger, that pin is
+published synchronously in the same turn as the failure that caused it, before any later maintenance
+pass — this process's own next segment admission, or another process sharing the state directory —
+can run against the window. The pin expires with the candidate after 14 days; it is released by
+`dismiss`, and also when a duplicate or a rejected candidate finds it no longer needs the window its
+trigger pre-published. It holds only within `KEIKO_LOG_PIN_QUOTA_BYTES`; the candidate shows
+`pinned`, `quota-exceeded` or `rejected`, plus `evidenceLostBeforePin` when a sealed segment inside
+the window was already gone by the time the pin actually covered it.
 
 | Command                               | What it does                                                 |
 | ------------------------------------- | ------------------------------------------------------------ |
@@ -712,7 +736,11 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   `keiko.support.analyze` for every timeline and `keiko.support.analyze-timeline` with
   `--correlation-id`, both at version 1. Every field the earlier output had is unchanged, so an
   existing reader such as `keiko investigate --from-timeline` keeps working; `--seed` already
-  carried `schemaVersion`, and `--clusters --json` still prints a bare array.
+  carried `schemaVersion`. `--clusters --json` still prints the same bare, unversioned array
+  byte-for-byte — no existing reader breaks — but it is deprecated: every use prints a one-line
+  stderr notice naming its versioned replacement, the `clusters` member `keiko.support.analyze`
+  (schema version 1) now carries under plain `--json`, which holds exactly the same data inside a
+  versioned envelope.
 - **Analyze streams too.** `keiko support analyze` reads its file through the same bounded line
   reader, including for `--seed` and `--emit-fixture`. A seed's `sourceArtifact.sha256` is the
   SHA-256 of the file's bytes, the value `shasum -a 256` and a report's `.sha256` file state.

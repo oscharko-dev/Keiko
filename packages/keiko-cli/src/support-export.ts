@@ -37,17 +37,9 @@ import type { AuditResult } from "./audit.js";
 // byte is exactly as safe as `readVerbatimLogLines`'s existing full-file `split("\n")`.
 const NEWLINE_BYTE = 0x0a;
 
-// `lifecycle.ts`'s `logFile()` writes the UI/BFF process's raw, unredacted stdout+stderr here
-// (`<stateDir>/ui.log`) — an acknowledged-unredacted operator channel, distinct from the redacted
-// `server*.log` stream above. Named once here so the double-confirmation gate in `support.ts` and
-// this module's own section builder never risk drifting on the literal.
-export const UI_LOG_FILE_NAME = "ui.log";
-
-// The one `sectionsExcluded` member Wave 6 introduces: always present unless the operator passed
-// BOTH `--include-ui-log` AND `--i-understand-this-is-unredacted` on `keiko support export`
-// (design doc §6.3) — a single flag is never sufficient consent. `support.ts` decides the gate (it
-// owns argv); this constant keeps the section tag and the exclusion label byte-identical between
-// the two files that need it.
+// The one `sectionsExcluded` member. Every report names the retired raw `ui.log` channel as
+// excluded (#3532): earlier versions wrote the UI child's raw output there, a legacy file is never
+// read into a report, and `support.ts` refuses the retired `--include-ui-log` flags.
 export const UI_LOG_SECTION = "ui-log";
 
 // The Activity Log store is itself bounded (#3530), but its default byte budget is larger than one
@@ -523,12 +515,8 @@ export interface SupportBundleManifest {
   // absolute paths) alongside the fs error kind that caused the skip. Distinct from
   // `truncatedLogFiles`: those were dropped on purpose for the size budget; these were simply gone.
   readonly skippedLogFiles: readonly SkippedLogFile[];
-  // Names every optional section this export did NOT attach — Wave 6. Currently the only member
-  // this manifest can ever carry is `"ui-log"` (§6.3): it is present whenever `support.ts`'s
-  // double-confirmation gate did not pass (either flag absent, or present alone), and ALWAYS —
-  // never merely when the operator happened to ask — so a reader of the manifest can tell the
-  // channel's status without knowing whether it was ever requested. Empty exactly when the gate
-  // passed and the section was attached.
+  // Names every optional section this export did NOT attach. The only member is `"ui-log"`, and it
+  // is always present: the raw `ui.log` channel is retired (#3532) and never read into a report.
   readonly sectionsExcluded: readonly string[];
   readonly auditSummary: RedactedAuditSummary;
   readonly evidenceIndexCount: number;
@@ -570,8 +558,8 @@ export interface ManifestInput {
   readonly evidenceIndexCount: number;
   readonly storeFingerprints: readonly StoreFingerprint[];
   readonly storesUnavailable: readonly StoreUnavailableEntry[];
-  // Computed by `support.ts` from its own double-confirmation gate (this module stays pure/argv-
-  // free — file banner) and passed straight through to `SupportBundleManifest.sectionsExcluded`.
+  // Supplied by `support.ts` (this module stays pure and argv-free) and passed straight through to
+  // `SupportBundleManifest.sectionsExcluded`.
   readonly sectionsExcluded: readonly string[];
 }
 
@@ -638,24 +626,11 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
   };
 }
 
-// ─── Wave 6 sections: ui-log (opt-in), config-snapshot (always), evidence-manifest (opt-in) ────
+// ─── Sections: config-snapshot (always), evidence-manifest (opt-in) ────────────────────────────
 //
 // Each is one `$section`-tagged JSONL record, exactly like the manifest itself (§6.1) — never
 // re-transformed content mixed into the manifest object, so a bug in one section's assembly can
 // never corrupt another's.
-
-// Attached only when `support.ts`'s double-confirmation gate (`--include-ui-log` AND
-// `--i-understand-this-is-unredacted`, both required) passes and `<stateDir>/ui.log` has content.
-// `content` is the file's bytes verbatim — `ui.log` is free text, not JSONL, so there is no
-// per-line shape to preserve the way the raw server-log content lines do.
-export interface SupportBundleUiLogSection {
-  readonly $section: "ui-log";
-  readonly content: string;
-}
-
-export function buildUiLogSection(content: string): SupportBundleUiLogSection {
-  return { $section: "ui-log", content };
-}
 
 // Always attached (never flag-gated): a snapshot of Keiko's own resolved `KEIKO_*` runtime
 // configuration, already passed through `redactLogFields` by the caller (`support.ts`) before this
@@ -689,8 +664,8 @@ export function buildEvidenceManifestSection(
   return { $section: "evidence-manifest", runId, manifest };
 }
 
-// Line 1 (the manifest), then any Wave 6 `$section` records (config-snapshot always, ui-log and
-// evidence-manifest only when their gates pass), then every already-read content line, in file
+// Line 1 (the manifest), then any Wave 6 `$section` records (config-snapshot always, evidence-manifest
+// only for a requested run), then every already-read content line, in file
 // order. The manifest is built from `readKeptFiles`'s result (see `support.ts`'s
 // `runSupportExport`) so its `sourceLogFiles`/`skippedLogFiles` reflect what was actually read, not
 // merely what was kept after the size budget — never touches an already-copied line's bytes.

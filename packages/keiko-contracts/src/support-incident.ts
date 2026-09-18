@@ -249,6 +249,12 @@ export interface SupportIncidentPin {
   readonly pinId?: string | undefined;
   readonly pinnedSegmentCount: number;
   readonly pinnedBytes: number;
+  // True when a sealed segment inside the window, visible just before the pin was published, was
+  // already gone by the time the pin actually covered it: a maintenance pass -- this process's own
+  // next segment admission, or another process sharing the state directory -- raced the narrow gap
+  // between observing the window and publishing its pin. The window is then never reported as a
+  // clean `pinned` even when `status` is `"pinned"`.
+  readonly evidenceLostBeforePin: boolean;
 }
 
 export interface SupportIncidentRecord {
@@ -382,7 +388,15 @@ function validWindow(value: unknown): value is SupportIncidentWindow {
 
 function validPin(value: unknown): value is SupportIncidentPin {
   if (!isPlainObject(value)) return false;
-  if (!hasOnlyKeys(value, ["status", "pinnedSegmentCount", "pinnedBytes"], ["pinId"])) return false;
+  if (
+    !hasOnlyKeys(
+      value,
+      ["status", "pinnedSegmentCount", "pinnedBytes", "evidenceLostBeforePin"],
+      ["pinId"],
+    )
+  ) {
+    return false;
+  }
   const pinned = value.status !== "rejected";
   return (
     isOneOf(SUPPORT_INCIDENT_PIN_STATUSES, value.status) &&
@@ -390,7 +404,8 @@ function validPin(value: unknown): value is SupportIncidentPin {
       ? typeof value.pinId === "string" && ACTIVITY_LOG_PIN_ID_PATTERN.test(value.pinId)
       : value.pinId === undefined) &&
     isCount(value.pinnedSegmentCount) &&
-    isCount(value.pinnedBytes)
+    isCount(value.pinnedBytes) &&
+    typeof value.evidenceLostBeforePin === "boolean"
   );
 }
 

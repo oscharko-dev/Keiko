@@ -47,6 +47,7 @@ function record(overrides: Partial<SupportIncidentRecord> = {}): SupportIncident
       pinId: "fedcba9876543210fedcba98",
       pinnedSegmentCount: 2,
       pinnedBytes: 4096,
+      evidenceLostBeforePin: false,
     },
     createdAtMs: 2_000,
     expiresAtMs: 9_000,
@@ -209,7 +210,15 @@ describe("the closed record schema", () => {
     ["a window out of order", { ...record(), window: { fromMs: 5, incidentAtMs: 4, toMs: 6 } }],
     [
       "a pinned status without a pin id",
-      { ...record(), pin: { status: "pinned", pinnedSegmentCount: 0, pinnedBytes: 0 } },
+      {
+        ...record(),
+        pin: {
+          status: "pinned",
+          pinnedSegmentCount: 0,
+          pinnedBytes: 0,
+          evidenceLostBeforePin: false,
+        },
+      },
     ],
     [
       "a rejected pin that names a pin id",
@@ -220,7 +229,27 @@ describe("the closed record schema", () => {
           pinId: "fedcba9876543210fedcba98",
           pinnedSegmentCount: 0,
           pinnedBytes: 0,
+          evidenceLostBeforePin: false,
         },
+      },
+    ],
+    [
+      "a pin missing the evidenceLostBeforePin signal",
+      {
+        ...record(),
+        pin: {
+          status: "pinned",
+          pinId: "fedcba9876543210fedcba98",
+          pinnedSegmentCount: 0,
+          pinnedBytes: 0,
+        },
+      },
+    ],
+    [
+      "a non-boolean evidenceLostBeforePin",
+      {
+        ...record(),
+        pin: { ...record().pin, evidenceLostBeforePin: "true" },
       },
     ],
     ["an expiry before creation", { ...record(), expiresAtMs: 1 }],

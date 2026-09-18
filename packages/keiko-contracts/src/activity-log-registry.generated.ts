@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b32b03405004f5d2ba1a0348966d32a3779df5bf869e8b1c01b942b27b91bc32" as const;
+  "7b067c4859ec4448275ec01c7bfbd4de2a4b00dde68ad9dab2cf6cb090949544" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -60,6 +60,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       portSinkFailed: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      portUnwired: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -422,7 +427,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string-array",
         dataClass: "closed-enum",
         required: true,
-        maxItems: 6,
+        maxItems: 7,
         values: [
           "catalog-mismatch",
           "sink-unwritable",
@@ -430,6 +435,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "budget-exceeded",
           "port-unwired",
           "level-silent",
+          "storage-check-failed",
         ],
       },
       writer: {
@@ -25590,6 +25596,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "portSinkFailed",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "portUnwired",
               type: "integer",
               dataClass: "count",
               required: false,

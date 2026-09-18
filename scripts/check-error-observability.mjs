@@ -35,16 +35,13 @@
 // sink.test.ts / consolidate.test.ts / log-port.test.ts, one per site above).
 
 import { Buffer } from "node:buffer";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const scriptPath = fileURLToPath(import.meta.url);
@@ -54,7 +51,6 @@ const SECRET_MARKER = "gate-secret-DO-NOT-LEAK";
 const ID_PATTERN = /^[A-Za-z0-9._-]{8,128}$/;
 const HOST = "127.0.0.1";
 const REPO_ROOT = resolve(here, "..");
-const GIT_EXECUTABLE = resolveHostExecutable("git", { workspaceRoot: REPO_ROOT });
 
 export const SERVER_TOP_LEVEL_SITE_ID = "server.top-level-catch";
 export const MIN_STRATIFIED_SITES = 10;
@@ -91,8 +87,8 @@ function isClassMember(node) {
 }
 
 // Class members get their own owner, `Class.member`, so two catches in different methods of one
-// class never share a key: the base-versus-head diff counts findings per owner, and a shared key
-// would let a new silent catch in one method hide behind a fixed one in another.
+// class never share a key: the legacy register counts findings per owner, and a shared key would
+// let a new silent catch in one method hide behind a fixed one in another.
 function classMemberName(member) {
   const className = member.parent.name?.text ?? "<class>";
   if (ts.isConstructorDeclaration(member)) return `${className}.constructor`;
@@ -391,6 +387,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
   ],
   [
+    "packages/keiko-server/src/observability/activity-log-readiness.ts:storageCheck",
+    "A throwing storage check becomes the closed storage-check-failed reason the readiness line persists.",
+  ],
+  [
     "packages/keiko-server/src/observability/server-log.ts:listingOrUndefined",
     "An unlistable directory becomes a storage-unavailable outcome the registered pin events persist.",
   ],
@@ -525,79 +525,137 @@ export function unregisteredFailurePathViolations(source, path = "fixture.ts") {
   return findings;
 }
 
-function findingSignature(finding) {
-  return `${finding.kind}:${finding.owner}`;
+// ─── The legacy failure-path register (#3540) ───────────────────────────────────────────────────
+//
+// The catch-clause rule runs over EVERY production TypeScript file under packages/ on every run; no
+// base ref and no diff decides what is checked. Failure paths that predate this full-tree rule are
+// listed per file, enclosing owner and kind in a committed register that may only shrink: a finding
+// beyond its register count fails the gate wherever it is, and a register entry the tree no longer
+// has fails it too, until `--prune-register` lowers the entry. Nothing adds to the register; a new
+// failure path is fixed, or reviewed into REVIEWED_FAILURE_PATH_EXEMPTIONS with its reason.
+
+export const FAILURE_PATH_REGISTER_PATH = "docs/observability/legacy-failure-path-register.json";
+const FAILURE_PATH_KINDS = new Set(["unregistered-catch", "raw-console-catch"]);
+const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "coverage", "out", "__tests__"]);
+
+function isProductionTypeScript(path) {
+  return path.endsWith(".ts") && !path.endsWith(".d.ts") && !path.endsWith(".test.ts");
 }
 
-// Findings in the head revision of one file that its base revision did not already have.
-export function newFailurePathFindings(baseSource, headSource, path) {
-  const baseCounts = Map.groupBy(
-    unregisteredFailurePathViolations(baseSource, path),
-    findingSignature,
+function collectTypeScript(repoRoot, relative, out) {
+  for (const entry of readdirSync(resolve(repoRoot, relative), { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || SKIPPED_DIRECTORIES.has(entry.name)) continue;
+    const path = `${relative}/${entry.name}`;
+    if (entry.isDirectory()) collectTypeScript(repoRoot, path, out);
+    else if (entry.isFile() && isProductionTypeScript(path)) out.push(path);
+  }
+}
+
+// Code-unit order: the same on every host and locale, which `localeCompare` is not.
+function compareCodeUnits(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+// Every production TypeScript file on disk, tracked or not, in code-unit order.
+export function productionTypeScriptFiles(repoRoot = REPO_ROOT) {
+  const out = [];
+  collectTypeScript(repoRoot, "packages", out);
+  return out.toSorted(compareCodeUnits);
+}
+
+export function scanFailurePaths(repoRoot = REPO_ROOT) {
+  return productionTypeScriptFiles(repoRoot).flatMap((path) =>
+    unregisteredFailurePathViolations(readFileSync(resolve(repoRoot, path), "utf8"), path),
   );
-  return unregisteredFailurePathViolations(headSource, path).filter((finding) => {
-    const signature = findingSignature(finding);
-    const matches = baseCounts.get(signature);
-    if (matches === undefined || matches.length === 0) return true;
-    matches.pop();
-    return false;
-  });
 }
 
-function gitText(args, cwd = REPO_ROOT) {
-  return execFileSync(GIT_EXECUTABLE, args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+function failurePathKey(entry) {
+  return `${entry.path} ${entry.owner} ${entry.kind}`;
 }
 
-function resolveGateBaseCommit(repoRoot) {
-  const configured = process.env.GITHUB_BASE_REF;
-  const candidates = [
-    ...(configured === undefined ? [] : [`origin/${configured}`, configured]),
-    "origin/dev",
-    "dev",
-  ];
-  for (const candidate of candidates) {
-    try {
-      return gitText(["rev-parse", "--verify", `${candidate}^{commit}`], repoRoot).trim();
-    } catch {
-      // Try the next deterministic local spelling of the PR base.
-    }
-  }
-  throw new Error("error-observability-base-ref-unavailable");
+function validRegisterEntry(entry) {
+  return (
+    typeof entry === "object" &&
+    entry !== null &&
+    typeof entry.path === "string" &&
+    entry.path.startsWith("packages/") &&
+    typeof entry.owner === "string" &&
+    FAILURE_PATH_KINDS.has(entry.kind) &&
+    Number.isSafeInteger(entry.count) &&
+    entry.count > 0 &&
+    Object.keys(entry).length === 4
+  );
 }
 
-function changedProductionTypeScriptFiles(repoRoot, baseCommit) {
-  return gitText(
-    ["diff", "--name-only", "--diff-filter=ACMR", baseCommit, "--", "packages"],
-    repoRoot,
-  )
-    .split("\n")
-    .filter(
-      (path) =>
-        path.endsWith(".ts") &&
-        !path.endsWith(".d.ts") &&
-        !path.endsWith(".test.ts") &&
-        !path.includes("/__tests__/"),
+// Fails closed on any shape but the exact one `--prune-register` writes: sorted, unique, positive.
+export function parseFailurePathRegister(text) {
+  const parsed = JSON.parse(text);
+  const entries = parsed?.entries;
+  const valid =
+    parsed?.schemaVersion === 1 &&
+    Object.keys(parsed).length === 2 &&
+    Array.isArray(entries) &&
+    entries.every(validRegisterEntry) &&
+    entries.every(
+      (entry, index) => index === 0 || failurePathKey(entries[index - 1]) < failurePathKey(entry),
     );
+  if (!valid) throw new Error("error-observability-register-invalid");
+  return entries;
 }
 
-function baseFileSource(repoRoot, baseCommit, path) {
-  try {
-    return gitText(["show", `${baseCommit}:${path}`], repoRoot);
-  } catch {
-    return "";
-  }
+export function serializeFailurePathRegister(entries) {
+  return `${JSON.stringify({ schemaVersion: 1, entries }, null, 2)}\n`;
 }
 
-export function unregisteredFailurePathDiffViolations(repoRoot = REPO_ROOT) {
-  const baseCommit = resolveGateBaseCommit(repoRoot);
-  return changedProductionTypeScriptFiles(repoRoot, baseCommit).flatMap((path) => {
-    const headSource = readFileSync(resolve(repoRoot, path), "utf8");
-    return newFailurePathFindings(baseFileSource(repoRoot, baseCommit, path), headSource, path);
+// Findings the register does not cover, and register entries the tree no longer holds in full.
+export function failurePathRegisterDiff(findings, entries) {
+  const found = Map.groupBy(findings, failurePathKey);
+  const registered = new Map(entries.map((entry) => [failurePathKey(entry), entry.count]));
+  const unregistered = [...found].flatMap(([key, sites]) =>
+    sites.length > (registered.get(key) ?? 0) ? sites : [],
+  );
+  const stale = entries.filter(
+    (entry) => (found.get(failurePathKey(entry))?.length ?? 0) < entry.count,
+  );
+  return { unregistered, stale };
+}
+
+// Lowers every entry to what the tree still holds and drops the ones it no longer has. It never
+// raises a count or adds an entry, so pruning cannot register a new failure path.
+export function prunedFailurePathRegister(findings, entries) {
+  const found = Map.groupBy(findings, failurePathKey);
+  return entries.flatMap((entry) => {
+    const count = Math.min(entry.count, found.get(failurePathKey(entry))?.length ?? 0);
+    return count > 0 ? [{ ...entry, count }] : [];
   });
+}
+
+function readFailurePathRegister(repoRoot) {
+  return parseFailurePathRegister(
+    readFileSync(resolve(repoRoot, FAILURE_PATH_REGISTER_PATH), "utf8"),
+  );
+}
+
+export function failurePathRegisterViolations(repoRoot = REPO_ROOT) {
+  const { unregistered, stale } = failurePathRegisterDiff(
+    scanFailurePaths(repoRoot),
+    readFailurePathRegister(repoRoot),
+  );
+  return [
+    ...unregistered,
+    ...stale.map((entry) => ({ ...entry, line: 0, kind: "stale-register-entry" })),
+  ];
+}
+
+export function pruneFailurePathRegister(repoRoot = REPO_ROOT) {
+  const entries = readFailurePathRegister(repoRoot);
+  const pruned = prunedFailurePathRegister(scanFailurePaths(repoRoot), entries);
+  writeFileSync(
+    resolve(repoRoot, FAILURE_PATH_REGISTER_PATH),
+    serializeFailurePathRegister(pruned),
+  );
+  return { before: entries.length, after: pruned.length };
 }
 
 function distPath(pkg, file) {
@@ -1238,15 +1296,21 @@ async function runServerTopLevelSite(exercised) {
   }
 }
 
-// The static check diffs against the PR base commit. Tests of the probe wiring pass their own
-// findings, so they do not depend on how much Git history the checkout carries.
-export async function main(findStaticViolations = unregisteredFailurePathDiffViolations) {
+// The static check scans the whole tree against the legacy register. Tests of the probe wiring pass
+// their own findings, so they do not depend on the tree they run in.
+export async function main(findStaticViolations = failurePathRegisterViolations) {
   const staticViolations = findStaticViolations();
   if (staticViolations.length > 0) {
     const sites = staticViolations
-      .map((finding) => `${finding.path}:${String(finding.line)} (${finding.kind})`)
+      .map(
+        (finding) => `${finding.path}:${String(finding.line)} ${finding.owner} (${finding.kind})`,
+      )
       .join(", ");
-    fail(`new unregistered failure path(s): ${sites}`);
+    fail(
+      `failure path(s) outside ${FAILURE_PATH_REGISTER_PATH}: ${sites}. Record the failure through ` +
+        "the owning log port or rethrow it; a stale-register-entry means a listed path is gone: run " +
+        "`node scripts/check-error-observability.mjs --prune-register` and commit the smaller register.",
+    );
   }
   const exercised = [];
   await runServerTopLevelSite(exercised);
@@ -1264,7 +1328,14 @@ export async function main(findStaticViolations = unregisteredFailurePathDiffVio
 
 if (process.argv[1] === scriptPath) {
   try {
-    await main();
+    if (process.argv.includes("--prune-register")) {
+      const { before, after } = pruneFailurePathRegister();
+      console.log(
+        `check:error-observability register pruned: ${String(before)} -> ${String(after)} entries.`,
+      );
+    } else {
+      await main();
+    }
   } catch (error) {
     fail(`unexpected gate error: ${String(error?.stack ?? error)}`);
   }

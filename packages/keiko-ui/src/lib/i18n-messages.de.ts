@@ -1097,6 +1097,7 @@ export const DE_MESSAGES = {
   "footer.diagnosticsReasonBudgetExceeded": "Protokollspeicherbudget überschritten",
   "footer.diagnosticsReasonPortUnwired": "ein Protokollanschluss ist nicht verbunden",
   "footer.diagnosticsReasonLevelSilent": "Protokollierung ist stumm geschaltet",
+  "footer.diagnosticsReasonStorageCheckFailed": "Protokollspeicher kann nicht geprüft werden",
   "footer.windowSingular": "{count} Fenster",
   "footer.windowPlural": "{count} Fenster",
   "footer.openWindows": "Offene Fenster",

@@ -397,6 +397,8 @@ export const ACTIVITY_LOG_READINESS_REASONS = [
   "budget-exceeded",
   "port-unwired",
   "level-silent",
+  // The storage could not be inspected at all (an unlistable log directory, a descriptor limit).
+  "storage-check-failed",
 ] as const;
 export type ActivityLogReadinessReason = (typeof ACTIVITY_LOG_READINESS_REASONS)[number];
 

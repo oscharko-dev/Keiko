@@ -416,7 +416,10 @@ each rule: `check:op-catalog` (registry, exemptions, failure-class coverage, fai
 inventory, proof and scenario resolution), `test:activity-log-scenarios` (executes the curated
 scenario matrix the inventory resolves), `check:error-observability`, `arch:check` with
 `arch:check:negative`, and `check:release-impact`. Required CI runs that exact command. It takes no
-changed-file input, so diff awareness can never narrow what it proves. The exemption validator also
+changed-file input, so diff awareness can never narrow what it proves. That includes the catch
+rule of `check:error-observability`: it scans every production file on every run, and the failure
+paths that predate the full-tree rule sit in a committed register that may only shrink
+(`docs/observability/legacy-failure-path-register.json`); nothing adds to it. The exemption validator also
 requires the record's owner to be the operation's owning package and its expiry to lie at most 180
 days ahead, so no record is unowned or permanent.
 
@@ -451,7 +454,8 @@ production sink refused.
 3. It receives the process sink from the server or CLI composition root. It never constructs a file
    sink and never reads `KEIKO_STATE_DIR` itself.
 4. It isolates its sink. A throwing `write` is caught and counted as `port-sink-failed` in the loss
-   ledger, every time and not only the first.
+   ledger, every time and not only the first. An event handed to a port with no sink wired is
+   counted as `port-unwired`, so a missed composition edge is visible instead of silent.
 5. It reports a failing sink once per sink instance, on the independent process-warning channel.
 
 **Loss is counted, never silent (#3532).** One bounded, process-wide loss ledger lives in the
@@ -480,14 +484,20 @@ produce reconstruction evidence. The result is one of three states: `ready`, `de
 `unavailable`. It carries three more facts:
 
 - the closed reasons: `catalog-mismatch`, `sink-unwritable`, `storage-pressure`,
-  `budget-exceeded`, `port-unwired` and `level-silent`;
+  `budget-exceeded`, `port-unwired`, `level-silent` and `storage-check-failed` (a storage check that
+  throws is reduced to this reason and its error is dropped, so readiness never freezes on a stale
+  state and never carries a path);
 - the writer kind: `production-file`, `test-injected` or `unavailable`;
 - the lost-event total.
 
 The startup evaluation runs before the server listens. It persists its `activity-log.readiness` line
 through the durable append path, so the probe is a real write, not a permission check. A failed write
 means `unavailable`, with the reason `sink-unwritable`. Storage conditions come from the segment
-store's own health report (`activityLogStorageHealth`). The heartbeat re-evaluates without a probe
+store's own health report (`activityLogStorageHealth`), which covers the segment store's state:
+writability, byte budget and pressure, including blocked retention. Segment manifests (D16) are not a
+readiness input: they are derived metadata, rebuilt whenever missing or stale, and never on the path
+that writes or reads evidence, so their state cannot make evidence unwritable or unreadable;
+`keiko support manifest verify` reports it. The heartbeat re-evaluates without a probe
 and logs every transition. A persistence loss since the last evaluation degrades readiness with
 `sink-unwritable`. `GET /api/health` returns the snapshot as `diagnostics`. `keiko status` prints
 it, and so does `keiko support export` for the exported directory. The desktop footer shows a
@@ -980,6 +990,15 @@ bound.
 Segments stay uncompressed. A sealed segment is directly readable by `keiko support analyze` and by
 line tools, and the byte budget already bounds disk use.
 
+**Calibration (#3532).** The defaults were checked against the traces of the 29 failure scenarios,
+each run through the real file writer in one process. Together they wrote 128 lines and 95,305 bytes:
+2 to 20 lines and 1,400 to 15,076 bytes per scenario (median 2,534 bytes), 745 bytes per line on
+average. The largest trace, the memory-knowledge loss scenario, is 20 lines and 15,076 bytes. At that
+line size an 8 MiB segment holds about 11,000 lines, and the 256 MiB budget about 360,000. The
+64 MiB pin quota holds about 4,400 incident traces of the largest measured size. No default had to
+grow. The report-size cap belongs to #3534, which is not part of this change; for reference, a 1 MiB
+cap would leave more than 60 times the largest trace.
+
 **Legacy input.** Existing `server.log` and `server-YYYY-MM-DD.log` files are read-only legacy
 segments. They count toward the budget, age out under the same retention, and are never rewritten or
 appended to. `server-log.rotation` and `server-log.capacity-warning` are retired; lines that carry
@@ -1025,11 +1044,20 @@ An incident is a control artifact over the Activity Log, not a second log (#3533
 is created automatically for a registered failure operation logged at `error` with at least one
 supported failure class, or explicitly by the user (`keiko support incident report`); a closed
 `trigger` records which. Eligibility derives from the registry, never from a UI-side list.
-Candidate creation runs outside the logging call and never transfers data.
 
-On creation the candidate pins a bounded window (15 minutes before, 5 minutes after) through D14's pin
-primitive, across every process instance. No causal-closure computation happens at pin time; a later
-selective export chooses the closure from the pinned window.
+On the registered-failure trigger, the window's Activity Log retention pin (15 minutes before, 5
+minutes after, through D14's pin primitive, across every process instance) is published
+synchronously, in the same turn as the triggering write — before any later maintenance pass, this
+process's own next segment admission or another process sharing the state directory, can run against
+an unprotected window. Only the rest of candidate creation — deduplication, the quota check, and the
+record write — runs outside the logging call; it never transfers data. A duplicate or a rejected
+candidate releases the pin its trigger already published instead of leaving it to sit until its own
+TTL. The residual race a synchronous publish cannot fully close on its own — a concurrent process's
+retention removing a sealed segment in the narrow gap between observing the window and the pin
+actually covering it — is detected by comparing that snapshot to the pin's own outcome and reported
+as the pin's `evidenceLostBeforePin`, so the window is never reported as a clean "pinned" when part
+of it was already lost. No causal-closure computation happens at pin time; a later selective export
+chooses the closure from the pinned window.
 
 Two identifiers serve two purposes. `incidentId` is random and names one occurrence.
 `defectFingerprint` is deterministic and versioned over allowlisted stable inputs (owning surface,

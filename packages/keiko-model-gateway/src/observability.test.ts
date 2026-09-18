@@ -437,4 +437,18 @@ describe("a caller-supplied sink is foreign code", () => {
       warn.mockRestore();
     }
   });
+
+  it("counts an event handed to an unwired port as lost", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      resolveLogSink(undefined).write({
+        level: "info",
+        category: "gateway",
+        op: "gateway.chat.started",
+      });
+      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
 });
