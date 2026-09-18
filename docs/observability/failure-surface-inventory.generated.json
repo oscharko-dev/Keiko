@@ -56,7 +56,7 @@
     "resolvedProofCount": 398,
     "failureClassCount": 308,
     "scenarioCount": 29,
-    "resolvedScenarioCount": 20
+    "resolvedScenarioCount": 24
   },
   "surfaces": [
     {
@@ -2008,10 +2008,12 @@
     "lifecycle-crash.crash": ["tests/activity-log-scenarios/lifecycle-crash.test.ts"],
     "lifecycle-crash.dependency-failure": [],
     "lifecycle-crash.loss": [],
-    "memory-knowledge.crash": [],
-    "memory-knowledge.dependency-failure": [],
-    "memory-knowledge.loss": [],
-    "memory-knowledge.rejection": [],
+    "memory-knowledge.crash": ["tests/activity-log-scenarios/memory-knowledge.test.ts"],
+    "memory-knowledge.dependency-failure": [
+      "tests/activity-log-scenarios/memory-knowledge.test.ts"
+    ],
+    "memory-knowledge.loss": ["tests/activity-log-scenarios/memory-knowledge.test.ts"],
+    "memory-knowledge.rejection": ["tests/activity-log-scenarios/memory-knowledge.test.ts"],
     "model-gateway.crash": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "model-gateway.dependency-failure": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "model-gateway.loss": ["tests/activity-log-scenarios/model-gateway.test.ts"],
