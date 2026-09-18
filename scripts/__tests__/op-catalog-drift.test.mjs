@@ -25,6 +25,7 @@ import {
   validateActivityLogRegistryExemptions,
 } from "../generate-op-catalog.mjs";
 import { failureSurfaceInventoryDrift } from "../lib/activity-log-failure-surface-inventory.mjs";
+import { withTypedRegistryFixture } from "./support/typed-registry-fixture.mjs";
 import {
   newFailurePathFindings,
   unregisteredFailurePathViolations,
@@ -93,31 +94,6 @@ function withFixturePackage(pkgName, fileContents, check) {
     const srcDir = join(root, "packages", pkgName, "src");
     mkdirSync(srcDir, { recursive: true });
     writeFileSync(join(srcDir, "fixture.ts"), fileContents, "utf8");
-    check(root);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-function withTypedRegistryFixture(pkgName, fileContents, check) {
-  const root = mkdtempSync(join(tmpdir(), "typed-op-registry-fixture-"));
-  try {
-    const contractsDir = join(root, "packages", "keiko-contracts", "src");
-    const emitterDir = join(root, "packages", pkgName, "src");
-    mkdirSync(contractsDir, { recursive: true });
-    mkdirSync(emitterDir, { recursive: true });
-    writeFileSync(
-      join(contractsDir, "observability.ts"),
-      [
-        "export function defineActivityLogOperation<const T>(value: T): T { return value; }",
-        "export function activityLogEvent<const T>(registration: T, _envelope: object, fields: Record<string, unknown>) {",
-        '  return { ...fields, contractKind: "activity-log-event" as const, registration };',
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    writeFileSync(join(emitterDir, "fixture.ts"), fileContents, "utf8");
     check(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
