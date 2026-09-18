@@ -290,6 +290,15 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "packages/keiko-server/src/observability/activity-log-store.ts:activityLogFreeBytes",
     "Free space that cannot be measured is reported as absent, never as plenty.",
   ],
+  // #3533 SupportIncident store: the same fail-closed probes as the Activity Log pin records.
+  [
+    "packages/keiko-server/src/observability/support-incident-store.ts:regularFileSize",
+    "A vanished or unreadable entry is classified as absent from the incident store listing.",
+  ],
+  [
+    "packages/keiko-server/src/observability/support-incident-store.ts:readRecord",
+    "An unreadable incident record describes nothing; the next sweep removes it and persists support.incident.expired invalid-record.",
+  ],
   [
     "packages/keiko-server/src/observability/server-log.ts:activeLogKey",
     "A directory that cannot be resolved is keyed by its lexical path; opening it still fails closed.",
