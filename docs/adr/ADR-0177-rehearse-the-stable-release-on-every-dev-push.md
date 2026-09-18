@@ -164,9 +164,25 @@ publishes; it only has to be verifiable by it.
   triggering actor in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`. It points `v<version>` at exactly the
   commit the button was pressed on (`scripts/release-candidate.mjs --request`, through the release tag
   App) and fails, naming the reason, when that commit cannot be released: the version is not
-  approved, npm or GitHub already carries it, or a publish of the tag is still open. A successful
-  request run is therefore the owner's authorization for exactly its head commit. GitHub records the
-  dispatching account as the run's triggering actor, and no token can choose it.
+  approved, or a publish of the tag is still open. A successful request run is therefore the owner's
+  authorization for exactly its head commit. GitHub records the dispatching account as the run's
+  triggering actor, and no token can choose it.
+- **Preparing the next version.** When the current version is already published there is nothing to
+  request yet, and `release-impact.catalog.json` entries are already written ahead of time, during
+  the normal review of the change that needs them (KEIKO-0118) — so the next release needs no new
+  human judgment, only a mechanical version move. The request job moves the checkout to the lowest
+  stable version the catalog already carries a reviewed, non-correction entry for
+  (`scripts/lib/release-version-bump.mjs: nextReviewedVersion`), opens a `release/bump-<version>` pull
+  request to `dev` as the release App, and arms native auto-merge, instead of failing. Direct pushes to
+  `dev` stay forbidden, so the owner's authorization has to cross this one merge: a version-bump PR can
+  only have been opened by the release App's own identity — reachable only from this owner-gated job —
+  it targets `dev` from the reserved branch prefix, and it carries exactly the one mechanical commit
+  `set-version.mjs` produces (`readVersionBumpAuthorization`, `isVersionBumpAuthorizationPr`). Losing
+  any one of those checks is a safe failure: the bump does not auto-release, never a release it should
+  not have made. The candidate tag holds at that merge exactly like a direct button press
+  (`release-candidate.mjs`'s `releaseHeld`), and the advance evaluation recognizes it as a request
+  equivalent to a live owner dispatch (`release-automation.mjs`'s `versionBumpRequest`), tried first and
+  falling back to the classic dispatch-run request — including on any read failure — unchanged.
 - **The held tag.** A later `dev` push never moves a tag that a successful or still-running request
   holds; that push belongs to the next release, and the planner assigns it no build. Only a newer
   press moves the tag. A held tag can at most stop a tag move, never start a publish, so the planner
@@ -211,11 +227,13 @@ publishes; it only has to be verifiable by it.
 - `portable-release-signing` can take a `v*` deployment policy and a required approval without
   affecting `dev`.
 - A green rehearsal proves the chain for `v<version>` at that commit. After a version is published,
-  the next release still needs its version bump and its reviewed release-impact approval; readiness
-  names that gap until the approval lands.
-- Releasing a version is one prepared version on `dev` (the version bump with its release-impact
-  approval) and one press of the release button. No second human step, command, run id or re-run is
-  part of a release that succeeds.
+  the next release still needs its reviewed release-impact approval on `dev` — written ahead of time
+  during normal feature review, never as a release-time step — before a press of the button can move
+  the version to it; readiness names that gap until the approval lands.
+- Releasing a version is one press of the release button, on a `dev` that already carries a reviewed
+  release-impact entry for whatever version comes next. No second human step, command, run id or
+  re-run is part of a release that succeeds, and no separate version-bump step is either: the button
+  prepares it.
 - Merges after the press are held back from the release they would otherwise have silently joined,
   and each requested commit is published at most once per press.
 - An owner-cut tag still releases as before; the candidate workflow keeps, moves, or leaves it by the
@@ -238,7 +256,11 @@ secrets and the step order of the candidate, the button and the event-driven sta
 place; `check-release-required-workflow-names.test.mjs` holds `release-advance.yml` to `release.yml`'s
 authority; `release-orchestration-integration.test.mjs` proves both build-owner scenarios, the held
 tag and the complete chain from the press to the authorized publish; and
-`release-publish-pipeline.test.mjs` stops a publish whose tag moved.
+`release-publish-pipeline.test.mjs` stops a publish whose tag moved. `release-version-bump.test.mjs`
+proves the reviewed-version lookup, the authorization PR's identity check, and the branch/commit/PR/
+auto-merge sequence in-process; `release-candidate.test.mjs` and `release-automation.test.mjs` also
+cover the merged-PR hold and request paths, including every way a PR can fail to be one
+(`releaseHeld`, `versionBumpRequest`).
 
 ## References
 
