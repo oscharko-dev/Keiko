@@ -10,8 +10,9 @@ name: Release advance
 #
 # `workflow_run` is the only trigger GitHub offers for "another workflow completed". Its classic misuse
 # is checking out the triggering run's head and executing it with the elevated token. This workflow
-# does the opposite by construction: it checks out the default branch, runs only committed repository
-# code, reads nothing from the triggering run, and skips every pull-request run. Its only write grant
+# does the opposite by construction: it checks out the default branch commit its own definition came
+# from, runs only committed repository code, reads nothing from the triggering run, and skips every
+# pull-request run. Its only write grant
 # is `actions: write`, which dispatches release.yml; that run's authorize job then refuses any commit
 # no allowlisted owner requested.
 on:
@@ -57,13 +58,16 @@ jobs:
       contents: read
       statuses: read
     steps:
-      - name: Check out the default branch
+      - name: Check out the commit this definition came from
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # `workflow_run` executes the default branch's definition of this file, so the decision it
-          # runs comes from the same place, never from the triggering run's head.
-          ref: ${{ github.event.repository.default_branch }}
+          # `workflow_run` executes the default branch's definition of this file at GITHUB_SHA, the
+          # default branch head when the event fired. The decision runs from that same commit: never
+          # from the triggering run's head, and never from a branch tip that moved after the event.
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Verify checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"

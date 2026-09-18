@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   AUTOMATION_ACTOR,
   gatherAdvanceFacts,
-  isOwnerReleaseRequest,
   newestOwnerRequest,
   newestStableBuild,
   readBuildRuns,
@@ -14,10 +13,10 @@ import {
   releaseAdvancePlan,
   releaseAuthorizePlan,
   releaseAutomationMain,
-  releaseOwners,
   runReleaseAdvance,
   runReleaseAuthorize,
 } from "../lib/release-automation.mjs";
+import { isOwnerReleaseRequest, releaseOwners } from "../lib/release-candidate.mjs";
 
 // ADR-0177 D9. Until 1.0.5 the stable build ended in a handoff that printed a long
 // `gh workflow run release.yml ... -f portable_assets_run_id=...` command, and the owner had to wait

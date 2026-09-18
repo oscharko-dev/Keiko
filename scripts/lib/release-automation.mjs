@@ -16,11 +16,13 @@ import { Buffer } from "node:buffer";
 
 import { evaluateRequiredChecks, parseRequiredChecks } from "../verify-release-required-checks.mjs";
 import {
-  isReleaseRequest,
+  isOwnerReleaseRequest,
+  isReleaseOwner,
   npmHasVersion,
   readFound,
   readReleaseDispatchRuns,
   releaseExists,
+  releaseOwners,
   remoteTagCommit,
 } from "./release-candidate.mjs";
 
@@ -48,39 +50,6 @@ function requireStableTag(tag) {
 function requireCommitSha(sha, label) {
   if (!COMMIT_SHA.test(String(sha))) fail(`${label} is not a full commit SHA.`);
   return sha;
-}
-
-/**
- * The allowlisted release owners from `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`, lower-cased because GitHub
- * logins are case-insensitive. Empty, missing, or malformed configuration refuses every owner.
- */
-export function releaseOwners(value) {
-  let parsed;
-  try {
-    parsed = JSON.parse(String(value ?? ""));
-  } catch {
-    parsed = undefined;
-  }
-  const valid =
-    Array.isArray(parsed) &&
-    parsed.length > 0 &&
-    parsed.every((login) => typeof login === "string" && login !== "" && !login.endsWith("[bot]"));
-  if (!valid) fail("KEIKO_RELEASE_OWNER_GITHUB_LOGINS is not a JSON array of human logins.");
-  return new Set(parsed.map((login) => login.toLowerCase()));
-}
-
-/** True when `login` is an allowlisted human release owner. */
-function isReleaseOwner(login, owners) {
-  return typeof login === "string" && !login.endsWith("[bot]") && owners.has(login.toLowerCase());
-}
-
-/**
- * True when an allowlisted owner pressed the release button. GitHub records the dispatching account
- * as the run's triggering actor, which no token can choose, so the run is that owner's authorization
- * for exactly its head commit.
- */
-export function isOwnerReleaseRequest(run, owners) {
-  return isReleaseRequest(run) && isReleaseOwner(run.triggering_actor.login, owners);
 }
 
 function runNumber(run) {

@@ -43,6 +43,12 @@ describe("release candidate workflow", () => {
     });
   });
 
+  it("hands both tag-writing plans the owner allowlist, so only an owner's request holds the tag", () => {
+    const allowlist = "${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}";
+    expect(candidate.jobs.plan.steps.at(-1).env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS).toBe(allowlist);
+    expect(candidate.jobs.tag.steps.at(-1).env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS).toBe(allowlist);
+  });
+
   it("writes the tag at once, with a contents-only App token from its environment", () => {
     // The tag build runs beside the commit's CI; the release-required checks gate the read-only
     // human handoff at the end of that build.
@@ -183,10 +189,13 @@ describe("event-driven publish start", () => {
     expect(job.environment).toBeUndefined();
     expect(JSON.stringify(job)).not.toContain("secrets.");
     expect(JSON.stringify(job)).not.toMatch(/workflow_run\.(head_sha|head_branch|id)/u);
+    // CodeRabbit finding on #3551: a branch ref binds the tip when the job starts, not the commit
+    // whose definition of this workflow is running; GITHUB_SHA is that default-branch commit.
     expect(job.steps[0].with).toStrictEqual({
       "persist-credentials": false,
-      ref: "${{ github.event.repository.default_branch }}",
+      ref: "${{ github.sha }}",
     });
+    expect(job.steps[1].run).toBe('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"');
     expect(job.steps.some((step) => /npm (ci|install)/u.test(String(step.run)))).toBe(false);
     expect(job.steps.at(-1)).toMatchObject({
       env: {

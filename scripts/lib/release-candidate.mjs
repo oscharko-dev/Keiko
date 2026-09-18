@@ -214,29 +214,49 @@ export function readReleaseDispatchRuns(runGh, repository) {
 const RELEASE_REQUEST_BRANCH = "dev";
 
 /**
- * True for a press of the release button: release.yml dispatched on dev by a human account. Whether
- * that human is an allowlisted release owner is release.yml's own job guard and the publish
- * authorization's question (scripts/lib/release-automation.mjs); the planner only needs to know that a
- * request holds the tag, and a held tag can at most stop a tag move, never start a publish.
+ * The allowlisted release owners from `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`, lower-cased because GitHub
+ * logins are case-insensitive. Empty, missing, or malformed configuration refuses every owner.
  */
-export function isReleaseRequest(run) {
-  const login = run?.triggering_actor?.login;
+export function releaseOwners(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(value ?? ""));
+  } catch {
+    parsed = undefined;
+  }
+  const valid =
+    Array.isArray(parsed) &&
+    parsed.length > 0 &&
+    parsed.every((login) => typeof login === "string" && login !== "" && !login.endsWith("[bot]"));
+  if (!valid) fail("KEIKO_RELEASE_OWNER_GITHUB_LOGINS is not a JSON array of human logins.");
+  return new Set(parsed.map((login) => login.toLowerCase()));
+}
+
+/** True when `login` is an allowlisted human release owner. */
+export function isReleaseOwner(login, owners) {
+  return typeof login === "string" && !login.endsWith("[bot]") && owners.has(login.toLowerCase());
+}
+
+/**
+ * True when an allowlisted owner pressed the release button: dispatched release.yml on dev. GitHub
+ * records the dispatching account as the run's triggering actor, which no token can choose, so the
+ * run is that owner's authorization for exactly its head commit.
+ */
+export function isOwnerReleaseRequest(run, owners) {
   return (
     run?.event === "workflow_dispatch" &&
     run?.head_branch === RELEASE_REQUEST_BRANCH &&
-    typeof login === "string" &&
-    login !== "" &&
-    !login.endsWith("[bot]")
+    isReleaseOwner(run?.triggering_actor?.login, owners)
   );
 }
 
-// A request run of an account outside the allowlist skips every job and concludes "skipped", so only
-// an owner's request can hold the tag beyond the seconds its run is open.
-function releaseRequestHolds(runs, remoteTagSha) {
+// A successful request, or one still running, holds the tag at its commit. Only an owner's request
+// counts: any other account's dispatch never holds the tag, not even for the seconds it is open.
+function ownerRequestHolds(runs, owners, remoteTagSha) {
   return runs.some(
     (run) =>
       run?.head_sha === remoteTagSha &&
-      isReleaseRequest(run) &&
+      isOwnerReleaseRequest(run, owners) &&
       (run?.conclusion === "success" || OPEN_RUN_STATUSES.has(run?.status)),
   );
 }
@@ -246,12 +266,16 @@ function releaseRequestHolds(runs, remoteTagSha) {
  * exact commit the owner pressed the button on, so it neither yields to a newer dev head nor to an
  * older request; a dev push yields to both.
  *
+ * @param owners  releaseOwners(), or undefined where the tag is never written. The dev rehearsal's
+ *                readiness reads no repository variable and needs no hold: a held tag and a moved
+ *                one both leave that commit without a dev rehearsal.
  * @param request true for the release button, false for a dev push
  * @param runGh   (args) => {status, stdout, stderr, error}; reads with the workflow token
  * @param runNpm  (args) => {status, stdout, stderr, error}
  */
 export function planReleaseCandidate({
   candidateSha,
+  owners,
   repository,
   request = false,
   rootPackage,
@@ -279,7 +303,10 @@ export function planReleaseCandidate({
       (run) => run?.head_branch === tag && OPEN_RUN_STATUSES.has(run?.status),
     );
     facts.ownerRequestHeld =
-      !request && facts.remoteTagSha !== undefined && releaseRequestHolds(runs, facts.remoteTagSha);
+      !request &&
+      owners !== undefined &&
+      facts.remoteTagSha !== undefined &&
+      ownerRequestHolds(runs, owners, facts.remoteTagSha);
   }
   return releaseCandidatePlan(facts);
 }
@@ -389,6 +416,7 @@ export function runReleaseCandidate({
   const request = mode === "--request";
   const plan = planReleaseCandidate({
     candidateSha,
+    owners: configuredOwners(env),
     readiness,
     repository,
     request,
@@ -422,6 +450,13 @@ function reportLine({ candidateSha, plan, request, writes }) {
   return writes
     ? `Release candidate ${candidateSha}: ${plan.tag} written (${plan.action}), ${plan.reason}.`
     : `Release candidate ${candidateSha}: ${plan.action}, ${plan.reason}.`;
+}
+
+// A job that writes the tag passes the allowlist, and an empty or malformed value fails it closed; the
+// rehearsal readiness passes none (see planReleaseCandidate).
+function configuredOwners(env) {
+  const value = env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+  return value === undefined ? undefined : releaseOwners(value);
 }
 
 function runInputs(env, mode) {

@@ -9,9 +9,12 @@ import {
   newestOwnerRequest,
   releaseAdvancePlan,
   releaseAuthorizePlan,
-  releaseOwners,
 } from "../lib/release-automation.mjs";
-import { PORTABLE_BUILD_OWNERS, releaseCandidatePlan } from "../lib/release-candidate.mjs";
+import {
+  PORTABLE_BUILD_OWNERS,
+  releaseCandidatePlan,
+  releaseOwners,
+} from "../lib/release-candidate.mjs";
 
 const SHA = "a".repeat(40);
 const TAG = "v1.0.5";

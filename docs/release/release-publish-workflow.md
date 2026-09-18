@@ -380,9 +380,11 @@ first release-trusted build. Do not retroactively change their trust scope or tr
 as a canary. Apple/Microsoft provider access is not a prerequisite and this updater repair grants no
 publish approval.
 
-The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after an allowlisted human
-dispatches it, after it re-verifies the release-required checks of the commit it was dispatched for
-and validates the green `Portable assets` run of that commit as its input.
+The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` once `authorize` accepted its
+dispatch — either a direct tag dispatch by an allowlisted owner, or the `github-actions[bot]`
+dispatch from `release-advance.yml` for a commit a successful owner release request authorized — and
+after it re-verifies the release-required checks of the commit it was dispatched for and validates
+the green `Portable assets` run of that commit as its input.
 The script:
 
 - checks version and publish-manifest consistency,
@@ -518,10 +520,13 @@ image, not a release image, so a publish from it needs three things added in the
   there. A checkout mounted from a git worktree carries a `.git` _file_ pointing at a main
   repository that is not mounted, and every git-reading gate fails on it.
 
-The `npm-publish` environment currently has no required-reviewer protection rule. Do not describe it
-as an approval gate and do not compensate by granting the stable build `actions: write`: an automatic
-workflow dispatch is bot-attributed and deliberately refused. Human control is the exact JSON-array
-owner guard plus the explicit non-bot dispatch; the environment scopes credentials and OIDC identity.
+The `npm-publish` environment has no required-reviewer protection rule. Do not describe it as an
+approval gate. Human control is the release button: its `request` job runs only for an allowlisted
+non-bot triggering actor in the exact JSON-array owner guard, and `authorize` accepts a publish
+dispatch only from such an owner directly on the tag, or from `github-actions[bot]` for the exact
+commit a successful owner request authorized. The environment scopes credentials and OIDC identity.
+Do not grant the stable build `actions: write`: `release-advance.yml` is the only workflow that
+dispatches a publish.
 
 ### Release-owner allowlist in an operator shell
 

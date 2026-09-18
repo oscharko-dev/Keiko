@@ -6,6 +6,7 @@ import {
   planReleaseCandidate,
   releaseCandidateMain,
   releaseCandidatePlan,
+  releaseOwners,
   remoteTagCommit,
   runReleaseCandidate,
 } from "../lib/release-candidate.mjs";
@@ -24,6 +25,7 @@ const READY = {
   reason: `${TAG} is approved for every portable target`,
 };
 const ROOT_PACKAGE = { name: "@oscharko-dev/keiko", version: "1.0.1" };
+const OWNERS = releaseOwners('["oscharko"]');
 
 function ok(value) {
   return { status: 0, stdout: JSON.stringify(value), stderr: "" };
@@ -180,9 +182,10 @@ describe("remoteTagCommit", () => {
 });
 
 describe("planReleaseCandidate", () => {
-  function gather(github, runNpm = NPM_MISSING, readiness = READY) {
+  function gather(github, runNpm = NPM_MISSING, readiness = READY, withAllowlist = true) {
     return planReleaseCandidate({
       candidateSha: CANDIDATE,
+      owners: withAllowlist ? OWNERS : undefined,
       readiness,
       repository: REPO,
       rootPackage: ROOT_PACKAGE,
@@ -287,6 +290,18 @@ describe("planReleaseCandidate", () => {
   it.each([
     ["a failed request", request({ conclusion: "failure" })],
     ["a request no owner could make (every job skipped)", request({ conclusion: "skipped" })],
+    [
+      "a running request of an account outside the allowlist",
+      request({
+        status: "in_progress",
+        conclusion: null,
+        triggering_actor: { login: "contributor" },
+      }),
+    ],
+    [
+      "a successful run of an account outside the allowlist",
+      request({ triggering_actor: { login: "contributor" } }),
+    ],
     ["a request for another commit", request({ head_sha: "c".repeat(40) })],
     ["a bot dispatch on dev", request({ triggering_actor: { login: "github-actions[bot]" } })],
     ["a dispatch without an actor", request({ triggering_actor: undefined })],
@@ -298,6 +313,19 @@ describe("planReleaseCandidate", () => {
       [RUNS_PATH]: ok({ workflow_runs: [run] }),
     });
     expect(gather(github).action).toBe("move");
+  });
+
+  it("computes no hold without an allowlist, as the dev rehearsal's readiness runs it", () => {
+    // The readiness job reads no repository variable (release-portable-assets-workflow.test.mjs pins
+    // that). Held or moved, the commit gets no dev rehearsal, so the answer it needs is the same.
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: tagAtOlder,
+      [RUNS_PATH]: ok({ workflow_runs: [request({})] }),
+    });
+    const withoutAllowlist = gather(github, NPM_MISSING, READY, false);
+    expect(withoutAllowlist.action).toBe("move");
+    expect(withoutAllowlist.portableBuild).not.toBe(PORTABLE_BUILD_OWNERS.DEV_REHEARSAL);
+    expect(gather(github).portableBuild).not.toBe(PORTABLE_BUILD_OWNERS.DEV_REHEARSAL);
   });
 
   it("creates a missing tag even when a request run carries no commit", () => {
@@ -612,6 +640,41 @@ describe("runReleaseCandidate", () => {
       }),
     ).toThrow(`${TAG} cannot be released from ${CANDIDATE}: not approved.`);
     expect(appended).toStrictEqual([]);
+  });
+
+  it("holds the tag for an owner's request when the tag-writing job passes the allowlist", () => {
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
+      [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page=1`]:
+        ok({
+          workflow_runs: [
+            {
+              conclusion: "success",
+              event: "workflow_dispatch",
+              head_branch: "dev",
+              head_sha: OLDER,
+              status: "completed",
+              triggering_actor: { login: "oscharko" },
+            },
+          ],
+        }),
+    });
+    const { result, writes } = run(
+      "--apply",
+      { KEIKO_RELEASE_OWNER_GITHUB_LOGINS: '["oscharko"]', KEIKO_RELEASE_TAG_TOKEN: "app-token" },
+      github,
+    );
+    expect(result.plan.action).toBe("skip");
+    expect(writes).toStrictEqual([]);
+  });
+
+  it("fails a tag-writing plan closed on an empty or malformed allowlist", () => {
+    expect(() => run("--plan", { KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "" })).toThrow(
+      "KEIKO_RELEASE_OWNER_GITHUB_LOGINS is not a JSON array of human logins",
+    );
+    expect(() => run("--apply", { KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "oscharko" })).toThrow(
+      "is not a JSON array of human logins",
+    );
   });
 
   it("refuses to request a release without the tag token", () => {

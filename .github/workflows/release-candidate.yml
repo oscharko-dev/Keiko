@@ -61,6 +61,8 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
           GITHUB_TOKEN: ${{ github.token }}
+          # Only an allowlisted owner's release request holds the tag (ADR-0177 D9).
+          KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
         run: node scripts/release-candidate.mjs --plan
 
   tag:
@@ -100,5 +102,6 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ needs.plan.outputs.sha }}
           GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
           KEIKO_RELEASE_TAG_TOKEN: ${{ steps.tag-token.outputs.token }}
         run: node scripts/release-candidate.mjs --apply

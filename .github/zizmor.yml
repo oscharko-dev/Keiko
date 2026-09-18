@@ -61,7 +61,7 @@ rules:
       # triggering run, skips every pull-request run in its job condition, and holds no secret. Its only
       # write grant is `actions: write`, which dispatches release.yml on a tag; that run's authorize job
       # refuses every commit no allowlisted release owner requested with the release button.
-      - release-advance.yml:17
+      - release-advance.yml:18
   adhoc-packages:
     ignore:
       # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;
