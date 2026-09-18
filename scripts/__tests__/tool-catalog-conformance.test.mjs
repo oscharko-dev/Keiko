@@ -42,10 +42,8 @@ import {
   measureToolCatalogPerformanceInFreshProcess,
   recalibrateToolCatalogPerformance,
   rebindToolCatalogPerformanceCaseIdentity,
-  rebindToolCatalogPerformanceSubject,
   ratchetToolCatalogPerformanceBudgets,
   toolCatalogPerformanceBudgets,
-  toolCatalogPerformanceSubject,
   TOOL_CATALOG_PERFORMANCE_FILES,
   TOOL_CATALOG_OVERFLOW_TOOL_COUNT,
   TOOL_CATALOG_SYNTHETIC_TOOL_COUNT,
@@ -783,66 +781,6 @@ describe("compiler measurements reuse the existing sample and percentile convent
           measure: async () => driftedRaw,
         }),
       ).rejects.toThrow("budget exceeds its reviewed ceiling");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }, 45_000);
-
-  it("rebinds a version-only subject drift without a fresh measurement, and refuses a real one", async () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-catalog-subject-rebind-"));
-    mkdirSync(join(root, "docs", "release"), { recursive: true });
-    mkdirSync(join(root, "scripts"), { recursive: true });
-    let clock = 0;
-    const raw = await measureToolCatalogPerformance(ROOT, () => ++clock);
-    const environment = {
-      platform: "linux",
-      architecture: "arm64",
-      nodeVersion: "v24.18.0",
-      logicalCores: 16,
-      totalMemoryBytes: 24_000_000_000,
-      containerImage: TOOL_CATALOG_REFERENCE_IMAGE,
-    };
-    const realSubject = toolCatalogPerformanceSubject(ROOT);
-    const dependencies = {
-      environment: () => environment,
-      measure: async () => structuredClone(raw),
-      now: () => "2026-09-06T00:00:00.000Z",
-      rulerDigest: () => "a".repeat(64),
-      subject: () => realSubject,
-    };
-    try {
-      const initial = await writeToolCatalogPerformanceCalibration(root, dependencies);
-      await writeToolCatalogPerformanceMeasurement(root, dependencies);
-
-      expect(() => rebindToolCatalogPerformanceSubject(root, dependencies)).toThrow(
-        "catalog performance subject already matches the checkout",
-      );
-
-      const bumpedSubject = { ...realSubject, lockfileSha256: "b".repeat(64) };
-      const rebound = rebindToolCatalogPerformanceSubject(root, {
-        ...dependencies,
-        subject: () => bumpedSubject,
-      });
-      expect(rebound.calibration.subject.lockfileSha256).toBe("b".repeat(64));
-      expect(rebound.measurement.subject.lockfileSha256).toBe("b".repeat(64));
-      expect(rebound.measurement.calibrationSha256).toBe(rebound.calibration.documentSha256);
-      expect(rebound.budget.maximumP95Ms).toEqual(initial.budget.maximumP95Ms);
-      expect(rebound.calibration.documentSha256).not.toBe(initial.calibration.documentSha256);
-
-      expect(() =>
-        rebindToolCatalogPerformanceSubject(root, {
-          ...dependencies,
-          subject: () => ({ ...bumpedSubject, sourceTreeSha256: "f".repeat(64) }),
-        }),
-      ).toThrow("catalog performance producer or measurement ruler changed");
-
-      expect(() =>
-        rebindToolCatalogPerformanceSubject(root, {
-          ...dependencies,
-          rulerDigest: () => "c".repeat(64),
-          subject: () => bumpedSubject,
-        }),
-      ).toThrow("catalog performance producer or measurement ruler changed");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

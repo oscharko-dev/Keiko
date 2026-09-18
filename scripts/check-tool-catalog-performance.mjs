@@ -747,7 +747,6 @@ function evidenceWriterDependencies(overrides = {}) {
     now: () => new Date().toISOString(),
     read: readJson,
     rulerDigest: toolCatalogPerformanceRulerDigest,
-    subject: toolCatalogPerformanceSubject,
     write: writeJson,
     ...overrides,
   };
@@ -857,57 +856,6 @@ export async function writeToolCatalogPerformanceMeasurement(root = process.cwd(
   return { measurement, result };
 }
 
-/**
- * Corrects `subject` in calibration, measurement and budget after a version-only change -- the
- * lockfile version bump #3415's own subject hash was over-fingerprinting (every workspace
- * package's `version` field and every pin on one, none of which the producer's compiled output can
- * observe). Needs no reference hardware and takes no fresh timings: subject hashing is pure file
- * hashing, identical on every host, so this is safe to run from anywhere, including a version-bump
- * CI job on a standard runner. Refuses when `sourceTreeSha256` or `measurementHarnessSha256` also
- * moved -- that is a real producer or measurement-ruler change, which changes what was measured and
- * needs recalibrateToolCatalogPerformance or rebindToolCatalogPerformanceCaseIdentity, both of which
- * take fresh timings from the pinned reference container.
- */
-export function rebindToolCatalogPerformanceSubject(root = process.cwd(), overrides = {}) {
-  const deps = evidenceWriterDependencies(overrides);
-  const calibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
-  const measurement = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement);
-  const currentSubject = {
-    ...deps.subject(root),
-    measurementHarnessSha256: deps.rulerDigest(root),
-  };
-  for (const document of [calibration, measurement]) {
-    if (
-      document.subject.sourceTreeSha256 !== currentSubject.sourceTreeSha256 ||
-      document.subject.measurementHarnessSha256 !== currentSubject.measurementHarnessSha256
-    ) {
-      throw new TypeError(
-        "catalog performance producer or measurement ruler changed; recalibrate or rebind case " +
-          "identity from the pinned reference container instead",
-      );
-    }
-  }
-  if (calibration.subject.lockfileSha256 === currentSubject.lockfileSha256) {
-    throw new TypeError("catalog performance subject already matches the checkout");
-  }
-  const rebindCalibration = sealToolCatalogPerformanceDocument({
-    ...calibration,
-    subject: currentSubject,
-  });
-  validateToolCatalogPerformanceDocument(rebindCalibration);
-  const rebindMeasurement = sealToolCatalogPerformanceDocument({
-    ...measurement,
-    calibrationSha256: rebindCalibration.documentSha256,
-    subject: currentSubject,
-  });
-  validateToolCatalogPerformanceDocument(rebindMeasurement);
-  const rebindBudget = toolCatalogPerformanceBudgets(rebindCalibration);
-  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration, rebindCalibration);
-  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement, rebindMeasurement);
-  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.budget, rebindBudget);
-  return { budget: rebindBudget, calibration: rebindCalibration, measurement: rebindMeasurement };
-}
-
 function currentIdentityDefects(document, current) {
   const defects = [];
   for (const id of expectedPerformanceCaseIds()) {
@@ -961,12 +909,8 @@ if (isMainModule(import.meta.url)) {
   const calibrate = process.argv.includes("--calibrate");
   const recalibrate = process.argv.includes("--recalibrate");
   const rebindCaseIdentity = process.argv.includes("--rebind-case-identity");
-  const rebindSubject = process.argv.includes("--rebind-subject");
   const writeMeasurement = process.argv.includes("--write-measurement");
-  if (
-    [calibrate, recalibrate, rebindCaseIdentity, rebindSubject, writeMeasurement].filter(Boolean)
-      .length > 1
-  ) {
+  if ([calibrate, recalibrate, rebindCaseIdentity, writeMeasurement].filter(Boolean).length > 1) {
     throw new TypeError("choose one performance evidence operation");
   } else if (calibrate) {
     await writeToolCatalogPerformanceCalibration();
@@ -977,9 +921,6 @@ if (isMainModule(import.meta.url)) {
   } else if (rebindCaseIdentity) {
     await rebindToolCatalogPerformanceCaseIdentity();
     console.log("tool-catalog-performance: PASS — non-widening case-identity rebind written");
-  } else if (rebindSubject) {
-    rebindToolCatalogPerformanceSubject();
-    console.log("tool-catalog-performance: PASS — version-only subject rebind written");
   } else if (writeMeasurement) {
     const { result } = await writeToolCatalogPerformanceMeasurement();
     if (result.defects.length > 0 || result.verdicts.length > 0)

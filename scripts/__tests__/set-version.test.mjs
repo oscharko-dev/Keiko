@@ -336,4 +336,31 @@ describe("normalizedLockfileText", () => {
     const parsed = JSON.parse(normalizedLockfileText(JSON.stringify(baseLockfile)));
     expect(parsed.packages["node_modules/zod"].version).toBe("3.23.0");
   });
+
+  // #3555 review: npm can emit a bundled node_modules/* entry with `inBundle: true` and no
+  // `resolved` -- the same shape a workspace entry has. Classifying by "no resolved field" would
+  // misclassify it as workspace noise and normalize its real version change away; classifying by
+  // lockfile path (root or packages/*) does not.
+  it("still moves on a bundled node_modules entry with no resolved field", () => {
+    const withBundled = structuredClone(baseLockfile);
+    withBundled.packages["node_modules/bundled-thing"] = { version: "1.0.0", inBundle: true };
+    const changed = structuredClone(withBundled);
+    changed.packages["node_modules/bundled-thing"].version = "1.0.1";
+    expect(normalizedLockfileText(JSON.stringify(changed))).not.toBe(
+      normalizedLockfileText(JSON.stringify(withBundled)),
+    );
+  });
+
+  it("refuses malformed JSON instead of silently returning it unnormalized", () => {
+    expect(() => normalizedLockfileText("{not json")).toThrow();
+  });
+
+  it.each([
+    ["omitted", {}],
+    ["null", { packages: null }],
+    ["a string", { packages: "not an object" }],
+  ])("returns the input unchanged when packages is %s", (_label, overrides) => {
+    const lockfile = JSON.stringify({ version: "1.0.5", ...overrides });
+    expect(normalizedLockfileText(lockfile)).toBe(lockfile);
+  });
 });

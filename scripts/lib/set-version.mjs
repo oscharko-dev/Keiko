@@ -81,11 +81,24 @@ export function versionedSource(text, version) {
 }
 
 const LOCKFILE_VERSION_PLACEHOLDER = "0.0.0-version-normalized";
+// The root manifest ("") and exactly this repository's configured workspace glob
+// (package.json "workspaces": ["packages/*"]) -- never "no resolved field", which npm also uses for
+// a bundled node_modules/* dependency (`inBundle: true`, no `resolved`). That shape would
+// misclassify a real, unreviewed dependency change as harmless workspace version noise and let
+// normalizedLockfileText normalize it away (#3555 review).
+const WORKSPACE_LOCKFILE_PATH = /^packages\/[^/]+$/u;
+
+function isWorkspaceLockfilePath(path) {
+  return path === "" || WORKSPACE_LOCKFILE_PATH.test(path);
+}
 
 function workspaceLockfileEntries(packages) {
-  return Object.values(packages).filter(
-    (entry) => entry !== null && typeof entry === "object" && entry.resolved === undefined,
-  );
+  return Object.entries(packages)
+    .filter(
+      ([path, entry]) =>
+        isWorkspaceLockfilePath(path) && entry !== null && typeof entry === "object",
+    )
+    .map(([, entry]) => entry);
 }
 
 function normalizeWorkspaceLockfileEntry(entry, workspaceNames) {
@@ -102,11 +115,12 @@ function normalizeWorkspaceLockfileEntry(entry, workspaceNames) {
 /**
  * `text` with every workspace package's own `version` field, and every dependency pin ON a
  * workspace package, replaced by a fixed placeholder. A workspace-local `packages/*` entry (and
- * the root `""` entry) is identified the same way npm itself distinguishes it from an installed
- * dependency: it carries no `resolved` field. This module moves exactly these fields on a version
+ * the root `""` entry) is identified by its lockfile path, exactly this repository's configured
+ * workspace glob -- never by content shape. This module moves exactly these fields on a version
  * bump and nothing else a lockfile refresh can reach, so the normalized text is unchanged across a
  * version-only bump while any other lockfile change -- a real dependency added, removed or
- * re-resolved, third-party version bumped -- still moves it.
+ * re-resolved, third-party version bumped, a bundled node_modules/* entry with no `resolved` -- still
+ * moves it.
  */
 export function normalizedLockfileText(text) {
   const lockfile = JSON.parse(text);

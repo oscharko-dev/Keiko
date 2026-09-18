@@ -211,9 +211,11 @@ function bumpTargetVersion(runGh, repository, sha) {
  * mechanical version bump relative to its own parent: every changed file is one set-version.mjs
  * moves, none were added or removed, and every one of them holds exactly the content that function
  * would have produced from the parent -- the lockfile compared normalized (normalizedLockfileText),
- * every other file compared verbatim (versionedManifest/versionedSource). The target version is
- * read from the root manifest's own new content, not asserted by the caller: this proves the
- * *relationship* between parent and head, not a claim about which version was intended.
+ * every other file compared verbatim (versionedManifest/versionedSource). Returns the verified
+ * version, read from the root manifest's own new content, not asserted by the caller: this proves
+ * the *relationship* between parent and head, not a claim about which version was intended -- the
+ * caller must still bind that returned version back to what it expected (#3555 review: two reviewed
+ * target versions can coexist, and nothing here alone stops a same-branch content swap between them).
  */
 function verifyMechanicalVersionBump(runGh, repository, sha) {
   const commit = readFound(runGh, `repos/${repository}/commits/${sha}`, `commit ${sha}`);
@@ -223,12 +225,15 @@ function verifyMechanicalVersionBump(runGh, repository, sha) {
   for (const file of files) {
     verifyBumpFile(runGh, repository, file, parentSha, sha, version, workspaceNames);
   }
+  return version;
 }
 
 /**
  * The version-bump authorization whose merge commit is `sha`, or undefined. A commit is associated
  * with the pull request that merged it through GitHub's own commit-to-PR index, so this never has to
- * search or guess which PR to check.
+ * search or guess which PR to check. Binds the branch name to the verified content: a same-count,
+ * mechanically clean replacement that targets a *different* reviewed version than the branch name
+ * says is refused, not silently authorized for whichever version it actually contains.
  */
 export function readVersionBumpAuthorization(runGh, repository, sha) {
   const associated = readFound(
@@ -248,7 +253,8 @@ export function readVersionBumpAuthorization(runGh, repository, sha) {
   );
   if (!isVersionBumpAuthorizationPr(pr)) return undefined;
   try {
-    verifyMechanicalVersionBump(runGh, repository, sha);
+    const version = verifyMechanicalVersionBump(runGh, repository, sha);
+    if (pr.head.ref !== versionBumpBranch(version)) return undefined;
   } catch {
     // A content mismatch, or any failure verifying it, means this cannot be proven to be a clean
     // mechanical bump -- the same fail-closed direction as every other check here, never a crash of

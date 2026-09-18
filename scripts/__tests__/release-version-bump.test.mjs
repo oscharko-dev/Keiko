@@ -292,6 +292,22 @@ describe("readVersionBumpAuthorization", () => {
     expect(readVersionBumpAuthorization(runGh, REPO, SHA)).toBeUndefined();
   });
 
+  // #3555 review: verifyMechanicalVersionBump derives its version from the head content alone and
+  // never asserted it against the branch it came from, so a clean bump to a *different* reviewed
+  // version than the branch name claims (release/bump-1.0.6 containing a verified 1.0.6 bump, but a
+  // PR whose own head.ref claims a different target) passed every other check unchanged.
+  it("refuses a clean bump whose verified version does not match the authorized branch name", () => {
+    const { runGh } = fakeGithub(
+      cleanBumpRoutes({
+        [`repos/${REPO}/pulls/7`]: ok({
+          ...authorizationPr,
+          head: { ref: `${VERSION_BUMP_BRANCH_PREFIX}1.0.7` },
+        }),
+      }),
+    );
+    expect(readVersionBumpAuthorization(runGh, REPO, SHA)).toBeUndefined();
+  });
+
   it("refuses when no associated PR was opened by the release App", () => {
     const { runGh } = fakeGithub({
       [`repos/${REPO}/commits/${SHA}/pulls`]: ok([
