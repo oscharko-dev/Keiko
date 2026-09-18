@@ -32,6 +32,12 @@ import { satisfies } from "semver";
 import ts from "typescript";
 import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import {
+  activityLogDirectory,
+  activityLogFiles,
+  activityLogSnapshot,
+  readActivityLogSince,
+} from "./lib/activity-log-files.mjs";
+import {
   PINNED_YARN,
   PINNED_YARN_NAME,
   yarnLocatorParts,
@@ -3078,10 +3084,6 @@ function gracefulExitReason(event) {
   return undefined;
 }
 
-export function readLogSuffix(logPath, offset) {
-  return readFileSync(logPath).subarray(offset).toString("utf8");
-}
-
 export function logHasGracefulProcessExit(logText) {
   for (const line of logText.split("\n")) {
     if (line.length === 0) continue;
@@ -3098,8 +3100,9 @@ export function logHasGracefulProcessExit(logText) {
 }
 
 function assertLifecycleStop(runLifecycle, stateDir) {
-  const logPath = join(stateDir, "logs", "server.log");
-  const offset = existsSync(logPath) ? statSync(logPath).size : 0;
+  // Only what the stop appends is inspected: an earlier restart's process.exiting must not count.
+  const logsDir = activityLogDirectory(stateDir);
+  const snapshot = activityLogSnapshot(logsDir);
   const stopResult = runLifecycle("stop");
   if (stopResult.status !== 0) {
     fail(
@@ -3113,10 +3116,10 @@ function assertLifecycleStop(runLifecycle, stateDir) {
   if (!stopResult.stdout.includes("Keiko UI stopped")) {
     fail(`keiko stop did not report a graceful stop: ${stopResult.stdout}${stopResult.stderr}`);
   }
-  if (!existsSync(logPath)) {
+  if (activityLogFiles(logsDir).length === 0) {
     fail("keiko stop left no activity log to prove process.exiting");
   }
-  const appended = readLogSuffix(logPath, offset);
+  const appended = readActivityLogSince(logsDir, snapshot);
   if (!logHasGracefulProcessExit(appended)) {
     fail("keiko stop did not record process.exiting with a graceful drain reason");
   }

@@ -11,6 +11,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { activityLogSegmentFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   buildRealBinaryScenarioArtifact,
@@ -133,7 +135,9 @@ function containedIn(root, candidate) {
 }
 
 describe("#2483 real-binary observation helpers", () => {
-  it("retains the existing activity log before deleting ephemeral journey state", () => {
+  // #3530: the journey's Activity Log is a set of segments; every one is retained, oldest first,
+  // as one artifact whose digest covers exactly the retained bytes.
+  it("retains every activity log segment before deleting ephemeral journey state", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-real-binary-activity-"));
     const context = {
       stateDir: join(root, "state"),
@@ -141,13 +145,29 @@ describe("#2483 real-binary observation helpers", () => {
     };
     try {
       expect(retainJourneyActivityLog(context)).toEqual({ status: "missing" });
-      const source = join(context.stateDir, "activity", "logs", "server.log");
-      mkdirSync(dirname(source), { recursive: true });
-      const line = '{"op":"coding-runtime.run-started","correlationId":"run-fixture"}\n';
-      writeFileSync(source, line);
-      expect(retainJourneyActivityLog(context)).toMatchObject({ status: "retained" });
+      const logsDir = join(context.stateDir, "activity", "logs");
+      mkdirSync(logsDir, { recursive: true });
+      const identity = {
+        startMs: Date.parse("2026-09-18T10:00:00.000Z"),
+        pid: 4242,
+        instanceId: "a1b2c3d4",
+        index: 1,
+      };
+      const first = '{"op":"coding-runtime.run-started","correlationId":"run-fixture"}\n';
+      const second = '{"op":"coding-runtime.run-settled","correlationId":"run-fixture"}\n';
+      writeFileSync(join(logsDir, activityLogSegmentFileName(identity, "sealed")), first);
+      writeFileSync(
+        join(logsDir, activityLogSegmentFileName({ ...identity, index: 2 }, "active")),
+        second,
+      );
+      const retained = retainJourneyActivityLog(context);
       rmSync(context.stateDir, { recursive: true });
-      expect(readFileSync(`${context.evidencePath}.activity.jsonl`, "utf8")).toBe(line);
+      const artifact = readFileSync(`${context.evidencePath}.activity.jsonl`, "utf8");
+      expect(artifact).toBe(`${first}${second}`);
+      expect(retained).toEqual({
+        status: "retained",
+        sha256: createHash("sha256").update(artifact).digest("hex"),
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
