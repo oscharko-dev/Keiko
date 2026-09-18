@@ -80,7 +80,7 @@ describe("logWorkspaceLifecycle", () => {
     logWorkspaceLifecycle({ activityLog }, { ...BASE, outcome: "blocked" });
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("conflict");
+    expect(line?.errorKind).toBe("validation-failed");
     expect(line?.extra?.failureKind).toBe("blocked");
   });
 
@@ -108,9 +108,22 @@ describe("logWorkspaceLifecycle", () => {
     );
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("conflict");
+    expect(line?.errorKind).toBe("target-mutated");
     expect(line?.extra?.failureKind).toBe("drifted");
     expect(line?.extra?.outcome).toBe("reconciled");
+  });
+
+  it.each([
+    ["INVALID_BASE_BRANCH", "validation-failed"],
+    ["UNSAFE_PATH", "unsafe-target"],
+    ["EXISTING_UNMANAGED_PATH", "target-exists"],
+    ["OPERATOR_APPROVAL_REQUIRED", "authority-denied"],
+    ["REPOSITORY_UNREACHABLE", "unavailable"],
+    ["PROVISIONING_FAILED", "write-failed"],
+  ] as const)("maps %s to the closed %s activity kind", (errorCode, expected) => {
+    const activityLog = createBufferedServerLogSink();
+    logWorkspaceLifecycle({ activityLog }, { ...BASE, outcome: "failed", errorCode });
+    expect(activityLog.events[0]?.errorKind).toBe(expected);
   });
 
   it("never invents an errorKind out of nothing for a plain success with no errorCode", () => {

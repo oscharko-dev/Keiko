@@ -319,6 +319,7 @@ function readLines(stateDir: string): Record<string, unknown>[] {
 }
 
 const FILESYSTEM_EVIDENCE_OPS: ReadonlySet<unknown> = new Set([
+  "server-log.capacity-warning",
   "server-log.rotation",
   "server-log.safe-open",
 ]);
@@ -691,7 +692,7 @@ describe("server activity log", () => {
     expect(lines[0]).toMatchObject({
       category: "diagnostic",
       op: "server-log.safe-open",
-      correlationId: "unknown-correlation-id",
+      correlationId: "request-correlation-3528",
       artifactClass: "activity-log",
       persistenceStatus: "opened",
       permissionAssurance: process.platform === "win32" ? "platform-inherited" : "verified-private",
@@ -1124,6 +1125,55 @@ describe("server activity log", () => {
     sink.close?.();
   });
 
+  it("warns once at the size threshold without rotating, truncating, or deleting", () => {
+    const sink = createFileServerLogSink(stateDir, {
+      level: "debug",
+      capacityWarningBytes: 1,
+    });
+
+    sink.write({
+      category: "diagnostic",
+      op: "capacity-trigger",
+      correlationId: "capacity-request-3529",
+    });
+    sink.write({
+      category: "diagnostic",
+      op: "capacity-after-warning",
+      correlationId: "capacity-request-after-3529",
+    });
+
+    const warnings = readLines(stateDir).filter(
+      (line) => line.op === "server-log.capacity-warning",
+    );
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        category: "diagnostic",
+        op: "server-log.capacity-warning",
+        correlationId: "capacity-request-3529",
+        errorKind: "publish-unsupported",
+        artifactClass: "activity-log",
+        capacityStatus: "warning-threshold-reached",
+        warningThresholdBytes: 1,
+        operatorAction: "stop-export-replace",
+        mutationStatus: "not-attempted",
+        completeness: "complete",
+        loss: "none",
+      }),
+    ]);
+    const observedSizeBytes = warnings[0]?.observedSizeBytes;
+    expect(typeof observedSizeBytes).toBe("number");
+    if (typeof observedSizeBytes !== "number") {
+      throw new TypeError("Expected the capacity warning to report a numeric observed size");
+    }
+    expect(observedSizeBytes).toBeGreaterThanOrEqual(1);
+    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual(["server.log"]);
+    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).toContain(
+      "capacity-after-warning",
+    );
+    sink.close?.();
+  });
+
   it("does not repeat deferred-rotation evidence when the caller write fails", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
@@ -1202,7 +1252,11 @@ describe("server activity log", () => {
     });
 
     vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    sink.write({ category: "indexing", op: "our-day-21" });
+    sink.write({
+      category: "indexing",
+      op: "our-day-21",
+      correlationId: "request-reopen-3528",
+    });
 
     // The legacy archive is untouched and contains only the bytes it held when it was moved.
     const archived = readFileSync(join(logsDir, "server-2026-08-20.log"), "utf8");
@@ -1213,6 +1267,12 @@ describe("server activity log", () => {
       "peer-day-21",
       "our-day-21",
     ]);
+    expect(readLines(stateDir)).toContainEqual(
+      expect.objectContaining({
+        op: "server-log.safe-open",
+        correlationId: "request-reopen-3528",
+      }),
+    );
     sink.close?.();
   });
 

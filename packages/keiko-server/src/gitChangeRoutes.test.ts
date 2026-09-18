@@ -30,6 +30,7 @@ import { runMigrations } from "./store/schema.js";
 import { createInMemoryUiStore, invalidRequest, type UiStore } from "./store/index.js";
 import {
   GIT_CHANGE_ROUTE_GROUP,
+  gitChangeBlockedErrorKind,
   handleGitChangeConnect,
   handleGitChangeRefresh,
 } from "./gitChangeRoutes.js";
@@ -40,6 +41,29 @@ import type { ServerLogEvent } from "./observability/server-log.js";
 
 const connectHandler = handleGitChangeConnect;
 const refreshHandler = handleGitChangeRefresh;
+
+describe("git-change blocked activity classification", () => {
+  it.each([
+    ["detached-head", "conflict"],
+    ["unborn-head", "conflict"],
+    ["missing-ref", "validation-failed"],
+    ["identical-refs", "validation-failed"],
+    ["no-pull-request", "validation-failed"],
+    ["ambiguous-pull-request", "conflict"],
+    ["reader-unauthorized", "authority-denied"],
+    ["remote-unresolved", "unavailable"],
+    ["repository-unavailable", "unavailable"],
+    ["snapshot-unavailable", "unavailable"],
+    ["snapshot-failed", "unavailable"],
+    ["chat-project-unavailable", "unavailable"],
+    ["GIT_CHANGE_CHAT_NOT_FOUND", "validation-failed"],
+    ["GIT_CHANGE_SCOPE_LIMIT_REACHED", "rate-limited"],
+    ["GIT_CHANGE_SCOPE_PERSIST_FAILED", "unavailable"],
+    ["relationship-conflict", "conflict"],
+  ] as const)("maps %s to %s", (reason, expected) => {
+    expect(gitChangeBlockedErrorKind(reason)).toBe(expected);
+  });
+});
 
 function asRouteResult(outcome: RouteResult | typeof STREAMING): RouteResult {
   if (outcome === STREAMING) throw new Error("expected a route result, got STREAMING");
@@ -576,7 +600,7 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git-change.chat.blocked",
-        errorKind: "unavailable",
+        errorKind: "rate-limited",
         extra: {
           completeness: "complete",
           loss: "none",
@@ -603,7 +627,7 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git-change.chat.blocked",
-        errorKind: "unavailable",
+        errorKind: "validation-failed",
         extra: {
           completeness: "complete",
           loss: "none",
@@ -906,7 +930,7 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git-change.chat.blocked",
-        errorKind: "unavailable",
+        errorKind: "conflict",
         extra: {
           completeness: "complete",
           loss: "none",

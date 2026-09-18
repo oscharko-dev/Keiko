@@ -542,7 +542,7 @@ describe("runUiCli", () => {
     });
     expect(sink.closeCallCount).toBe(1);
     const event = sink.events.find(({ op }) => op === "process.fatal");
-    expect(event?.errorKind).toBe("internal");
+    expect(event?.errorKind).toBe("validation-failed");
     expect(extraOf(event)).toMatchObject({
       kind: "server-error",
       failureKind: "PORTABLE_UPDATE_RECOVERY_CORRUPT",
@@ -603,7 +603,7 @@ describe("runUiCli", () => {
     expect(phases).toStrictEqual(["pre-listen", "post-listen"]);
     expect(close).toHaveBeenCalledOnce();
     const event = sink.events.find(({ op }) => op === "process.fatal");
-    expect(event?.errorKind).toBe("internal");
+    expect(event?.errorKind).toBe("durability-failed");
     expect(extraOf(event).failureKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
     expect(extraOf(event).recoveryReason).toBe("persistence-failed");
   });

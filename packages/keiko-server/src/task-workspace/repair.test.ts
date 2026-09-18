@@ -569,7 +569,7 @@ describe("accept-moved-head (adopt an out-of-band commit as the verified head)",
     expect(causeMessageOf(error)).toBe("spawn git ENOENT");
     expect(gathers).toBeGreaterThan(1);
     const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("unavailable");
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.extra?.operation).toBe("repair");
     expect(Array.isArray(line.extra?.frames)).toBe(true);
@@ -716,7 +716,7 @@ describe("release-stale-lock (clear stale lock)", () => {
         (event) => event.extra?.failureKind === "REPOSITORY_UNREACHABLE",
       );
       expect(line?.correlationId).toBe("repair-unreachable-0001");
-      expect(line?.errorKind).toBe("internal");
+      expect(line?.errorKind).toBe("unavailable");
       expect(line?.extra).toMatchObject({ operation: "repair" });
       expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
       // Body-free: the unreachable root never reaches the line.
@@ -810,7 +810,7 @@ describe("release-stale-lock (clear stale lock)", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.correlationId).toBe("req-corr-repair-rejection-1");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("authority-denied");
     expect(line.extra?.failureKind).toBe("OPERATOR_APPROVAL_REQUIRED");
     expect(line.extra?.operation).toBe("repair");
     expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);

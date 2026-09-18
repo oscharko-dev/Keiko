@@ -141,10 +141,17 @@ function resolveBinding(parent: ResolvedBinding, context: ServerLogContext): Res
 function mergeExtra(
   binding: ResolvedBinding,
   input: ServerLogEventInput,
+  registeredFields?: ReadonlySet<string>,
 ): Readonly<Record<string, unknown>> | undefined {
-  if (binding.extra === undefined) return input.extra;
-  if (input.extra === undefined) return binding.extra;
-  return { ...binding.extra, ...input.extra };
+  const bound =
+    registeredFields === undefined || binding.extra === undefined
+      ? binding.extra
+      : Object.fromEntries(
+          Object.entries(binding.extra).filter(([name]) => registeredFields.has(name)),
+        );
+  if (bound === undefined || Object.keys(bound).length === 0) return input.extra;
+  if (input.extra === undefined) return bound;
+  return { ...bound, ...input.extra };
 }
 
 function buildEvent(
@@ -152,6 +159,9 @@ function buildEvent(
   input: ServerLogEventInput,
   binding: ResolvedBinding,
 ): ServerLogEvent {
+  const registration = activityLogEventRegistration(input);
+  const registeredFields =
+    registration === undefined ? undefined : new Set(Object.keys(registration.fields));
   const event: ServerLogEvent = {
     level,
     category: input.category ?? binding.category ?? FALLBACK_CATEGORY,
@@ -161,9 +171,8 @@ function buildEvent(
     durationMs: input.durationMs,
     status: input.status,
     errorKind: input.errorKind,
-    extra: mergeExtra(binding, input),
+    extra: mergeExtra(binding, input, registeredFields),
   };
-  const registration = activityLogEventRegistration(input);
   if (registration !== undefined) {
     Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
       value: registration,

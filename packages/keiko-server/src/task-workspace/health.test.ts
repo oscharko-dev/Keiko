@@ -363,7 +363,7 @@ describe("operational health classification (AC1)", () => {
     expect(validateWorkspaceHealthReport(report).ok).toBe(true);
     const line = activityLogEventWithFailureKind(activityLog, "IDENTITY_PROOF_FAILED");
     expect(line.correlationId).toBe("health-proof-0001");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("read-failed");
     // Body-free by contract: the cause travels as a class chain, never as its message.
     expect(line.extra).toMatchObject({ operation: "health" });
     expect(Array.isArray(line.extra?.causeChain)).toBe(true);
@@ -465,7 +465,7 @@ describe("an unreachable repository is isolated to its own rows", () => {
     expect(store.getById(stranded.workspaceId)?.health).toBe("healthy");
     const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
     expect(line.correlationId).toBe("health-unreachable-0001");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("unavailable");
     expect(line.extra).toMatchObject({ operation: "health" });
     expect(JSON.stringify(line)).not.toContain(other);
   });
@@ -511,7 +511,7 @@ describe("a global report surfaces orphans of repositories without persisted row
         expect(validateWorkspaceHealthReport(report).ok).toBe(true);
         const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
         expect(line.correlationId).toBe("health-listing-0001");
-        expect(line.errorKind).toBe("internal");
+        expect(line.errorKind).toBe("unavailable");
         expect(line.extra).toMatchObject({ operation: "health" });
         expect(Array.isArray(line.extra?.causeChain)).toBe(true);
         expect(JSON.stringify(line)).not.toContain(managedRoot);

@@ -176,14 +176,19 @@ export function emitKeychainFallback(
   error: unknown,
   elapsedMs: () => number,
 ): void {
+  const boundedExitKind = classifyBoundedExit(error);
   emitSecurityLogEvent(
     sink,
     activityLogEvent(
       SECURITY_KEYCHAIN_FALLBACK_OPERATION,
-      { level: "warn", errorKind: "unavailable", durationMs: elapsedMs() },
+      {
+        level: "warn",
+        errorKind: boundedExitKind === "timeout" ? "timeout" : "unavailable",
+        durationMs: elapsedMs(),
+      },
       {
         reasonKind: securityErrorKind(error),
-        boundedExitKind: classifyBoundedExit(error),
+        boundedExitKind,
       },
     ),
   );

@@ -30,7 +30,6 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/te
 import {
   activityLogEvent,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -140,10 +139,6 @@ const ISSUE_RESOLVED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function closedResolutionErrorKind(value: string): ActivityLogErrorKind {
-  return isActivityLogErrorKind(value) ? value : "unknown";
-}
-
 export interface GitHubIssueResolutionInput {
   /** Server-resolved checkout root, already canonical (realpath'd by the caller). */
   readonly repositoryRoot: string;
@@ -224,6 +219,24 @@ export type GitHubIssueResolutionReason =
   | "default-branch-read-failed"
   | "default-branch-unresolved"
   | "aborted";
+
+const RESOLUTION_ERROR_KINDS = {
+  "invalid-reference": "invalid-request",
+  "repository-mismatch": "conflict",
+  "auth-required": "authority-denied",
+  "issue-unavailable": "unavailable",
+  "clone-failed": "unavailable",
+  "authority-denied": "authority-denied",
+  cancelled: "cancelled",
+} as const satisfies Record<CodingWorkbenchIssueBindingFailure, ActivityLogErrorKind>;
+
+export function githubIssueResolutionErrorKind(
+  outcome: CodingWorkbenchIssueBindingFailure,
+  reason: GitHubIssueResolutionReason | undefined,
+): ActivityLogErrorKind {
+  if (reason === "read-failed" || reason === "default-branch-read-failed") return "read-failed";
+  return RESOLUTION_ERROR_KINDS[outcome];
+}
 
 // ─── digests ───────────────────────────────────────────────────────────────────────────────
 
@@ -519,9 +532,9 @@ function record(
       {
         level: levelFor(outcome, detail.errorKind),
         correlationId: ctx.correlationId,
-        ...(detail.errorKind === undefined
+        ...(outcome === "resolved"
           ? {}
-          : { errorKind: closedResolutionErrorKind(detail.errorKind) }),
+          : { errorKind: githubIssueResolutionErrorKind(outcome, detail.reason) }),
       },
       {
         outcome,

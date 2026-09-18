@@ -103,6 +103,26 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it.each([
+    ["boundary", "internal"],
+    ["unhandled-rejection", "internal"],
+    ["sse-error", "unavailable"],
+    ["other", "unknown"],
+  ] as const)("maps the closed %s client kind to %s", async (kind, errorKind) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({ message: "bounded client failure", clientTs: CLIENT_TS, kind });
+
+    await expect(handleClientDiagnosticIngest(context(body))).resolves.toEqual({
+      status: 204,
+      body: null,
+    });
+
+    expect(clientDiagnosticEvents(sink)[0]).toMatchObject({
+      errorKind,
+      extra: { clientKind: kind },
+    });
+  });
+
   it("projects the hostile message only as a digest", async () => {
     const sink = captureServerLog();
     const message = "boundary caught TypeError";

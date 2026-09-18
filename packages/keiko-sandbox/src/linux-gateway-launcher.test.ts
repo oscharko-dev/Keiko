@@ -145,7 +145,9 @@ function hasAllowedLauncherTarget(args: readonly string[]): boolean {
   if (args[6] === process.execPath) {
     return hasAllowedNodeProofArgs(args, 7, LAUNCHER_NODE_PROOF_ARG_COUNTS);
   }
-  if (args[6] === MISSING_TARGET_PATH) return args.length === 7;
+  if (args[6] === MISSING_TARGET_PATH) {
+    return hasAllowedNodeProofArgs(args, 7, DIRECT_NODE_PROOF_ARG_COUNTS);
+  }
   return (
     args[6] === "/bin/sh" &&
     args[7] === "-c" &&
@@ -374,6 +376,22 @@ describe("Linux gateway launcher validation", () => {
       ),
     );
     expect(validateProofChildArgs(wrapped.command, wrapped.args)).toBe(wrapped.args);
+
+    const missingTarget = requireWrapped(
+      planIsolatedRun(
+        {
+          command: MISSING_TARGET_PATH,
+          args: ["-e", ROUND_TRIP_SNIPPET, "1983"],
+          cwd: process.cwd(),
+          network: { mode: "gateway", host: "127.0.0.1", port: 1983 },
+        },
+        { bubblewrap: true, unshare: false, seatbelt: false, docker: false, podman: false },
+        "linux",
+      ),
+    );
+    expect(validateProofChildArgs(missingTarget.command, missingTarget.args)).toBe(
+      missingTarget.args,
+    );
     expect(() => validateProofChildArgs("/bin/sh", ["-c", "exit 0"])).toThrow(
       "linux-gateway-proof-child-invalid",
     );

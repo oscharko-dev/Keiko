@@ -62,14 +62,17 @@ export interface PortableTreeKht1Operation {
 }
 
 export class PortableTreeAttestationError extends Error {
-  public constructor(message: string) {
+  public constructor(
+    message: string,
+    public readonly kind: "cancelled" | "integrity" | "timeout" = "integrity",
+  ) {
     super(message);
     this.name = "PortableTreeAttestationError";
   }
 }
 
-function fail(message: string): never {
-  throw new PortableTreeAttestationError(message);
+function fail(message: string, kind: "cancelled" | "integrity" | "timeout" = "integrity"): never {
+  throw new PortableTreeAttestationError(message, kind);
 }
 
 function assertDeadline(deadline: number): void {
@@ -79,12 +82,16 @@ function assertDeadline(deadline: number): void {
 }
 
 function assertAsyncOperation(operation: PortableTreeKht1Operation): void {
-  if (operation.signal?.aborted === true) fail("portable handoff preparation was cancelled");
-  if (operation.now() > operation.deadline) fail("portable handoff preparation timed out");
+  if (operation.signal?.aborted === true) {
+    fail("portable handoff preparation was cancelled", "cancelled");
+  }
+  if (operation.now() > operation.deadline) {
+    fail("portable handoff preparation timed out", "timeout");
+  }
 }
 
 function assertSyncOperation(deadline: number): void {
-  if (Date.now() > deadline) fail("portable handoff preparation timed out");
+  if (Date.now() > deadline) fail("portable handoff preparation timed out", "timeout");
 }
 
 interface TreeBudget {
@@ -604,10 +611,17 @@ function logAttestationFailure(
     sink,
     activityLogEvent(
       SECURITY_PORTABLE_TREE_ATTESTATION_FAILED_OPERATION,
-      { level: "error", errorKind: "validation-failed" },
+      { level: "error", errorKind: attestationErrorKind(error) },
       { driver, failureKind: securityErrorKind(error) },
     ),
   );
+}
+
+function attestationErrorKind(error: unknown): "cancelled" | "timeout" | "validation-failed" {
+  if (!(error instanceof PortableTreeAttestationError)) return "validation-failed";
+  if (error.kind === "cancelled") return "cancelled";
+  if (error.kind === "timeout") return "timeout";
+  return "validation-failed";
 }
 
 export async function hashPortableTreeKht1(

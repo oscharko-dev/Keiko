@@ -21,6 +21,7 @@ import {
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 
 const DEFAULT_CANDIDATE_TTL_MS = 10 * 60_000;
 
@@ -129,6 +130,12 @@ interface CandidateRecord {
   readonly installMode: UpdateInstallMode;
   readonly executionToken: string;
   readonly impact: UpdateReleaseImpactInput;
+  readonly issuedCorrelationId: string;
+}
+
+interface ConsumedCandidateRecord {
+  readonly expiresAt: number;
+  readonly issuedCorrelationId: string;
 }
 
 export type UpdateCandidateRejection =
@@ -167,6 +174,7 @@ export interface UpdateCandidateAuthority {
   readonly issue: (
     report: UpdatePreflightReport,
     installMode: UpdateInstallMode,
+    correlationId?: string,
   ) => UpdateCandidateClaim | undefined;
   readonly consume: (
     claim: UpdateSessionStartRequest,
@@ -387,14 +395,14 @@ export function createUpdateCandidateAuthority(
   const activityLog = options.activityLog;
   const diagnostics = options.diagnostics;
   const records = new Map<string, CandidateRecord>();
-  const consumed = new Map<string, number>();
+  const consumed = new Map<string, ConsumedCandidateRecord>();
   const pruneExpired = (): void => {
     const current = now();
     for (const [candidateId, record] of records) {
       if (Date.parse(record.snapshot.expiresAt) <= current) records.delete(candidateId);
     }
-    for (const [candidateId, expiresAt] of consumed) {
-      if (expiresAt <= current) consumed.delete(candidateId);
+    for (const [candidateId, consumedRecord] of consumed) {
+      if (consumedRecord.expiresAt <= current) consumed.delete(candidateId);
     }
   };
   const trimAfterInsertion = <T>(entries: Map<string, T>): void => {
@@ -405,7 +413,7 @@ export function createUpdateCandidateAuthority(
     }
   };
   return {
-    issue(report, installMode): UpdateCandidateClaim | undefined {
+    issue(report, installMode, correlationId): UpdateCandidateClaim | undefined {
       pruneExpired();
       const issuedAtMs = now();
       const candidateId = idFactory();
@@ -419,13 +427,20 @@ export function createUpdateCandidateAuthority(
         throw new TypeError("Update candidate token factory returned an invalid token.");
       }
       const confirmationDigest = digestUpdateCandidate(snapshot);
-      records.set(candidateId, { snapshot, installMode, executionToken, impact });
+      const issuedCorrelationId = correlationIdOrUnknown(correlationId);
+      records.set(candidateId, {
+        snapshot,
+        installMode,
+        executionToken,
+        impact,
+        issuedCorrelationId,
+      });
       trimAfterInsertion(records);
       emitCandidateEvent(
         activityLog,
         activityLogEvent(
           UPDATE_CANDIDATE_ISSUED_OPERATION,
-          { correlationId: candidateId },
+          { correlationId: issuedCorrelationId },
           {
             candidateId,
             targetVersion: snapshot.targetVersion,
@@ -453,13 +468,17 @@ export function createUpdateCandidateAuthority(
       const record = records.get(claim.candidateId);
       pruneExpired();
       if (record === undefined) {
-        const reason = consumed.has(claim.candidateId) ? "replayed" : "unknown";
+        const consumedRecord = consumed.get(claim.candidateId);
+        const reason = consumedRecord === undefined ? "unknown" : "replayed";
         emitCandidateEvent(
           activityLog,
           activityLogEvent(
             UPDATE_CANDIDATE_REJECTED_OPERATION,
             {
-              correlationId: claim.requestId ?? claim.candidateId,
+              correlationId: correlationIdOrUnknown(claim.requestId),
+              ...(consumedRecord === undefined
+                ? {}
+                : { parentCorrelationId: consumedRecord.issuedCorrelationId }),
               errorKind: candidateRejectionErrorKind(reason),
             },
             {
@@ -479,7 +498,8 @@ export function createUpdateCandidateAuthority(
           activityLogEvent(
             UPDATE_CANDIDATE_REJECTED_OPERATION,
             {
-              correlationId: claim.requestId ?? claim.candidateId,
+              correlationId: correlationIdOrUnknown(claim.requestId),
+              parentCorrelationId: record.issuedCorrelationId,
               errorKind: candidateRejectionErrorKind(reason),
             },
             {
@@ -495,7 +515,10 @@ export function createUpdateCandidateAuthority(
       };
       if (!claimMatches(claim, record)) return reject("claim-mismatch");
       records.delete(claim.candidateId);
-      consumed.set(claim.candidateId, Date.parse(record.snapshot.expiresAt) + ttlMs);
+      consumed.set(claim.candidateId, {
+        expiresAt: Date.parse(record.snapshot.expiresAt) + ttlMs,
+        issuedCorrelationId: record.issuedCorrelationId,
+      });
       trimAfterInsertion(consumed);
       if (now() >= Date.parse(record.snapshot.expiresAt)) return reject("expired");
       const runtimeRejection = updateCandidateRuntimeRejection(
@@ -509,7 +532,10 @@ export function createUpdateCandidateAuthority(
         activityLog,
         activityLogEvent(
           UPDATE_CANDIDATE_CONSUMED_OPERATION,
-          { correlationId: claim.requestId ?? claim.candidateId },
+          {
+            correlationId: correlationIdOrUnknown(claim.requestId),
+            parentCorrelationId: record.issuedCorrelationId,
+          },
           {
             candidateId: claim.candidateId,
             targetVersion: record.snapshot.targetVersion,

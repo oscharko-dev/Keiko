@@ -394,7 +394,7 @@ describe("healthy reconciliation (AC4)", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.level).toBe("warn");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("unavailable");
     expect(line.extra?.failureKind).toBe("missing");
     expect(line.extra?.outcome).toBe("reconciled");
   });
@@ -484,7 +484,7 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     // while every row assertion stayed green, and the operator would be told a pointer is stale for
     // a fact whose executable exit is `reconcile-pointer` (PR #3381 review).
     const line = activityLogEventWithFailureKind(activityLog, "stale-pointer");
-    expect(line.errorKind).toBe("conflict");
+    expect(line.errorKind).toBe("target-mutated");
     expect(line.correlationId).toBe("gitdir-mismatch-0001");
     expect(line.extra).toMatchObject({
       operation: "reconcile",
@@ -527,7 +527,7 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     // …and the migration is named on the activity log, so the operator is not sent after a
     // replaced worktree for a registration that only predates the rule.
     const line = activityLogEventWithFailureKind(activityLog, "stale-pointer");
-    expect(line.errorKind).toBe("conflict");
+    expect(line.errorKind).toBe("target-mutated");
     expect(line.extra).toMatchObject({
       operation: "reconcile",
       driftMarker: "identity-schema-retired",
@@ -614,7 +614,7 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
       });
     }
     const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("unavailable");
     expect(line.correlationId).toBe("unreachable-0001");
     expect(line.extra).toMatchObject({ operation: "reconcile" });
     expect(Array.isArray(line.extra?.causeChain)).toBe(true);
@@ -730,7 +730,7 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
       driftMarkers: [],
     });
     const line = activityLogEventWithFailureKind(activityLog, "IDENTITY_PROOF_FAILED");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("read-failed");
     expect(line.correlationId).toBe("proof-failed-0001");
     // Body-free by contract: the cause travels as a class chain, never as its message.
     expect(line.extra).toMatchObject({ operation: "reconcile" });

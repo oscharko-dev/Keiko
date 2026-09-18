@@ -207,18 +207,30 @@ function logReadinessObservation(
   correlationId: string | undefined,
   failure: { readonly error: unknown } | undefined,
 ): void {
+  const providerFailed = result.providerError === true;
+  let failureFields: Record<string, unknown> = {};
+  if (failure !== undefined) {
+    failureFields = readinessFailureFields(failure.error);
+  } else if (providerFailed) {
+    failureFields = { errorClass: "ProviderReadinessError", code: "provider-error" };
+  }
   (seams.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       READINESS_OBSERVED_OPERATION,
       {
         correlationId: correlationIdOrUnknown(correlationId),
-        ...(failure === undefined ? {} : { level: "warn", errorKind: "internal" }),
+        ...(providerFailed
+          ? {
+              level: "warn",
+              errorKind: failure === undefined ? ("unavailable" as const) : ("internal" as const),
+            }
+          : {}),
       },
       {
         state: result.providerError === true ? "unknown" : "observed",
         providerError: result.providerError === true,
         count: result.checks?.total ?? 0,
-        ...(failure === undefined ? {} : readinessFailureFields(failure.error)),
+        ...failureFields,
       },
     ),
   );

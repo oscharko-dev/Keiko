@@ -416,7 +416,9 @@ export function handleCreateCodingRuntimeRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return mutation(ctx, deps, undefined, "start", (runtime, body) => runtime.start(body));
+  return mutation(ctx, deps, undefined, "start", (runtime, body, correlationId) =>
+    runtime.start(body, correlationId),
+  );
 }
 
 export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -547,7 +549,9 @@ export function handleCodingRuntimeRetry(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, "retry", (runtime, body) => runtime.retry(runId, body));
+    : mutation(ctx, deps, runId, "retry", (runtime, body, correlationId) =>
+        runtime.retry(runId, body, correlationId),
+      );
 }
 export function handleCodingRuntimeRecoveryAcknowledgement(
   ctx: RouteContext,

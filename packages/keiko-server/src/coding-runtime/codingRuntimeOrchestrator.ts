@@ -1713,9 +1713,13 @@ export class CodingRuntimeOrchestrator {
    * (running, or an unacknowledged recovery) still fails closed as `active-run-conflict` inside
    * `startFresh`.
    */
-  start(input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+  start(input: unknown, correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
     return this.serial(() =>
-      this.startFreshAgainstPredecessor(input, this.acknowledgedRecoveryPredecessorId()),
+      this.startFreshAgainstPredecessor(
+        input,
+        this.acknowledgedRecoveryPredecessorId(),
+        correlationId,
+      ),
     );
   }
 
@@ -1729,18 +1733,23 @@ export class CodingRuntimeOrchestrator {
   private async startFreshAgainstPredecessor(
     input: unknown,
     predecessorRunId: string | undefined,
+    correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
-    if (predecessorRunId === undefined) return this.startFresh(input);
+    if (predecessorRunId === undefined) return this.startFresh(input, undefined, correlationId);
     this.activeRunId = undefined;
     this.activeEffectiveMode = undefined;
     try {
-      return await this.startFresh(input, predecessorRunId);
+      return await this.startFresh(input, predecessorRunId, correlationId);
     } finally {
       this.restoreUnsettledRecoverySlot(predecessorRunId);
     }
   }
 
-  retry(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+  retry(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
     return this.serial(async () => {
       if (!parseCodingWorkbenchRuntimeStartRequest(input).ok) return this.fail("invalid-intent");
       const prior = this.deps.snapshots.get(runId);
@@ -1748,7 +1757,7 @@ export class CodingRuntimeOrchestrator {
         return this.fail("invalid-intent");
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
-      return this.startFreshAgainstPredecessor(input, runId);
+      return this.startFreshAgainstPredecessor(input, runId, correlationId);
     });
   }
 
@@ -2905,6 +2914,7 @@ export class CodingRuntimeOrchestrator {
   private async startFresh(
     input: unknown,
     predecessorRunId?: string,
+    correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
     const parsed = parseCodingWorkbenchRuntimeStartRequest(input);
     if (!parsed.ok || this.activeRunId)
@@ -2923,6 +2933,7 @@ export class CodingRuntimeOrchestrator {
       principal,
       runId,
       issue.binding,
+      correlationId,
     );
     if (!resolved.ok) return { ok: false, failureCode: resolved.failureCode, runId };
     const launch = resolved.launch;
@@ -2941,12 +2952,8 @@ export class CodingRuntimeOrchestrator {
     this.activeRunId = runId;
     this.settledRunId = undefined;
     this.activeEffectiveMode = launch.effectiveMode;
-    recordRuntimeRunStarted(
-      this.deps.activityLog,
-      snapshot,
-      launch.effectiveMode,
-      selection.reason,
-    );
+    const { activityLog } = this.deps;
+    recordRuntimeRunStarted(activityLog, snapshot, launch.effectiveMode, selection.reason);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
     const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
@@ -3159,6 +3166,7 @@ export class CodingRuntimeOrchestrator {
     principal: string,
     runId: string,
     issueBinding?: CodingWorkbenchIssueBinding,
+    correlationId?: string,
   ): Promise<
     | { readonly ok: true; readonly launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]> }
     | { readonly ok: false; readonly failureCode: CodingWorkbenchRuntimeFailureCode }
@@ -3176,6 +3184,7 @@ export class CodingRuntimeOrchestrator {
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,
+        ...(correlationId === undefined ? {} : { correlationId }),
         ...(issueBinding === undefined ? {} : { issueBinding }),
       };
       await this.deps.launchResolver.prepare?.(input);

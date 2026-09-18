@@ -299,6 +299,24 @@ describe("bounded request body activity log", () => {
     stream.destroy();
   });
 
+  it("normalizes a 128-character machine code to the 64-character field contract and settles", async () => {
+    const sink = captureServerLog("info");
+    const stream = new PassThrough();
+    const failure = Object.assign(new Error("private transport failure"), {
+      code: "X".repeat(128),
+    });
+    const outcome = readBoundedRequestBody(asRequest(stream), 128_000, undefined, "req-corr-128");
+
+    stream.emit("error", failure);
+
+    await expect(outcome).rejects.toBe(failure);
+    expect(sink.events[0]).toMatchObject({
+      op: "http.request.body.failed",
+      extra: { failureKind: "unknown" },
+    });
+    stream.destroy();
+  });
+
   it("keeps a client disconnect at debug so a busy server does not warn on every abort", async () => {
     const atInfo = captureServerLog("info");
     const controller = new AbortController();

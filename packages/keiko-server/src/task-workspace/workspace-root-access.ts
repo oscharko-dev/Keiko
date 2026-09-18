@@ -7,6 +7,7 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { UiHandlerDeps } from "../deps.js";
 import { pathIsDenied } from "../files-deny.js";
 import { errorKindOf, type ServerLogSink } from "../observability/index.js";
@@ -279,6 +280,24 @@ function resolutionFailureReasonFor(purpose: ManagedAccessPurpose): ManagedRootD
     : "managed-root-resolution-failed";
 }
 
+const MANAGED_ROOT_RESOLUTION_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  EACCES: "permission-denied",
+  EPERM: "permission-denied",
+  ENOENT: "unavailable",
+  ENOTDIR: "unavailable",
+  EIO: "read-failed",
+  ESTALE: "target-mutated",
+  EBUSY: "conflict",
+  AbortError: "cancelled",
+  TimeoutError: "timeout",
+  ETIMEDOUT: "timeout",
+  IDENTITY_PROOF_FAILED: "read-failed",
+};
+
+function managedRootResolutionErrorKind(error: unknown): ActivityLogErrorKind {
+  return MANAGED_ROOT_RESOLUTION_ERROR_KINDS[errorKindOf(error)] ?? "internal";
+}
+
 function canonicalManagedRootAccess(
   lookup: ManagedTaskWorkspaceLookup,
   requestedRoot: string,
@@ -344,7 +363,7 @@ function recordManagedRootResolutionFailure(
     {
       reason,
       failureKind: errorKindOf(error),
-      errorKind: "internal",
+      errorKind: managedRootResolutionErrorKind(error),
       ...(frames.length === 0 ? {} : { frames }),
       ...(causes.length === 0 ? {} : { causeChain: causes }),
     },

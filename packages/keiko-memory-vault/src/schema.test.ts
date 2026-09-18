@@ -294,7 +294,7 @@ describe("flushPlaintextResidueWithRetry", () => {
     expect(degraded).toBeDefined();
     expect(degraded?.errorKind).toBe("durability-failed");
     expect(degraded?.extra?.attempts).toBe(3);
-    expect(degraded?.extra?.busy).toBe(true);
+    expect(degraded?.extra?.busy).toBe(false);
     expect(degraded?.extra?.failureKind).toBe("Error");
     expect(fake.calls.count).toBe(3);
   });
@@ -311,7 +311,7 @@ describe("flushPlaintextResidueWithRetry", () => {
     expect(degraded?.errorKind).toBe("durability-failed");
     expect(degraded?.extra?.attempts).toBe(3);
     expect(degraded?.extra?.busy).toBe(true);
-    expect(degraded?.extra?.failureKind).toBe("unknown");
+    expect(degraded?.extra?.failureKind).toBe("checkpoint-busy-retries-exhausted");
   });
 
   it("stops retrying after the first non-busy success (busy=1 then busy=0)", () => {
@@ -349,6 +349,7 @@ describe("flushPlaintextResidueWithRetry", () => {
     // busy===0 on every attempt, so the degraded report's own "busy" summary must reflect that
     // (not misreport a partial checkpoint as a busy-contention one).
     expect(degraded?.extra?.busy).toBe(false);
+    expect(degraded?.extra?.failureKind).toBe("checkpoint-incomplete-retries-exhausted");
   });
 
   // A malformed/short PRAGMA result row (missing or non-integer columns) must fail closed into
@@ -366,7 +367,7 @@ describe("flushPlaintextResidueWithRetry", () => {
     expect(degraded).toBeDefined();
     expect(degraded?.errorKind).toBe("durability-failed");
     expect(degraded?.extra?.attempts).toBe(3);
-    expect(degraded?.extra?.busy).toBe(true);
-    expect(degraded?.extra?.failureKind).toBe("unknown");
+    expect(degraded?.extra?.busy).toBe(false);
+    expect(degraded?.extra?.failureKind).toBe("checkpoint-result-malformed");
   });
 });

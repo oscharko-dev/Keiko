@@ -387,7 +387,7 @@ describe("POST /api/task-workspaces", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "internal",
+      errorKind: "invalid-request",
       extra: { operation: "provision", failureKind: "INVALID_REQUEST" },
     });
     expect(activityLog.lines().join("\n")).not.toContain(hostileBody);
@@ -405,7 +405,7 @@ describe("POST /api/task-workspaces", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "internal",
+      errorKind: "validation-failed",
       extra: { operation: "provision", failureKind: "INVALID_BASE_BRANCH" },
     });
   });
@@ -425,7 +425,7 @@ describe("POST /api/task-workspaces", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "internal",
+      errorKind: "invalid-request",
       extra: { operation: "provision", failureKind: "INVALID_REQUEST" },
     });
     expect(activityLog.lines().join("\n")).not.toContain(taskId);

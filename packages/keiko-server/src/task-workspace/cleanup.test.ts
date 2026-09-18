@@ -472,7 +472,7 @@ describe("governed cleanup happy path (AC4)", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.level).toBe("warn");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("conflict");
     expect(line.extra?.failureKind).toBe("worktree-dirty");
     expect(line.extra?.outcome).toBe("cleanup-refused");
   });
@@ -493,7 +493,7 @@ describe("governed cleanup happy path (AC4)", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.correlationId).toBe("req-corr-cleanup-rejection-1");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("authority-denied");
     expect(line.extra?.failureKind).toBe("OPERATOR_APPROVAL_REQUIRED");
     expect(line.extra?.operation).toBe("cleanup");
     expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
@@ -1247,7 +1247,7 @@ describe("orphan cleanup", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.level).toBe("warn");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("unavailable");
     expect(line.extra?.failureKind).toBe("REPOSITORY_UNREACHABLE");
     expect(line.correlationId).toBe("req-corr-orphan-unlistable-1");
     expect(line.extra?.operation).toBe("cleanup");
@@ -1265,7 +1265,7 @@ describe("orphan cleanup", () => {
     ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
     const line = lastActivityLogEvent(activityLog);
     expect(line.correlationId).toBe("req-corr-orphan-cleanup-rejection-1");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("authority-denied");
     expect(line.extra?.failureKind).toBe("OPERATOR_APPROVAL_REQUIRED");
     expect(line.extra?.operation).toBe("cleanup");
     expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);

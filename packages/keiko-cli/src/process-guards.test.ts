@@ -153,7 +153,7 @@ function fakeServerModule(described: {
 }
 
 describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", () => {
-  it("writes one process.fatal line before stderr with a code-first failureKind", async () => {
+  it("writes one process.fatal line before stderr with a classified code-first failureKind", async () => {
     vi.stubEnv("KEIKO_STATE_DIR", "/fake/state/dir");
     const { module, writes, createFileServerLogSink } = fakeServerModule({
       errorClass: "GatewayError",
@@ -182,7 +182,7 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
         level: "error",
         category: "process",
         op: "process.fatal",
-        errorKind: "internal",
+        errorKind: "unavailable",
         extra: {
           kind: "unhandled-rejection",
           failureKind: "ECONNRESET",
@@ -224,6 +224,31 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
         completeness: "complete",
         loss: "none",
       });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("preserves a closed fatal failureKind in the envelope", async () => {
+    vi.stubEnv("KEIKO_STATE_DIR", "/fake/state/dir");
+    const { module, writes } = fakeServerModule({
+      errorClass: "GatewayError",
+      code: "timeout",
+    });
+    const sink: ProcessGuardSink = {
+      err: vi.fn(),
+      exit: vi.fn(),
+      loadServer: () => Promise.resolve(module),
+    };
+    const { rejection, cleanup } = installAndCapture(sink);
+    try {
+      rejection?.(new Error("boom"));
+      await vi.waitFor(() => {
+        expect(writes).toHaveLength(1);
+      });
+      const [event] = writes as [{ errorKind: string; extra: Record<string, unknown> }];
+      expect(event.errorKind).toBe("timeout");
+      expect(event.extra.failureKind).toBe("timeout");
     } finally {
       cleanup();
     }

@@ -13,6 +13,7 @@ import {
   codingWorkbenchIssueBindingDigest,
   codingWorkbenchRemoteDigest,
   createGitHubIssueResolver,
+  githubIssueResolutionErrorKind,
   type GitHubIssueResolutionDeps,
   type GitHubIssueResolver,
 } from "./githubIssueResolution.js";
@@ -115,6 +116,19 @@ function fixture(): ResolverFixture {
 }
 
 describe("server-resolved issue intake", () => {
+  it.each([
+    ["invalid-reference", undefined, "invalid-request"],
+    ["repository-mismatch", undefined, "conflict"],
+    ["auth-required", undefined, "authority-denied"],
+    ["authority-denied", undefined, "authority-denied"],
+    ["issue-unavailable", undefined, "unavailable"],
+    ["issue-unavailable", "read-failed", "read-failed"],
+    ["clone-failed", "default-branch-read-failed", "read-failed"],
+    ["cancelled", "aborted", "cancelled"],
+  ] as const)("maps %s / %s to %s", (failure, reason, expected) => {
+    expect(githubIssueResolutionErrorKind(failure, reason)).toBe(expected);
+  });
+
   it("derives canonical binding and bounds transient comments while keeping logs body-free", async () => {
     const f = fixture();
     const result = await f.resolve(f.deps, f.input);
@@ -241,7 +255,7 @@ describe("server-resolved issue intake", () => {
     expect(f.events.at(-1)).toMatchObject({
       op: "coding-workbench.issue.resolved",
       correlationId: "issue-test",
-      errorKind: "unknown",
+      errorKind: "read-failed",
       extra: { reason: "read-failed", failureKind: "Error" },
     });
   });

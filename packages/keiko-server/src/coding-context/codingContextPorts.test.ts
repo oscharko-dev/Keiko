@@ -27,6 +27,7 @@ const WORKSPACE: WorkspaceInfo = {
 function githubPortWith(
   spawn: SpawnFn,
   timeoutMs = 1_000,
+  events?: ServerLogEvent[],
 ): ReturnType<typeof createGitHubCodeContextApiPort> {
   return createGitHubCodeContextApiPort({
     workspace: WORKSPACE,
@@ -34,6 +35,9 @@ function githubPortWith(
     spawn,
     resolveExecutable: () => "/test-bin/gh",
     timeoutMs,
+    ...(events === undefined
+      ? {}
+      : { activityLog: { write: (event: ServerLogEvent): void => void events.push(event) } }),
   });
 }
 
@@ -61,6 +65,10 @@ describe("github code context port", () => {
       port.readJson(READ_ARGV, { signal: AbortSignal.abort(), correlationId: "read-cancelled" }),
     ).rejects.toMatchObject({ code: "gh-failed" });
     expect(spawned).toBe(0);
+    expect(events.find((event) => event.op === "coding-context.github.read")).toMatchObject({
+      errorKind: "cancelled",
+      extra: { outcome: "cancelled" },
+    });
     await port.readJson(READ_ARGV, { correlationId: "read-issue-42" });
     expect(events).toContainEqual(expect.objectContaining({ correlationId: "read-issue-42" }));
     expect(JSON.stringify(events)).not.toContain("repos/oscharko-dev");
@@ -120,6 +128,47 @@ describe("github code context port", () => {
     await expect(badJson.readJson(READ_ARGV)).rejects.toMatchObject({ code: "gh-invalid-json" });
   });
 
+  it.each([
+    {
+      name: "denied invocation",
+      expected: "authority-denied",
+      read: (port: ReturnType<typeof createGitHubCodeContextApiPort>): Promise<unknown> =>
+        port.readJson([]),
+      spawn: (() => fakeChild(0, "{}")) as SpawnFn,
+    },
+    {
+      name: "failed read",
+      expected: "read-failed",
+      read: (port: ReturnType<typeof createGitHubCodeContextApiPort>): Promise<unknown> =>
+        port.readJson(READ_ARGV),
+      spawn: ((..._args: readonly unknown[]) => fakeChild(1, "")) as unknown as SpawnFn,
+    },
+    {
+      name: "transient provider failure",
+      expected: "unavailable",
+      read: (port: ReturnType<typeof createGitHubCodeContextApiPort>): Promise<unknown> =>
+        port.readJson(READ_ARGV),
+      spawn: ((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(1, "gh: Too Many Requests (HTTP 429)")) as unknown as SpawnFn,
+    },
+    {
+      name: "invalid provider JSON",
+      expected: "validation-failed",
+      read: (port: ReturnType<typeof createGitHubCodeContextApiPort>): Promise<unknown> =>
+        port.readJson(READ_ARGV),
+      spawn: ((..._args: readonly unknown[]) => fakeChild(0, "not-json")) as unknown as SpawnFn,
+    },
+  ])("maps a $name to the closed $expected error kind", async ({ expected, read, spawn }) => {
+    const events: ServerLogEvent[] = [];
+    const port = githubPortWith(spawn, 1_000, events);
+
+    await expect(read(port)).rejects.toBeInstanceOf(GitHubCodeContextPortError);
+
+    expect(events.find((event) => event.op === "coding-context.github.read")?.errorKind).toBe(
+      expected,
+    );
+  });
+
   // The spawn boundary — not this port — owns the output cap: past `policy.maxOutputBytes` it
   // replaces stdout with a marker, kills the child, and sets `truncated`. Both observable shapes of
   // that one stop (the child had already exited 0, or the kill landed and it died on the signal)
@@ -137,17 +186,25 @@ describe("github code context port", () => {
     }
 
     it("reports an over-cap read as truncated when the child still exits zero", async () => {
-      const port = githubPortWith(((..._args: readonly unknown[]) =>
-        fakeGhChild({
-          chunks: [jsonOfExactByteLength(capBytes + 1)],
-          exitCode: 0,
-          signal: null,
-        })) as unknown as SpawnFn);
+      const events: ServerLogEvent[] = [];
+      const port = githubPortWith(
+        ((..._args: readonly unknown[]) =>
+          fakeGhChild({
+            chunks: [jsonOfExactByteLength(capBytes + 1)],
+            exitCode: 0,
+            signal: null,
+          })) as unknown as SpawnFn,
+        1_000,
+        events,
+      );
 
       const failure = await port.readJson(READ_ARGV).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(GitHubCodeContextPortError);
       expect(failure).toMatchObject({ code: "gh-output-truncated" });
       expect((failure as Error).message).not.toContain("xxx");
+      expect(events.find((event) => event.op === "coding-context.github.read")?.errorKind).toBe(
+        "read-failed",
+      );
     });
 
     it("reports an over-cap read as truncated when the flood kill terminates the child", async () => {

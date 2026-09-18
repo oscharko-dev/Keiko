@@ -2927,7 +2927,7 @@ const INDEXING_DETACHED_RUN_LAUNCHED_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "correlation",
+  causal: "parent-correlation",
   lifecycle: "start",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["indexing-detached-run"],
@@ -3172,6 +3172,7 @@ function launchDetachedCapsuleIndexing(
   deps: UiHandlerDeps,
   resolved: ResolvedIndexingProvider,
   jobId: string | undefined,
+  requestCorrelationId: string | undefined,
 ): void {
   const key = String(resolved.capsule.id);
   // One id across both evidence surfaces. When the route minted a job id, the launch line, every
@@ -3186,7 +3187,10 @@ function launchDetachedCapsuleIndexing(
   log.logger.info(
     activityLogEvent(
       INDEXING_DETACHED_RUN_LAUNCHED_OPERATION,
-      { correlationId: log.correlationId },
+      {
+        correlationId: log.correlationId,
+        parentCorrelationId: correlationIdOrUnknown(requestCorrelationId),
+      },
       {
         capsuleIdDigest: log.capsuleIdDigest,
         jobIdMinted: jobId !== undefined,
@@ -3223,6 +3227,7 @@ function acceptDetachedIndexingStart(
   store: ReturnType<typeof openKnowledgeStore>,
   resolved: ResolvedIndexingProvider,
   log: IndexingRouteLog,
+  requestCorrelationId: string | undefined,
 ): RouteResult {
   // Trust-boundary validation stays SYNCHRONOUS, before the 202: the deny-list is
   // re-validated against the canonical (realpath-resolved) roots at index time, and a
@@ -3253,7 +3258,7 @@ function acceptDetachedIndexingStart(
       },
     ),
   );
-  launchDetachedCapsuleIndexing(deps, resolved, jobId);
+  launchDetachedCapsuleIndexing(deps, resolved, jobId, requestCorrelationId);
   return {
     status: 202,
     body: {
@@ -3307,7 +3312,7 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
         const response = conflict("An indexing job for this capsule is already starting.");
         return refuseIndexingStart(log, "run-already-starting", response);
       }
-      return acceptDetachedIndexingStart(deps, env.store, resolved, log);
+      return acceptDetachedIndexingStart(deps, env.store, resolved, log, ctx.correlationId);
     } finally {
       env.close();
     }

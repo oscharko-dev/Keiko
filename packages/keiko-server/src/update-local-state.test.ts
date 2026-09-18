@@ -617,6 +617,43 @@ describe("update runtime state and audit events", () => {
     });
   });
 
+  it("emits failed runtime status as structured body-free failure evidence", () => {
+    const stateDir = makeStateDir();
+    const events: SecurityLogEvent[] = [];
+    const localState = createUpdateLocalStateManager({
+      stateDir,
+      now: () => NOW,
+      idFactory: () => "event-runtime-failed-0123456789abcdef",
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    const failure = new TypeError("private portable staging detail");
+
+    localState.recordAuditEvent(
+      "portable-staging-result",
+      {
+        correlationId: "request-runtime-failed-0123456789abcdef",
+        targetVersion: "0.2.12",
+        store: "package-install",
+        status: "failed",
+      },
+      failure,
+    );
+
+    expect(events[0]).toMatchObject({
+      op: "update.runtime.event",
+      level: "warn",
+      correlationId: "request-runtime-failed-0123456789abcdef",
+      errorKind: "internal",
+      extra: {
+        status: "failed",
+        failureKind: "portable-staging-result-failed",
+      },
+    });
+    expect(Array.isArray(events[0]?.extra?.frames)).toBe(true);
+    expect(Array.isArray(events[0]?.extra?.causeChain)).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("private portable staging detail");
+  });
+
   it("migrates legacy runtime facts without fabricating a terminal session", () => {
     const stateDir = makeStateDir();
     touch(

@@ -179,8 +179,15 @@ async function createIndexableCapsule(
   return capsuleId;
 }
 
-async function startIndexing(deps: UiHandlerDeps, capsuleId: string): Promise<RouteResult> {
-  return handleStartLocalKnowledgeCapsuleIndexing({ ...ctx("POST"), params: { capsuleId } }, deps);
+async function startIndexing(
+  deps: UiHandlerDeps,
+  capsuleId: string,
+  correlationId?: string,
+): Promise<RouteResult> {
+  return handleStartLocalKnowledgeCapsuleIndexing(
+    { ...ctx("POST"), correlationId, params: { capsuleId } },
+    deps,
+  );
 }
 
 async function cancelIndexing(deps: UiHandlerDeps, capsuleId: string): Promise<RouteResult> {
@@ -385,7 +392,7 @@ describe("the start-indexing route is on the record", () => {
     const capsuleId = await createIndexableCapsule(deps, tmp);
     const sink = capture();
 
-    const accepted = await startIndexing(deps, String(capsuleId));
+    const accepted = await startIndexing(deps, String(capsuleId), "request-indexing-launch-parent");
     expect(accepted.status).toBe(202);
     await awaitDetachedCapsuleIndexing(String(capsuleId));
 
@@ -413,7 +420,7 @@ describe("the start-indexing route is on the record", () => {
     const capsuleId = await createIndexableCapsule(deps, tmp);
     const sink = capture();
 
-    const accepted = await startIndexing(deps, String(capsuleId));
+    const accepted = await startIndexing(deps, String(capsuleId), "request-indexing-launch-parent");
     await awaitDetachedCapsuleIndexing(String(capsuleId));
 
     // Everything between the 202 and the orchestrator's first line — the detached store open and
@@ -422,6 +429,7 @@ describe("the start-indexing route is on the record", () => {
       level: "info",
       category: "indexing",
       correlationId: jobIdOf(accepted),
+      parentCorrelationId: "request-indexing-launch-parent",
       extra: { jobIdMinted: true },
     });
     const ops = sink.events.map((event) => event.op);

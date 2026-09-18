@@ -31,6 +31,7 @@ import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/r
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
@@ -187,6 +188,21 @@ export function clientDiagnosticNoteDigest(message: string): string {
   return sha256Hex(`keiko-client-diagnostic-note-v1\0${message}`);
 }
 
+type ClientDiagnosticKind = NonNullable<ClientDiagnosticIngestRequest["kind"]>;
+
+const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
+  boundary: "internal",
+  "unhandled-rejection": "internal",
+  "sse-error": "unavailable",
+  other: "unknown",
+} as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
+
+function clientDiagnosticErrorKind(
+  kind: ClientDiagnosticIngestRequest["kind"],
+): "internal" | "unavailable" | "unknown" {
+  return kind === undefined ? "unknown" : CLIENT_DIAGNOSTIC_ERROR_KINDS[kind];
+}
+
 // Projects the validated request onto the activity log. `message` is admitted only as a digest;
 // `readyState`/`kind` ride along as bounded, closed-shape fields.
 function logClientDiagnostic(
@@ -219,7 +235,7 @@ function logClientDiagnostic(
   getServerLogger().warn(
     activityLogEvent(
       CLIENT_DIAGNOSTIC_OPERATION,
-      { correlationId, errorKind: "internal" },
+      { correlationId, errorKind: clientDiagnosticErrorKind(request.kind) },
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );

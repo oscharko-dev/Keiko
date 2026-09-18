@@ -415,9 +415,16 @@ function emitCheckpointDegraded(
       { level: "warn", errorKind: "durability-failed" },
       {
         attempts,
-        busy: outcome.kind === "ok" ? outcome.result.busy === 1 : true,
-        failureKind: outcome.kind === "threw" ? outcome.errorKind : "unknown",
+        busy: outcome.kind === "ok" && outcome.result.busy === 1,
+        failureKind: checkpointFailureKind(outcome),
       },
     ),
   );
+}
+
+function checkpointFailureKind(outcome: WalCheckpointAttempt): string {
+  if (outcome.kind === "threw") return outcome.errorKind;
+  if (outcome.kind === "malformed") return "checkpoint-result-malformed";
+  if (outcome.result.busy === 1) return "checkpoint-busy-retries-exhausted";
+  return "checkpoint-incomplete-retries-exhausted";
 }

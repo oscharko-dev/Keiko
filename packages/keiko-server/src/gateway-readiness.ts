@@ -306,7 +306,7 @@ function logAutomaticReadinessStarted(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
       { correlationId },
-      { modelId, probeCount },
+      { modelId: boundedReadinessModelId(modelId), probeCount },
     ),
   );
 }
@@ -321,12 +321,19 @@ function logAutomaticReadinessCompleted(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
       { correlationId },
       {
-        modelId: report.modelId,
+        modelId: boundedReadinessModelId(report.modelId),
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
       },
     ),
   );
+}
+
+// Configured model ids do not originate at this route's bounded request parser. Keep the full id
+// for provider selection and the response, but project only the operation contract's opaque-id
+// bound into reconstruction evidence.
+function boundedReadinessModelId(modelId: string): string {
+  return modelId.slice(0, MAX_MODEL_ID_CHARS);
 }
 
 async function providerRequest(

@@ -260,17 +260,33 @@ function recordPreview(
   status: number,
   detail: { readonly issueNumber?: number | undefined; readonly repositoryId?: string | undefined },
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write(
-    activityLogEvent(
-      ISSUE_PREVIEWED_OPERATION,
-      { level: "info", correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, status },
-      {
-        outcome,
-        ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
-        ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
-      },
-    ),
-  );
+  const resolvedCorrelationId = correlationId ?? UNKNOWN_CORRELATION_ID;
+  try {
+    (deps.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        ISSUE_PREVIEWED_OPERATION,
+        { level: "info", correlationId: resolvedCorrelationId, status },
+        {
+          outcome,
+          ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
+          ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
+        },
+      ),
+    );
+  } catch (error) {
+    // Evidence failure must be visible, but it must never replace the already-decided preview or
+    // refusal. The fallback carries only a code-owned source plus the reduced error class.
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: resolvedCorrelationId,
+        operation: "coding-workbench.issue.preview",
+        source: "coding-context.issuePreviewRoutes.recordPreview",
+        error,
+        redact: (): string => "server-operation-failed",
+      }),
+    );
+  }
 }
 
 type AdmittedPreview =

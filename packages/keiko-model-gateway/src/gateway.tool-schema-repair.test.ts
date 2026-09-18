@@ -1,4 +1,5 @@
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { describe, expect, it, vi } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
@@ -10,8 +11,8 @@ import {
 } from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
-import { createGatewayToolCatalogBridge } from "./toolCatalogBridge.js";
-import type { Clock, GatewayConfig, ModelProviderConfig } from "./types.js";
+import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
+import type { Clock, GatewayConfig, ModelProviderConfig, NormalizedResponse } from "./types.js";
 
 const MODEL_ID = "fixture-model";
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
@@ -203,6 +204,50 @@ describe("Gateway bounded tool-schema repair", () => {
       },
     });
     expect(JSON.stringify(events)).not.toContain(INVALID_ARGUMENT_SECRET);
+  });
+
+  it("hashes an oversized provider tool-call id before writing bounded repair evidence", async () => {
+    const providerToolCallId = `call-${"provider-controlled".repeat(20)}`;
+    const events: ModelGatewayLogEvent[] = [];
+    const corrected: NormalizedResponse = {
+      modelId: MODEL_ID,
+      content: "corrected",
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: "provider-request",
+        promptTokens: 12,
+        completionTokens: 1,
+        latencyMs: 1,
+        costClass: "medium",
+      },
+    };
+    let providerCalls = 0;
+    const gateway = new Gateway(config(), {
+      clock: clock(),
+      random: (): number => 1,
+      adapter: {
+        call: (): Promise<NormalizedResponse> => {
+          providerCalls += 1;
+          if (providerCalls > 1) return Promise.resolve(corrected);
+          return Promise.reject(
+            new GatewayToolCatalogError("invalid-arguments", undefined, true, {
+              toolCallId: providerToolCallId,
+              offeredAlias: "keiko_changeset_edit",
+            }),
+          );
+        },
+      },
+      log: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(gateway.chat(request())).resolves.toMatchObject({ content: "corrected" });
+
+    expect(events.find((event) => event.op === "gateway.tool-catalog.repair")?.extra).toMatchObject(
+      { toolCallId: `tool-call-${sha256Hex(providerToolCallId)}` },
+    );
+    expect(JSON.stringify(events)).not.toContain(providerToolCallId);
   });
 
   // Run 7 (2026-09-10): gpt-5.4 omitted the properties the managed-runtime dialect declares required

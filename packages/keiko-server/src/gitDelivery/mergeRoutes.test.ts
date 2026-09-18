@@ -1114,6 +1114,38 @@ describe("readMergeProviderReadiness — default merge-adapter termination wirin
     expect(JSON.stringify(events)).not.toContain("private provider body");
   });
 
+  it("classifies a returned provider error as a structured failure", async () => {
+    const events: ServerLogEvent[] = [];
+    await readMergeProviderReadiness(
+      WIRING_COMMAND,
+      testWorkspace("/repo"),
+      {
+        activityLog: { write: (event): void => void events.push(event) },
+        mergeAdapterFactory: () => ({
+          readMergeReadiness: (): Promise<GitMergeProviderReadiness> =>
+            Promise.resolve({ providerCapableStrategies: [], providerError: true }),
+          mergePullRequest: (): Promise<GitMergeExecResult> =>
+            Promise.reject(new Error("must not merge")),
+        }),
+      },
+      () => 1,
+      "readiness-returned-provider-error",
+    );
+
+    expect(events[0]).toMatchObject({
+      op: "git.delivery.readiness.observed",
+      level: "warn",
+      correlationId: "readiness-returned-provider-error",
+      errorKind: "unavailable",
+      extra: {
+        state: "unknown",
+        providerError: true,
+        errorClass: "ProviderReadinessError",
+        code: "provider-error",
+      },
+    });
+  });
+
   it("wires the caller's activityLog + correlationId into the default createNodeGitMergeAdapter call", async () => {
     const activity: ServerLogEvent[] = [];
     await readMergeProviderReadiness(

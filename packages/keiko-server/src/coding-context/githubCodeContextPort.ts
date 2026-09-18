@@ -22,7 +22,6 @@ import type { CommandResult, CommandRule, WorkspaceInfo } from "@oscharko-dev/ke
 import {
   activityLogEvent,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -303,7 +302,7 @@ function recordRead(
         correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
         ...(failureKind === undefined
           ? {}
-          : { level: "warn", errorKind: closedReadErrorKind(failureKind) }),
+          : { level: "warn", errorKind: closedReadErrorKind(context, error) }),
       },
       {
         byteCount,
@@ -323,8 +322,22 @@ function recordRead(
 type GitHubContextReadOutcome =
   "succeeded" | "cancelled" | GitHubCodeContextPortErrorCode | "failed";
 
-function closedReadErrorKind(value: string): ActivityLogErrorKind {
-  return isActivityLogErrorKind(value) ? value : "unknown";
+const GITHUB_READ_ERROR_KINDS = {
+  "gh-denied": "authority-denied",
+  "gh-failed": "read-failed",
+  "gh-transient-failure": "unavailable",
+  "gh-output-truncated": "read-failed",
+  "gh-invalid-json": "validation-failed",
+} as const satisfies Record<GitHubCodeContextPortErrorCode, ActivityLogErrorKind>;
+
+function closedReadErrorKind(
+  context: GitHubCodeContextReadContext,
+  error: unknown,
+): ActivityLogErrorKind {
+  if (context.signal?.aborted === true) return "cancelled";
+  return error instanceof GitHubCodeContextPortError
+    ? GITHUB_READ_ERROR_KINDS[error.code]
+    : "internal";
 }
 
 function readOutcome(

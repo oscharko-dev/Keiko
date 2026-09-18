@@ -249,6 +249,7 @@ describe("legacy update audit import", () => {
     expect(lines[1]?.snapshotId).toBe(legacyEventId(3));
     expect(lines[2]).toMatchObject({
       op: "update.runtime.legacy-snapshot-imported",
+      correlationId: "unknown-correlation-id",
       historical: true,
       sourceSchemaVersion: 1,
       importedCount: 2,

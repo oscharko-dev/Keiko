@@ -33,6 +33,7 @@ import { isGitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-c
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
@@ -500,6 +501,29 @@ function gitChangeActivity(deps: UiHandlerDeps): ServerLogSink {
   return deps.activityLog ?? processServerLogSink();
 }
 
+const GIT_CHANGE_BLOCKED_ERROR_KINDS = {
+  "detached-head": "conflict",
+  "unborn-head": "conflict",
+  "missing-ref": "validation-failed",
+  "identical-refs": "validation-failed",
+  "no-pull-request": "validation-failed",
+  "ambiguous-pull-request": "conflict",
+  "reader-unauthorized": "authority-denied",
+  "remote-unresolved": "unavailable",
+  "repository-unavailable": "unavailable",
+  "snapshot-unavailable": "unavailable",
+  "snapshot-failed": "unavailable",
+  "chat-project-unavailable": "unavailable",
+  GIT_CHANGE_CHAT_NOT_FOUND: "validation-failed",
+  GIT_CHANGE_SCOPE_LIMIT_REACHED: "rate-limited",
+  GIT_CHANGE_SCOPE_PERSIST_FAILED: "unavailable",
+  "relationship-conflict": "conflict",
+} as const satisfies Record<GitChangeBlockedLogReason, ActivityLogErrorKind>;
+
+export function gitChangeBlockedErrorKind(reason: GitChangeBlockedLogReason): ActivityLogErrorKind {
+  return GIT_CHANGE_BLOCKED_ERROR_KINDS[reason];
+}
+
 function logGitChangeBlocked(
   deps: UiHandlerDeps,
   correlationId: string,
@@ -508,7 +532,7 @@ function logGitChangeBlocked(
   gitChangeActivity(deps).write(
     activityLogEvent(
       GIT_CHANGE_CHAT_BLOCKED_OPERATION,
-      { correlationId, errorKind: "unavailable" },
+      { correlationId, errorKind: gitChangeBlockedErrorKind(reason) },
       { reason },
     ),
   );

@@ -65,6 +65,18 @@ describe("native coding-runtime compaction support reconstruction", () => {
       expect(timeline?.lines.map(({ op, extra, errorKind }) => ({ op, extra, errorKind }))).toEqual(
         [
           {
+            op: "server-log.safe-open",
+            errorKind: undefined,
+            extra: {
+              artifactClass: "activity-log",
+              persistenceStatus: "opened",
+              permissionAssurance: "verified-private",
+              containmentAssurance: "private-root-guarded",
+              completeness: "complete",
+              loss: "none",
+            },
+          },
+          {
             op: "coding-runtime.compaction",
             errorKind: undefined,
             extra: {
@@ -128,17 +140,6 @@ describe("native coding-runtime compaction support reconstruction", () => {
           },
         ],
       );
-      const infrastructure = findTimeline(analysis, "unknown-correlation-id");
-      expect(infrastructure?.lines).toHaveLength(1);
-      expect(infrastructure?.lines[0]).toMatchObject({
-        op: "server-log.safe-open",
-        extra: {
-          artifactClass: "activity-log",
-          persistenceStatus: "opened",
-          completeness: "complete",
-          loss: "none",
-        },
-      });
       expect(serialized).not.toContain(bodyCanary);
     } finally {
       activityLog.close?.();

@@ -150,7 +150,7 @@ const RUN_MANIFEST_NOT_ADMITTED_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "correlation",
+  causal: "parent-correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["workspace-script-trust-admission"],
@@ -182,7 +182,7 @@ const RUN_MANIFEST_ADMITTED_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "correlation",
+  causal: "parent-correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["workspace-script-trust-admission"],
@@ -202,7 +202,7 @@ const RUN_MANIFEST_REVOKED_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "correlation",
+  causal: "parent-correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["workspace-script-trust-admission"],
@@ -282,6 +282,7 @@ export interface WorkspaceScriptTrustService {
     root: string,
     runId: string,
     expiresAt: string,
+    parentCorrelationId?: string,
   ) => WorkspaceRunManifestAdmission | undefined;
   /**
    * True while the root's current package-script basis is exactly the one its live run's last
@@ -291,7 +292,7 @@ export interface WorkspaceScriptTrustService {
    */
   readonly holdsRunAdmissionForRoot: (root: string) => boolean;
   /** Drops every admission the run holds and returns how many there were. */
-  readonly revokeRunAdmissions: (runId: string) => number;
+  readonly revokeRunAdmissions: (runId: string, parentCorrelationId?: string) => number;
   readonly recomputeForRoots?: (roots: readonly string[]) => readonly WorkspaceTrustLevel[];
   // #2628 — additive listener registration so composition-time consumers (buildPeripherals
   // wires managed-LSP restriction propagation this way) receive every persisted restriction
@@ -993,6 +994,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     root: string,
     runId: string,
     expiresAt: string,
+    parentCorrelationId?: string,
   ): WorkspaceRunManifestAdmission | undefined => {
     const candidate = this.runAdmissionCandidate(root, expiresAt);
     if ("refusal" in candidate) {
@@ -1001,7 +1003,11 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       this.activityLog.write(
         activityLogEvent(
           RUN_MANIFEST_NOT_ADMITTED_OPERATION,
-          { correlationId: correlationIdOrUnknown(runId), errorKind: "authority-denied" },
+          {
+            correlationId: correlationIdOrUnknown(runId),
+            parentCorrelationId: correlationIdOrUnknown(parentCorrelationId),
+            errorKind: "authority-denied",
+          },
           { reason: candidate.refusal, completeness: "complete", loss: "none" },
         ),
       );
@@ -1016,7 +1022,10 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     this.activityLog.write(
       activityLogEvent(
         RUN_MANIFEST_ADMITTED_OPERATION,
-        { correlationId: correlationIdOrUnknown(runId) },
+        {
+          correlationId: correlationIdOrUnknown(runId),
+          parentCorrelationId: correlationIdOrUnknown(parentCorrelationId),
+        },
         {
           basis: admission.basis,
           ...(admission.manifestDigest === undefined
@@ -1079,7 +1088,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     }
   };
 
-  public readonly revokeRunAdmissions = (runId: string): number => {
+  public readonly revokeRunAdmissions = (runId: string, parentCorrelationId?: string): number => {
     let revoked = 0;
     for (const [canonicalRoot, admission] of this.runAdmissions) {
       if (admission.runId !== runId) continue;
@@ -1090,7 +1099,10 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       this.activityLog.write(
         activityLogEvent(
           RUN_MANIFEST_REVOKED_OPERATION,
-          { correlationId: correlationIdOrUnknown(runId) },
+          {
+            correlationId: correlationIdOrUnknown(runId),
+            parentCorrelationId: correlationIdOrUnknown(parentCorrelationId),
+          },
           { count: revoked, completeness: "complete", loss: "none" },
         ),
       );

@@ -128,10 +128,11 @@ function writeFatalActivityLogLine(
 }
 
 // Loads the classifier, writes the `process.fatal` activity-log line when a state directory is in
-// scope, and resolves the stderr text — the content-free class only, never the code (the JSON
-// line's `errorKind` is code-first for machine matching; the human-facing stderr line stays the
-// simpler class name). Never throws: a failure here is caught by the caller, which keeps the
-// pre-computed fallback line rather than losing the crash report entirely.
+// scope, and resolves the stderr text. The activity-log envelope carries the nearest closed
+// failure class for clustering, while `extra.failureKind` retains the exact shape-gated code or
+// class for reconstruction. The human-facing stderr line stays on the simpler content-free class
+// name. Never throws: a failure here is caught by the caller, which keeps the pre-computed fallback
+// line rather than losing the crash report entirely.
 async function writeFatalLine(
   humanKind: string,
   machineKind: FatalReasonKind,

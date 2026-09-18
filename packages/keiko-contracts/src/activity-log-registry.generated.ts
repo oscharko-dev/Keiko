@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "3052d7d49ece744979ddd50801e3a41fec63be72ee68f7452ef40ff7344b2cc2" as const;
+  "cc1937fb6b4f1bd40061f1824a264bdafcd5b96b06ee85f2169256e7a7e08b5b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -15017,7 +15017,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
     },
-    causal: "correlation",
+    causal: "parent-correlation",
     lifecycle: "start",
     analyzerProjection: "process-lifecycle",
     failureClasses: ["indexing-detached-run"],
@@ -20419,6 +20419,66 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "server-log.capacity-warning",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "observability/server-log.capacityWarningEvidence",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      artifactClass: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["activity-log"],
+      },
+      capacityStatus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["warning-threshold-reached"],
+      },
+      observedSizeBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      warningThresholdBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      operatorAction: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["stop-export-replace"],
+      },
+      mutationStatus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["not-attempted"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["activity-log-capacity"],
+    proofIds: ["server-log.capacity-warning.threshold"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "server-log.line-dropped",
     category: "diagnostic",
     owner: "keiko-server",
@@ -22991,6 +23051,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 128,
       },
+      failureKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 64,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
     },
     causal: "correlation",
     lifecycle: "state",
@@ -23094,7 +23174,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
     },
-    causal: "none",
+    causal: "correlation",
     lifecycle: "end",
     analyzerProjection: "timeline",
     failureClasses: ["update-runtime-legacy-import"],
@@ -23505,7 +23585,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 64,
       },
     },
-    causal: "correlation",
+    causal: "parent-correlation",
     lifecycle: "state",
     analyzerProjection: "timeline",
     failureClasses: ["workspace-script-trust-admission"],
@@ -23542,7 +23622,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         ],
       },
     },
-    causal: "correlation",
+    causal: "parent-correlation",
     lifecycle: "failure",
     analyzerProjection: "failure-cluster",
     failureClasses: ["workspace-script-trust-admission"],
@@ -23573,7 +23653,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
     },
-    causal: "correlation",
+    causal: "parent-correlation",
     lifecycle: "end",
     analyzerProjection: "timeline",
     failureClasses: ["workspace-script-trust-admission"],
@@ -23654,10 +23734,80 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 299,
-  completeClassCount: 299,
+  supportedClassCount: 300,
+  completeClassCount: 300,
   completeness: "complete",
   classes: [
+    {
+      failureClass: "activity-log-capacity",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      causalEdges: [
+        {
+          op: "server-log.capacity-warning",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: ["server-log.capacity-warning"],
+      operations: [
+        {
+          op: "server-log.capacity-warning",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "artifactClass",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "capacityStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "mutationStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "observedSizeBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "operatorAction",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "warningThresholdBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["server-log.capacity-warning.threshold"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
     {
       failureClass: "activity-log-contract",
       productSurfaces: ["keiko-server"],
@@ -40783,7 +40933,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "indexing.detached-run.launched",
-          mode: "correlation",
+          mode: "parent-correlation",
         },
       ],
       lossSignals: ["indexing.detached-run.failed", "indexing.detached-run.launched"],
@@ -40835,7 +40985,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "indexing",
           lifecycle: "start",
-          causal: "correlation",
+          causal: "parent-correlation",
           analyzerProjection: "process-lifecycle",
           safeContextFields: [
             {
@@ -47982,10 +48132,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "eventId",
               type: "string",
               dataClass: "opaque-id",
               required: true,
+            },
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
             },
             {
               name: "historical",
@@ -48143,14 +48311,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "completeness-state",
             "count",
             "digest",
+            "error-kind",
             "loss-state",
             "opaque-id",
             "safe-platform-class",
             "safe-version",
           ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["update.runtime.event.body-free"],
           replayReferences: [],
@@ -48167,7 +48336,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "update.runtime.legacy-snapshot-imported",
-          mode: "none",
+          mode: "correlation",
         },
       ],
       lossSignals: ["update.runtime.legacy-snapshot-imported"],
@@ -48177,7 +48346,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "diagnostic",
           lifecycle: "end",
-          causal: "none",
+          causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
             {
@@ -49774,15 +49943,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "workspace-script-trust.run-manifest-admitted",
-          mode: "correlation",
+          mode: "parent-correlation",
         },
         {
           op: "workspace-script-trust.run-manifest-not-admitted",
-          mode: "correlation",
+          mode: "parent-correlation",
         },
         {
           op: "workspace-script-trust.run-manifest-revoked",
-          mode: "correlation",
+          mode: "parent-correlation",
         },
       ],
       lossSignals: [
@@ -49796,7 +49965,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "security",
           lifecycle: "state",
-          causal: "correlation",
+          causal: "parent-correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
             {
@@ -49838,7 +50007,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "security",
           lifecycle: "failure",
-          causal: "correlation",
+          causal: "parent-correlation",
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
@@ -49862,7 +50031,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "security",
           lifecycle: "end",
-          causal: "correlation",
+          causal: "parent-correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
             {

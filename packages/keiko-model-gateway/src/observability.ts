@@ -308,7 +308,10 @@ const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{
   { pattern: /cancel|abort/u, result: "cancelled" },
   { pattern: /rate|^429$/u, result: "rate-limited" },
   { pattern: /valid|schema/u, result: "validation-failed" },
-  { pattern: /permission|forbidden|blocked/u, result: "permission-denied" },
+  {
+    pattern: /(?:^|[._-])auth(?:entication)?(?:[._-]|$)|permission|forbidden|blocked/u,
+    result: "permission-denied",
+  },
   { pattern: /authority/u, result: "authority-denied" },
   { pattern: /conflict/u, result: "conflict" },
   { pattern: /unavailable|econn/u, result: "unavailable" },

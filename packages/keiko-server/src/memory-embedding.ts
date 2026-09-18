@@ -365,7 +365,7 @@ function logEmbeddingFailed(
       {
         modelId: provider.modelId,
         providerIdentity: memoryEmbeddingProviderIdentityDigest(provider),
-        failureKind: errorKind,
+        failureKind: boundedEmbeddingFailureKind(errorKind),
       },
     ),
   );
@@ -377,7 +377,7 @@ function logEmbeddingFailed(
 type EmbeddingStoreRejection = "store-rejected" | "invalidation-failed";
 
 function logEmbeddingStoreRejected(kind: EmbeddingStoreRejection, error: unknown): void {
-  const failureKind = errorKindOf(error);
+  const failureKind = boundedEmbeddingFailureKind(errorKindOf(error));
   const envelope = { errorKind: closedEmbeddingErrorKind(failureKind) } as const;
   if (kind === "store-rejected") {
     getServerLogger().warn(
@@ -948,4 +948,10 @@ export async function insertSalienceMemoryWithNoveltyGate(
     autoLinkRelatedMemories(deps, vault, inserted.id, embedding, neighbors, calibration);
   }
   return { kind: "inserted", record: inserted };
+}
+
+const EMBEDDING_FAILURE_KIND = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
+
+function boundedEmbeddingFailureKind(errorKind: string): string {
+  return EMBEDDING_FAILURE_KIND.test(errorKind) ? errorKind : "unknown";
 }

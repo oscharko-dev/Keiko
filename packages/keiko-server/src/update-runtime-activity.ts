@@ -15,6 +15,7 @@ import {
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 
 import { correlationIdOrUnknown } from "./correlation.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
 export interface UpdateRuntimeActivityFields {
   readonly eventId: string;
@@ -206,6 +207,21 @@ const UPDATE_RUNTIME_EVENT_OPERATION = defineActivityLogOperation({
     historical: { type: "boolean", dataClass: "closed-enum", required: false },
     sourceSchemaVersion: { type: "integer", dataClass: "count", required: false },
     legacyEventId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -234,7 +250,7 @@ const UPDATE_LEGACY_SNAPSHOT_IMPORTED_OPERATION = defineActivityLogOperation({
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["update-runtime-legacy-import"],
@@ -245,11 +261,30 @@ const UPDATE_LEGACY_SNAPSHOT_IMPORTED_OPERATION = defineActivityLogOperation({
 export function updateRuntimeActivityEvent(
   correlationId: string | undefined,
   fields: UpdateRuntimeActivityFields,
+  failure?: unknown,
 ): SecurityLogEvent {
+  const failed = fields.status === "failed" || fields.portableSidecarStatus === "failed";
+  const failureKind =
+    fields.portableSidecarFailureCode ?? fields.warningCode ?? `${fields.type}-failed`;
   return activityLogEvent(
     UPDATE_RUNTIME_EVENT_OPERATION,
-    { level: "info", correlationId: correlationIdOrUnknown(correlationId) },
-    { ...fields, completeness: "complete", loss: "none" },
+    {
+      level: failed ? "warn" : "info",
+      correlationId: correlationIdOrUnknown(correlationId),
+      ...(failed ? { errorKind: "internal" as const } : {}),
+    },
+    {
+      ...fields,
+      ...(failed
+        ? {
+            failureKind,
+            frames: keikoStackFrames(failure),
+            causeChain: causeChain(failure),
+          }
+        : {}),
+      completeness: "complete",
+      loss: "none",
+    },
   );
 }
 
@@ -261,7 +296,7 @@ export function updateLegacySnapshotImportedEvent(input: {
 }): SecurityLogEvent {
   return activityLogEvent(
     UPDATE_LEGACY_SNAPSHOT_IMPORTED_OPERATION,
-    { level: "info" },
+    { level: "info", correlationId: correlationIdOrUnknown(undefined) },
     {
       historical: true,
       sourceSchemaVersion: 1,

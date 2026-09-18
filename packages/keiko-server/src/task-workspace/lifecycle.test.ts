@@ -247,7 +247,7 @@ describe("getActive / list", () => {
       // exactly as it does for the other refusals (PR #3381 review).
       const line = activityLog.events.find((event) => event.extra?.failureKind === "POINTER_DRIFT");
       expect(line?.correlationId).toBe("active-read-unbindable");
-      expect(line?.errorKind).toBe("conflict");
+      expect(line?.errorKind).toBe("target-mutated");
       expect(line?.extra).toMatchObject({
         operation: "activate",
         outcome: "blocked",
@@ -302,7 +302,7 @@ describe("getActive / list", () => {
       (event) => event.extra?.failureKind === "PROVISIONING_FAILED",
     );
     expect(line?.correlationId).toBe("active-read-identity-failed");
-    expect(line?.errorKind).toBe("internal");
+    expect(line?.errorKind).toBe("write-failed");
     expect(line?.extra).toMatchObject({ operation: "activate" });
     expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
     // Body-free: the seam's own message never reaches the line.
@@ -328,7 +328,7 @@ describe("getActive / list", () => {
       (event) => event.extra?.failureKind === "ILLEGAL_TRANSITION",
     );
     expect(line?.correlationId).toBe("active-read-0001");
-    expect(line?.errorKind).toBe("internal");
+    expect(line?.errorKind).toBe("conflict");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "blocked",
@@ -354,7 +354,7 @@ describe("getActive / list", () => {
       (event) => event.extra?.failureKind === "PROVISIONING_FAILED",
     );
     expect(line?.correlationId).toBe("active-read-identity-unwired");
-    expect(line?.errorKind).toBe("internal");
+    expect(line?.errorKind).toBe("write-failed");
     expect(line?.extra).toMatchObject({ operation: "activate" });
   });
 });
@@ -420,7 +420,7 @@ describe("setActive (atomic switch)", () => {
     expect(activityLog.events).toHaveLength(1);
     expect(lastActivityLogEvent(activityLog)).toMatchObject({
       correlationId: "req-corr-nested-activation-1",
-      errorKind: "internal",
+      errorKind: "invalid-request",
       extra: { operation: "activate", failureKind: "INVALID_REQUEST" },
     });
     expect(activityLog.lines().join("\n")).not.toContain("hostile body");
@@ -542,7 +542,7 @@ describe("pause", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.correlationId).toBe("req-corr-pause-rejection-1");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("conflict");
     expect(line.extra?.failureKind).toBe("ILLEGAL_TRANSITION");
     expect(line.extra?.operation).toBe("pause");
     expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
@@ -722,7 +722,7 @@ describe("identity proof before bindings and readiness", () => {
     expect(upgraded.getActive()).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
     const line = activityLog.events.find((event) => event.extra?.failureKind === "POINTER_DRIFT");
-    expect(line?.errorKind).toBe("conflict");
+    expect(line?.errorKind).toBe("target-mutated");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "retry-required",
@@ -805,7 +805,7 @@ describe("identity proof before bindings and readiness", () => {
       expect(flagged?.recoveryHints.map((hint) => hint.strategy)).toEqual(["operator-repair"]);
       const line = activityLog.events.find((event) => event.extra?.failureKind === "POINTER_DRIFT");
       expect(line?.correlationId).toBe("active-read-escape");
-      expect(line?.errorKind).toBe("conflict");
+      expect(line?.errorKind).toBe("target-mutated");
       expect(line?.extra).toMatchObject({
         operation: "activate",
         workspaceId: inst.workspaceId,
@@ -855,7 +855,7 @@ describe("identity proof before bindings and readiness", () => {
     expect(flagged?.driftMarkers).toEqual(["worktree-missing"]);
     const line = activityLog.events.find((event) => event.extra?.failureKind === "POINTER_DRIFT");
     expect(line?.correlationId).toBe("active-read-missing");
-    expect(line?.errorKind).toBe("conflict");
+    expect(line?.errorKind).toBe("target-mutated");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "retry-required",

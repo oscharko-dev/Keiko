@@ -339,7 +339,7 @@ describe("readMacosKeychainSecret sink wiring", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       op: "security.keychain.fallback",
-      errorKind: "unavailable",
+      errorKind: "timeout",
       extra: { reasonKind: "ETIMEDOUT", boundedExitKind: "timeout" },
     });
   }, 15_000);

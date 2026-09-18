@@ -213,6 +213,7 @@ export async function fetchPortableGitHubReleaseAssets(
   deps: UiHandlerDeps,
   currentVersion: string,
   target: UpdatePortableTarget,
+  correlationId?: string,
 ): Promise<PortableGitHubReleaseOutcome> {
   let result: LatestReleaseFetch;
   try {
@@ -223,6 +224,7 @@ export async function fetchPortableGitHubReleaseAssets(
       target,
       "release-metadata",
       portableFetchFailureReason(error),
+      correlationId,
     );
     return unavailableOutcome();
   }
@@ -232,7 +234,7 @@ export async function fetchPortableGitHubReleaseAssets(
     return notNeededOutcome(result.release, target);
   }
   try {
-    const resolution = await resolvePortableAsset(deps, result.release, target);
+    const resolution = await resolvePortableAsset(deps, result.release, target, correlationId);
     return {
       status: "live",
       targetVersion: result.release.targetVersion,
@@ -247,6 +249,7 @@ export async function fetchPortableGitHubReleaseAssets(
       target,
       "release-evidence",
       portableFetchFailureReason(error),
+      correlationId,
     );
     return unavailableOutcome();
   }

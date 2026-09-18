@@ -271,6 +271,10 @@ export interface ServerLogSink {
 // Compatibility value for existing callers. Mutation-based retention is deferred to #3530.
 export const DEFAULT_LOG_RETENTION_DAYS = 7;
 
+// Interim #3529 safeguard. #3530 owns bounded append-only segments and retention; this threshold
+// only emits one body-free operator warning and never mutates the file.
+export const DEFAULT_LOG_CAPACITY_WARNING_BYTES = 256 * 1024 * 1024;
+
 // A hard ceiling on one serialised line. Every field guard runs first, so reaching this means a
 // caller passed an unexpected shape; the line is replaced rather than written, so one pathological
 // event cannot fill a disk or blow a log shipper's line limit.
@@ -866,6 +870,7 @@ interface ActiveLog {
   pendingNewline: boolean;
   pendingSafeOpenEvidence: boolean;
   pendingRotationOutcome: RotationOutcome | undefined;
+  readonly warnedCapacityThresholds: Set<number>;
 }
 
 interface RotationOutcome {
@@ -1122,11 +1127,56 @@ const SERVER_LOG_ROTATION_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function safeOpenEvidence(): ServerLogEvent {
+const SERVER_LOG_CAPACITY_WARNING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server-log.capacity-warning",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.capacityWarningEvidence",
+  fields: {
+    artifactClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["activity-log"],
+    },
+    capacityStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["warning-threshold-reached"],
+    },
+    observedSizeBytes: { type: "integer", dataClass: "count", required: true },
+    warningThresholdBytes: { type: "integer", dataClass: "count", required: true },
+    operatorAction: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["stop-export-replace"],
+    },
+    mutationStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-attempted"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-capacity"],
+  proofIds: ["server-log.capacity-warning.threshold"],
+  releaseImpact: "patch",
+});
+
+function safeOpenEvidence(correlationId: string | undefined): ServerLogEvent {
   return activityLogEvent(
     SERVER_LOG_SAFE_OPEN_OPERATION,
     {
-      correlationId: correlationIdOrUnknown(undefined),
+      correlationId: correlationIdOrUnknown(correlationId),
     },
     {
       artifactClass: "activity-log",
@@ -1163,12 +1213,37 @@ function rotationEvidence(
   );
 }
 
+function capacityWarningEvidence(
+  observedSizeBytes: number,
+  warningThresholdBytes: number,
+  correlationId: string | undefined,
+): ServerLogEvent {
+  return activityLogEvent(
+    SERVER_LOG_CAPACITY_WARNING_OPERATION,
+    {
+      level: "warn",
+      correlationId: correlationIdOrUnknown(correlationId),
+      errorKind: "publish-unsupported",
+    },
+    {
+      artifactClass: "activity-log",
+      capacityStatus: "warning-threshold-reached",
+      observedSizeBytes,
+      warningThresholdBytes,
+      operatorAction: "stop-export-replace",
+      mutationStatus: "not-attempted",
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+}
+
 function pendingPersistenceEvents(
   active: ActiveLog,
   correlationId: string | undefined,
 ): readonly ServerLogEvent[] {
   const events: ServerLogEvent[] = [];
-  if (active.pendingSafeOpenEvidence) events.push(safeOpenEvidence());
+  if (active.pendingSafeOpenEvidence) events.push(safeOpenEvidence(correlationId));
   if (active.pendingRotationOutcome !== undefined) {
     events.push(rotationEvidence(active.pendingRotationOutcome, correlationId));
   }
@@ -1188,7 +1263,7 @@ function writePendingPersistenceEvents(
 ): boolean {
   let firstIdentityUsed = false;
   if (active.pendingSafeOpenEvidence) {
-    writeEventRecord(active, handle, safeOpenEvidence(), firstIdentity);
+    writeEventRecord(active, handle, safeOpenEvidence(correlationId), firstIdentity);
     active.pendingSafeOpenEvidence = false;
     firstIdentityUsed = true;
   }
@@ -1262,10 +1337,48 @@ function writeCurrentEvent(
   }
 }
 
+function observedCapacityWarningSize(
+  active: ActiveLog,
+  warningThresholdBytes: number,
+): number | undefined {
+  const identity = currentHandleIdentity(active);
+  if (identity === undefined) return undefined;
+  if (identity.size < warningThresholdBytes) {
+    active.warnedCapacityThresholds.delete(warningThresholdBytes);
+    return undefined;
+  }
+  return active.warnedCapacityThresholds.has(warningThresholdBytes) ? undefined : identity.size;
+}
+
+function persistCapacityWarning(
+  active: ActiveLog,
+  warningThresholdBytes: number,
+  correlationId: string | undefined,
+): void {
+  const observedSizeBytes = observedCapacityWarningSize(active, warningThresholdBytes);
+  if (observedSizeBytes === undefined) return;
+  const event = capacityWarningEvidence(observedSizeBytes, warningThresholdBytes, correlationId);
+  const identity = allocateServerLogIdentity();
+  try {
+    writeCurrentEvent(active, event, identity);
+    active.warnedCapacityThresholds.add(warningThresholdBytes);
+  } catch (error) {
+    closeHandle(active);
+    reportServerLogFailure(error, {
+      op: event.op,
+      correlationId: event.correlationId,
+      identity,
+      loss: error instanceof PostWriteMutationError ? "event-location-unknown" : "event-dropped",
+    });
+  }
+}
+
 export interface FileServerLogSinkOptions {
   readonly level?: ServerLogThreshold | undefined;
   // Retained for configuration compatibility while mutation-based retention is deferred to #3530.
   readonly retentionDays?: number | undefined;
+  /** Test/deployment seam for the non-mutating capacity warning; never rotates or deletes. */
+  readonly capacityWarningBytes?: number | undefined;
   readonly env?: ServerLogEnv | undefined;
 }
 
@@ -1725,6 +1838,12 @@ export function appendDurableServerLogBatch(
 // per-consumer, because that is a caller's own volume control and cannot lose data.
 const activeLogs = new Map<string, ActiveLog>();
 
+function capacityWarningBytes(value: number | undefined): number {
+  return value !== undefined && Number.isSafeInteger(value) && value > 0
+    ? value
+    : DEFAULT_LOG_CAPACITY_WARNING_BYTES;
+}
+
 function resolveActiveLog(directory: string): ActiveLog {
   const key = resolvePath(directory);
   const existing = activeLogs.get(key);
@@ -1738,6 +1857,7 @@ function resolveActiveLog(directory: string): ActiveLog {
     pendingNewline: false,
     pendingSafeOpenEvidence: false,
     pendingRotationOutcome: undefined,
+    warnedCapacityThresholds: new Set<number>(),
   };
   activeLogs.set(key, created);
   return created;
@@ -1769,11 +1889,19 @@ export function createFileServerLogSink(
   }
   const active = resolveActiveLog(directory);
   const threshold = options.level ?? resolveServerLogThreshold(options.env ?? process.env);
-  return createFileSinkFacade(active, threshold);
+  return createFileSinkFacade(
+    active,
+    threshold,
+    capacityWarningBytes(options.capacityWarningBytes),
+  );
 }
 
 // Split out so `createFileServerLogSink` stays inside the 50-line ceiling.
-function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold): ServerLogSink {
+function createFileSinkFacade(
+  active: ActiveLog,
+  threshold: ServerLogThreshold,
+  warningThresholdBytes: number,
+): ServerLogSink {
   return {
     write(event: ServerLogEvent): void {
       // The threshold check comes before any formatting: a filtered event costs one comparison.
@@ -1795,7 +1923,9 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
           loss:
             error instanceof PostWriteMutationError ? "event-location-unknown" : "event-dropped",
         });
+        return;
       }
+      persistCapacityWarning(active, warningThresholdBytes, event.correlationId);
     },
     flush(): void {
       // `writeSync` leaves nothing in user space, so a flush is already complete on return.

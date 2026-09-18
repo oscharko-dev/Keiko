@@ -50,10 +50,14 @@ import {
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
-import type { TaskWorkspaceDriftMarker } from "@oscharko-dev/keiko-contracts";
+import type {
+  TaskWorkspaceDriftMarker,
+  WorkspaceCleanupRefusalReason,
+  WorkspaceReconciliationStatus,
+} from "@oscharko-dev/keiko-contracts";
 import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { processServerLogSink } from "../process-log-sink.js";
-import { TaskWorkspaceError } from "./errors.js";
+import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import {
   appendWorkspaceLifecycleEvidence,
   type WorkspaceLifecycleEvidenceRecord,
@@ -317,10 +321,64 @@ function writeWorkspaceLog(
   );
 }
 
+const TASK_WORKSPACE_ERROR_KINDS = {
+  INVALID_REQUEST: "invalid-request",
+  MISSING_REPOSITORY: "unavailable",
+  INVALID_BASE_BRANCH: "validation-failed",
+  UNSAFE_PATH: "unsafe-target",
+  BRANCH_CONFLICT: "conflict",
+  EXISTING_UNMANAGED_PATH: "target-exists",
+  LOCK_CONTENTION: "conflict",
+  POINTER_DRIFT: "target-mutated",
+  PROVISIONING_FAILED: "write-failed",
+  WORKSPACE_NOT_FOUND: "unavailable",
+  ILLEGAL_TRANSITION: "conflict",
+  OPERATOR_APPROVAL_REQUIRED: "authority-denied",
+  REPAIR_NOT_APPLICABLE: "validation-failed",
+  REPAIR_FAILED: "write-failed",
+  CLEANUP_NOT_ELIGIBLE: "conflict",
+  CLEANUP_FAILED: "write-failed",
+  IDENTITY_PROOF_FAILED: "read-failed",
+  REPOSITORY_UNREACHABLE: "unavailable",
+} as const satisfies Record<TaskWorkspaceErrorCode, ActivityLogErrorKind>;
+
+const RECONCILIATION_ERROR_KINDS = {
+  healthy: "internal",
+  missing: "unavailable",
+  drifted: "target-mutated",
+  locked: "conflict",
+  "partially-created": "target-mutated",
+  "stale-pointer": "target-mutated",
+  "unmanaged-path": "unsafe-target",
+  "recovery-required": "target-mutated",
+} as const satisfies Record<WorkspaceReconciliationStatus, ActivityLogErrorKind>;
+
+const CLEANUP_REFUSAL_ERROR_KINDS = {
+  "ownership-unproven": "authority-denied",
+  "path-escape": "unsafe-target",
+  "lock-live": "conflict",
+  "worktree-dirty": "conflict",
+  "not-eligible-state": "conflict",
+} as const satisfies Record<WorkspaceCleanupRefusalReason, ActivityLogErrorKind>;
+
+const ROUTINE_WORKSPACE_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  blocked: "validation-failed",
+  failed: "internal",
+  "retry-required": "unavailable",
+  "operator-required": "authority-denied",
+  "cleanup-refused": "conflict",
+};
+
+const WORKSPACE_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  ...TASK_WORKSPACE_ERROR_KINDS,
+  ...RECONCILIATION_ERROR_KINDS,
+  ...CLEANUP_REFUSAL_ERROR_KINDS,
+  ...ROUTINE_WORKSPACE_ERROR_KINDS,
+};
+
 function closedWorkspaceErrorKind(errorKind: string): ActivityLogErrorKind {
   if (errorKind === EVIDENCE_PERSISTENCE_ERROR_KIND) return "durability-failed";
-  if (/CONFLICT|LOCK|DRIFT|STALE|MOVED|BLOCKED/iu.test(errorKind)) return "conflict";
-  return "internal";
+  return WORKSPACE_ERROR_KINDS[errorKind] ?? "internal";
 }
 
 // The ONE projection for a settled #445-#448 lifecycle outcome. `recordWorkspaceLifecycle` below owns

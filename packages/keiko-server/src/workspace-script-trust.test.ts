@@ -1155,6 +1155,7 @@ describe("managed task worktrees below the state directory", () => {
         fixture.worktreeRoot,
         "run-trust-0001",
         "2026-09-10T20:00:00.000Z",
+        "request-script-trust-0001",
       );
       expect(admission).toEqual({ basis: "known", manifestDigest: expect.any(String) as string });
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
@@ -1163,6 +1164,7 @@ describe("managed task worktrees below the state directory", () => {
           category: "security",
           op: "workspace-script-trust.run-manifest-admitted",
           correlationId: "run-trust-0001",
+          parentCorrelationId: "request-script-trust-0001",
           extra: {
             basis: "known",
             manifestDigest: admission?.manifestDigest,
@@ -1192,12 +1194,13 @@ describe("managed task worktrees below the state directory", () => {
 
       // And with the run itself; a second run's admissions are untouched by the first run's end.
       expect(trust.revokeRunAdmissions("run-trust-0002")).toBe(0);
-      expect(trust.revokeRunAdmissions("run-trust-0001")).toBe(1);
+      expect(trust.revokeRunAdmissions("run-trust-0001", "request-script-revoke-0001")).toBe(1);
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
       expect(events).toContainEqual(
         expect.objectContaining({
           op: "workspace-script-trust.run-manifest-revoked",
           correlationId: "run-trust-0001",
+          parentCorrelationId: "request-script-revoke-0001",
           extra: { count: 1, completeness: "complete", loss: "none" },
         }),
       );

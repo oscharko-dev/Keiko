@@ -279,6 +279,7 @@ function expectLoggedRejection(
   sink: BufferedServerLogSink,
   operation: "provision" | "activate",
   failureKind: TaskWorkspaceErrorCode,
+  errorKind: "invalid-request" | "unavailable",
   rawIdentitySeed: string,
 ): void {
   expect(sink.events).toHaveLength(1);
@@ -286,7 +287,7 @@ function expectLoggedRejection(
   expect(line).toMatchObject({
     op: "task-workspace.lifecycle",
     category: "diagnostic",
-    errorKind: "internal",
+    errorKind,
     extra: { operation, failureKind },
   });
   expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[a-f0-9]{24}$/u);
@@ -517,7 +518,7 @@ describe("provision success (AC1, AC4)", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.level).toBe("warn");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("validation-failed");
     expect(line.extra?.failureKind).toBe("INVALID_BASE_BRANCH");
     expect(line.extra?.outcome).toBe("blocked");
     expect(activityLog.events).toHaveLength(1);
@@ -1089,7 +1090,7 @@ describe("settled failure trace", () => {
         event.extra?.failureKind === "PROVISIONING_FAILED" && event.extra.outcome === "failed",
     );
     expect(failed).toBeDefined();
-    expect(failed?.errorKind).toBe("internal");
+    expect(failed?.errorKind).toBe("write-failed");
     expect(failed?.correlationId).toBe("provision-trace-1");
     expect(failed?.extra?.causeChain).toEqual([expect.stringMatching(/^Error/u)]);
     expect(activityLog.lines().join("\n")).not.toContain("identity registration exploded");
@@ -1115,7 +1116,7 @@ describe("early rejection activity logging", () => {
       "INVALID_REQUEST",
     );
 
-    expectLoggedRejection(activityLog, "provision", "INVALID_REQUEST", taskId);
+    expectLoggedRejection(activityLog, "provision", "INVALID_REQUEST", "invalid-request", taskId);
     expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-invalid-request-1");
   });
 
@@ -1143,7 +1144,7 @@ describe("early rejection activity logging", () => {
       "MISSING_REPOSITORY",
     );
 
-    expectLoggedRejection(activityLog, "provision", "MISSING_REPOSITORY", taskId);
+    expectLoggedRejection(activityLog, "provision", "MISSING_REPOSITORY", "unavailable", taskId);
     expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-missing-repository-1");
   });
 
@@ -1164,7 +1165,13 @@ describe("early rejection activity logging", () => {
       "INVALID_REQUEST",
     );
 
-    expectLoggedRejection(activityLog, "activate", "INVALID_REQUEST", workspaceId);
+    expectLoggedRejection(
+      activityLog,
+      "activate",
+      "INVALID_REQUEST",
+      "invalid-request",
+      workspaceId,
+    );
     expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-invalid-request-1");
   });
 
@@ -1185,7 +1192,13 @@ describe("early rejection activity logging", () => {
       "WORKSPACE_NOT_FOUND",
     );
 
-    expectLoggedRejection(activityLog, "activate", "WORKSPACE_NOT_FOUND", workspaceId);
+    expectLoggedRejection(
+      activityLog,
+      "activate",
+      "WORKSPACE_NOT_FOUND",
+      "unavailable",
+      workspaceId,
+    );
     expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-missing-workspace-1");
   });
 });
@@ -1849,7 +1862,7 @@ describe("activate", () => {
     expect(after?.driftMarkers).toContain("worktree-missing");
     expect(activityLog.events).toHaveLength(1);
     expect(lastActivityLogEvent(activityLog)).toMatchObject({
-      errorKind: "conflict",
+      errorKind: "target-mutated",
       extra: {
         operation: "activate",
         outcome: "retry-required",
@@ -1948,7 +1961,7 @@ describe("activation re-proves the managed identity", () => {
         event.correlationId === "activate-retired-0001" &&
         event.extra?.failureKind === "POINTER_DRIFT",
     );
-    expect(line?.errorKind).toBe("conflict");
+    expect(line?.errorKind).toBe("target-mutated");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "retry-required",
@@ -1985,7 +1998,7 @@ describe("activation re-proves the managed identity", () => {
         event.correlationId === "activate-changed-0001" &&
         event.extra?.failureKind === "POINTER_DRIFT",
     );
-    expect(line?.errorKind).toBe("conflict");
+    expect(line?.errorKind).toBe("target-mutated");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "retry-required",

@@ -6,7 +6,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 import type { ServerLogSink } from "./observability/index.js";
 import type {
   PortableAssetRedirectFailureReason,
@@ -164,11 +164,16 @@ export function recordPortableRedirectRefusal(
   target: UpdatePortableTarget,
   assetKind: PortableEvidenceAssetKind,
   reason: PortableAssetRedirectFailureReason,
+  correlationId?: string,
 ): void {
   sink?.write(
     activityLogEvent(
       PORTABLE_ASSET_REDIRECT_REFUSED_OPERATION,
-      { level: "warn", correlationId: UNKNOWN_CORRELATION_ID, errorKind: "unsafe-target" },
+      {
+        level: "warn",
+        correlationId: correlationIdOrUnknown(correlationId),
+        errorKind: "unsafe-target",
+      },
       { assetKind, reason, target, completeness: "complete", loss: "none" },
     ),
   );
@@ -179,13 +184,14 @@ export function recordPortableFetchFailure(
   target: UpdatePortableTarget,
   assetKind: PortableFetchAssetKind,
   reason: PortableFetchFailureReason,
+  correlationId?: string,
 ): void {
   sink?.write(
     activityLogEvent(
       PORTABLE_FETCH_FAILED_OPERATION,
       {
         level: "warn",
-        correlationId: UNKNOWN_CORRELATION_ID,
+        correlationId: correlationIdOrUnknown(correlationId),
         errorKind: portableFetchErrorKind(reason),
       },
       { assetKind, reason, target, completeness: "complete", loss: "none" },
@@ -197,11 +203,16 @@ export function recordReleaseTrustFailure(
   sink: ServerLogSink | undefined,
   target: UpdatePortableTarget,
   reason: ReleaseTrustFailureReason,
+  correlationId?: string,
 ): void {
   sink?.write(
     activityLogEvent(
       RELEASE_TRUST_VERIFY_OPERATION,
-      { level: "warn", correlationId: UNKNOWN_CORRELATION_ID, errorKind: "validation-failed" },
+      {
+        level: "warn",
+        correlationId: correlationIdOrUnknown(correlationId),
+        errorKind: "validation-failed",
+      },
       { status: "failed", target, reason, completeness: "complete", loss: "none" },
     ),
   );
@@ -211,11 +222,12 @@ export function recordReleaseTrustSuccess(
   sink: ServerLogSink | undefined,
   target: UpdatePortableTarget,
   trust: { readonly keyId: string; readonly metadataVersion: number },
+  correlationId?: string,
 ): void {
   sink?.write(
     activityLogEvent(
       RELEASE_TRUST_VERIFY_OPERATION,
-      { correlationId: UNKNOWN_CORRELATION_ID },
+      { correlationId: correlationIdOrUnknown(correlationId) },
       {
         status: "succeeded",
         target,

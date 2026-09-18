@@ -2,7 +2,9 @@ import {
   activityLogEvent,
   classifyErrorKind,
   defineActivityLogOperation,
+  isActivityLogErrorKind,
   type ActivityLogEventEnvelope,
+  type ActivityLogErrorKind,
   type ActivityLogFields,
   type RegisteredActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -79,12 +81,44 @@ function boundedSessionId(value: string | undefined): string | undefined {
   return value !== undefined && /^[A-Za-z0-9._-]{1,128}$/u.test(value) ? value : undefined;
 }
 
+const RECOVERY_ERROR_KINDS = {
+  interrupted: "cancelled",
+  corrupt: "validation-failed",
+  incompatible: "validation-failed",
+  "persistence-failed": "durability-failed",
+  unspecified: "internal",
+} as const satisfies Readonly<
+  Record<NonNullable<ProcessFatalFields["recoveryReason"]>, ActivityLogErrorKind>
+>;
+
+const FATAL_ERROR_KIND_PATTERNS: readonly (readonly [RegExp, ActivityLogErrorKind])[] = [
+  [/timeout|timedout|etimedout/iu, "timeout"],
+  [/cancel|abort|interrupted/iu, "cancelled"],
+  [/rate.?limit|quota/iu, "rate-limited"],
+  [/permission|forbidden|unauthorized|eacces|eperm|auth/iu, "permission-denied"],
+  [/unavailable|connection|transport|network|econn|epipe|dns/iu, "unavailable"],
+];
+
+function fatalActivityErrorKind(
+  failureKind: string,
+  recoveryReason: ProcessFatalFields["recoveryReason"],
+): ActivityLogErrorKind {
+  if (recoveryReason !== undefined) return RECOVERY_ERROR_KINDS[recoveryReason];
+  if (isActivityLogErrorKind(failureKind)) return failureKind;
+  return (
+    FATAL_ERROR_KIND_PATTERNS.find(([pattern]) => pattern.test(failureKind))?.[1] ?? "internal"
+  );
+}
+
 export function processFatalActivityLogEvent(input: ProcessFatalActivityInput): ProcessFatalEvent {
   const failureKind = classifyErrorKind(input.failureKind) ?? "unknown";
   const sessionId = boundedSessionId(input.sessionId);
   return activityLogEvent(
     PROCESS_FATAL_OPERATION,
-    { level: "error", errorKind: "internal" },
+    {
+      level: "error",
+      errorKind: fatalActivityErrorKind(failureKind, input.recoveryReason),
+    },
     {
       kind: input.kind,
       failureKind,

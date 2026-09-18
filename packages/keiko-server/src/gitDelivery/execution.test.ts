@@ -126,7 +126,7 @@ function expectWorktreeReadFailureEvent(
 
 function expectRestampFailure(
   activity: ReturnType<typeof captureActivityLog>,
-  errorKind: "conflict" | "internal",
+  errorKind: "conflict" | "unavailable",
   failureKind: "LOCK_CONTENTION" | "REPOSITORY_UNREACHABLE",
   correlationId: string,
 ): ServerLogEvent {
@@ -1161,7 +1161,7 @@ describe("executeGovernedMutation — verified-head restamp (#3382)", () => {
       // Exactly one classified line for the failed restamp — not silent, and body-free.
       const failure = expectRestampFailure(
         activity,
-        "internal",
+        "unavailable",
         "REPOSITORY_UNREACHABLE",
         "request-correlation-restamp-rejects",
       );

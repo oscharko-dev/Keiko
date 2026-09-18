@@ -615,6 +615,13 @@ interface RepairPromptBudget {
 
 const TOOL_SCHEMA_REPAIR_PREFIX =
   "The previous tool call was rejected before execution because its arguments did not match the advertised schema.";
+const BODY_FREE_TOOL_CALL_ID = /^(?![<{])[\x21-\x7e]{1,256}$/u;
+
+function loggedToolCallId(toolCallId: string): string {
+  return BODY_FREE_TOOL_CALL_ID.test(toolCallId)
+    ? toolCallId
+    : `tool-call-${sha256Hex(toolCallId)}`;
+}
 
 // What the model is told to fix, in the schema's vocabulary only (declared property paths and
 // counts; the rejected arguments are never quoted back). A generic "match the schema" sentence left
@@ -917,7 +924,7 @@ export class Gateway {
         {
           state,
           reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
-          toolCallId: repair.toolCallId,
+          toolCallId: loggedToolCallId(repair.toolCallId),
           offeredAlias: repair.offeredAlias,
           ...(repair.shape === undefined
             ? {}

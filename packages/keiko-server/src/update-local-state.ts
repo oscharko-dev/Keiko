@@ -149,6 +149,7 @@ export interface UpdateLocalStateManager {
   readonly recordAuditEvent: (
     type: UpdateRuntimeEventType,
     input?: AuditEventInput,
+    failure?: unknown,
   ) => AuditEventRecord;
 }
 
@@ -1722,6 +1723,7 @@ function recordAuditEvent(
   context: ManagerContext,
   type: UpdateRuntimeEventType,
   input: AuditEventInput = {},
+  failure?: unknown,
 ): AuditEventRecord {
   const event: UpdateRuntimeAuditEvent = {
     schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
@@ -1732,7 +1734,7 @@ function recordAuditEvent(
   };
   try {
     context.activityLog?.write(
-      updateRuntimeActivityEvent(event.correlationId, updateRuntimeActivityFields(event)),
+      updateRuntimeActivityEvent(event.correlationId, updateRuntimeActivityFields(event), failure),
     );
     return { event };
   } catch (error) {
@@ -1782,6 +1784,7 @@ export function createUpdateLocalStateManager(
     writeRuntimeState: (state): UpdateRuntimeState => writeRuntimeState(context, state),
     acquireRemediationLease: (actionId): (() => void) | undefined =>
       acquireRemediationLease(context, actionId),
-    recordAuditEvent: (type, input): AuditEventRecord => recordAuditEvent(context, type, input),
+    recordAuditEvent: (type, input, failure): AuditEventRecord =>
+      recordAuditEvent(context, type, input, failure),
   };
 }

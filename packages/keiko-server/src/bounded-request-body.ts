@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  isErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -73,6 +74,11 @@ function requestAlreadyTerminated(req: IncomingMessage): boolean {
 interface BoundedBodyOutcomeFields {
   readonly maxBytes: number;
   readonly receivedBytes: number;
+}
+
+function boundedBodyFailureKind(error: unknown): string {
+  const failureKind = errorKindOf(error);
+  return isErrorKind(failureKind) ? failureKind : "unknown";
 }
 
 const HTTP_REQUEST_BODY_REJECTED_OPERATION = defineActivityLogOperation({
@@ -226,7 +232,7 @@ function logBodyFailed(
       { correlationId: correlationIdOrUnknown(correlationId), errorKind: "internal" },
       {
         ...fields,
-        failureKind: errorKindOf(error),
+        failureKind: boundedBodyFailureKind(error),
         ...(frames.length === 0 ? {} : { frames }),
         ...(chain.length === 0 ? {} : { causeChain: chain }),
         completeness: "complete",
@@ -340,8 +346,13 @@ class BoundedRequestBodyReader {
       // Fail closed on the size boundary. The line is emitted before `rejectOnce` clears the
       // accumulated chunks so `receivedBytes` still reports what was actually observed, and only
       // when this call is the one that settles the read — a late queued event must not log twice.
-      if (!this.settled) logBodyRejected(this.correlationId, this.outcomeFields);
-      this.rejectOnce(new RequestBodyTooLargeError(), true, true);
+      if (!this.settled) {
+        try {
+          logBodyRejected(this.correlationId, this.outcomeFields);
+        } finally {
+          this.rejectOnce(new RequestBodyTooLargeError(), true, true);
+        }
+      }
       return;
     }
     this.chunks.push(buffer);
@@ -351,18 +362,30 @@ class BoundedRequestBodyReader {
     if (this.settled) return;
     this.settled = true;
     this.cleanup();
-    logBodyReceived(this.correlationId, safeContentTypeHeader(this.req), this.total);
-    this.resolve(Buffer.concat(this.chunks).toString("utf8"));
+    const body = Buffer.concat(this.chunks).toString("utf8");
+    try {
+      logBodyReceived(this.correlationId, safeContentTypeHeader(this.req), this.total);
+    } finally {
+      this.resolve(body);
+    }
   };
 
   private readonly onCancellation = (): void => {
-    if (!this.settled) logBodyCancelled(this.correlationId, this.outcomeFields);
-    this.rejectOnce(new RequestBodyCancelledError(), true, true);
+    if (this.settled) return;
+    try {
+      logBodyCancelled(this.correlationId, this.outcomeFields);
+    } finally {
+      this.rejectOnce(new RequestBodyCancelledError(), true, true);
+    }
   };
 
   private readonly onRequestError = (error: Error): void => {
-    if (!this.settled) logBodyFailed(this.correlationId, this.outcomeFields, error);
-    this.rejectOnce(error, false, true);
+    if (this.settled) return;
+    try {
+      logBodyFailed(this.correlationId, this.outcomeFields, error);
+    } finally {
+      this.rejectOnce(error, false, true);
+    }
   };
 }
 

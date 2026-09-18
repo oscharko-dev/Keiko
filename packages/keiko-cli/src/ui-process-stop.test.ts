@@ -285,6 +285,7 @@ describe("terminateUiProcess", () => {
 
   it("refuses forced stop when the pid file does not prove ownership", async () => {
     const stateDir = makeStateDir();
+    const { sink, events } = recordingSink();
     const killWindowsTree = vi.fn(() => "succeeded" as const);
     const outcome = await terminateUiProcess({
       pid: 5,
@@ -297,14 +298,20 @@ describe("terminateUiProcess", () => {
         /* must not run */
       },
       killWindowsTree,
+      securityLogSink: sink,
       escalate: true,
     });
     expect(outcome).toEqual({ confirmed: false, escalated: false });
     expect(killWindowsTree).not.toHaveBeenCalled();
+    expect(events.find(({ op }) => op === "cli.lifecycle.stop-request-failed")).toMatchObject({
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unverified-pid" },
+    });
   });
 
   it("refuses to signal the current process", async () => {
     const stateDir = makeStateDir();
+    const { sink, events } = recordingSink();
     writeOwnedPid(stateDir, process.pid);
     const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
     const outcome = await terminateUiProcess({
@@ -317,10 +324,15 @@ describe("terminateUiProcess", () => {
       killProcess: (pid, signal) => {
         killed.push([pid, signal]);
       },
+      securityLogSink: sink,
       escalate: true,
     });
     expect(outcome).toEqual({ confirmed: false, escalated: false });
     expect(killed).toEqual([]);
+    expect(events.find(({ op }) => op === "cli.lifecycle.stop-request-failed")).toMatchObject({
+      errorKind: "unsafe-target",
+      extra: { failureKind: "refused-self-pid" },
+    });
   });
 
   it("does not emit stop-requested when POSIX SIGTERM fails with EPERM", async () => {

@@ -411,7 +411,7 @@ describe("recordVerifiedManagedHead (#3382)", () => {
 
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("unavailable");
     expect(line.extra?.failureKind).toBe("WORKSPACE_NOT_FOUND");
     expect(line.correlationId).toBe("req-restamp-2");
   });
@@ -433,7 +433,7 @@ describe("recordVerifiedManagedHead (#3382)", () => {
     ).resolves.toBe(false);
 
     const line = lastActivityLogEvent(activityLog);
-    expect(line.errorKind).toBe("internal");
+    expect(line.errorKind).toBe("unavailable");
     expect(line.extra?.failureKind).toBe("REPOSITORY_UNREACHABLE");
     expect(line.correlationId).toBe("req-restamp-3");
     // A refused restamp writes nothing: the baseline the next pass classifies against is untouched.

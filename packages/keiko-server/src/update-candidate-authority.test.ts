@@ -247,7 +247,9 @@ describe("UpdateCandidateAuthority", () => {
       activityLog: { write: (event): void => void events.push(event) },
     });
     const reviewed = report();
-    const claim = requiredClaim(authority.issue(reviewed, mode()));
+    const claim = requiredClaim(
+      authority.issue(reviewed, mode(), "request-preflight-3405-0123456789abcdef"),
+    );
 
     authority.consume(
       { ...request(claim), requestId: "request-3405-0123456789abcdef" },
@@ -264,7 +266,7 @@ describe("UpdateCandidateAuthority", () => {
       {
         category: "diagnostic",
         op: "update.candidate.issued",
-        correlationId: "candidate-3405-0123456789abcdef",
+        correlationId: "request-preflight-3405-0123456789abcdef",
         extra: {
           candidateId: "candidate-3405-0123456789abcdef",
           targetVersion: "0.3.18",
@@ -277,6 +279,7 @@ describe("UpdateCandidateAuthority", () => {
         category: "diagnostic",
         op: "update.candidate.consumed",
         correlationId: "request-3405-0123456789abcdef",
+        parentCorrelationId: "request-preflight-3405-0123456789abcdef",
         extra: {
           candidateId: "candidate-3405-0123456789abcdef",
           targetVersion: "0.3.18",

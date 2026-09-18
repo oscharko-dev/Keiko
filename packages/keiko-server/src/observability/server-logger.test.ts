@@ -25,6 +25,7 @@ import {
   setServerLogger,
   startLogTimer,
 } from "./server-logger.js";
+import { updateRuntimeActivityEvent } from "../update-runtime-activity.js";
 
 function throwingSink(): ServerLogSink {
   return {
@@ -108,6 +109,7 @@ describe("server logger bound context", () => {
     const sink = createBufferedServerLogSink();
     const logger = createServerLogger({ sink, level: "debug" }).child({
       correlationId: "req-registered",
+      undeclaredChildField: "must-not-reach-registered-extra",
     });
 
     logger.info(activityLogEvent(operation, {}, { outcome: "accepted" }));
@@ -406,6 +408,30 @@ describe("process-wide server logger", () => {
       op: "server-log.write-failed",
       rejectionKind: "unregistered-operation",
     });
+  });
+
+  it("persists a registered child event after dropping undeclared bound fields", () => {
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+
+    getServerLogger()
+      .child({
+        correlationId: "request-child-bound-registered",
+        undeclaredChildField: "must-not-reach-disk",
+      })
+      .info(
+        updateRuntimeActivityEvent("request-child-bound-registered", {
+          eventId: "event-child-bound-registered",
+          type: "user-confirmed",
+          occurredAt: "2026-09-18T00:00:00.000Z",
+          status: "succeeded",
+        }),
+      );
+
+    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    expect(raw).toContain('"op":"update.runtime.event"');
+    expect(raw).toContain('"eventId":"event-child-bound-registered"');
+    expect(raw).not.toContain("undeclaredChildField");
+    expect(raw).not.toContain("must-not-reach-disk");
   });
 
   it("returns the same instance until it is reset", () => {

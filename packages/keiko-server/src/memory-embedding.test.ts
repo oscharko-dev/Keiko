@@ -805,6 +805,20 @@ describe("memory embedding activity log", () => {
     expect(sink.lines().join("\n")).not.toContain("getaddrinfo");
   });
 
+  it("reduces a 128-character machine token to the registered failure-kind vocabulary", async () => {
+    const failureKind = `E${"X".repeat(127)}`;
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.reject(Object.assign(new Error("secret"), { code: failureKind })),
+    });
+    const sink = capture("info");
+
+    await expect(embedMemoryText(deps, "a durable preference")).resolves.toBeNull();
+
+    expect(sink.events[0]?.extra?.failureKind).toBe("unknown");
+    expect(sink.lines().join("\n")).not.toContain(failureKind);
+  });
+
   it("keeps an unconfigured install at debug and reports the dimensions of a success there too", async () => {
     const unconfigured = makeDeps({ modelId: CHAT_MODEL });
     const configured = makeDeps({ embeddingRequest: okAdapter(8) });

@@ -233,6 +233,8 @@ describe("portable KHT1 tree attestation", () => {
   });
 
   it("checks abort and deadline throughout async work and closes active resources", async () => {
+    const events: SecurityLogEvent[] = [];
+    const securityLogSink = { write: (event: SecurityLogEvent): void => void events.push(event) };
     const cancelledRoot = fixtureRoot();
     writeFileSync(join(cancelledRoot, "large.bin"), Buffer.alloc(4 * 1024 * 1024 + 1));
     const controller = new AbortController();
@@ -242,6 +244,7 @@ describe("portable KHT1 tree attestation", () => {
         cancelledRoot,
         operation({
           signal: controller.signal,
+          securityLogSink,
           yieldControl: () => {
             yields += 1;
             controller.abort();
@@ -260,12 +263,16 @@ describe("portable KHT1 tree attestation", () => {
     writeFileSync(join(timedRoot, "file.txt"), "content");
     let clock = 0;
     await expect(
-      hashPortableTreeKht1(timedRoot, operation({ deadline: 4, now: () => (clock += 1) })),
+      hashPortableTreeKht1(
+        timedRoot,
+        operation({ deadline: 4, now: () => (clock += 1), securityLogSink }),
+      ),
     ).rejects.toThrow(/timed out/u);
     expect(() => {
       renameSync(timedRoot, `${timedRoot}-renamed`);
     }).not.toThrow();
     roots[roots.indexOf(timedRoot)] = `${timedRoot}-renamed`;
+    expect(events.map((event) => event.errorKind)).toEqual(["cancelled", "timeout"]);
   });
 
   it("fails closed on an expired sync deadline and malformed or mismatched digests", () => {

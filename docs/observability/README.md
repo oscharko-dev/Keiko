@@ -48,8 +48,24 @@ appending to the verified `server.log` instead of risking an overwrite or deleti
 selected state root. At the first write after each UTC day boundary it emits one correlated
 `server-log.rotation` warning with `persistenceStatus: "deferred"`,
 `durabilityAssurance: "unchanged"`, and `retentionStatus: "deferred"`. No archive, stage, marker,
-or retention deletion is attempted. Operators should monitor the current file's growth until the
-append-only segment replacement lands.
+or retention deletion is attempted.
+
+As an interim, non-mutating capacity safeguard, the sink emits one correlated
+`server-log.capacity-warning` when the current file reaches 256 MiB. The line reports only the
+observed byte count, threshold, `operatorAction: "stop-export-replace"`, and
+`mutationStatus: "not-attempted"`; it does not rotate, truncate, rename, or delete anything. To
+recover capacity safely:
+
+1. Stop every Keiko process using the state directory.
+2. Run `keiko support export --state-dir <stateDir> --out <path-outside-stateDir>` and retain both
+   the export and its integrity sidecar.
+3. With all writers still stopped, verify `logs/server.log` is the expected regular, single-link
+   file, then move it intact to an operator-controlled archive outside `logs/`. Never truncate or
+   replace a live descriptor.
+4. Restart Keiko so the guarded sink creates a new `server.log`; retain the archived original until
+   the applicable evidence policy permits disposal.
+
+#3530 remains responsible for automatic bounded segments and retention.
 
 ## Log level
 
