@@ -441,6 +441,16 @@ interface EvidenceContext {
   readonly server: LoadedServer;
   readonly stateDir: string;
   readonly correlationId: string;
+  readonly io: CliIo;
+  readonly command: "query" | "manifest" | "export";
+}
+
+// The independent fallback when the Activity Log itself cannot be opened: a closed, content-free
+// stderr notice. The command then fails closed instead of running unevidenced.
+function reportActivityLogUnavailable(context: EvidenceContext, error: unknown): void {
+  context.io.err(
+    `keiko support ${context.command}: Activity Log unavailable (${describeErrorKind(error)})\n`,
+  );
 }
 
 function withActivityLog(
@@ -467,7 +477,8 @@ export function recordSupportQueryEvidence(
       emitSupportQueryEvidence(sink, context.correlationId, surface, run.result);
     });
     return true;
-  } catch {
+  } catch (error) {
+    reportActivityLogUnavailable(context, error);
     return false;
   }
 }
@@ -490,8 +501,8 @@ export function recordSupportQueryFailure(
         errorKind: activityErrorKind(failure.error),
       });
     });
-  } catch {
-    // The Activity Log itself is unavailable: the caller already reports the failure on stderr.
+  } catch (error) {
+    reportActivityLogUnavailable(context, error);
   }
 }
 
@@ -536,6 +547,8 @@ export async function runSupportQueryCli(
     server: await loadIncidentServer(),
     stateDir,
     correlationId: randomUUID(),
+    io,
+    command: "query",
   };
   const selection = await resolveOrFail(args, context, io, loadIncidentServer);
   if (selection === undefined) return 1;
@@ -557,10 +570,7 @@ export async function runSupportQueryCli(
     });
     return 1;
   }
-  if (!recordSupportQueryEvidence(context, "query", run)) {
-    io.err("keiko support query: Activity Log unavailable\n");
-    return 1;
-  }
+  if (!recordSupportQueryEvidence(context, "query", run)) return 1;
   printQuery(run.result, args.json, io);
   return 0;
 }
@@ -601,6 +611,8 @@ export async function runSupportManifestCli(
     server: await (deps.run?.loadServer ?? loadServer)(),
     stateDir,
     correlationId: randomUUID(),
+    io,
+    command: "manifest",
   };
   let stats: SegmentManifestPassStats;
   try {
@@ -621,8 +633,8 @@ export async function runSupportManifestCli(
     withActivityLog(context, (sink) => {
       emitSupportManifestEvidence(sink, context.correlationId, stats);
     });
-  } catch {
-    io.err("keiko support manifest: Activity Log unavailable\n");
+  } catch (error) {
+    reportActivityLogUnavailable(context, error);
     return 1;
   }
   io.out(

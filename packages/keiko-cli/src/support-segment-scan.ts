@@ -50,13 +50,10 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
+// A name retention removed after the listing reads as absent; any other failure propagates.
 function regularFileSize(path: string): number | undefined {
-  try {
-    const stat = lstatSync(path);
-    return stat.isFile() ? stat.size : undefined;
-  } catch {
-    return undefined;
-  }
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  return stat?.isFile() === true ? stat.size : undefined;
 }
 
 /** Every readable Activity Log file of `stateDir` in logical-log order; opens no file. */
@@ -245,7 +242,13 @@ function removeOrphanManifests(
   if (directory === undefined) return;
   for (const entry of listStoredSegmentManifests(directory)) {
     if (sealedIds.has(entry.segmentId)) continue;
-    if (removeStoredSegmentManifest(directory, entry.name)) stats.removedOrphanCount += 1;
+    try {
+      removeStoredSegmentManifest(directory, entry.name);
+      stats.removedOrphanCount += 1;
+    } catch {
+      // Counted and persisted by support.manifest.rebuilt; the next pass retries the removal.
+      stats.writeFailedCount += 1;
+    }
   }
 }
 

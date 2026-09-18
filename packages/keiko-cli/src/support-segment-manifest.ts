@@ -830,13 +830,9 @@ function removeIfPresent(directory: string, name: string): void {
   }
 }
 
+// Only ENOENT reads as absent; every other lstat failure propagates.
 function manifestNameExists(directory: string, name: string): boolean {
-  try {
-    lstatSync(join(directory, name));
-    return true;
-  } catch {
-    return false;
-  }
+  return lstatSync(join(directory, name), { throwIfNoEntry: false }) !== undefined;
 }
 
 /**
@@ -868,26 +864,16 @@ export function writeStoredSegmentManifest(directory: string, manifest: SegmentM
 export function listStoredSegmentManifests(
   directory: string,
 ): readonly { readonly name: string; readonly segmentId: string }[] {
-  let names: readonly string[];
-  try {
-    names = readdirSync(directory);
-  } catch {
-    return [];
-  }
+  // The store was just created by `ensureSegmentManifestDirectory`: a listing failure propagates.
   const entries: { name: string; segmentId: string }[] = [];
-  for (const name of [...names].sort(compareText)) {
+  for (const name of [...readdirSync(directory)].sort(compareText)) {
     const segmentId = parseSegmentManifestFileName(name);
     if (segmentId !== undefined) entries.push({ name, segmentId });
   }
   return entries;
 }
 
-/** Removes one closed-grammar manifest; `false` when the guarded removal refused it. */
-export function removeStoredSegmentManifest(directory: string, name: string): boolean {
-  try {
-    removeIfPresent(directory, name);
-    return true;
-  } catch {
-    return false;
-  }
+/** Removes one closed-grammar manifest; throws the closed refusal of the guarded removal. */
+export function removeStoredSegmentManifest(directory: string, name: string): void {
+  removeIfPresent(directory, name);
 }

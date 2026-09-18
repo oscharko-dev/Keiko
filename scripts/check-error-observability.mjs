@@ -290,6 +290,28 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "packages/keiko-server/src/observability/activity-log-store.ts:activityLogFreeBytes",
     "Free space that cannot be measured is reported as absent, never as plenty.",
   ],
+  // #3531 segment-manifest store: derived, rebuildable metadata. Every outcome below is counted in
+  // the registered support.manifest.rebuilt event, and nothing is ever trusted after a failure.
+  [
+    "packages/keiko-cli/src/support-segment-manifest.ts:parseSegmentManifest",
+    "A stored manifest that is not JSON is invalid; it is rebuilt from its sealed segment, never trusted.",
+  ],
+  [
+    "packages/keiko-cli/src/support-segment-manifest.ts:ensureSegmentManifestDirectory",
+    "A store that cannot be created keeps manifests in memory; support.manifest.rebuilt persists persisted=false.",
+  ],
+  [
+    "packages/keiko-cli/src/support-segment-manifest.ts:readStoredSegmentManifest",
+    "An unreadable or invalid stored manifest is rebuilt from its segment; support.manifest.rebuilt counts it.",
+  ],
+  [
+    "packages/keiko-cli/src/support-segment-scan.ts:persistManifest",
+    "A manifest that cannot be written serves the pass from memory; support.manifest.rebuilt counts the failure.",
+  ],
+  [
+    "packages/keiko-cli/src/support-segment-scan.ts:removeOrphanManifests",
+    "An orphan manifest that cannot be removed is counted by support.manifest.rebuilt and retried next pass.",
+  ],
   // #3533 SupportIncident store: the same fail-closed probes as the Activity Log pin records.
   [
     "packages/keiko-server/src/observability/support-incident-store.ts:regularFileSize",
