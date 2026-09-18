@@ -1409,9 +1409,10 @@ interface ActiveLog {
   standingPressure: StandingPressure | undefined;
   quotaExhaustedReported: boolean;
   recoveredSegments: number;
-  readonly failedDeletions: Set<string>;
-  readonly failedPinRemovals: Set<string>;
-  readonly failedRecoveries: Set<string>;
+  // Mutations that failed, keyed by name (pin records by path), with the time a retry is due.
+  readonly failedDeletions: Map<string, number>;
+  readonly failedPinRemovals: Map<string, number>;
+  readonly failedRecoveries: Map<string, number>;
   sealTimer: ReturnType<typeof setInterval> | undefined;
 }
 
@@ -1459,9 +1460,9 @@ function resolveActiveLog(directory: string, config: ActivityLogStorageConfig): 
     standingPressure: undefined,
     quotaExhaustedReported: false,
     recoveredSegments: 0,
-    failedDeletions: new Set<string>(),
-    failedPinRemovals: new Set<string>(),
-    failedRecoveries: new Set<string>(),
+    failedDeletions: new Map<string, number>(),
+    failedPinRemovals: new Map<string, number>(),
+    failedRecoveries: new Map<string, number>(),
     sealTimer: undefined,
   };
   activeLogs.set(key, created);
@@ -2071,6 +2072,44 @@ function recoverOrphanedSegment(
   }
 }
 
+// A failed seal, recovery, or deletion is retried after this backoff, never skipped for the life of
+// the process: a transient lock or permission blip must not strand bytes the budget keeps counting.
+// Only the first failure of a name is evidenced; its retries stay quiet until one succeeds.
+const FAILED_MUTATION_RETRY_MS = 60_000;
+
+function retryDue(failures: ReadonlyMap<string, number>, key: string, nowMs: number): boolean {
+  const retryAtMs = failures.get(key);
+  return retryAtMs === undefined || retryAtMs <= nowMs;
+}
+
+// Records a failure and returns whether it is the first one for `key`.
+function recordMutationFailure(failures: Map<string, number>, key: string, nowMs: number): boolean {
+  const first = !failures.has(key);
+  failures.set(key, nowMs + FAILED_MUTATION_RETRY_MS);
+  return first;
+}
+
+// Forgets failures whose target no longer exists (a peer or an operator removed it).
+function forgetVanished(failures: Map<string, number>, present: ReadonlySet<string>): void {
+  for (const key of [...failures.keys()]) {
+    if (!present.has(key)) failures.delete(key);
+  }
+}
+
+// Whether a recovery outcome is evidenced: every success, and the first failure of a segment.
+function noteRecoveryOutcome(
+  active: ActiveLog,
+  name: string,
+  outcome: RecoveryOutcome,
+  nowMs: number,
+): boolean {
+  if (outcome.status === "failed")
+    return recordMutationFailure(active.failedRecoveries, name, nowMs);
+  active.failedRecoveries.delete(name);
+  active.recoveredSegments += 1;
+  return true;
+}
+
 function recoverOrphanedSegments(
   active: ActiveLog,
   cursor: WriteCursor,
@@ -2085,17 +2124,19 @@ function recoverOrphanedSegments(
     segmentSeconds: active.config.segmentSeconds,
     isAlive: processIsAlive,
   };
+  forgetVanished(active.failedRecoveries, new Set(listing.files.map((entry) => entry.file.name)));
   let changed = false;
   for (const entry of listing.files) {
-    if (!isActivityLogSegmentEntry(entry) || active.failedRecoveries.has(entry.file.name)) continue;
+    if (!isActivityLogSegmentEntry(entry)) continue;
+    if (!retryDue(active.failedRecoveries, entry.file.name, nowMs)) continue;
     const owner = activityLogOrphanOwner(entry, context);
     if (owner === undefined) continue;
     const outcome = recoverOrphanedSegment(active, entry, owner);
     if (outcome === undefined) continue;
     changed = true;
-    if (outcome.status === "failed") active.failedRecoveries.add(entry.file.name);
-    else active.recoveredSegments += 1;
-    queueEvidence(active, segmentRecoveredEvidence(outcome, cursor.correlationId));
+    if (noteRecoveryOutcome(active, entry.file.name, outcome, nowMs)) {
+      queueEvidence(active, segmentRecoveredEvidence(outcome, cursor.correlationId));
+    }
   }
   return changed;
 }
@@ -2119,15 +2160,15 @@ function pinCoverage(
 function removePinRecordQuietly(active: ActiveLog, read: ActivityLogPinRead): boolean {
   try {
     removeActivityLogFile(read.entry.path, active.trustedRoot);
+    active.failedPinRemovals.delete(read.entry.path);
     return true;
   } catch {
-    active.failedPinRemovals.add(read.entry.path);
     return false;
   }
 }
 
-// Expired and unreadable pin records protect nothing; removing them is bounded cleanup, and each
-// removal is evidenced once. A record this process already failed to remove is not retried.
+// Expired and unreadable pin records protect nothing; removing them is bounded cleanup. A removal
+// that fails is retried after the backoff; each record's removal and first failure are evidenced.
 // Returns the paths removed in this pass.
 function expireActivityLogPins(
   active: ActiveLog,
@@ -2137,12 +2178,14 @@ function expireActivityLogPins(
   nowMs: number,
 ): ReadonlySet<string> {
   const removedPaths = new Set<string>();
+  forgetVanished(active.failedPinRemovals, new Set(reads.map((read) => read.entry.path)));
   for (const read of reads) {
     if (read.record !== undefined && read.record.expiresAtMs > nowMs) continue;
-    if (active.failedPinRemovals.has(read.entry.path)) continue;
+    if (!retryDue(active.failedPinRemovals, read.entry.path, nowMs)) continue;
     const coverage = pinCoverage(read.record, listing.files);
     const removed = removePinRecordQuietly(active, read);
     if (removed) removedPaths.add(read.entry.path);
+    else if (!recordMutationFailure(active.failedPinRemovals, read.entry.path, nowMs)) continue;
     const facts: PinExpiryFacts = {
       pinId: read.entry.pinId,
       reason: read.record === undefined ? "invalid-record" : "expired",
@@ -2175,6 +2218,7 @@ function tightenLegacyFile(path: string, trustedRoot: string): boolean {
 function removeRetentionTarget(active: ActiveLog, entry: ActivityLogFileEntry): boolean {
   try {
     removeActivityLogFile(entry.path, active.trustedRoot);
+    active.failedDeletions.delete(entry.file.name);
     return true;
   } catch (error) {
     const permissionUnsafe =
@@ -2183,6 +2227,7 @@ function removeRetentionTarget(active: ActiveLog, entry: ActivityLogFileEntry): 
   }
   try {
     removeActivityLogFile(entry.path, active.trustedRoot);
+    active.failedDeletions.delete(entry.file.name);
     return true;
   } catch {
     return false;
@@ -2193,9 +2238,10 @@ function queueRetentionEvidence(
   active: ActiveLog,
   cursor: WriteCursor,
   outcome: ActivityLogRetentionOutcome,
+  firstFailures: number,
 ): void {
   const pruned = outcome.prunedSegmentCount + outcome.prunedLegacyFileCount;
-  if (pruned === 0 && outcome.failedNames.length === 0) return;
+  if (pruned === 0 && firstFailures === 0) return;
   queueEvidence(active, retentionPrunedEvidence(outcome, active.config, cursor.correlationId));
 }
 
@@ -2238,12 +2284,12 @@ function queueQuotaEvidence(
   queueEvidence(active, pinQuotaExhaustedEvidence(facts, active.config, cursor.correlationId));
 }
 
+// Blocked while any deletion is still pending retry, not only in the pass that first failed.
 function standingPressure(
   active: ActiveLog,
-  outcome: ActivityLogRetentionOutcome,
   freeBytes: number | undefined,
 ): StandingPressure | undefined {
-  if (outcome.failedNames.length > 0) return "retention-blocked";
+  if (active.failedDeletions.size > 0) return "retention-blocked";
   const lowDisk = activityLogLowDiskThresholdBytes(active.config);
   return freeBytes !== undefined && freeBytes < lowDisk ? "low-disk-space" : undefined;
 }
@@ -2257,7 +2303,7 @@ function queuePressureTransition(
   outcome: ActivityLogRetentionOutcome,
 ): void {
   const freeBytes = activityLogFreeBytes(active.directory);
-  const state = standingPressure(active, outcome, freeBytes);
+  const state = standingPressure(active, freeBytes);
   const previous = active.standingPressure;
   if (state === previous) return;
   active.standingPressure = state;
@@ -2277,6 +2323,19 @@ function remainingPinRecordBytes(
   return reads
     .filter((read) => !removed.has(read.entry.path))
     .reduce((sum, read) => sum + read.entry.sizeBytes, 0);
+}
+
+// Names whose failed deletion is not yet due for a retry; failures of files that no longer exist are
+// forgotten first, so the set only ever holds real, still-present targets.
+function pendingRetries(
+  failures: Map<string, number>,
+  listing: ActivityLogDirectoryListing,
+  nowMs: number,
+): ReadonlySet<string> {
+  forgetVanished(failures, new Set(listing.files.map((entry) => entry.file.name)));
+  return new Set(
+    [...failures.entries()].filter(([, retryAtMs]) => retryAtMs > nowMs).map(([name]) => name),
+  );
 }
 
 function applyRetention(
@@ -2303,12 +2362,14 @@ function applyRetention(
       config: active.config,
       nowMs,
       reserveBytes,
-      skipNames: active.failedDeletions,
+      skipNames: pendingRetries(active.failedDeletions, listing, nowMs),
     },
     (entry) => removeRetentionTarget(active, entry),
   );
-  for (const name of outcome.failedNames) active.failedDeletions.add(name);
-  queueRetentionEvidence(active, cursor, outcome);
+  const firstFailures = outcome.failedNames.filter((name) =>
+    recordMutationFailure(active.failedDeletions, name, nowMs),
+  ).length;
+  queueRetentionEvidence(active, cursor, outcome, firstFailures);
   queuePressureTransition(active, cursor, outcome);
   return outcome;
 }

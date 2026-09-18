@@ -2070,6 +2070,77 @@ describe("activity log retention", () => {
     }
   });
 
+  // PR #3554 review: a deletion that failed once was skipped for the life of the process while its
+  // bytes kept counting, so one transient failure could deny every later segment.
+  it("retries a deletion that failed transiently instead of wedging the writer", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-18T10:00:00Z"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-activity-transient-"));
+    try {
+      const external = join(outside, "external-link.log");
+      writeFileSync(external, "x".repeat(SMALL_BUDGET), { mode: 0o600 });
+      mkdirSync(logsDirectory(stateDir), { recursive: true, mode: 0o700 });
+      const archive = join(logsDirectory(stateDir), "server-2026-09-01.log");
+      // Undeletable while a second link exists; an ordinary private file once it is gone.
+      linkSync(external, archive);
+      const sink = createFileServerLogSink(stateDir, { env: retentionEnv });
+      sink.write({ category: "http", op: "while-blocked" });
+      expect(readCallerLines(stateDir)).toHaveLength(0);
+
+      rmSync(external);
+      vi.setSystemTime(new Date("2026-09-18T10:01:01Z"));
+      sink.write({ category: "http", op: "after-retry" });
+
+      expect(existsSync(archive)).toBe(false);
+      expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["after-retry"]);
+      expect(linesWithOp(stateDir, "activity-log.retention.pruned")).toContainEqual(
+        expect.objectContaining({ retentionStatus: "pruned", prunedLegacyFileCount: 1 }),
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  // PR #3554 review, same class at the recovery layer: a failed recovery was never retried, so the
+  // orphan stayed active and reserved against the budget for the life of the process.
+  it("retries a recovery that failed transiently and evidences the first failure only once", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-18T10:00:00Z"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-activity-orphan-"));
+    try {
+      const identity = {
+        startMs: Date.now() - 1_000,
+        pid: exitedProcessId(),
+        instanceId: "7e7e7e7e",
+        index: 1,
+      };
+      const orphan = seedSegment(stateDir, {
+        identity,
+        state: "active",
+        content: syntheticLines(400),
+      });
+      const external = join(outside, "external-link.jsonl");
+      linkSync(orphan, external);
+      const sink = createFileServerLogSink(stateDir);
+      sink.write({ category: "http", op: "first-pass" });
+      sink.close?.();
+      sink.write({ category: "http", op: "inside-backoff" });
+      sink.close?.();
+      expect(existsSync(orphan)).toBe(true);
+
+      rmSync(external);
+      vi.setSystemTime(new Date("2026-09-18T10:01:01Z"));
+      sink.write({ category: "http", op: "after-backoff" });
+
+      expect(existsSync(orphan)).toBe(false);
+      expect(
+        linesWithOp(stateDir, "activity-log.segment.recovered").map((line) => line.recoveryStatus),
+      ).toStrictEqual(["failed", "sealed"]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("reports a full disk once writing resumes, with the exact number of dropped events", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "before-full" });
