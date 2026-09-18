@@ -970,8 +970,10 @@ async function runServerTopLevelSite(exercised) {
   }
 }
 
-export async function main() {
-  const staticViolations = unregisteredFailurePathDiffViolations();
+// The static check diffs against the PR base commit. Tests of the probe wiring pass their own
+// findings, so they do not depend on how much Git history the checkout carries.
+export async function main(findStaticViolations = unregisteredFailurePathDiffViolations) {
+  const staticViolations = findStaticViolations();
   if (staticViolations.length > 0) {
     const sites = staticViolations
       .map((finding) => `${finding.path}:${String(finding.line)} (${finding.kind})`)

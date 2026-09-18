@@ -72,6 +72,10 @@ describe("check-error-observability gate — stratified site sample", () => {
 // stubbed to throw and keep the failure paths assertable in-band, matching the convention in
 // `release-script-lcov-mapping.test.mjs` and `verify-portable-runtime-signing-args.test.mjs`.
 describe("check-error-observability gate — runProbe / runServerTopLevelSite / main wiring", () => {
+  // The static diff check needs the PR base commit, which a shallow CI checkout does not carry;
+  // these tests pin the probe wiring, so they supply the static findings themselves.
+  const noStaticViolations = () => [];
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -87,7 +91,7 @@ describe("check-error-observability gate — runProbe / runServerTopLevelSite / 
       throw new Error(`process.exit(${String(code)})`);
     });
     try {
-      await main();
+      await main(noStaticViolations);
       expect(errorSpy).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
       const passMessage = logSpy.mock.calls.map((call) => String(call[0])).join("\n");
@@ -160,7 +164,7 @@ describe("check-error-observability gate — runProbe / runServerTopLevelSite / 
         throw new Error(`process.exit(${String(code)})`);
       });
       try {
-        await expect(main()).rejects.toThrow("process.exit(1)");
+        await expect(main(noStaticViolations)).rejects.toThrow("process.exit(1)");
         expect(errorSpy).toHaveBeenCalledTimes(1);
         const [message] = errorSpy.mock.calls[0] ?? [];
         expect(String(message)).toContain(`site '${testCase.id}'`);
@@ -188,7 +192,7 @@ describe("check-error-observability gate — runProbe / runServerTopLevelSite / 
       throw new Error(`process.exit(${String(code)})`);
     });
     try {
-      await expect(main()).rejects.toThrow("process.exit(1)");
+      await expect(main(noStaticViolations)).rejects.toThrow("process.exit(1)");
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const [message] = errorSpy.mock.calls[0] ?? [];
       expect(String(message)).toContain(
@@ -199,6 +203,30 @@ describe("check-error-observability gate — runProbe / runServerTopLevelSite / 
     } finally {
       SITE_PROBES.length = 0;
       SITE_PROBES.push(...originalProbes);
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it("main(): a new unregistered failure path fails the gate before any probe runs", async () => {
+    const originalExitCode = process.exitCode;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
+    const finding = {
+      path: "packages/fixture/src/failure.ts",
+      line: 7,
+      kind: "unregistered-catch",
+    };
+    try {
+      await expect(main(() => [finding])).rejects.toThrow("process.exit(1)");
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(String(errorSpy.mock.calls[0]?.[0])).toContain(
+        "new unregistered failure path(s): packages/fixture/src/failure.ts:7 (unregistered-catch)",
+      );
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
       process.exitCode = originalExitCode;
     }
   });
