@@ -100,7 +100,9 @@ retention/pin-quota values every cooperating process actually enforces: the firs
 valid record publishes its own; every later process applies the STORED values regardless of its own
 env, and records one `activity-log.policy.conflict` line when they differ. A process may replace a
 stale or corrupt record only while it is the directory's sole live writer, which is what lets a
-changed `KEIKO_LOG_RETENTION_BYTES` take effect on the next clean restart.
+changed `KEIKO_LOG_RETENTION_BYTES` take effect on the next clean restart. Every retention pass reads
+the record again before it deletes anything, so a process that was running idle when the record was
+replaced applies the new values from its next pass on.
 
 A pin protects a time window, or named segments, from retention until it expires, within the pin
 quota. `activity-log.pin.created` and `activity-log.pin.expired` record its lifecycle; a pin released before its expiry is recorded with `expiryReason: "released"`. A pin that

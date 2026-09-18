@@ -973,7 +973,9 @@ stored and requested values, as closed and bounded fields. A process may replace
 record only while it is the store's sole live writer (every other active segment belongs to a
 confirmed-exited instance), which is what lets a changed `KEIKO_LOG_RETENTION_BYTES` take effect on
 the next clean restart without letting a stray concurrent process silently override a running
-server's governance. Segment size/age stay per-writer settings, clamped against the governing
+server's governance. Every maintenance pass re-reads the record before it deletes anything, so a
+process that held no active segment while the record was replaced (an idle server) adopts the new
+values on its next pass instead of pruning under its first read. Segment size/age stay per-writer settings, clamped against the governing
 retention bytes with the same invariant as before. Total disk use is therefore at most the ONE
 governing byte budget plus the pin quota, even when cooperating processes' own env values disagree.
 
