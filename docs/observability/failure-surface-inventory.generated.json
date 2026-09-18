@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "95854abbca4705b710350b24b5fc60e013ae1392b785fa3d48f4077cff4e4e55"
+    "catalogDigest": "1a3da470af5bf166f3eb78110de0e8f26d0ea7a00d103b317e191dcd17ba0df9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 420,
-    "proofCount": 428,
+    "operationCount": 423,
+    "proofCount": 431,
     "resolvedProofCount": 399,
-    "failureClassCount": 308,
+    "failureClassCount": 309,
     "scenarioCount": 29,
     "resolvedScenarioCount": 24
   },
@@ -568,6 +568,9 @@
         "security.windows-shortcut.system-root-refused",
         "support.analyze.classified",
         "support.export.publication",
+        "support.manifest.rebuilt",
+        "support.query.completed",
+        "support.query.failed",
         "update.candidate.consumed",
         "update.candidate.issued",
         "update.candidate.rejected",
@@ -893,7 +896,8 @@
     "workspace-reconnect": ["bff.dependency-failure"],
     "workspace-root-denial": ["tools-workflows.rejection"],
     "workspace-script-trust": ["tools-workflows.rejection"],
-    "workspace-script-trust-admission": ["tools-workflows.rejection"]
+    "workspace-script-trust-admission": ["tools-workflows.rejection"],
+    "support-query": ["runtime-packages.dependency-failure"]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -1914,6 +1918,9 @@
     "support.incident.rejected.emitted-line": [
       "packages/keiko-server/src/observability/support-incident.test.ts"
     ],
+    "support.manifest.rebuilt.manifest-evidence": [],
+    "support.query.completed.query-evidence": [],
+    "support.query.failed.failure-evidence": [],
     "task-workspace.identity.creation-time-probe.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
     ],

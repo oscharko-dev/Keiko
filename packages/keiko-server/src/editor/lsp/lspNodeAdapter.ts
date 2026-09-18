@@ -137,7 +137,8 @@ const LSP_SPAWN_FAILED_OPERATION = defineActivityLogOperation({
       maxItems: 5,
     },
   },
-  causal: "correlation",
+  // Process-scoped like process.started: no request correlation exists at the spawn boundary.
+  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["lsp-process-spawn"],
@@ -169,7 +170,8 @@ const LSP_PROCESS_RUNTIME_ERROR_OPERATION = defineActivityLogOperation({
       maxItems: 5,
     },
   },
-  causal: "correlation",
+  // Process-scoped like process.started: no request correlation exists for a running server.
+  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["lsp-process-runtime"],

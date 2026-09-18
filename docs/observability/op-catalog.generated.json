@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "95854abbca4705b710350b24b5fc60e013ae1392b785fa3d48f4077cff4e4e55",
+    "catalogDigest": "1a3da470af5bf166f3eb78110de0e8f26d0ea7a00d103b317e191dcd17ba0df9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1495,8 +1495,8 @@
         "failureClasses": ["cli-support-export"],
         "proofIds": ["cli.support.export.failed.install-layout-refusal"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/support.ts:197",
-        "emitterSites": ["packages/keiko-cli/src/support.ts:249"]
+        "registrationSite": "packages/keiko-cli/src/support.ts:218",
+        "emitterSites": ["packages/keiko-cli/src/support.ts:270"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18190,14 +18190,14 @@
             "maxItems": 5
           }
         },
-        "causal": "correlation",
+        "causal": "none",
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "failureClasses": ["lsp-process-runtime"],
         "proofIds": ["lsp.process.runtime-error.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:148",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:320"]
+        "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:149",
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:322"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18256,8 +18256,8 @@
         "failureClasses": ["lsp-process-termination"],
         "proofIds": ["lsp.process.terminated.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:180",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:351"]
+        "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:182",
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:353"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18313,7 +18313,7 @@
         "proofIds": ["lsp.spawn.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:61",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:264"]
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:266"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18371,14 +18371,14 @@
             "maxItems": 5
           }
         },
-        "causal": "correlation",
+        "causal": "none",
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "failureClasses": ["lsp-process-spawn"],
         "proofIds": ["lsp.spawn.failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:98",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:299"]
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:301"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23646,8 +23646,8 @@
         "failureClasses": ["support-analysis"],
         "proofIds": ["support.analyze.classified.classification-evidence"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/support.ts:929",
-        "emitterSites": ["packages/keiko-cli/src/support.ts:1092"]
+        "registrationSite": "packages/keiko-cli/src/support.ts:977",
+        "emitterSites": ["packages/keiko-cli/src/support.ts:1140"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23786,12 +23786,12 @@
           "support.export.publication.commit-last"
         ],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/support.ts:814",
+        "registrationSite": "packages/keiko-cli/src/support.ts:862",
         "emitterSites": [
-          "packages/keiko-cli/src/support.ts:1128",
-          "packages/keiko-cli/src/support.ts:1154",
-          "packages/keiko-cli/src/support.ts:1180",
-          "packages/keiko-cli/src/support.ts:1194"
+          "packages/keiko-cli/src/support.ts:1176",
+          "packages/keiko-cli/src/support.ts:1202",
+          "packages/keiko-cli/src/support.ts:1228",
+          "packages/keiko-cli/src/support.ts:1242"
         ]
       },
       {
@@ -24122,6 +24122,307 @@
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/observability/support-incident.ts:180",
         "emitterSites": ["packages/keiko-server/src/observability/support-incident.ts:352"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "support.manifest.rebuilt",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "support-query-evidence.emitSupportManifestEvidence",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["query", "export", "rebuild", "verify"]
+          },
+          "persisted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "segmentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reusedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "builtCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "replacedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "removedOrphanCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unreadableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "writeFailedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "verifiedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "mismatchCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "manifestBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "capability",
+        "failureClasses": ["support-query"],
+        "proofIds": ["support.manifest.rebuilt.manifest-evidence"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-cli/src/support-query-evidence.ts:41",
+        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:167"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "support.query.completed",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "support-query-evidence.emitSupportQueryEvidence",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["query", "export", "rebuild", "verify"]
+          },
+          "queryClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "correlation",
+              "incident",
+              "defect-fingerprint",
+              "parent-correlation",
+              "operation",
+              "error-kind",
+              "failure-class",
+              "time-window"
+            ]
+          },
+          "segmentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "candidateSegmentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "prunedSegmentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "openedSegmentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unreadableSegmentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "scannedBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "candidateEventCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "resultEventCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "contextEventCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "closureCorrelationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "selectedBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "requiredBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "truncation": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["none", "context-truncated", "budget-exceeded"]
+          },
+          "evidenceClassification": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["supported", "legacy", "unsupported", "corrupt", "truncated", "incomplete"]
+          },
+          "sufficiency": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["complete", "degraded", "insufficient"]
+          },
+          "sufficiencyReasons": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": false,
+            "maxItems": 17,
+            "values": [
+              "no-registered-evidence",
+              "no-registered-failure",
+              "corrupt-evidence",
+              "parent-correlation-missing",
+              "lifecycle-start-missing",
+              "report-budget-exceeded",
+              "evidence-not-retained",
+              "segment-unreadable",
+              "truncated-evidence",
+              "unsupported-evidence",
+              "incomplete-evidence",
+              "sequence-anomaly",
+              "activity-log-loss",
+              "events-dropped",
+              "correlation-unknown",
+              "evidence-partial",
+              "context-truncated"
+            ]
+          },
+          "lossEventCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "capability",
+        "failureClasses": ["support-query"],
+        "proofIds": ["support.query.completed.query-evidence"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-cli/src/support-query-evidence.ts:70",
+        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:198"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "support.query.failed",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "support-query-evidence.emitSupportQueryFailure",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["query", "export", "rebuild", "verify"]
+          },
+          "queryClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "correlation",
+              "incident",
+              "defect-fingerprint",
+              "parent-correlation",
+              "operation",
+              "error-kind",
+              "failure-class",
+              "time-window"
+            ]
+          },
+          "failureStage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["store-listing", "incident-lookup", "manifest", "scan"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["support-query"],
+        "proofIds": ["support.query.failed.failure-evidence"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-cli/src/support-query-evidence.ts:127",
+        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:239"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31767,7 +32068,7 @@
           "failure": ["lsp.process.runtime-error"],
           "loss": []
         },
-        "requiredCausalOperations": ["lsp.process.runtime-error"],
+        "requiredCausalOperations": [],
         "requiredLossOperations": [],
         "requiredProofOperations": ["lsp.process.runtime-error"],
         "requiredReplayProofIds": [],
@@ -31794,7 +32095,7 @@
           "failure": ["lsp.spawn.failed"],
           "loss": []
         },
-        "requiredCausalOperations": ["lsp.spawn.completed", "lsp.spawn.failed"],
+        "requiredCausalOperations": ["lsp.spawn.completed"],
         "requiredLossOperations": [],
         "requiredProofOperations": ["lsp.spawn.completed", "lsp.spawn.failed"],
         "requiredReplayProofIds": [],
@@ -34584,14 +34885,49 @@
         ],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "support-query",
+        "requiredProductSurfaces": ["keiko-cli"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["support.manifest.rebuilt", "support.query.completed"],
+          "failure": ["support.query.failed"],
+          "loss": []
+        },
+        "requiredCausalOperations": [
+          "support.manifest.rebuilt",
+          "support.query.completed",
+          "support.query.failed"
+        ],
+        "requiredLossOperations": [],
+        "requiredProofOperations": [
+          "support.manifest.rebuilt",
+          "support.query.completed",
+          "support.query.failed"
+        ],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["support.manifest.rebuilt", "support.query.completed"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "error-kind",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
       }
     ],
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 308,
+      "supportedClassCount": 309,
       "completeClassCount": 308,
-      "completeness": "complete",
+      "completeness": "incomplete",
       "classes": [
         {
           "failureClass": "activity-log-contract",
@@ -55970,7 +56306,7 @@
           "causalEdges": [
             {
               "op": "lsp.process.runtime-error",
-              "mode": "correlation"
+              "mode": "none"
             }
           ],
           "lossSignals": [],
@@ -55982,7 +56318,7 @@
               "owner": "keiko-server",
               "category": "diagnostic",
               "lifecycle": "failure",
-              "causal": "correlation",
+              "causal": "none",
               "analyzerProjection": "failure-cluster",
               "safeContextFields": [
                 {
@@ -56042,7 +56378,7 @@
             },
             {
               "op": "lsp.spawn.failed",
-              "mode": "correlation"
+              "mode": "none"
             }
           ],
           "lossSignals": [],
@@ -56096,7 +56432,7 @@
               "owner": "keiko-server",
               "category": "diagnostic",
               "lifecycle": "failure",
-              "causal": "correlation",
+              "causal": "none",
               "analyzerProjection": "failure-cluster",
               "safeContextFields": [
                 {
@@ -62051,6 +62387,298 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "support-query",
+          "requirementContract": "support-query",
+          "productSurfaces": ["keiko-cli"],
+          "lifecycleTransitions": ["end", "failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["support.manifest.rebuilt", "support.query.completed"],
+            "failure": ["support.query.failed"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "support.manifest.rebuilt",
+              "mode": "correlation"
+            },
+            {
+              "op": "support.query.completed",
+              "mode": "correlation"
+            },
+            {
+              "op": "support.query.failed",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["support.manifest.rebuilt", "support.query.completed"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "support.manifest.rebuilt",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "builtCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "manifestBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "mismatchCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "persisted",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "removedOrphanCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "replacedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reusedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "segmentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "unreadableCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "verifiedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "writeFailedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.manifest.rebuilt.manifest-evidence"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.query.completed",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "candidateEventCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "candidateSegmentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "closureCorrelationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "contextEventCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "evidenceClassification",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "lossEventCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "openedSegmentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "prunedSegmentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "queryClass",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "requiredBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "resultEventCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "scannedBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "segmentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "selectedBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "sufficiency",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "sufficiencyReasons",
+                  "type": "string-array",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "truncation",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "unreadableSegmentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.query.completed.query-evidence"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.query.failed",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "failureStage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "queryClass",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.query.failed.failure-evidence"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": ["evidence-classes"],
+          "completeness": "incomplete"
+        },
+        {
           "failureClass": "task-workspace-lifecycle",
           "requirementContract": "task-workspace-lifecycle",
           "productSurfaces": ["keiko-server"],
@@ -65659,11 +66287,24 @@
         }
       ]
     },
-    "violations": []
+    "violations": [
+      {
+        "code": "failure-class-contract-unsatisfied",
+        "site": "typedRegistry.failureClassContracts.support-query",
+        "correctiveAction": "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
+        "detail": "evidence-classes"
+      },
+      {
+        "code": "failure-class-incomplete",
+        "site": "typedRegistry.failureClassCoverage.support-query",
+        "correctiveAction": "Add the missing registered completeness, loss, and executable proof obligations.",
+        "detail": "evidence-classes"
+      }
+    ]
   },
   "legacyDiscovery": {
-    "dynamicCount": 46,
-    "unknownCategoryCount": 65,
+    "dynamicCount": 47,
+    "unknownCategoryCount": 66,
     "authoritative": false
   },
   "entries": [
@@ -65689,6 +66330,12 @@
       "op": "<dynamic>",
       "category": "unknown",
       "site": "packages/keiko-cli/src/support-analyze.ts:2051",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-cli/src/support-query-cli.ts:170",
       "package": "keiko-cli"
     },
     {
@@ -65742,7 +66389,7 @@
     {
       "op": "cli.support.export.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support.ts:200",
+      "site": "packages/keiko-cli/src/support.ts:221",
       "package": "keiko-cli"
     },
     {
@@ -65844,13 +66491,31 @@
     {
       "op": "support.analyze.classified",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support.ts:932",
+      "site": "packages/keiko-cli/src/support.ts:980",
       "package": "keiko-cli"
     },
     {
       "op": "support.export.publication",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support.ts:817",
+      "site": "packages/keiko-cli/src/support.ts:865",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "support.manifest.rebuilt",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support-query-evidence.ts:44",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "support.query.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support-query-evidence.ts:73",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "support.query.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support-query-evidence.ts:130",
       "package": "keiko-cli"
     },
     {
@@ -69048,13 +69713,13 @@
     {
       "op": "lsp.process.runtime-error",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:151",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:152",
       "package": "keiko-server"
     },
     {
       "op": "lsp.process.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:183",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:185",
       "package": "keiko-server"
     },
     {
@@ -70467,6 +71132,9 @@
     "support.incident.dismissed",
     "support.incident.expired",
     "support.incident.rejected",
+    "support.manifest.rebuilt",
+    "support.query.completed",
+    "support.query.failed",
     "task-workspace.identity.creation-time-probe",
     "task-workspace.lifecycle",
     "task-workspace.reconcile.startup",
