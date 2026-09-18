@@ -14,8 +14,9 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessByStdio } from "node:child_process";
 import { tmpdir } from "node:os";
+import type { Readable } from "node:stream";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -416,7 +417,7 @@ function startRotationWorker(
   stateDir: string,
   barrier: string,
   workerId: number,
-): ChildProcessWithoutNullStreams {
+): ChildProcessByStdio<null, Readable, Readable> {
   return spawn(
     process.execPath,
     [
@@ -433,7 +434,7 @@ function startRotationWorker(
   );
 }
 
-function waitForWorkerReady(child: ChildProcessWithoutNullStreams): Promise<void> {
+function waitForWorkerReady(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
   return new Promise((resolveReady, reject) => {
     child.once("error", reject);
     child.stdout.once("data", (chunk) => {
@@ -443,7 +444,7 @@ function waitForWorkerReady(child: ChildProcessWithoutNullStreams): Promise<void
   });
 }
 
-function waitForWorkerExit(child: ChildProcessWithoutNullStreams): Promise<void> {
+function waitForWorkerExit(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
   return new Promise((resolveExit, reject) => {
     child.once("error", reject);
     child.once("exit", (code) => {

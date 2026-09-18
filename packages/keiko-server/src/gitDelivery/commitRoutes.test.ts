@@ -840,10 +840,16 @@ describe("commit draft — explicit model-backed generation", () => {
   });
 
   it("rejects invalid model output without falling back to a generic commit message", async () => {
+    const events: ServerLogEvent[] = [];
     const handler = createHandleCommitDraft({
       execution: seams({
         stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
       }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
     });
 
     const res = await handler(
@@ -860,6 +866,22 @@ describe("commit draft — explicit model-backed generation", () => {
       error: { code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" },
     });
     expect(JSON.stringify(res.body)).not.toContain("update staged changes");
+    expect(events).toContainEqual({
+      category: "diagnostic",
+      op: "git.commit.draft.completed",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      status: 502,
+      errorKind: "validation-failed",
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        stagedFileCount: 2,
+        areaCount: 2,
+        touchesTests: false,
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+      },
+    });
   });
 });
 

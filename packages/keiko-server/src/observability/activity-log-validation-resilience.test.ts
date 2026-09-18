@@ -18,8 +18,10 @@ import {
 function runBusinessOperation(sink: ServerLogSink, rejectedValue: string): string {
   const registration = activityLogOperationSchema("chat.request.dispatch");
   if (registration === undefined) throw new Error("test registration is missing");
+  // The casts deliberately model a JavaScript caller crossing the compile-time boundary: the
+  // runtime validator, not the type system, must stop the rejected value here.
   const event = activityLogEvent(
-    registration,
+    registration as never,
     { correlationId: "validation-resilience-0001" },
     {
       endpointDigest: "a".repeat(64),
@@ -28,7 +30,7 @@ function runBusinessOperation(sink: ServerLogSink, rejectedValue: string): strin
       bodyBytes: 32,
       timeoutMs: 1_000,
       stream: false,
-    },
+    } as never,
   );
   sink.write(event);
   return "business-operation-completed";

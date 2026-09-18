@@ -9522,6 +9522,110 @@ describe("gateway setup writes the process activity log", () => {
       deps.store.close();
     }
   });
+
+  it("records an unsupported tool-calling verification without an error kind", async () => {
+    const uiDir = await tempDir("keiko-gw-tool-unsupported-ui-");
+    const evidenceDir = await tempDir("keiko-gw-tool-unsupported-ev-");
+    // The endpoint answers the tool-calling probe with plain text instead of the requested tool
+    // call: a concluded capability verdict, not a failure.
+    vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> =>
+      answerSetupCall(url),
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const result = await handleGatewaySetup(
+        ctx(
+          {
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "example-secret-token",
+            deploymentNames: ["chat-model"],
+          },
+          "corr-tool-unsupported",
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      const verificationEvent = sink.events.find(
+        (event) => event.op === "gateway.tool-calling.verification",
+      );
+      expect(verificationEvent).toMatchObject({
+        category: "gateway",
+        correlationId: "corr-tool-unsupported",
+        status: 200,
+        extra: { verificationStatus: "unsupported", completeness: "complete", loss: "none" },
+      });
+      // The logger normalizes an absent errorKind to undefined, so the written line carries none.
+      expect(verificationEvent?.errorKind).toBeUndefined();
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("records an unverified tool-calling verification as unavailable", async () => {
+    const uiDir = await tempDir("keiko-gw-tool-unverified-ui-");
+    const evidenceDir = await tempDir("keiko-gw-tool-unverified-ev-");
+    // Chat answers, but the tool-calling probe meets a transient 503 and cannot conclude either way.
+    vi.stubGlobal(
+      "fetch",
+      (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> => {
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+          readonly tools?: unknown;
+        };
+        if (body.tools === undefined) return answerSetupCall(url);
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "unavailable" } }), {
+            status: 503,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      },
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const result = await handleGatewaySetup(
+        ctx(
+          {
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey: "example-secret-token",
+            deploymentNames: ["chat-model"],
+          },
+          "corr-tool-unverified",
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      const verificationEvent = sink.events.find(
+        (event) => event.op === "gateway.tool-calling.verification",
+      );
+      expect(verificationEvent).toMatchObject({
+        category: "gateway",
+        correlationId: "corr-tool-unverified",
+        status: 503,
+        errorKind: "unavailable",
+        extra: { verificationStatus: "unverified", completeness: "complete", loss: "none" },
+      });
+    } finally {
+      deps.store.close();
+    }
+  });
 });
 
 describe("gateway setup embedding spend ceiling", () => {

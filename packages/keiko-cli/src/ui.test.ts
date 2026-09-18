@@ -276,7 +276,7 @@ describe("runUiCli", () => {
       expect.objectContaining({
         op: "cli.install-layout.normalized",
         correlationId,
-        extra: expect.objectContaining({ completeness: "complete", loss: "none" }),
+        extra: expect.objectContaining({ completeness: "complete", loss: "none" }) as unknown,
       }),
     ]);
   });

@@ -4166,7 +4166,9 @@ describe("issue-bound runs (#3385)", () => {
     const refused = captured.records.find(
       (event) => event.op === "coding-runtime.run.issue-binding-refused",
     );
-    expect(refused?.errorKind).toBe("internal");
+    // A throwing resolver is a routine issue-unavailable failure, classified by its closed
+    // failure reason rather than as an internal defect.
+    expect(refused?.errorKind).toBe("unavailable");
     expect(refused?.extra).toMatchObject({
       completeness: "complete",
       loss: "none",
