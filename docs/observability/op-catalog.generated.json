@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aef1814edb06c600020cd19916f213f2bf8bb3274e812823a4d5c8a796ee6cf5",
+    "catalogDigest": "2615d0bef2a23870293a32ca1b434099c1503e884c5558b319528600c4a49558",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24197,6 +24197,11 @@
             "dataClass": "count",
             "required": true
           },
+          "missingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
           "manifestBytes": {
             "type": "integer",
             "dataClass": "count",
@@ -24210,7 +24215,7 @@
         "proofIds": ["support.manifest.rebuilt.manifest-evidence"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-cli/src/support-query-evidence.ts:41",
-        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:167"]
+        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:168"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -24366,8 +24371,8 @@
         "failureClasses": ["support-query"],
         "proofIds": ["support.query.completed.query-evidence"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-cli/src/support-query-evidence.ts:70",
-        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:198"]
+        "registrationSite": "packages/keiko-cli/src/support-query-evidence.ts:71",
+        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:200"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -24421,8 +24426,8 @@
         "failureClasses": ["support-query"],
         "proofIds": ["support.query.failed.failure-evidence"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-cli/src/support-query-evidence.ts:127",
-        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:239"]
+        "registrationSite": "packages/keiko-cli/src/support-query-evidence.ts:128",
+        "emitterSites": ["packages/keiko-cli/src/support-query-evidence.ts:241"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -62437,6 +62442,12 @@
                   "required": true
                 },
                 {
+                  "name": "missingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "persisted",
                   "type": "boolean",
                   "dataClass": "closed-enum",
@@ -66496,13 +66507,13 @@
     {
       "op": "support.query.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support-query-evidence.ts:73",
+      "site": "packages/keiko-cli/src/support-query-evidence.ts:74",
       "package": "keiko-cli"
     },
     {
       "op": "support.query.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support-query-evidence.ts:130",
+      "site": "packages/keiko-cli/src/support-query-evidence.ts:131",
       "package": "keiko-cli"
     },
     {
