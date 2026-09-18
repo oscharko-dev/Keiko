@@ -27,6 +27,7 @@ import {
   type PrDescriptionApplicationService,
   type PrDescriptionServiceOptions,
   type PrDescriptionApplicationResult,
+  type PrDescriptionExecutionResult,
   type PreparedPrDescription,
   type PrDescriptionContext,
   type PrDescriptionDraftPreview,
@@ -241,7 +242,7 @@ class DescriptionService implements PrDescriptionApplicationService {
     id: string,
     lease: object,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal },
-  ): Promise<PrDescriptionApplicationResult> {
+  ): Promise<PrDescriptionExecutionResult> {
     const proposal = this.held(id);
     if (proposal === undefined || this.busy)
       return { outcome: "blocked", reason: "approval-invalid" };
@@ -311,7 +312,7 @@ class DescriptionService implements PrDescriptionApplicationService {
     confirmed: boolean,
     phase: "apply" | "reconcile",
     check: () => boolean,
-  ): Promise<PrDescriptionApplicationResult> {
+  ): Promise<PrDescriptionExecutionResult> {
     const started = this.time();
     const remote = await readDescriptionBody(this.options, context);
     const now = this.time();
@@ -328,7 +329,7 @@ class DescriptionService implements PrDescriptionApplicationService {
     context: PrDescriptionContext,
     phase: "preview" | "apply" | "reconcile",
     error: unknown,
-  ): PrDescriptionApplicationResult {
+  ): PrDescriptionExecutionResult {
     const reason = descriptionFailureReason(error);
     logDescription(this.options, context, phase, reason, undefined, error);
     return { outcome: "blocked", reason };
