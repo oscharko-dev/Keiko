@@ -11,8 +11,18 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  activityLogOperationSchema,
+  attachActivityLogEventRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { closeFileServerLogSinks, recordUserReportedIncident } from "@oscharko-dev/keiko-server";
+import {
+  closeFileServerLogSinks,
+  recordRegisteredFailureIncident,
+  recordUserReportedIncident,
+} from "@oscharko-dev/keiko-server";
+import { createFileServerLogSink } from "@oscharko-dev/keiko-server/observability/server-log";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
 import { loadServer } from "./lazy-modules.js";
@@ -205,6 +215,61 @@ describe("keiko support query (#3531)", () => {
       diagnosticSufficiency: { status: "insufficient", reasons: ["evidence-not-retained"] },
       events: [],
     });
+  });
+
+  // Regression: a registered failure with no correlation of its own (a bare diagnostic op, no
+  // request in flight) has no root to walk a closure from. Before this fix, incidentPart only fell
+  // back to the incident's own pinned window for a user-reported trigger, so a correlation-less
+  // registered-failure incident's own segments were pinned but never queryable again: its query
+  // resolved to `insufficient`/`evidence-not-retained` even though its evidence was right there.
+  it("resolves a correlation-less registered-failure incident through its own pinned window", async () => {
+    const stateDir = makeRoot("keiko-query-cli-no-correlation-");
+    const registration = activityLogOperationSchema("cli.support.export.failed");
+    if (registration === undefined) throw new Error("fixture operation is not registered");
+    createFileServerLogSink(stateDir).write(
+      attachActivityLogEventRegistration(
+        {
+          level: "error",
+          category: "diagnostic",
+          op: "cli.support.export.failed",
+          // The sentinel a real bare diagnostic write persists when no request is in flight
+          // (verified against a real scenario's actual output) — never a real correlation id.
+          correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+          errorKind: "unavailable",
+          extra: {
+            reason: "activity-log-unavailable",
+            targetSha256: "a".repeat(64),
+            failureKind: "SupportActivityLogUnavailableError",
+            completeness: "complete",
+            loss: "none",
+          },
+        },
+        registration,
+      ),
+    );
+    const created = recordRegisteredFailureIncident(stateDir, {
+      op: "cli.support.export.failed",
+      errorKind: "unavailable",
+      // No correlationId at all: exactly the bare-diagnostic-op case.
+    });
+    if (created?.status !== "created") {
+      throw new Error(`expected a created incident, got ${JSON.stringify(created)}`);
+    }
+    const { io, out } = makeIo();
+
+    const code = await runSupportCli(
+      ["query", "--state-dir", stateDir, "--incident", created.record.incidentId, "--json"],
+      io,
+      {},
+    );
+
+    expect(code).toBe(0);
+    const result = JSON.parse(out()) as {
+      readonly diagnosticSufficiency: { readonly status: string; readonly reasons: string[] };
+      readonly events: readonly { readonly record: { readonly op: string } }[];
+    };
+    expect(result.diagnosticSufficiency.reasons).not.toContain("evidence-not-retained");
+    expect(result.events.map((event) => event.record.op)).toContain("cli.support.export.failed");
   });
 });
 

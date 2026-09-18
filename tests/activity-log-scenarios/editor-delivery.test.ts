@@ -195,7 +195,7 @@ describe("Activity Log scenario: editor-delivery", () => {
       await exited;
       handle.releaseRuntimeResources?.();
 
-      const trace = expectActivityLogScenario("editor-delivery.crash", {
+      const trace = await expectActivityLogScenario("editor-delivery.crash", {
         stateDir,
         startedAtMs,
         expectedOps: ["lsp.spawn.completed", "lsp.process.terminated"],
@@ -216,14 +216,14 @@ describe("Activity Log scenario: editor-delivery", () => {
     // Regression (#3532): lsp.spawn.failed was registered as correlation-causal although the spawn
     // boundary never has a request correlation, so every LSP spawn failure projected `degraded`
     // (correlation-unknown). It is a process-scoped event now and reconstructs to complete.
-    it("reconstructs an LSP spawn failure to a complete dependency-failure trace", () => {
+    it("reconstructs an LSP spawn failure to a complete dependency-failure trace", async () => {
       const startedAtMs = Date.now();
 
       expect(() => defaultLspSpawnFn("relative-language-server", [], {}, stateDir)).toThrow(
         LspProcessError,
       );
 
-      const trace = expectActivityLogScenario("editor-delivery.dependency-failure", {
+      const trace = await expectActivityLogScenario("editor-delivery.dependency-failure", {
         stateDir,
         startedAtMs,
         expectedOps: ["lsp.spawn.failed"],
@@ -249,7 +249,7 @@ describe("Activity Log scenario: editor-delivery", () => {
 
       await observed(["status"], { cwd: stateDir, maxBytes: 1_000_000, timeoutMs: 5_000 });
 
-      const trace = expectActivityLogScenario("editor-delivery.dependency-failure", {
+      const trace = await expectActivityLogScenario("editor-delivery.dependency-failure", {
         stateDir,
         startedAtMs,
         expectedOps: ["git.process.failed"],
@@ -277,7 +277,7 @@ describe("Activity Log scenario: editor-delivery", () => {
 
       await runtimeGitDiff(context, execution, "unstaged", ["bounded.js"]);
 
-      const trace = expectActivityLogScenario("editor-delivery.loss", {
+      const trace = await expectActivityLogScenario("editor-delivery.loss", {
         stateDir,
         startedAtMs,
         expectedOps: ["git.runtime-diff.search-bounded"],
@@ -310,7 +310,7 @@ describe("Activity Log scenario: editor-delivery", () => {
         timeoutMs: 5_000,
       });
 
-      const trace = expectActivityLogScenario("editor-delivery.rejection", {
+      const trace = await expectActivityLogScenario("editor-delivery.rejection", {
         stateDir,
         startedAtMs,
         expectedOps: ["git.process.refused"],

@@ -14,7 +14,10 @@
 //   * every line is supported v2 evidence of this build (no corrupt, truncated or foreign line);
 //   * the expected operations were persisted in causal order;
 //   * the trace exercises at least one failure class the inventory maps to this scenario;
-//   * the analyzer's per-failure-class sufficiency projection is `complete`.
+//   * the analyzer's per-failure-class sufficiency projection is `complete`;
+//   * (#3533 acceptance) the local incident candidate the scenario's failure creates through the
+//     production trigger pins a window whose #3531 query-engine selection contains every line of
+//     that failure's own registered causal closure — see `proveIncidentWindowCoversClosure`.
 //
 // Failure messages name the scenario, the class and the closed reason — never a field value. The
 // returned trace measurements (bytes, lines, lines per second) calibrate segment and retention
@@ -24,7 +27,27 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "vitest";
 
-import { analyzeLogText } from "../../packages/keiko-cli/src/support-analyze.js";
+import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  activityLogOperationSchema,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  recordRegisteredFailureIncident,
+  recordUserReportedIncident,
+} from "@oscharko-dev/keiko-server";
+import {
+  analyzeLogText,
+  type AnalyzeAllResult,
+  type OpCluster,
+} from "../../packages/keiko-cli/src/support-analyze.js";
+import {
+  DEFAULT_SUPPORT_QUERY_LIMITS,
+  type SupportQueryResult,
+} from "../../packages/keiko-cli/src/support-query.js";
+import {
+  executeSupportQuery,
+  resolveSupportSelection,
+} from "../../packages/keiko-cli/src/support-query-cli.js";
 import { readPersistedActivityLog } from "./activity-log-proof.js";
 
 export interface ActivityLogScenarioRun {
@@ -87,15 +110,109 @@ function recordTrace(trace: ActivityLogScenarioTrace): void {
   writeFileSync(join(directory, `${trace.scenario}.json`), `${JSON.stringify(trace)}\n`, "utf8");
 }
 
+// ─── #3533 acceptance: the pinned window covers the complete registered causal closure ──────────
+//
+// Every #3532 scenario already exercises a registered failure class (asserted above). This second
+// pass creates the SAME local incident candidate a real Keiko install would create for that
+// failure, through the same production entry points #3533 defines
+// (packages/keiko-server/src/observability/support-incident.ts's recordRegisteredFailureIncident,
+// the registered-failure trigger's own recorder; recordUserReportedIncident as the fallback for a
+// scenario whose only evidence is an uncorrelated state signal, never a discrete failure op — a
+// heartbeat sampling process-stall/memory-pressure, never itself `lifecycle: "failure"`), then
+// selects BOTH closures through the #3531 query engine (the same
+// resolveSupportSelection/executeSupportQuery pair `keiko support query --incident` and
+// `--correlation-id` run) and proves the incident's own selection is a superset of the failure's
+// direct correlation closure — i.e. every line a direct query for that one correlation would select
+// is present in what the pinned incident window resolves to. A scenario deliberately drives more
+// than one independent correlation in the same test (siblings, not one chain); the acceptance
+// criterion is that the incident's OWN closure is complete, not that every unrelated line the test
+// happens to also emit is swept in.
+function primaryFailureCluster(result: AnalyzeAllResult): OpCluster | undefined {
+  return result.clusters.find(
+    (cluster) => activityLogOperationSchema(cluster.op)?.lifecycle === "failure",
+  );
+}
+
+// A cluster's sample carries whatever the persisted `correlationId` field held, including the
+// closed `ACTIVITY_LOG_UNKNOWN_CORRELATION_ID` sentinel some diagnostic paths write when no
+// request-scoped id is in context (support-query.ts's own `knownCorrelation` applies the same
+// filter for the query engine's roots). Treating that shared, non-unique sentinel as a real
+// correlation id would create an incident rooted on it — a false closure, not this failure's own.
+function knownFailureCorrelationId(cluster: OpCluster): string | undefined {
+  const id = cluster.sampleCorrelationIds[0];
+  return id === undefined || id === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID ? undefined : id;
+}
+
+async function queryEvents(
+  stateDir: string,
+  selector: Parameters<typeof resolveSupportSelection>[0],
+): Promise<SupportQueryResult> {
+  const selection = await resolveSupportSelection(selector, stateDir);
+  return executeSupportQuery(stateDir, selection, DEFAULT_SUPPORT_QUERY_LIMITS, {
+    trigger: "query",
+  }).result;
+}
+
+async function proveIncidentWindowCoversClosure(
+  scenario: string,
+  stateDir: string,
+  result: AnalyzeAllResult,
+): Promise<void> {
+  const failure = primaryFailureCluster(result);
+  const correlationId = failure === undefined ? undefined : knownFailureCorrelationId(failure);
+  const creation =
+    failure === undefined
+      ? recordUserReportedIncident(stateDir, {})
+      : recordRegisteredFailureIncident(stateDir, {
+          op: failure.op,
+          errorKind: failure.errorKind ?? undefined,
+          correlationId,
+        });
+  expect(creation, `scenario ${scenario}: records an incident candidate for its failure`).not.toBe(
+    undefined,
+  );
+  if (creation === undefined) return;
+  if (creation.status === "rejected") {
+    expect.fail(`scenario ${scenario}: incident candidate was rejected (${creation.reason})`);
+  }
+
+  const incidentResult = await queryEvents(stateDir, {
+    incidentId: creation.record.incidentId,
+    filter: {},
+  });
+  expect(
+    incidentResult.diagnosticSufficiency.reasons,
+    `scenario ${scenario}: the incident's own selection is retained`,
+  ).not.toContain("evidence-not-retained");
+
+  if (correlationId === undefined) {
+    // A bare diagnostic op with no correlation of its own: there is no independent closure to
+    // compare against, only the pinned window itself, already proven non-empty above.
+    return;
+  }
+  const ownResult = await queryEvents(stateDir, { correlationId, filter: {} });
+  const incidentLines = new Set(incidentResult.events.map((event) => event.text));
+  const missing = ownResult.events
+    .map((event) => event.text)
+    .filter((text) => !incidentLines.has(text));
+  expect(
+    missing,
+    `scenario ${scenario}: the pinned window contains every line of the failure's own registered causal closure`,
+  ).toEqual([]);
+}
+
 /**
  * Reconstructs the scenario's persisted Activity Log through the support analyzer and asserts a
  * complete report. `scenario` must be a string literal: the op-catalog generator resolves the
- * scenario matrix from these calls.
+ * scenario matrix from these calls. Also proves the #3533 acceptance criterion: the local incident
+ * candidate this scenario's failure creates through the production path pins a window whose #3531
+ * query-engine selection contains every line of that failure's own registered causal closure (see
+ * `proveIncidentWindowCoversClosure`).
  */
-export function expectActivityLogScenario(
+export async function expectActivityLogScenario(
   scenario: string,
   run: ActivityLogScenarioRun,
-): ActivityLogScenarioTrace {
+): Promise<ActivityLogScenarioTrace> {
   const text = readPersistedActivityLog(run.stateDir);
   const elapsedMs = Math.max(1, Date.now() - run.startedAtMs);
   const result = analyzeLogText(text);
@@ -114,6 +231,7 @@ export function expectActivityLogScenario(
     .map((entry) => `${entry.failureClass}:${entry.reasons.join("+")}`);
   expect(incomplete, `scenario ${scenario}: every observed class is complete`).toEqual([]);
   expect(result.sufficiency.status, `scenario ${scenario}: report sufficiency`).toBe("complete");
+  await proveIncidentWindowCoversClosure(scenario, run.stateDir, result);
   const lineCount = persistedOps(text).length;
   const trace = {
     scenario,

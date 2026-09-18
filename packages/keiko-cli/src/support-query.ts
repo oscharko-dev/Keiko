@@ -764,10 +764,7 @@ function aggregateIntegrity(state: EngineState): IntegrityAggregate {
   const counts = emptyEvidenceCounts();
   for (const manifest of manifests) addCounts(counts, manifest);
   const boundary = processBoundaryAnomalies(manifests);
-  const anomalies = [
-    ...anomalyKinds(manifests),
-    ...[...boundary.kinds].map(representativeAnomaly),
-  ];
+  const anomalies = [...anomalyKinds(manifests), ...[...boundary.kinds].map(representativeAnomaly)];
   const classification = evidenceSummary(counts, anomalies).classification;
   const anomalyCount =
     manifests.reduce((sum, manifest) => {

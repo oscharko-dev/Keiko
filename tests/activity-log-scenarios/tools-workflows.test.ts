@@ -56,7 +56,7 @@ describe("Activity Log scenario: tools-workflows", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("reconstructs a terminated command to a complete crash trace", () => {
+  it("reconstructs a terminated command to a complete crash trace", async () => {
     const startedAtMs = Date.now();
     const evidence: CommandTerminationEvidence = {
       reason: "timeout",
@@ -65,7 +65,7 @@ describe("Activity Log scenario: tools-workflows", () => {
     };
     logCommandTermination(processServerLogSink(), "tools-workflows-crash-0001", evidence);
 
-    const trace = expectActivityLogScenario("tools-workflows.crash", {
+    const trace = await expectActivityLogScenario("tools-workflows.crash", {
       stateDir,
       startedAtMs,
       expectedOps: ["command.terminated"],
@@ -84,7 +84,7 @@ describe("Activity Log scenario: tools-workflows", () => {
     });
   });
 
-  it("reconstructs a refused tool binding to a complete dependency-failure trace", () => {
+  it("reconstructs a refused tool binding to a complete dependency-failure trace", async () => {
     const startedAtMs = Date.now();
     emitToolLifecycleEvent(toolCatalogLogPort(), {
       op: "tool-catalog.bind-unavailable",
@@ -96,7 +96,7 @@ describe("Activity Log scenario: tools-workflows", () => {
       reason: "handler-unavailable",
     });
 
-    const trace = expectActivityLogScenario("tools-workflows.dependency-failure", {
+    const trace = await expectActivityLogScenario("tools-workflows.dependency-failure", {
       stateDir,
       startedAtMs,
       expectedOps: ["tool-catalog.bind-unavailable"],
@@ -118,7 +118,7 @@ describe("Activity Log scenario: tools-workflows", () => {
     });
   });
 
-  it("reconstructs a discarded late tool completion to a complete loss trace", () => {
+  it("reconstructs a discarded late tool completion to a complete loss trace", async () => {
     const startedAtMs = Date.now();
     emitToolLifecycleEvent(toolCatalogLogPort(), {
       op: "tool-catalog.completion-discarded",
@@ -132,7 +132,7 @@ describe("Activity Log scenario: tools-workflows", () => {
       reason: "late-completion",
     });
 
-    const trace = expectActivityLogScenario("tools-workflows.loss", {
+    const trace = await expectActivityLogScenario("tools-workflows.loss", {
       stateDir,
       startedAtMs,
       expectedOps: ["tool-catalog.completion-discarded"],
@@ -152,7 +152,7 @@ describe("Activity Log scenario: tools-workflows", () => {
     });
   });
 
-  it("reconstructs a denied workspace root request to a complete rejection trace", () => {
+  it("reconstructs a denied workspace root request to a complete rejection trace", async () => {
     const startedAtMs = Date.now();
     recordWorkspaceRootDenial(
       new PathDeniedError("denied customer secret", "/private/customer/.env"),
@@ -162,7 +162,7 @@ describe("Activity Log scenario: tools-workflows", () => {
       },
     );
 
-    const trace = expectActivityLogScenario("tools-workflows.rejection", {
+    const trace = await expectActivityLogScenario("tools-workflows.rejection", {
       stateDir,
       startedAtMs,
       expectedOps: ["workspace.root.denied"],
