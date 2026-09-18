@@ -282,6 +282,7 @@ function unlinkGuardedPath(
 
 function archiveDescriptor(
   path: string,
+  target: string,
   options: SafeArtifactDirectoryEntryOptions,
 ): number | undefined {
   const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
@@ -293,12 +294,7 @@ function archiveDescriptor(
     const opened = fstatSync(descriptor, { bigint: true });
     const pathname = lstatSync(path, { bigint: true });
     if (
-      !opened.isFile() ||
-      !descriptorOwnerIsTrusted(opened) ||
-      !permissionIsPrivate(opened.mode) ||
-      (opened.nlink !== 1n && opened.nlink !== 2n) ||
-      opened.dev !== pathname.dev ||
-      opened.ino !== pathname.ino ||
+      !archiveSourceIsSafe(descriptor, path, target, opened, pathname) ||
       !guards.every(directoryGuardStillMatches)
     ) {
       throw safeFileError(options.artifactClass, "unsafe-target");
@@ -312,6 +308,26 @@ function archiveDescriptor(
     if (error instanceof SafeArtifactFileError) throw error;
     throw safeFileError(options.artifactClass, "unsafe-target");
   }
+}
+
+function archiveSourceIsSafe(
+  descriptor: number,
+  path: string,
+  target: string,
+  opened: BigIntStats,
+  pathname: BigIntStats,
+): boolean {
+  const checks = [
+    opened.isFile(),
+    descriptorOwnerIsTrusted(opened),
+    permissionIsPrivate(opened.mode),
+    new Set([1n, 2n]).has(opened.nlink),
+    opened.dev === pathname.dev,
+    opened.ino === pathname.ino,
+  ];
+  if (!checks.every(Boolean)) return false;
+  if (opened.nlink === 1n) return true;
+  return linkedArchiveMatches(descriptor, path, target);
 }
 
 function linkedArchiveMatches(descriptor: number, source: string, target: string): boolean {
@@ -371,7 +387,7 @@ export function archiveSafeArtifactFile(
   target: string,
   options: SafeArtifactDirectoryEntryOptions,
 ): SafeArtifactArchiveResult {
-  const descriptor = archiveDescriptor(source, options);
+  const descriptor = archiveDescriptor(source, target, options);
   if (descriptor === undefined) return "source-missing";
   try {
     const linked = runGuardedDirectoryMutation(
@@ -451,6 +467,24 @@ function directoryAuthorityIsSafe(stat: BigIntStats): boolean {
   const writableByOthers = (stat.mode & 0o022n) !== 0n;
   const rootStickyDirectory = stat.uid === 0n && (stat.mode & 0o1000n) !== 0n;
   return ownerIsTrusted && (!writableByOthers || rootStickyDirectory);
+}
+
+function directoryAuthorityIsOwnerOnly(stat: BigIntStats): boolean {
+  if (process.platform === "win32") return true;
+  const effectiveUser = process.geteuid?.();
+  return (
+    effectiveUser !== undefined &&
+    stat.uid === BigInt(effectiveUser) &&
+    (stat.mode & 0o777n) === BigInt(DIR_MODE)
+  );
+}
+
+function isTrustedArtifactDirectory(path: string, trustedRoot: string): boolean {
+  const fromRoot = relative(resolve(trustedRoot), resolve(path));
+  return (
+    fromRoot === "" ||
+    (!fromRoot.startsWith(`..${sep}`) && fromRoot !== ".." && !isAbsolute(fromRoot))
+  );
 }
 
 function directoryChain(path: string): readonly string[] {
@@ -579,6 +613,12 @@ function captureDirectoryGuards(
   const guards: DirectoryGuard[] = [];
   try {
     for (const path of containedDirectories(trustedRoot, targetPath, artifactClass)) {
+      if (
+        isTrustedArtifactDirectory(path, trustedRoot) &&
+        !directoryAuthorityIsOwnerOnly(lstatDirectory(path, artifactClass))
+      ) {
+        throw safeFileError(artifactClass, "unsafe-ancestor");
+      }
       guards.push(openDirectoryGuard(path, artifactClass));
     }
     return guards;

@@ -41,7 +41,7 @@ function runHelper(cwd: string, input: string): ReturnType<typeof spawnSync> {
 
 function request(
   cwd: string,
-  operation: "link" | "unlink",
+  operation: "link" | "rename" | "unlink",
   source: string,
   target?: string,
 ): SafeArtifactDirectoryMutationRequest {
@@ -68,7 +68,7 @@ function runtimeIo(
 }
 
 function runtimeRequest(
-  operation: "link" | "unlink",
+  operation: "link" | "rename" | "unlink",
   source = "source",
   target?: string,
 ): SafeArtifactDirectoryMutationRequest {
@@ -107,7 +107,7 @@ describe("safe artifact directory mutation helper", () => {
     expect(readFileSync(source, "utf8")).toBe("preserved");
   });
 
-  it("links and unlinks only validated basenames in the attested current directory", () => {
+  it("links, renames, and unlinks only validated basenames in the attested current directory", () => {
     const cwd = freshDirectory();
     const source = join(cwd, "source");
     const target = join(cwd, "target");
@@ -123,6 +123,10 @@ describe("safe artifact directory mutation helper", () => {
     );
     expect(lstatSync(source).nlink).toBe(1);
     expect(readFileSync(source, "utf8")).toBe("artifact");
+    expect(runHelper(cwd, JSON.stringify(request(cwd, "rename", "source", "target"))).status).toBe(
+      SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success,
+    );
+    expect(readFileSync(target, "utf8")).toBe("artifact");
   });
 });
 
@@ -153,11 +157,12 @@ describe("safe artifact directory mutation runtime", () => {
     expect(directoryMatches).not.toHaveBeenCalled();
   });
 
-  it("executes validated link and unlink requests and rechecks the directory identity", () => {
+  it("executes validated link, rename, and unlink requests and rechecks directory identity", () => {
     const link = vi.fn();
+    const rename = vi.fn();
     const unlink = vi.fn();
     const directoryMatches = vi.fn(() => true);
-    const io = runtimeIo({ directoryMatches, link, unlink });
+    const io = runtimeIo({ directoryMatches, link, rename, unlink });
 
     expect(runSafeArtifactDirectoryMutation(runtimeRequest("link", "source", "target"), io)).toBe(
       SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success,
@@ -165,7 +170,11 @@ describe("safe artifact directory mutation runtime", () => {
     expect(runSafeArtifactDirectoryMutation(runtimeRequest("unlink"), io)).toBe(
       SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success,
     );
+    expect(runSafeArtifactDirectoryMutation(runtimeRequest("rename", "source", "target"), io)).toBe(
+      SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success,
+    );
     expect(link).toHaveBeenCalledWith("source", "target");
+    expect(rename).toHaveBeenCalledWith("source", "target");
     expect(unlink).toHaveBeenCalledWith("source");
     expect(directoryMatches).toHaveBeenCalledWith(1n, 2n);
   });

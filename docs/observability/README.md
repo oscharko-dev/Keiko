@@ -8,7 +8,7 @@ log itself, how its lines join together across a request's lifecycle, and how to
 [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md), which records
 the design decisions behind everything described here.
 
-## File location and deferred rotation
+## File location, daily rotation, and retention
 
 Normal runtime activity lives at `<stateDir>/logs/server.log` — `<stateDir>` is `./.keiko` by
 default, or wherever `--state-dir` / `KEIKO_STATE_DIR` points. Commands that must audit or remove
@@ -41,16 +41,35 @@ with a closed safe-artifact error. Keiko never silently substitutes a null sink 
 activity log; an in-memory/null sink exists only where a caller explicitly selected one, such as a
 unit-test composition without a state directory.
 
-Rotation and retention are deliberately deferred to #3530's bounded append-only segment design.
-Node does not expose descriptor-relative rename/unlink operations, so mutating dated files through
-absolute paths leaves a final same-UID ancestor-substitution window. Keiko therefore keeps
-appending to the verified `server.log` instead of risking an overwrite or deletion outside the
-selected state root. At the first write after each UTC day boundary it emits one correlated
-`server-log.rotation` warning with `persistenceStatus: "deferred"`,
-`durabilityAssurance: "unchanged"`, and `retentionStatus: "deferred"`. No archive, stage, marker,
-or retention deletion is attempted.
+At the first write after each UTC day boundary, Keiko seals the finished current file as exactly one
+`server-YYYY-MM-DD.log` archive and opens a fresh `server.log`. The default retention window is
+seven dated archives; an explicitly configured positive `retentionDays` value replaces that default.
+Pruning recognizes only real calendar dates in the closed archive grammar and never deletes a
+lookalike, backup, stage, or unrelated file.
 
-As an interim, non-mutating capacity safeguard, the sink emits one correlated
+The filesystem boundary is the operating-system user. The selected state and log directories must
+be owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected owner's inherited
+ACL on Windows). Keiko rechecks their device/inode identity around every link, rename, and unlink.
+Before retention removes an archive, an opened handle must prove that the target is a regular,
+owner-matched, private, single-link file and still names the checked pathname.
+
+Cross-process rotation uses a hard link to publish the dated destination without replacement:
+`EEXIST` means another process won, and the loser preserves that archive. Only errors that state the
+filesystem does not support hard links permit the guarded rename fallback. A failed, unsafe, or
+ambiguous mutation leaves evidence in place and never escapes into the caller.
+
+`server-log.rotation` records the closed `persistenceStatus`, `rotationReason`, `archivedCount`,
+`retentionStatus`, `prunedCount`, and `retainedCount`. A mutation failure is a body-free
+`durability-failed` event with partial completeness; paths and filenames never enter the event.
+
+There is a documented residual same-user race: Node has no portable descriptor-relative
+link/rename/unlink API, and the rename fallback cannot make a no-replace promise on filesystems that
+lack hard links. A process already running as the same OS user can act between pathname checks. The
+implementation narrows that window with owner-private directories, held directory/file handles,
+pre/post identity checks, and the non-replacing hard-link winner. This residual risk does not justify
+removing or postponing bounded retention.
+
+As an additional non-mutating capacity safeguard, the sink emits one correlated
 `server-log.capacity-warning` when the current file reaches 256 MiB. The line reports only the
 observed byte count, threshold, `operatorAction: "stop-export-replace"`, and
 `mutationStatus: "not-attempted"`; it does not rotate, truncate, rename, or delete anything. To
@@ -65,7 +84,8 @@ recover capacity safely:
 4. Restart Keiko so the guarded sink creates a new `server.log`; retain the archived original until
    the applicable evidence policy permits disposal.
 
-#3530 remains responsible for automatic bounded segments and retention.
+Immutable byte-bounded segments may replace daily files later, but the daily retention bound remains
+active until the replacement is complete on the same revision.
 
 ## Log level
 

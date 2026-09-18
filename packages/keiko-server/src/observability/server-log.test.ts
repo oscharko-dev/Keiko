@@ -14,9 +14,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
@@ -341,6 +342,115 @@ function readCallerRecords(stateDir: string): (Record<string, unknown> | null)[]
   return readRawRecords(stateDir).filter(
     (record) => record === null || !FILESYSTEM_EVIDENCE_OPS.has(record.op),
   );
+}
+
+const rotationWorkerModule = pathToFileURL(
+  resolve(dirname(fileURLToPath(import.meta.url)), "../../dist/observability/server-log.js"),
+).href;
+const rotationWorkerContractsModule = pathToFileURL(
+  resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../keiko-contracts/dist/observability.js",
+  ),
+).href;
+
+const ROTATION_WORKER_SOURCE = `
+const [moduleUrl, contractsUrl, stateDir, barrier, workerId] = process.argv.slice(1);
+let clock = "2026-09-17T23:59:00.000Z";
+const RealDate = Date;
+globalThis.Date = class extends RealDate {
+  constructor(...args) { super(...(args.length === 0 ? [clock] : args)); }
+  static now() { return new RealDate(clock).valueOf(); }
+};
+const { createFileServerLogSink } = await import(moduleUrl);
+const { activityLogEvent, defineActivityLogOperation } = await import(contractsUrl);
+const { existsSync } = await import("node:fs");
+const operation = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server-log.capacity-warning",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.capacityWarningEvidence",
+  fields: {
+    artifactClass: { type: "string", dataClass: "closed-enum", required: true, values: ["activity-log"] },
+    capacityStatus: { type: "string", dataClass: "closed-enum", required: true, values: ["warning-threshold-reached"] },
+    observedSizeBytes: { type: "integer", dataClass: "count", required: true },
+    warningThresholdBytes: { type: "integer", dataClass: "count", required: true },
+    operatorAction: { type: "string", dataClass: "closed-enum", required: true, values: ["stop-export-replace"] },
+    mutationStatus: { type: "string", dataClass: "closed-enum", required: true, values: ["not-attempted"] },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-capacity"],
+  proofIds: ["server-log.capacity-warning.threshold"],
+  releaseImpact: "patch",
+});
+const event = (day) => activityLogEvent(operation, {
+  level: "warn",
+  correlationId: "rotation-worker-" + workerId,
+  errorKind: "publish-unsupported",
+}, {
+  artifactClass: "activity-log",
+  capacityStatus: "warning-threshold-reached",
+  observedSizeBytes: day * 100 + Number(workerId),
+  warningThresholdBytes: 999999,
+  operatorAction: "stop-export-replace",
+  mutationStatus: "not-attempted",
+  completeness: "complete",
+  loss: "none",
+});
+const sink = createFileServerLogSink(stateDir, { level: "debug" });
+sink.write(event(1));
+process.stdout.write("ready\\n");
+while (!existsSync(barrier)) await new Promise((resolve) => setTimeout(resolve, 5));
+clock = "2026-09-18T00:00:30.000Z";
+sink.write(event(2));
+sink.close?.();
+`;
+
+function startRotationWorker(
+  stateDir: string,
+  barrier: string,
+  workerId: number,
+): ChildProcessWithoutNullStreams {
+  return spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      ROTATION_WORKER_SOURCE,
+      rotationWorkerModule,
+      rotationWorkerContractsModule,
+      stateDir,
+      barrier,
+      String(workerId),
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
+function waitForWorkerReady(child: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise((resolveReady, reject) => {
+    child.once("error", reject);
+    child.stdout.once("data", (chunk) => {
+      if (String(chunk).includes("ready")) resolveReady();
+      else reject(new Error("rotation worker did not become ready"));
+    });
+  });
+}
+
+function waitForWorkerExit(child: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise((resolveExit, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolveExit();
+      else reject(new Error(`rotation worker exited ${String(code)}`));
+    });
+  });
 }
 
 describe("server activity log", () => {
@@ -1179,16 +1289,49 @@ describe("server activity log", () => {
     const logsDir = join(stateDir, "logs");
     const sink = createFileServerLogSink(stateDir, { retentionDays: 2 });
     sink.write({ category: "http", op: "bounded-day-20" });
-    for (const day of ["2026-08-17", "2026-08-18", "2026-08-19"]) {
-      writeFileSync(join(logsDir, `server-${day}.log`), "seed\n", { mode: 0o600 });
+    for (const day of [21, 22, 23, 24]) {
+      vi.setSystemTime(new Date(`2026-08-${String(day)}T00:00:30Z`));
+      sink.write({ category: "http", op: `bounded-day-${String(day)}` });
     }
 
-    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    sink.write({ category: "http", op: "bounded-day-21" });
-
     expect(
-      readdirSync(logsDir).filter((name) => /^server-2026-08-(?:19|20)\.log$/u.test(name)),
-    ).toStrictEqual(["server-2026-08-19.log", "server-2026-08-20.log"]);
+      readdirSync(logsDir).filter((name) => /^server-\d{4}-\d{2}-\d{2}\.log$/u.test(name)),
+    ).toStrictEqual(["server-2026-08-22.log", "server-2026-08-23.log"]);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["bounded-day-24"]);
+  });
+
+  it("keeps both process histories across one shared UTC day boundary", async () => {
+    const barrier = join(stateDir, "rotate-now");
+    const workers = [
+      startRotationWorker(stateDir, barrier, 1),
+      startRotationWorker(stateDir, barrier, 2),
+    ];
+    await Promise.all(workers.map(waitForWorkerReady));
+    writeFileSync(barrier, "rotate", { mode: 0o600 });
+    await Promise.all(workers.map(waitForWorkerExit));
+
+    const logsDir = join(stateDir, "logs");
+    expect(readdirSync(logsDir).filter((name) => name.startsWith("server-"))).toStrictEqual([
+      "server-2026-09-17.log",
+    ]);
+    const archived = readFileSync(join(logsDir, "server-2026-09-17.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const current = readLines(stateDir);
+    expect(
+      archived
+        .filter((line) => line.op === "server-log.capacity-warning")
+        .map((line) => line.observedSizeBytes)
+        .sort(),
+    ).toStrictEqual([101, 102]);
+    expect(
+      current
+        .filter((line) => line.op === "server-log.capacity-warning")
+        .map((line) => line.observedSizeBytes)
+        .sort(),
+    ).toStrictEqual([201, 202]);
+    expect(current.filter((line) => line.op === "server-log.rotation")).toHaveLength(2);
   });
 
   it("warns once at the size threshold without rotating, truncating, or deleting", () => {
@@ -1353,8 +1496,10 @@ describe("server activity log", () => {
     const parkedLogs = join(stateDir, "logs-parked");
     const outside = mkdtempSync(join(tmpdir(), "keiko-server-log-outside-"));
     const outsideVictim = join(outside, "server.log");
+    const outsideArchive = join(outside, "server-2026-08-19.log");
     const outsideStage = join(outside, `.keiko-server-rotation-${"a".repeat(32)}.stage`);
     writeFileSync(outsideVictim, "outside-victim", { mode: 0o640 });
+    writeFileSync(outsideArchive, "outside-archive", { mode: 0o600 });
     writeFileSync(outsideStage, "outside-stage", { mode: 0o640 });
     chmodSync(outsideVictim, 0o640);
     renameSync(logsDir, parkedLogs);
@@ -1365,6 +1510,7 @@ describe("server activity log", () => {
       sink.write({ category: "indexing", op: "during-parent-redirect" });
 
       expect(readFileSync(outsideVictim, "utf8")).toBe("outside-victim");
+      expect(readFileSync(outsideArchive, "utf8")).toBe("outside-archive");
       expect(readFileSync(outsideStage, "utf8")).toBe("outside-stage");
       expect(statSync(outsideVictim).mode & 0o777).toBe(0o640);
       expect(statSync(outsideStage).mode & 0o777).toBe(0o640);
@@ -1374,8 +1520,27 @@ describe("server activity log", () => {
       rmSync(outside, { recursive: true, force: true });
     }
 
-    sink.write({ category: "indexing", op: "after-parent-restore" });
+    sink.write({
+      category: "indexing",
+      op: "after-parent-restore",
+      correlationId: "directory-restore-evidence",
+    });
     expect(readCallerLines(stateDir).map((line) => line.op)).toContain("after-parent-restore");
+    expect(readLines(stateDir)).toContainEqual(
+      expect.objectContaining({
+        op: "server-log.rotation",
+        correlationId: "directory-restore-evidence",
+        errorKind: "durability-failed",
+        persistenceStatus: "failed",
+        rotationReason: "mutation-failed",
+        archivedCount: 0,
+        retentionStatus: "unchanged",
+        prunedCount: 0,
+        retainedCount: 1,
+        completeness: "partial",
+        loss: "none",
+      }),
+    );
     expect(readdirSync(logsDir)).toStrictEqual(["server.log"]);
   });
 

@@ -32,6 +32,7 @@ import {
   MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
   SafeArtifactFileError,
   acknowledgeSafeArtifactFileSet,
+  archiveSafeArtifactFile,
   chmodIfPresent,
   ensureDirHardened,
   isSafeArtifactClass,
@@ -39,6 +40,7 @@ import {
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
   recoverSafeArtifactFileSet,
+  removeSafeArtifactFile,
   replaceSafeArtifactFile,
   safeArtifactContainmentAssurance,
   safeArtifactPublicationSlot,
@@ -104,7 +106,11 @@ function performMutation(
     return;
   }
   if (invocation.targetPath === undefined) throw new Error("expected mutation target");
-  fs.linkSync(invocation.sourcePath, invocation.targetPath);
+  if (invocation.operation === "link") {
+    fs.linkSync(invocation.sourcePath, invocation.targetPath);
+  } else {
+    fs.renameSync(invocation.sourcePath, invocation.targetPath);
+  }
 }
 
 function mockedMutationResult(
@@ -2416,6 +2422,149 @@ describe("publishSafeArtifactFileSet", () => {
     }
     expect(thrown).toEqual(expect.objectContaining({ kind: "open-failed" }));
     expect(String(thrown)).not.toContain(base);
+  });
+});
+
+describe("bounded Activity Log mutations", () => {
+  it("publishes one hard-link archive and leaves it as a private single-link file", () => {
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const archive = join(base, "server-2026-09-17.log");
+    writeFileSync(source, "finished-day\n", { mode: FILE_MODE });
+
+    expect(
+      archiveSafeArtifactFile(source, archive, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      }),
+    ).toBe("hard-link-winner");
+    expect(existsSync(source)).toBe(false);
+    expect(readFileSync(archive, "utf8")).toBe("finished-day\n");
+    expect(statSync(archive).nlink).toBe(1);
+    expect(statSync(archive).mode & 0o777).toBe(FILE_MODE);
+  });
+
+  it("never replaces an archive that already won the closed destination name", () => {
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const archive = join(base, "server-2026-09-17.log");
+    writeFileSync(source, "current-day\n", { mode: FILE_MODE });
+    writeFileSync(archive, "winning-day\n", { mode: FILE_MODE });
+
+    expect(
+      archiveSafeArtifactFile(source, archive, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      }),
+    ).toBe("archive-exists");
+    expect(readFileSync(source, "utf8")).toBe("current-day\n");
+    expect(readFileSync(archive, "utf8")).toBe("winning-day\n");
+  });
+
+  it("finalizes the genuine EEXIST winner link without replacing its archive", () => {
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const archive = join(base, "server-2026-09-17.log");
+    writeFileSync(source, "finished-day\n", { mode: FILE_MODE });
+    linkSync(source, archive);
+
+    expect(
+      archiveSafeArtifactFile(source, archive, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      }),
+    ).toBe("archive-exists");
+    expect(existsSync(source)).toBe(false);
+    expect(readFileSync(archive, "utf8")).toBe("finished-day\n");
+    expect(statSync(archive).nlink).toBe(1);
+  });
+
+  it("rejects an unrelated hard-link surprise without creating an archive target", () => {
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const unrelated = join(base, "unrelated.log");
+    const archive = join(base, "server-2026-09-17.log");
+    writeFileSync(source, "finished-day\n", { mode: FILE_MODE });
+    linkSync(source, unrelated);
+
+    expect(() =>
+      archiveSafeArtifactFile(source, archive, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "unsafe-target" }));
+    expect(existsSync(archive)).toBe(false);
+    expect(readFileSync(source, "utf8")).toBe("finished-day\n");
+    expect(readFileSync(unrelated, "utf8")).toBe("finished-day\n");
+  });
+
+  it("uses rename only after the hard-link helper reports unsupported", async () => {
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const archive = join(base, "server-2026-09-17.log");
+    writeFileSync(source, "finished-day\n", { mode: FILE_MODE });
+    const operations: SafeArtifactDirectoryMutationOperation[] = [];
+    vi.resetModules();
+    await mockDirectoryMutation((invocation, perform) => {
+      operations.push(invocation.operation);
+      if (invocation.operation === "link") {
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.unsupported;
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
+    const isolated = await import("./fs-hardening.js");
+
+    expect(
+      isolated.archiveSafeArtifactFile(source, archive, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      }),
+    ).toBe("rename-fallback");
+    expect(operations).toStrictEqual(["link", "rename"]);
+    expect(readFileSync(archive, "utf8")).toBe("finished-day\n");
+  });
+
+  it("unlinks only an opened owner-private single-link regular file", () => {
+    const base = freshDir();
+    const target = join(base, "server-2026-09-16.log");
+    const peer = join(base, "peer.log");
+    writeFileSync(target, "archive\n", { mode: FILE_MODE });
+    linkSync(target, peer);
+
+    expect(() => {
+      removeSafeArtifactFile(target, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      });
+    }).toThrow(expect.objectContaining({ kind: "unsafe-target" }));
+    expect(readFileSync(target, "utf8")).toBe("archive\n");
+    expect(readFileSync(peer, "utf8")).toBe("archive\n");
+
+    unlinkSync(peer);
+    removeSafeArtifactFile(target, {
+      artifactClass: "activity-log",
+      trustedRoot: base,
+    });
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("rejects a group-readable trusted artifact directory before mutation", () => {
+    if (process.platform === "win32") return;
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const archive = join(base, "server-2026-09-17.log");
+    writeFileSync(source, "finished-day\n", { mode: FILE_MODE });
+    chmodSync(base, 0o750);
+
+    expect(() =>
+      archiveSafeArtifactFile(source, archive, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "unsafe-ancestor" }));
+    expect(readFileSync(source, "utf8")).toBe("finished-day\n");
+    expect(existsSync(archive)).toBe(false);
   });
 });
 

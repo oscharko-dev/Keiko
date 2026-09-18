@@ -17,10 +17,12 @@ anything in the original epic is still pending. `keiko support analyze` exposes
 and op-cluster machinery D9 describes, so that machinery is reachable directly from the CLI, not
 only by importing it — see D9.
 
-Amended by #3528 on 2026-09-17: the path-based day-rotation and retention mutation inherited from
-#3230 is retired fail-closed. Node cannot make its final absolute-path rename/unlink step immune to
-a same-UID ancestor substitution, so `server.log` remains append-only and emits explicit deferred
-rotation/retention evidence until #3530 supplies bounded append-only segments.
+Amended by #3528 on 2026-09-18: daily rotation and retention remain the active disk bound until
+immutable segments replace them. Their mutation boundary is hardened to the operating-system user:
+owner-private non-redirected directories, held handle/path identity checks, a non-replacing hard-link
+winner across processes, rename fallback only when hard links are unsupported, and verified
+single-link archive handles before retention unlink. The residual same-user pathname race is explicit
+and does not authorize unbounded growth.
 
 Amended by #3529 on 2026-09-17: the heuristic operation inventory is now a non-authoritative
 migration view. Canonical TypeScript-resolved registrations form the versioned production registry,
@@ -129,7 +131,7 @@ the tuple alone.
 
 **The sequence is monotonic and may contain gaps.** Each non-filtered
 `createFileSinkFacade.write` invocation reserves one identity before boundary handling or opening the
-file. The first record that invocation actually persists — safe-open evidence, deferred-rotation
+file. The first record that invocation actually persists — safe-open evidence, rotation/retention
 evidence, or the caller record — uses that reserved identity; any additional records allocate their
 identities immediately before their physical writes. An opening or write failure never rolls an
 identity back. Two callers racing the same failure therefore cannot reuse the number that follows it;
@@ -453,7 +455,8 @@ coherent noun groups the artifact producer and its own consumer under one verb s
   --i-understand-this-is-unredacted] [--include-evidence RUNID[,RUNID...]]` composes existing,
   already-hardened pieces — the evidence index listing, the local-state audit summary, a redacted
   config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a plain
-  read-and-concatenate of the current log plus any legacy rotation archives — into one manifest-led
+  read-and-concatenate of the current log plus retained daily archives and compatible legacy
+  rotation files — into one manifest-led
   `.jsonl` bundle, plus a
   `<output>.sha256` integrity sidecar (D12). No new redaction logic is written for the bulk of the
   file — every log line copied in is a line that was already redacted at write time. `ui.log` (a
@@ -699,6 +702,44 @@ The agent-reading step this adds: **for a failed request**, read `routeTemplate`
 `reason`, then look for a `client.diagnostic` line sharing the `correlationId` to learn what the
 browser saw. Everything on these lines is a count, a closed label, a template, or an id.
 
+### D14 — Daily rotation remains bounded and uses the OS-user filesystem boundary
+
+Until immutable byte-bounded segments replace it, the current persistence format keeps the existing
+UTC-day bound: `server.log` becomes one `server-YYYY-MM-DD.log` archive at the next write after a
+day boundary, and the oldest closed-grammar archives are pruned until exactly the configured
+`retentionDays` window remains (seven by default). A candidate name is admitted only when its date is
+a real ISO calendar day; suffixes, stages, backups, malformed dates, and unrelated files are never
+retention targets. A successor storage design must replace this bound in the same revision rather
+than remove it first.
+
+The trust boundary is the operating-system user. The configured state/log directory is accepted only
+while it remains owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected owner's
+inherited ACL on Windows). Directory device/inode identity is captured and rechecked before and after
+every link, rename, and unlink. Retention opens each target without following its final symlink and
+requires a regular, owner-matched, private, single-link file whose descriptor and pathname identities
+agree immediately before unlink. The cached append descriptor retains D2's `ensureHandle`/
+`handleStillCurrent` stale-inode protection before and after every caller write.
+
+Cross-process archive publication uses `link(2)` as a non-replacing winner primitive. `EEXIST`
+means a peer already published the destination; Keiko verifies and preserves it rather than
+overwriting it. The winner (or a peer observing the same two-link inode) removes only the current
+name, leaving the archive as a single-link file. Rename is reachable only for filesystem error codes
+that explicitly classify hard links as unsupported. Ordinary permission, I/O, link-count, unsafe
+target, and identity failures do not enter that fallback.
+
+Every boundary attempt produces body-free typed `server-log.rotation` evidence once persistence is
+available: closed persistence/rotation/retention outcomes and reasons plus archived, pruned, and
+retained counts. Mutation failures are partial `durability-failed` evidence and never escape into
+the product operation that triggered the write.
+
+**Residual same-user race.** Node exposes no portable descriptor-relative link/rename/unlink API,
+and a rename fallback on a filesystem without hard links cannot provide a portable no-replace
+primitive. A process already executing as the same OS user can therefore act in the narrow interval
+between pathname checks. Owner-private directories, held descriptors, pre/post identity checks, the
+hard-link winner, closed names, and target-handle verification narrow and detect that interval; they
+do not claim to eliminate it. This residual is part of the stated OS-user threat model and is never
+a reason to disable or defer bounded retention.
+
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract
@@ -816,6 +857,11 @@ rather than left implicit across the Decision section:
   it in `legacyLineCount`, and surfaces exactly one `warnings[]` entry naming that count (D9, D10).
   An agent must read `warnings[]` before trusting that every line in a bundle came from an ordered
   v2 process lifetime.
+- Daily rotation and retention remain a real bound until immutable segments replace them (D14).
+  Cross-process publication cannot replace a winning archive, pruning cannot select a non-grammar
+  name or an unverified target, and every outcome is reconstructable from typed body-free evidence.
+  The documented residual same-user pathname race is a limit of Node's portable filesystem API,
+  not permission to remove the bound.
 - Process lifecycle events (`process.started`/`process.heartbeat`/`process.exiting`) carry no
   `correlationId` and so never enter a per-correlation timeline; the analyzer's `processes[]`
   summaries (D9) are the reconstruction path for them, keyed by `(pid, instanceId)` rather than by

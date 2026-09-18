@@ -450,11 +450,16 @@ system that exists, never beside it:
   emitted line(s) — `op`, `correlationId`, `errorKind`, the fields that carry the evidence — and a
   change to a user-visible or failure-prone surface is checked against `keiko support analyze`
   showing the operation in its timeline. The pull-request template carries this as a checklist item.
-- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log,
-  bounded through append-only segments and deterministic retention; it must not create a second
-  logical stream or a path-based replacement shortcut. Until segmented persistence is present, do
-  not claim the append-only current file is bounded. Segment and retention changes preserve
-  ordering, compatibility classification, explicit truncation/loss, and support-export reconstruction.
+- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log;
+  it must not create a second logical stream or a path-based replacement shortcut. Until immutable
+  segments replace daily files, the current file rotates at UTC day boundaries and dated archives
+  are retained for the configured bounded window. Never remove an existing disk bound while a
+  successor is unfinished. Rotation and pruning operate only inside an owner-private,
+  non-redirected directory, on closed-grammar names whose opened handles prove regular,
+  owner-matched files; hard-link publication selects one cross-process archive winner, and rename is
+  only the fallback on filesystems that report hard links unsupported. Segment and retention
+  changes preserve ordering, compatibility classification, explicit truncation/loss, and
+  support-export reconstruction.
 - **Saved reports remain under human control.** A support export or replay fixture is written only
   to the local destination the user selected. Keiko does not upload it, attach it to GitHub, open an
   issue, or otherwise disclose it automatically. Content-bearing optional sections require their

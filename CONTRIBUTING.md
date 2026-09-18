@@ -55,6 +55,14 @@ as applicable. Saved support reports remain local artifacts written to a user-se
 publishing or attaching one to GitHub or another external system requires separate explicit user
 authority and is never part of logging or export.
 
+Activity Log storage must remain bounded on every intermediate change. The current daily-file
+implementation publishes one immutable `server-YYYY-MM-DD.log` archive per UTC boundary and retains
+only the configured number of closed-grammar archives. Filesystem mutation is limited to verified
+owner-private, non-redirected directories and opened regular owner-matched targets. Cross-process
+rotation uses a non-replacing hard-link winner; rename is permitted only when the filesystem reports
+hard links unsupported. Any successor segment design must replace this bound atomically rather than
+remove it first.
+
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into
