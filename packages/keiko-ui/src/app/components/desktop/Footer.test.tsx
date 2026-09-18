@@ -14,6 +14,7 @@ import { Footer } from "./Footer";
 import { HEALTH_POLL_INTERVAL_MS } from "./hooks/useBackendHealth";
 import type { AppWindow } from "./windows/types";
 import { fetchHealth } from "@/lib/api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 vi.mock("@/lib/api", () => ({
   fetchHealth: vi.fn(),
@@ -313,6 +314,32 @@ describe("Footer — diagnostic readiness", () => {
 
     expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
     expect(screen.queryByText("Diagnostics degraded")).not.toBeInTheDocument();
+  });
+
+  it("reports a failed health read once per failure streak, by class only", async () => {
+    vi.useFakeTimers();
+    const reports: string[] = [];
+    setClientDiagnosticWriter((message) => reports.push(message));
+    try {
+      fetchHealthMock
+        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"))
+        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"))
+        .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: ready })
+        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"));
+      renderFooter();
+      await advance(0);
+      await advance(HEALTH_POLL_INTERVAL_MS);
+      expect(reports).toEqual(["[keiko] health read failed: TypeError"]);
+
+      await advance(HEALTH_POLL_INTERVAL_MS);
+      await advance(HEALTH_POLL_INTERVAL_MS);
+      expect(reports).toEqual([
+        "[keiko] health read failed: TypeError",
+        "[keiko] health read failed: TypeError",
+      ]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 
   it("stops reading health once the footer unmounts", async () => {

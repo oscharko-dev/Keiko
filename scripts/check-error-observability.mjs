@@ -16,6 +16,8 @@
 //   9. memory-consolidation.log-port.sink-failed — keiko-memory-consolidation's own structural log port
 //  10. memory-consolidation.summary-fallback — keiko-memory-consolidation's runConsolidation fallback path
 //  11. security.macos-keychain.fallback — keiko-security's own structural log port
+//  12. quality-intelligence.capsule-store-open — keiko-server, the QI capsule resolver's store-open
+//                                         catch, which swallowed the failure before #3532
 //
 // Before this widening the gate forced exactly ONE synchronous throw through the top-level server.ts
 // catch and asserted against exactly one produced record — real coverage of the other ~100
@@ -35,9 +37,10 @@
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
@@ -162,6 +165,18 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
   ],
   [
+    "packages/keiko-cli/src/ui.ts:warnShutdownHookFailed",
+    "The process warning is the last independent channel; its own failure has no channel left.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-readiness.ts:activityLogCatalogCoherent",
+    "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-logger.ts:isMandatoryActivityLogEvent",
+    "A hostile registration accessor makes the event ordinary instead of failing the emitting call.",
+  ],
+  [
     "packages/keiko-contracts/src/observability.ts:registrationMatchesCanonical",
     "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
   ],
@@ -245,13 +260,115 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "packages/keiko-server/src/observability/server-log.ts:safeArtifactErrorKind",
     "A hostile prototype trap is reduced to absent data inside the last-resort log sink.",
   ],
+  // #3530 segmented Activity Log store: fail-closed probes, and failure outcomes that a registered
+  // storage event persists.
   [
-    "packages/keiko-server/src/observability/server-log.ts:handleStillCurrent",
-    "A failed file-identity check invalidates the cached handle and forces a safe reopen.",
+    "packages/keiko-server/src/observability/activity-log-store.ts:regularFileStat",
+    "A vanished or unreadable entry is classified as absent from the Activity Log listing.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:currentHandleIdentity",
-    "A failed file-identity check invalidates the cached handle and forces a safe reopen.",
+    "packages/keiko-server/src/observability/activity-log-store.ts:readPinRecord",
+    "An unreadable pin record protects nothing; the caller removes it and persists pin.expired invalid-record.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:processIsAlive",
+    "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:lastCompleteLineOp",
+    "An unparsable tail line is classified as carrying no seal line.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:lineSeq",
+    "An unparsable line is classified as carrying no sequence number.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:activityLogSegmentSeqSpan",
+    "An unreadable span is reported as unknown in the registered quota-exhaustion marker.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:activityLogFreeBytes",
+    "Free space that cannot be measured is reported as absent, never as plenty.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:activeLogKey",
+    "A directory that cannot be resolved is keyed by its lexical path; opening it still fails closed.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:closeQuietly",
+    "Best-effort close of a descriptor the writer has already stopped using.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:currentSegmentSize",
+    "A failed identity read makes the caller treat the segment as mutated and fail closed.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:sharesInode",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:pathMissing",
+    "The catch classifies the closed ENOENT result of an existence probe.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:readSealedTail",
+    "An unreadable tail is persisted as tailState unknown in the registered recovery event.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:finishInterruptedSeal",
+    "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:settleOrphanDescriptor",
+    "Best-effort fsync and read-only mode on a recovered segment; the sealing rename still decides.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:recoverOrphanedSegment",
+    "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:removePinRecordQuietly",
+    "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:tightenLegacyFile",
+    "A legacy file that cannot be narrowed stays in place; the retention event persists the failure.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:removeRetentionTarget",
+    "A failed deletion is persisted by the registered retention event and retried after a backoff.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:withdrawSegment",
+    "A segment left in place is this process's abandoned segment; maintenance seals it with evidence.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:restrictSealedMode",
+    "Best-effort read-only mode after a successful seal; the segment stays owner-private.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:descriptorAtPath",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:persistPostWriteMutation",
+    "The mutation evidence stays queued; the caller reports the event whose location is unknown.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:createPin",
+    "The catch returns the closed storage-unavailable rejection the registered pin.created event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:ownedDirectory",
+    "A failed ownership read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:batchIsWritable",
+    "An unformattable batch is deferred to its caller before any line is written.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:syncActiveSegment",
+    "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
   ],
 ]);
 
@@ -956,6 +1073,58 @@ function makeKeychainFallbackProbe() {
   };
 }
 
+// #3532: the Quality Intelligence capsule resolver used to swallow a knowledge-store open failure
+// and degrade silently to QI_CAPSULE_UNAVAILABLE. The failure is now reported once, on the operator
+// diagnostic path, before the resolver degrades to its empty result.
+function makeQualityIntelligenceCapsuleStoreProbe() {
+  const correlationId = `gate-qi-capsule-${randomUUID()}`;
+  return {
+    id: "quality-intelligence.capsule-store-open",
+    async run() {
+      const mod = await import(distPath("keiko-server", "qualityIntelligence/capsuleAdapter.js"));
+      const root = mkdtempSync(join(tmpdir(), "keiko-gate-qi-capsule-"));
+      try {
+        // A regular file where the knowledge-store directory belongs makes every open fail.
+        writeFileSync(join(root, "local-knowledge"), "occupied");
+        const records = [];
+        const resolver = mod.makeCapsuleResolver(
+          { uiDbPath: join(root, "ui.db"), diagnostics: { record: (r) => records.push(r) } },
+          correlationId,
+        );
+        const documents = resolver?.capsule("gate-capsule");
+        check(
+          Array.isArray(documents) && documents.length === 0,
+          "qi capsule resolver did not degrade to an empty result",
+        );
+        resolver?.close();
+        return records;
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    assertShape(record) {
+      check(
+        record.correlationId === correlationId,
+        `qi capsule correlationId: ${record.correlationId}`,
+      );
+      check(
+        record.operation === "quality-intelligence.capsule-source",
+        `qi capsule operation: ${record.operation}`,
+      );
+      check(record.source === "qi.capsule-adapter", `qi capsule source: ${record.source}`);
+      check(
+        record.message ===
+          "Quality Intelligence could not open the knowledge store for a capsule source.",
+        `qi capsule message: ${record.message}`,
+      );
+      check(
+        typeof record.errorClass === "string" && record.errorClass.length > 0,
+        "qi capsule errorClass missing",
+      );
+    },
+  };
+}
+
 export const SITE_PROBES = [
   makeSinkTerminalTeeProbe(),
   makeMemoryGetProbe(),
@@ -967,6 +1136,7 @@ export const SITE_PROBES = [
   makeConsolidationLogPortProbe(),
   makeConsolidationSummaryFallbackProbe(),
   makeKeychainFallbackProbe(),
+  makeQualityIntelligenceCapsuleStoreProbe(),
 ];
 
 async function runProbe(probe, exercised) {
