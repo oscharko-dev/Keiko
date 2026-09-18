@@ -53,6 +53,7 @@ import {
   writeToolCatalogPerformanceCalibration,
   writeToolCatalogPerformanceMeasurement,
 } from "../check-tool-catalog-performance.mjs";
+import { CODING_PERFORMANCE_BUDGET_POLICY } from "../coding-runtime-performance-evidence.mjs";
 import {
   regenerateArguments,
   regenerationOptions,
@@ -521,7 +522,7 @@ describe("compiler measurements reuse the existing sample and percentile convent
     expect(
       evaluateToolCatalogPerformanceEvidence(withinBudget, calibration, alteredBudget).defects,
     ).toEqual(["legacy-native-6-tool coldCompileMs budget exceeds its reviewed ceiling"]);
-    const ratcheted = ratchetToolCatalogPerformanceBudgets(calibration, {
+    const narrowedBudget = {
       ...budget,
       maximumP95Ms: {
         ...budget.maximumP95Ms,
@@ -530,11 +531,19 @@ describe("compiler measurements reuse the existing sample and percentile convent
           coldCompileMs: budget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs / 2,
         },
       },
-    });
+    };
+    const ratcheted = ratchetToolCatalogPerformanceBudgets(calibration, narrowedBudget);
     expect(ratcheted.maximumP95Ms["legacy-native-6-tool"].coldCompileMs).toBe(
       budget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs / 2,
     );
-    expect(ratcheted.ceilingP95Ms).toEqual(ratcheted.maximumP95Ms);
+    expect(ratcheted.ceilingP95Ms).toEqual(budget.ceilingP95Ms);
+    const { ceilingP95Ms: _ceilingP95Ms, ...legacyBudget } = narrowedBudget;
+    const migratedLegacy = ratchetToolCatalogPerformanceBudgets(calibration, {
+      ...legacyBudget,
+      schemaVersion: 1,
+      policy: CODING_PERFORMANCE_BUDGET_POLICY,
+    });
+    expect(migratedLegacy.ceilingP95Ms).toEqual(legacyBudget.maximumP95Ms);
     const renamedRaw = structuredClone(calibrationRaw);
     renamedRaw.cases = {
       renamed: renamedRaw.cases["legacy-native-6-tool"],

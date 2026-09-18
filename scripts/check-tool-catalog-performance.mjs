@@ -629,12 +629,15 @@ function performanceBudgetDefects(budget, calibration) {
 export function ratchetToolCatalogPerformanceBudgets(calibration, previousBudget) {
   validateToolCatalogPerformanceBudget(previousBudget);
   const maximumP95Ms = structuredClone(previousBudget.maximumP95Ms);
+  const ceilingP95Ms = structuredClone(
+    previousBudget.schemaVersion === 1 ? previousBudget.maximumP95Ms : previousBudget.ceilingP95Ms,
+  );
   return {
     schemaVersion: 2,
     target: "tool-catalog",
     policy: TOOL_CATALOG_FROZEN_BUDGET_POLICY,
     calibrationSha256: calibration.documentSha256,
-    ceilingP95Ms: structuredClone(maximumP95Ms),
+    ceilingP95Ms,
     maximumP95Ms,
   };
 }
