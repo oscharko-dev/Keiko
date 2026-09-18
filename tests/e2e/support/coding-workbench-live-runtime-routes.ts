@@ -199,7 +199,7 @@ async function handleCodexSetupRoute(
   return true;
 }
 
-async function handleEditorSnapshotRoute(
+export async function handleEditorSnapshotRoute(
   route: Route,
   pathname: string,
   fixture: RuntimeFixtureState,
