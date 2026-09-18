@@ -78,8 +78,6 @@ function failureClassEntry(contract, operations) {
     failureClass: contract.failureClass,
     surfaces,
     mode,
-    operations: members.map((operation) => operation.op).toSorted(compareCodepoints),
-    requiredEvidenceClasses: contract.requiredEvidenceClasses,
     scenarios: surfaces.map((surface) => `${surface}.${mode}`),
   };
 }
@@ -221,38 +219,28 @@ function scenarioViolations(scenarios, calls) {
   return [...callViolations, ...unresolved];
 }
 
-function lifecycleOperations(members) {
-  return Object.fromEntries(
-    ["start", "state", "end", "failure", "loss"].map((phase) => [
-      phase,
-      members
-        .filter((operation) => operation.lifecycle === phase)
-        .map((operation) => operation.op)
-        .toSorted(compareCodepoints),
-    ]),
-  );
-}
-
-function surfaceEntry(surface, operations, classes, proofs, scenarios) {
+// Only what op-catalog.generated.json does not already carry: the surface each operation maps to
+// and the port it emits through. Everything else about an operation (fields, lifecycle, causal
+// mode, analyzer projection, failure classes, proof ids) is joined from the catalog by op name.
+function surfaceEntry(surface, operations, scenarios) {
   const members = operations.filter((operation) => operation.surface === surface);
-  const surfaceClasses = classes.filter((entry) => entry.surfaces.includes(surface));
   return {
     surface,
     owners: sortedUnique(members.map((operation) => operation.owner)),
     ports: sortedUnique(members.map((operation) => operation.port).filter(Boolean)),
-    emitters: sortedUnique(members.map((operation) => operation.emitter)),
     operations: members.map((operation) => operation.op).toSorted(compareCodepoints),
-    lifecycleOperations: lifecycleOperations(members),
-    failureClasses: surfaceClasses.map((entry) => entry.failureClass),
-    requiredEvidenceClasses: sortedUnique(
-      surfaceClasses.flatMap((entry) => entry.requiredEvidenceClasses),
-    ),
-    analyzerProjections: sortedUnique(members.map((operation) => operation.analyzerProjection)),
-    proofIds: proofs.filter((proof) => proof.surface === surface).map((proof) => proof.proofId),
     scenarios: scenarios
       .filter((scenario) => scenario.surface === surface)
       .map((scenario) => scenario.scenario),
   };
+}
+
+function failureClassScenarios(classes) {
+  return Object.fromEntries(classes.map((entry) => [entry.failureClass, entry.scenarios]));
+}
+
+function resolutionFiles(entries, key) {
+  return Object.fromEntries(entries.map((entry) => [entry[key], entry.testFiles]));
 }
 
 function emptySurfaceViolations(surfaces) {
@@ -327,23 +315,37 @@ export function generateFailureSurfaceInventory(repoRoot, registry, options = {}
   const proofs = proofEntries(operations, calls);
   const scenarios = scenarioEntries(classes, calls);
   const surfaces = ACTIVITY_LOG_FAILURE_SURFACES.map((surface) =>
-    surfaceEntry(surface, operations, classes, proofs, scenarios),
+    surfaceEntry(surface, operations, scenarios),
   );
   const parts = { operations, proofs, scenarios, surfaces, calls };
   return {
     $schema: FAILURE_SURFACE_INVENTORY_SCHEMA,
     generatedBy: "scripts/generate-op-catalog.mjs",
+    joinsWith: "docs/observability/op-catalog.generated.json",
     registry: { schemaDigest: registry.schemaDigest, catalogDigest: registry.catalogDigest },
     autonomyContext: autonomyContext(registry),
     failureModes: ACTIVITY_LOG_FAILURE_MODES,
-    surfaceRules: context.surfaceRules,
-    ownerPorts: context.ownerPorts,
     summary: summary(operations, proofs, classes, scenarios),
     surfaces,
-    operations,
-    failureClasses: classes,
-    proofs,
-    scenarios,
+    // failure class -> "<surface>.<mode>" scenario ids; an empty list only for a class no mapped
+    // operation belongs to, which the surface-unmapped violation already reports.
+    failureClassScenarios: failureClassScenarios(classes),
+    // proof id / scenario id -> the test files that resolve it; an empty list is unresolved.
+    proofs: resolutionFiles(proofs, "proofId"),
+    scenarios: resolutionFiles(scenarios, "scenario"),
     violations: assembleViolations(repoRoot, registry, context, parts),
   };
+}
+
+/**
+ * A named drift message when the checked-in inventory bytes differ from the freshly generated and
+ * formatted bytes; undefined when they are identical. Byte comparison, not structural equality:
+ * formatting drift is drift too, exactly like the catalog pin.
+ */
+export function failureSurfaceInventoryDrift(generatedBytes, checkedInBytes) {
+  if (generatedBytes === checkedInBytes) return undefined;
+  return (
+    "docs/observability/failure-surface-inventory.generated.json is stale: it differs from what " +
+    "scripts/generate-op-catalog.mjs generates now. Run `npm run generate:op-catalog` and commit."
+  );
 }
