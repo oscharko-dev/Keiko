@@ -199,9 +199,97 @@ function commitVersionBump(runGit, applySetVersion, version) {
   ]);
 }
 
+function branchExists(runGhWithTagToken, repository, branch) {
+  const result = runGhWithTagToken(["api", `repos/${repository}/git/ref/heads/${branch}`]);
+  return result?.error === undefined && result?.status === 0;
+}
+
+const PR_PAGE_SIZE = 100;
+
 /**
- * Moves the repository to `version` on a fresh branch, opens a PR to dev and arms native auto-merge.
- * Runs from an already-checked-out working tree at the commit the button was pressed on.
+ * Every pull request ever opened from `branch`, open or closed, newest first. A prior press can
+ * leave at most one branch behind (the name is deterministic), so this never needs more than one
+ * page in practice; a page this full refuses rather than guessing which one matters.
+ */
+function branchPullRequests(runGhWithTagToken, repository, branch) {
+  const [owner] = repository.split("/");
+  const result = runStep(runGhWithTagToken, "listing pull requests for the version-bump branch", [
+    "api",
+    `repos/${repository}/pulls?head=${owner}:${branch}&state=all&per_page=${PR_PAGE_SIZE}`,
+  ]);
+  let prs;
+  try {
+    prs = JSON.parse(String(result.stdout ?? ""));
+  } catch {
+    fail("the version-bump branch's pull request listing could not be parsed as JSON.");
+  }
+  if (!Array.isArray(prs)) fail("the version-bump branch's pull request listing is malformed.");
+  if (prs.length >= PR_PAGE_SIZE) fail(`${branch} has too many pull requests to resume safely.`);
+  return prs;
+}
+
+/**
+ * What a fresh press finds for `branch`: "create" when nothing exists yet (the common case); an
+ * existing, unmerged pull request to resume from instead of re-attempting the mechanical commit and
+ * push a prior press already made (#3555 review: a partial failure -- the PR API call refused before
+ * the App had `pull_requests: write`, a transient error while arming auto-merge, or the button
+ * pressed twice before the first press's PR merged -- must never leave the branch name permanently
+ * stuck, since nothing here force-pushes over it).
+ */
+function versionBumpResumeState(runGhWithTagToken, repository, branch) {
+  if (!branchExists(runGhWithTagToken, repository, branch)) return { action: "create" };
+  const prs = branchPullRequests(runGhWithTagToken, repository, branch);
+  const open = prs.find((pr) => pr?.state === "open");
+  if (open !== undefined) return { action: "rearm", prNumber: open.number };
+  const merged = prs.find((pr) => typeof pr?.merged_at === "string");
+  if (merged !== undefined) return { action: "done", prNumber: merged.number };
+  if (prs.length === 0) return { action: "open" };
+  const newest = prs.toSorted((a, b) => b.number - a.number)[0];
+  fail(
+    `${branch} already exists with a closed, unmerged pull request #${String(newest.number)}; ` +
+      "resolve or delete it before the button can prepare this version again.",
+  );
+}
+
+function createVersionBump({
+  applySetVersion,
+  branch,
+  remoteUrl,
+  repository,
+  runGhWithTagToken,
+  runGit,
+  version,
+}) {
+  runStep(runGit, "authenticating the version-bump push", [
+    "remote",
+    "set-url",
+    "origin",
+    remoteUrl,
+  ]);
+  runStep(runGit, "creating the version-bump branch", ["checkout", "-b", branch]);
+  commitVersionBump(runGit, applySetVersion, version);
+  runStep(runGit, "pushing the version-bump branch", ["push", "origin", branch]);
+  return openVersionBumpPr(runGhWithTagToken, repository, branch, version);
+}
+
+function resumeOrCreatePr(seams) {
+  const { branch, repository, runGhWithTagToken, version } = seams;
+  const state = versionBumpResumeState(runGhWithTagToken, repository, branch);
+  if (state.action === "rearm" || state.action === "done") return state;
+  if (state.action === "open") {
+    return {
+      action: "rearm",
+      prNumber: openVersionBumpPr(runGhWithTagToken, repository, branch, version),
+    };
+  }
+  return { action: "rearm", prNumber: createVersionBump(seams) };
+}
+
+/**
+ * Moves the repository to `version` on a fresh branch, opens a PR to dev and arms native auto-merge --
+ * or, when a prior press already got partway there, resumes from exactly that point instead of
+ * re-attempting it. Runs from an already-checked-out working tree at the commit the button was
+ * pressed on.
  *
  * @param applySetVersion    (version) => void; mutates the checkout in place (scripts/set-version.mjs)
  * @param remoteUrl          the push URL with the release App token embedded (x-access-token)
@@ -217,24 +305,25 @@ export function applyVersionBumpRequest({
   version,
 }) {
   const branch = versionBumpBranch(version);
-  runStep(runGit, "authenticating the version-bump push", [
-    "remote",
-    "set-url",
-    "origin",
+  const resolved = resumeOrCreatePr({
+    applySetVersion,
+    branch,
     remoteUrl,
-  ]);
-  runStep(runGit, "creating the version-bump branch", ["checkout", "-b", branch]);
-  commitVersionBump(runGit, applySetVersion, version);
-  runStep(runGit, "pushing the version-bump branch", ["push", "origin", branch]);
-  const prNumber = openVersionBumpPr(runGhWithTagToken, repository, branch, version);
-  runStep(runGhWithTagToken, "arming native auto-merge", [
-    "pr",
-    "merge",
-    "--auto",
-    "--squash",
-    String(prNumber),
-    "--repo",
     repository,
-  ]);
-  return { branch, prNumber, version };
+    runGhWithTagToken,
+    runGit,
+    version,
+  });
+  if (resolved.action === "rearm") {
+    runStep(runGhWithTagToken, "arming native auto-merge", [
+      "pr",
+      "merge",
+      "--auto",
+      "--squash",
+      String(resolved.prNumber),
+      "--repo",
+      repository,
+    ]);
+  }
+  return { branch, prNumber: resolved.prNumber, version };
 }

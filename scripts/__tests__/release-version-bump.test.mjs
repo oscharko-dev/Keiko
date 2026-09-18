@@ -189,38 +189,59 @@ describe("readVersionBumpAuthorization", () => {
   });
 });
 
+// #3555 review: a partial failure from a prior press -- the PR API call refused before the App had
+// pull_requests: write, a transient error arming auto-merge, or the button pressed twice before the
+// first press's PR merged -- must never leave the deterministic branch name permanently stuck, since
+// nothing here force-pushes over it. applyVersionBumpRequest must resume from whatever a prior press
+// already did instead of blindly re-attempting the mechanical commit and push.
 describe("applyVersionBumpRequest", () => {
-  function fakeRunner() {
+  const BRANCH = `${VERSION_BUMP_BRANCH_PREFIX}1.0.6`;
+  const REF_PATH = `repos/${REPO}/git/ref/heads/${BRANCH}`;
+  const PRS_PATH = `repos/${REPO}/pulls?head=oscharko-dev:${BRANCH}&state=all&per_page=100`;
+
+  function fakeGit() {
     const calls = [];
     const run = (args) => {
       calls.push(args);
-      if (args[0] === "api" && args[3] === `repos/${REPO}/pulls`) {
-        return ok({ number: 9 });
-      }
       return { status: 0, stdout: "", stderr: "" };
     };
     return { calls, run };
   }
 
-  it("branches, commits, pushes, opens the PR and arms auto-merge in order", () => {
-    const git = fakeRunner();
-    const gh = fakeRunner();
+  function fakeGh(routes) {
+    const calls = [];
+    const run = (args) => {
+      calls.push(args);
+      if (args[0] === "api" && args[1] !== "--method") return routes[args.at(-1)];
+      if (args[0] === "api" && args[3] === `repos/${REPO}/pulls`) return routes.openPr;
+      if (args[0] === "pr" && args[1] === "merge") return routes.mergeResult ?? ok({});
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+    return { calls, run };
+  }
+
+  function pr(overrides) {
+    return { merged_at: null, number: 5, state: "open", ...overrides };
+  }
+
+  function bump(overrides) {
+    return applyVersionBumpRequest({
+      applySetVersion: () => undefined,
+      remoteUrl: "https://x-access-token:t@github.com/oscharko-dev/Keiko.git",
+      repository: REPO,
+      version: "1.0.6",
+      ...overrides,
+    });
+  }
+
+  it("branches, commits, pushes, opens the PR and arms auto-merge when nothing exists yet", () => {
+    const git = fakeGit();
+    const gh = fakeGh({ [PRS_PATH]: ok([]), [REF_PATH]: NOT_FOUND, openPr: ok({ number: 9 }) });
     const applySetVersion = (version) => {
       expect(version).toBe("1.0.6");
     };
-    const result = applyVersionBumpRequest({
-      applySetVersion,
-      remoteUrl: "https://x-access-token:t@github.com/oscharko-dev/Keiko.git",
-      repository: REPO,
-      runGhWithTagToken: gh.run,
-      runGit: git.run,
-      version: "1.0.6",
-    });
-    expect(result).toStrictEqual({
-      branch: `${VERSION_BUMP_BRANCH_PREFIX}1.0.6`,
-      prNumber: 9,
-      version: "1.0.6",
-    });
+    const result = bump({ applySetVersion, runGhWithTagToken: gh.run, runGit: git.run });
+    expect(result).toStrictEqual({ branch: BRANCH, prNumber: 9, version: "1.0.6" });
     expect(git.calls.map((args) => args[0])).toStrictEqual([
       "remote",
       "checkout",
@@ -230,7 +251,7 @@ describe("applyVersionBumpRequest", () => {
       "commit",
       "push",
     ]);
-    expect(gh.calls[0]).toStrictEqual([
+    expect(gh.calls.at(-2)).toStrictEqual([
       "api",
       "--method",
       "POST",
@@ -238,13 +259,76 @@ describe("applyVersionBumpRequest", () => {
       "-f",
       expect.stringContaining("title="),
       "-f",
-      `head=${VERSION_BUMP_BRANCH_PREFIX}1.0.6`,
+      `head=${BRANCH}`,
       "-f",
       "base=dev",
       "-F",
       expect.stringContaining("body="),
     ]);
-    expect(gh.calls[1]).toStrictEqual(["pr", "merge", "--auto", "--squash", "9", "--repo", REPO]);
+    expect(gh.calls.at(-1)).toStrictEqual([
+      "pr",
+      "merge",
+      "--auto",
+      "--squash",
+      "9",
+      "--repo",
+      REPO,
+    ]);
+  });
+
+  it("resumes by opening a PR, without re-committing, when the branch was pushed but no PR exists", () => {
+    const git = fakeGit();
+    const gh = fakeGh({ [PRS_PATH]: ok([]), [REF_PATH]: ok({}), openPr: ok({ number: 9 }) });
+    const result = bump({ runGhWithTagToken: gh.run, runGit: git.run });
+    expect(result).toStrictEqual({ branch: BRANCH, prNumber: 9, version: "1.0.6" });
+    expect(git.calls).toStrictEqual([]);
+  });
+
+  it("resumes by re-arming auto-merge, without touching git or opening a second PR, when open", () => {
+    const git = fakeGit();
+    const gh = fakeGh({ [PRS_PATH]: ok([pr({ number: 5 })]), [REF_PATH]: ok({}) });
+    const result = bump({ runGhWithTagToken: gh.run, runGit: git.run });
+    expect(result).toStrictEqual({ branch: BRANCH, prNumber: 5, version: "1.0.6" });
+    expect(git.calls).toStrictEqual([]);
+    expect(gh.calls).toStrictEqual([
+      ["api", REF_PATH],
+      ["api", PRS_PATH],
+      ["pr", "merge", "--auto", "--squash", "5", "--repo", REPO],
+    ]);
+  });
+
+  it("reports success without re-arming a pull request that already merged", () => {
+    const git = fakeGit();
+    const gh = fakeGh({
+      [PRS_PATH]: ok([pr({ merged_at: "2026-09-18T00:00:00Z", number: 3, state: "closed" })]),
+      [REF_PATH]: ok({}),
+    });
+    const result = bump({ runGhWithTagToken: gh.run, runGit: git.run });
+    expect(result).toStrictEqual({ branch: BRANCH, prNumber: 3, version: "1.0.6" });
+    expect(git.calls).toStrictEqual([]);
+    expect(gh.calls.some((args) => args[0] === "pr")).toBe(false);
+  });
+
+  it("fails closed on a closed, unmerged pull request instead of reusing or replacing the branch", () => {
+    const gh = fakeGh({
+      [PRS_PATH]: ok([pr({ merged_at: null, number: 4, state: "closed" })]),
+      [REF_PATH]: ok({}),
+    });
+    expect(() => bump({ runGhWithTagToken: gh.run, runGit: fakeGit().run })).toThrow(
+      `${BRANCH} already exists with a closed, unmerged pull request #4; resolve or delete it`,
+    );
+  });
+
+  it("fails closed rather than guess among too many pull requests to resume safely", () => {
+    const gh = fakeGh({
+      [PRS_PATH]: ok(
+        Array.from({ length: 100 }, (_unused, index) => pr({ number: index, state: "closed" })),
+      ),
+      [REF_PATH]: ok({}),
+    });
+    expect(() => bump({ runGhWithTagToken: gh.run, runGit: fakeGit().run })).toThrow(
+      "too many pull requests to resume safely",
+    );
   });
 
   it("fails closed when a git step fails", () => {
@@ -254,28 +338,27 @@ describe("applyVersionBumpRequest", () => {
           ? { status: 1, stdout: "", stderr: "denied" }
           : { status: 0, stdout: "", stderr: "" },
     };
-    expect(() =>
-      applyVersionBumpRequest({
-        applySetVersion: () => undefined,
-        remoteUrl: "https://x-access-token:t@github.com/oscharko-dev/Keiko.git",
-        repository: REPO,
-        runGhWithTagToken: () => ok({ number: 1 }),
-        runGit: git.run,
-        version: "1.0.6",
-      }),
-    ).toThrow("pushing the version-bump branch failed: denied");
+    const gh = fakeGh({ [PRS_PATH]: ok([]), [REF_PATH]: NOT_FOUND, openPr: ok({ number: 1 }) });
+    expect(() => bump({ runGhWithTagToken: gh.run, runGit: git.run })).toThrow(
+      "pushing the version-bump branch failed: denied",
+    );
   });
 
   it("fails closed when the opened pull request has no number", () => {
-    expect(() =>
-      applyVersionBumpRequest({
-        applySetVersion: () => undefined,
-        remoteUrl: "https://x-access-token:t@github.com/oscharko-dev/Keiko.git",
-        repository: REPO,
-        runGhWithTagToken: () => ok({}),
-        runGit: () => ({ status: 0, stdout: "", stderr: "" }),
-        version: "1.0.6",
-      }),
-    ).toThrow("the opened pull request has no number");
+    const gh = fakeGh({ [PRS_PATH]: ok([]), [REF_PATH]: NOT_FOUND, openPr: ok({}) });
+    expect(() => bump({ runGhWithTagToken: gh.run, runGit: fakeGit().run })).toThrow(
+      "the opened pull request has no number",
+    );
+  });
+
+  it("fails closed on a malformed or unreadable pull request listing", () => {
+    const malformedGh = fakeGh({ [PRS_PATH]: ok({ not: "an array" }), [REF_PATH]: ok({}) });
+    expect(() => bump({ runGhWithTagToken: malformedGh.run, runGit: fakeGit().run })).toThrow(
+      "malformed",
+    );
+    const unreadableGh = fakeGh({ [PRS_PATH]: NOT_FOUND, [REF_PATH]: ok({}) });
+    expect(() => bump({ runGhWithTagToken: unreadableGh.run, runGit: fakeGit().run })).toThrow(
+      "listing pull requests for the version-bump branch failed",
+    );
   });
 });
