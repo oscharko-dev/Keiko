@@ -38,6 +38,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
+import { writeActivityLogPolicyRecord } from "./activity-log-store.js";
 import { MAX_LOG_FIELD_COUNT, REDACTED_KEY, REDACTED_SHAPE } from "./log-redaction.js";
 import {
   ACTIVITY_LOG_STORAGE_OPERATIONS,
@@ -2788,6 +2789,51 @@ describe("activity log store policy", () => {
         requestedRetentionBytes: secondBudget,
       }),
     );
+  });
+
+  // Every maintenance pass re-reads the stored policy, so a record another process replaced after
+  // this one resolved it (a sole-writer restart while this process held no active segment) governs
+  // this process's next pass instead of its stale first read.
+  it("applies a policy another process replaced after this process resolved its own", () => {
+    const firstBudget = 4 * 1024 * 1024;
+    const secondBudget = 512 * 1024;
+    const env = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(firstBudget),
+      KEIKO_LOG_SEGMENT_BYTES: String(SMALL_SEGMENT),
+    });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "http", op: "before.replacement" });
+    expect(policyRecord()).toMatchObject({ retentionBytes: firstBudget });
+
+    // What a sole-writer restart elsewhere leaves behind: the same record, a smaller budget.
+    const logs = logsDirectory(stateDir);
+    rmSync(join(logs, ACTIVITY_LOG_STORE_POLICY_FILE_NAME));
+    writeActivityLogPolicyRecord(logs, logs, {
+      schemaVersion: 1,
+      retentionBytes: secondBudget,
+      retentionDays: 14,
+      pinQuotaBytes: 64 * 1024 * 1024,
+    });
+
+    // One segment rollover: its maintenance pass re-reads the record before anything is pruned.
+    for (let index = 0; index < 150; index += 1) {
+      sink.write({ category: "http", op: "after.replacement", extra: { index } });
+    }
+    expect(linesWithOp(stateDir, "activity-log.policy.conflict")).toContainEqual(
+      expect.objectContaining({
+        policyResolution: "adopted",
+        storedRetentionBytes: secondBudget,
+        requestedRetentionBytes: firstBudget,
+      }),
+    );
+
+    // Well past the new, smaller budget but far below the first: only the replaced policy prunes.
+    for (let index = 150; index < 2_500; index += 1) {
+      sink.write({ category: "http", op: "after.replacement", extra: { index } });
+    }
+    expect(linesWithOp(stateDir, "activity-log.retention.pruned").at(-1)).toMatchObject({
+      retentionBudgetBytes: secondBudget,
+    });
   });
 
   it("refuses to replace the stored policy while a live peer still holds an active segment", async () => {

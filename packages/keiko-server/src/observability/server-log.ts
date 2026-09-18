@@ -117,6 +117,7 @@ import {
   readActivityLogPins,
   readActivityLogPolicyRecord,
   removeActivityLogFile,
+  ACTIVITY_LOG_POLICY_SETTINGS,
   resolveActivityLogStorageConfig,
   resolveActivityLogStorePolicy,
   writeActivityLogPinRecord,
@@ -1455,8 +1456,13 @@ interface ActiveLog {
   // first time real storage work happens (`ensureGovernedPolicy`, #3554) — never before, so a sink
   // that never logs anything past its threshold never touches the policy file.
   config: ActivityLogStorageConfig;
+  // The config this process resolved from its own env, kept so a refreshed governing policy can be
+  // merged into it again (#3554).
+  readonly envConfig: ActivityLogStorageConfig;
   // True once `ensureGovernedPolicy` has run for this directory in this process.
   policyResolved: boolean;
+  // The governing retention and pin-quota values this process currently applies.
+  governed: ActivityLogPolicyValues | undefined;
   segment: ActiveSegment | undefined;
   nextIndex: number;
   lastStartMs: number;
@@ -1525,7 +1531,9 @@ function resolveActiveLog(directory: string, config: ActivityLogStorageConfig): 
     directory,
     trustedRoot: directory,
     config,
+    envConfig: config,
     policyResolved: false,
+    governed: undefined,
     segment: undefined,
     nextIndex: 1,
     lastStartMs: 0,
@@ -1564,10 +1572,50 @@ function ensureGovernedPolicy(active: ActiveLog, correlationId: string | undefin
     },
     { pid: process.pid, instanceId: INSTANCE_ID, isAlive: processIsAlive },
   );
-  active.config = applyGovernedPolicy(active.config, outcome);
+  active.governed = governedValues(outcome);
+  active.config = applyGovernedPolicy(active.envConfig, outcome);
   if (outcome.conflict !== undefined) {
     queueEvidence(active, policyConflictEvidence(outcome.conflict, correlationId));
   }
+}
+
+function governedValues(values: ActivityLogPolicyValues): ActivityLogPolicyValues {
+  return {
+    retentionBytes: values.retentionBytes,
+    retentionDays: values.retentionDays,
+    pinQuotaBytes: values.pinQuotaBytes,
+  };
+}
+
+// Every maintenance pass re-applies the store's CURRENT governing policy before it deletes anything
+// (#3554). A record another process replaced after this one resolved it (a sole-writer restart while
+// this process held no active segment) governs this process's retention from its next pass on, so
+// no two processes prune under different budgets beyond one pass, and a disagreement with this
+// process's own env is evidenced again.
+function refreshGovernedPolicy(active: ActiveLog, correlationId: string | undefined): void {
+  if (active.governed === undefined) return;
+  const stored = readActivityLogPolicyRecord(active.directory, active.trustedRoot);
+  const current = active.governed;
+  if (
+    stored === undefined ||
+    ACTIVITY_LOG_POLICY_SETTINGS.every((key) => stored[key] === current[key])
+  ) {
+    return;
+  }
+  active.governed = governedValues(stored);
+  active.config = applyGovernedPolicy(active.envConfig, stored);
+  const requested = governedValues(active.envConfig);
+  const conflictingSettings = ACTIVITY_LOG_POLICY_SETTINGS.filter(
+    (key) => stored[key] !== requested[key],
+  );
+  if (conflictingSettings.length === 0) return;
+  queueEvidence(
+    active,
+    policyConflictEvidence(
+      { resolution: "adopted", conflictingSettings, stored: active.governed, requested },
+      correlationId,
+    ),
+  );
 }
 
 // Real storage work is never speculative here (a pin request or a durable batch append IS the
@@ -2529,6 +2577,7 @@ function runMaintenance(active: ActiveLog, cursor: WriteCursor, reserveBytes: nu
   if (!durableLogDirectory(active.directory)) {
     throw new SafeArtifactFileError("activity-log", "unsafe-ancestor");
   }
+  refreshGovernedPolicy(active, cursor.correlationId);
   const nowMs = Date.now();
   recoverOrphanedSegments(active, cursor, listActivityLogDirectory(active.directory), nowMs);
   return applyRetention(active, cursor, nowMs, reserveBytes).admitted;
