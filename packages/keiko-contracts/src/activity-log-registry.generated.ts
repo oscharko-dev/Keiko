@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8e9fa6ef78097aa67c646a836a626532ef1f553fe202ea682b37e643ddd88c48" as const;
+  "80e6fdc0166340bf392220d65a6af94b3bb1426d8f0848f47e15bc0753a48c8c" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -15177,6 +15177,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "error-kind",
         required: true,
         maxLength: 64,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
       },
     },
     causal: "correlation",
@@ -43189,10 +43203,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "failureKind",
               type: "string",
               dataClass: "error-kind",
               required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
             },
             {
               name: "stage",
@@ -43207,10 +43233,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "digest",
             "error-kind",
             "loss-state",
+            "safe-platform-class",
           ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["indexing.detached-run.failed.line"],
           replayReferences: [],

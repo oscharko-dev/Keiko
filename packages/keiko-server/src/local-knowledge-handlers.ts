@@ -82,6 +82,7 @@ import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown, newCorrelationId } from "./correlation.js";
 import { errorKindOf, getServerLogger, type ServerLogger } from "./observability/index.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { CAPSULE_SET_MAX_MEMBERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {
@@ -2903,6 +2904,20 @@ const INDEXING_DETACHED_RUN_FAILED_OPERATION = defineActivityLogOperation({
       values: ["pre-orchestrator"],
     },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -3148,6 +3163,8 @@ function reportDetachedIndexingFailure(
         capsuleIdDigest: log.capsuleIdDigest,
         stage: "pre-orchestrator",
         failureKind,
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
         completeness: "complete",
         loss: "none",
       },

@@ -4869,9 +4869,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "digest",
       "error-kind",
       "loss-state",
+      "safe-platform-class",
     ],
-    requiredFrameOperations: [],
-    requiredCauseOperations: [],
+    requiredFrameOperations: ["indexing.detached-run.failed"],
+    requiredCauseOperations: ["indexing.detached-run.failed"],
   },
   {
     contractKind: "activity-log-failure-class",
