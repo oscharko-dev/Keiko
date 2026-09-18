@@ -235,6 +235,19 @@ export function orderActivityLogFileNames(names: Iterable<string>): readonly Act
   return parsed.sort(compareActivityLogFileNames);
 }
 
+/**
+ * The files a reader reads, one name per segment: an active name whose sealed twin is also listed
+ * exists only inside a seal's link-then-unlink window and names the same bytes, so it is dropped.
+ * Maintenance keeps the full listing, because it must see both names to finish that seal.
+ */
+export function readableActivityLogFileNames(
+  files: readonly ActivityLogFileName[],
+): readonly ActivityLogFileName[] {
+  const sealed = new Set<string>();
+  for (const file of files) if (file.kind === "sealed") sealed.add(file.segmentId);
+  return files.filter((file) => file.kind !== "active" || !sealed.has(file.segmentId));
+}
+
 export function activityLogPinFileName(pinId: string): string {
   if (!ACTIVITY_LOG_PIN_ID_PATTERN.test(pinId)) {
     throw new RangeError("invalid Activity Log pin id");

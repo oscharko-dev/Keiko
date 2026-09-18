@@ -81,6 +81,7 @@ import {
   isActivityLogProcessId,
   isActivityLogProductVersion,
   isActivityLogSequence,
+  readableActivityLogFileNames,
   recordActivityLogLoss,
   type ActivityLogCompatibilityState,
   type ActivityLogErrorKind,
@@ -2791,7 +2792,7 @@ function recordPersistenceLoss(error: unknown, count = 1): void {
   );
 }
 
-function noteDroppedEvent(active: ActiveLog, error: unknown): void {
+function recordDroppedEvent(active: ActiveLog, error: unknown): void {
   recordPersistenceLoss(error);
   if (active.segment !== undefined) active.segment.droppedEvents += 1;
   const state = blockingPressure(error);
@@ -2883,7 +2884,7 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
         // has stopped working is exactly the condition an operator cannot infer from the absence
         // of lines, so the loss is counted for the next persisted pressure line and announced on
         // the independent stderr channel now.
-        noteDroppedEvent(active, error);
+        recordDroppedEvent(active, error);
         reportServerLogFailure(error, {
           op: event.op,
           correlationId: event.correlationId,
@@ -3272,14 +3273,21 @@ export interface ActivityLogFileInfo {
   readonly sizeBytes: number;
 }
 
-/** Every Activity Log file of `stateDir`, legacy and segmented, in logical-log order. */
+/**
+ * Every Activity Log file of `stateDir` a reader reads, legacy and segmented, in logical-log order:
+ * one name per segment, so a seal caught between its link and unlink is never read twice.
+ */
 export function listActivityLogFiles(stateDir: string): readonly ActivityLogFileInfo[] {
-  return listActivityLogDirectory(join(stateDir, "logs")).files.map((entry) => ({
-    name: entry.file.name,
-    path: entry.path,
-    kind: entry.file.kind,
-    sizeBytes: entry.sizeBytes,
-  }));
+  const entries = listActivityLogDirectory(join(stateDir, "logs")).files;
+  const readable = new Set(readableActivityLogFileNames(entries.map((entry) => entry.file)));
+  return entries
+    .filter((entry) => readable.has(entry.file))
+    .map((entry) => ({
+      name: entry.file.name,
+      path: entry.path,
+      kind: entry.file.kind,
+      sizeBytes: entry.sizeBytes,
+    }));
 }
 
 // ─── Durable batches (the legacy update-audit import) ──────────────────────────────────────────
@@ -3462,7 +3470,7 @@ function writeDurableEvents(
     try {
       writeQueued(active, cursor, event);
     } catch (error) {
-      noteDroppedEvent(active, error);
+      recordDroppedEvent(active, error);
       return false;
     }
     const segmentId = active.segment?.segmentId;

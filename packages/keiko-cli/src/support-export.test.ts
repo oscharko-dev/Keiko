@@ -142,6 +142,24 @@ describe("discoverServerLogFiles", () => {
     expect(discovery.skippedLogFiles).toEqual([]);
   });
 
+  // A seal publishes the sealed name as a hard link and then unlinks the active name. An export
+  // that lists the directory inside that window considers the segment once, under its sealed name,
+  // and the single-link guard still refuses the shared inode: the in-flight seal is attested as one
+  // skipped file, never copied twice and never followed through a second name.
+  it("attests a segment caught mid-seal once, under its sealed name", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    writePrivateLog(join(dir, SEALED_SEGMENT), "sealed\n");
+    linkSync(join(dir, SEALED_SEGMENT), join(dir, segmentName(1, "active")));
+    writePrivateLog(join(dir, CURRENT_SEGMENT), "current\n");
+
+    const discovery = discoverServerLogFiles(dir);
+
+    expect(discovery.files.map((f) => f.name)).toEqual([CURRENT_SEGMENT]);
+    expect(discovery.skippedLogFiles).toEqual([
+      { name: SEALED_SEGMENT, errorKind: "unsafe-target" },
+    ]);
+  });
+
   it("omits the current file from the ordering when it does not exist", () => {
     writePrivateLog(join(dir, "server-2026-08-19.log"), "a\n");
 

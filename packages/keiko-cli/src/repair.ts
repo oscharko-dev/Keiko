@@ -235,7 +235,9 @@ interface LoosePermFinding {
   readonly observed: string;
 }
 
-// Records every node not already at `targetMode`, applying the fix unless this is a dry-run.
+// Records every node with a permission bit outside `targetMode`, removing those bits unless this is
+// a dry-run. Tightening only ever removes bits: an owner-only mode stricter than the target (a
+// sealed, read-only Activity Log segment is 0o400, #3530) is compliant and keeps its strictness.
 // #KEIKO-0301: guard each node's statSync/chmodSync so one unreadable / vanished artifact
 // is recorded as an "unreadable" finding rather than aborting the whole repair run. The
 // happy path (a stable, readable state tree) is unchanged; only the newly-guarded error
@@ -254,6 +256,7 @@ function tightenNodes(
     // classifies symlinks as retained and never tightens them, so a symlink observed here
     // is by definition unexpected and belongs in `unreadable`, not chmodded.
     let observed: string;
+    let tightenedMode: number;
     try {
       const stat = lstatSync(node.absPath);
       if (stat.isSymbolicLink()) {
@@ -265,7 +268,8 @@ function tightenNodes(
         continue;
       }
       const mode = stat.mode & 0o777;
-      if (mode === targetMode) continue;
+      tightenedMode = mode & targetMode;
+      if (tightenedMode === mode) continue;
       observed = `0o${mode.toString(8)}`;
     } catch {
       unreadable.push({
@@ -288,7 +292,7 @@ function tightenNodes(
     // block cannot redirect the chmod to a target outside the state directory. openSync with
     // O_NOFOLLOW errors with ELOOP when the final path element is a symlink; fchmodSync then
     // targets the exact inode we opened. Directories need O_DIRECTORY | O_RDONLY.
-    if (tightenNodeMode(node, targetMode)) {
+    if (tightenNodeMode(node, tightenedMode)) {
       findings.push({ category: node.category, relPath: node.relPath, observed });
     } else {
       unreadable.push({

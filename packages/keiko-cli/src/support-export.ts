@@ -19,7 +19,10 @@ import { closeSync, fstatSync, lstatSync, readFileSync, readSync, readdirSync } 
 import { dirname, join } from "node:path";
 import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
-import { orderActivityLogFileNames } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  orderActivityLogFileNames,
+  readableActivityLogFileNames,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import {
   openSafeArtifactFile,
@@ -183,7 +186,10 @@ export function discoverServerLogFiles(logsDir: string): LogFileDiscovery {
   } catch {
     return { files: [], skippedLogFiles: [] };
   }
-  const ordered = orderActivityLogFileNames(names).map((file) => file.name);
+  // One name per segment: a seal caught between its link and unlink must not be exported twice.
+  const ordered = readableActivityLogFileNames(orderActivityLogFileNames(names)).map(
+    (file) => file.name,
+  );
   const files: LogFileInfo[] = [];
   const skippedLogFiles: SkippedLogFile[] = [];
   for (const name of ordered) {
