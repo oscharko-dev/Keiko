@@ -448,6 +448,21 @@ export {
 // crash handler — never at module scope, where it would cost real startup time against
 // GEN-PERF-CLI-001's budget.
 export { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+
+// #3533 — local SupportIncident candidates. `keiko support incident` lists, resolves, previews,
+// records (Report a problem), and dismisses them through these. The automatic trigger runs inside
+// the Activity Log file sink; `recordRegisteredFailureIncident` is its entry for a caller that
+// holds one registered failure event's body-free facts.
+export {
+  dismissSupportIncident,
+  listSupportIncidents,
+  recordRegisteredFailureIncident,
+  recordUserReportedIncident,
+  supportIncidentSegmentFiles,
+  type SupportIncidentCreation,
+  type SupportIncidentDismissal,
+  type SupportIncidentSegmentFile,
+} from "./observability/support-incident.js";
 export { contentFreeErrorClass, describeError } from "./diagnostics-log.js";
 
 // #3532 — product-wide Activity Log wiring. `createActivityLogSink` is the level-gated production

@@ -53,6 +53,7 @@ import {
   formatRegisteredServerLogLine,
   listActivityLogFiles,
   pinActivityLogWindow,
+  releaseActivityLogPin,
   reportServerLogFailure,
   resetServerLogFailureNotices,
   serverLogInstanceId,
@@ -62,6 +63,7 @@ import {
 } from "./server-log.js";
 import type {
   ActivityLogFileInfo,
+  ActivityLogPinResult,
   DurableServerLogBatchOptions,
   DurableServerLogBatchResult,
   FileServerLogSinkOptions,
@@ -269,6 +271,10 @@ const fsCalls = vi.hoisted(() => ({
   failWriteOpOnce: null as string | null,
   failWriteCode: null as string | null,
   freeBytes: null as number | null,
+  // `null` lists every Activity Log directory normally. A number fails exactly that ordinal listing of a
+  // `logs` directory (1 = the next one) with EACCES, the error class `readdirSync` rethrows.
+  failLogsListingCall: null as number | null,
+  logsListings: 0,
   // `null` passes every write through untouched. A number is a byte budget: the descriptor accepts
   // that many more bytes and then reports 0, which is what a stalled descriptor reports and the
   // only way to produce a short write on a regular file.
@@ -284,6 +290,8 @@ function resetFsKnobs(): void {
   fsCalls.failWriteOpOnce = null;
   fsCalls.failWriteCode = null;
   fsCalls.freeBytes = null;
+  fsCalls.failLogsListingCall = null;
+  fsCalls.logsListings = 0;
 }
 
 // The four-argument Buffer overload is the only one the module under test uses, and the only one
@@ -305,8 +313,18 @@ vi.mock("node:fs", async (importOriginal) => {
     buffer.subarray(offset, offset + length).toString("utf8");
   const mentionsOp = (text: string, op: string): boolean =>
     text.includes(`"op":"${op}"`) || text.includes(`:${op}"`);
+  const readdirSync = actual.readdirSync as (...args: readonly unknown[]) => unknown;
   return {
     ...actual,
+    readdirSync: ((...args: readonly unknown[]): unknown => {
+      if (fsCalls.failLogsListingCall !== null && /(?:^|[\\/])logs$/u.test(String(args[0]))) {
+        fsCalls.logsListings += 1;
+        if (fsCalls.logsListings === fsCalls.failLogsListingCall) {
+          throw Object.assign(new Error("forced listing failure"), { code: "EACCES" });
+        }
+      }
+      return readdirSync(...args);
+    }) as typeof actual.readdirSync,
     openSync: (...args: Parameters<typeof actual.openSync>): number => {
       fsCalls.open += 1;
       if (fsCalls.failOpenMatching?.test(String(args[0])) === true) {
@@ -2543,6 +2561,140 @@ describe("activity log retention pins", () => {
       remaining.every((name) => name !== undefined && "pid" in name && name.pid === process.pid),
     ).toBe(true);
   }, 120_000);
+});
+
+describe("activity log pins never throw and can be released", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-pin-release-"));
+    resetFsKnobs();
+  });
+
+  afterEach(() => {
+    resetFsKnobs();
+    closeFileServerLogSinks();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function pinWindow(
+    env: Readonly<Record<string, string>>,
+    correlationId: string,
+  ): ActivityLogPinResult {
+    const now = Date.now();
+    return pinActivityLogWindow(
+      stateDir,
+      {
+        scope: { kind: "window", fromMs: now - 3_600_000, toMs: now + 60_000 },
+        expiresAtMs: now + 86_400_000,
+        correlationId,
+      },
+      env,
+    );
+  }
+
+  function pinRecordNames(): readonly string[] {
+    return readdirSync(logsDirectory(stateDir)).filter((name) => name.startsWith("pin-"));
+  }
+
+  it("rejects a pin as storage-unavailable when the directory cannot be listed", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 1);
+    fsCalls.failLogsListingCall = 1;
+    const result = pinWindow(env, "pin-unlistable-3530");
+    fsCalls.failLogsListingCall = null;
+
+    expect(result).toStrictEqual({ status: "rejected", reason: "storage-unavailable" });
+    expect(pinRecordNames()).toStrictEqual([]);
+    expect(linesWithOp(stateDir, "activity-log.pin.created")).toContainEqual(
+      expect.objectContaining({
+        correlationId: "pin-unlistable-3530",
+        pinStatus: "rejected",
+        rejectionReason: "storage-unavailable",
+      }),
+    );
+  });
+
+  it("still reports a published pin when the listing after the seal fails", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 2);
+    fsCalls.failLogsListingCall = 2;
+    const result = pinWindow(env, "pin-late-listing-3530");
+    fsCalls.failLogsListingCall = null;
+
+    expect(result).toMatchObject({ status: "pinned", pinnedSegmentCount: 2 });
+    expect(pinRecordNames()).toHaveLength(1);
+  });
+
+  it("releases a pin before its expiry and records it as a released pin.expired", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 2);
+    const pinned = pinWindow(env, "pin-to-release-3533");
+    if (pinned.status !== "pinned") throw new Error("expected a pin");
+
+    const released = releaseActivityLogPin(
+      stateDir,
+      { pinId: pinned.pinId, correlationId: "pin-release-3533" },
+      env,
+    );
+
+    expect(released).toStrictEqual({
+      status: "released",
+      releasedSegmentCount: pinned.pinnedSegmentCount,
+      releasedBytes: pinned.pinnedBytes,
+    });
+    expect(pinRecordNames()).toStrictEqual([]);
+    expect(activityLogStorageHealth(stateDir, env).pinnedBytes).toBe(0);
+    expect(linesWithOp(stateDir, "activity-log.pin.expired")).toContainEqual(
+      expect.objectContaining({
+        correlationId: "pin-release-3533",
+        pinId: pinned.pinId,
+        expiryReason: "released",
+        removalStatus: "removed",
+        releasedSegmentCount: pinned.pinnedSegmentCount,
+      }),
+    );
+  });
+
+  it("refuses an invalid or unknown pin id without touching the store", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 1);
+
+    expect(releaseActivityLogPin(stateDir, { pinId: "not-a-pin-id" }, env)).toStrictEqual({
+      status: "rejected",
+      reason: "invalid-request",
+    });
+    expect(releaseActivityLogPin(stateDir, { pinId: "a".repeat(24) }, env)).toStrictEqual({
+      status: "rejected",
+      reason: "not-found",
+    });
+    expect(linesWithOp(stateDir, "activity-log.pin.expired")).toStrictEqual([]);
+  });
+
+  it("evidences a release that cannot list the directory and never throws", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 1);
+    const pinned = pinWindow(env, "pin-release-unlistable-3533");
+    if (pinned.status !== "pinned") throw new Error("expected a pin");
+    fsCalls.logsListings = 0;
+    fsCalls.failLogsListingCall = 1;
+    const released = releaseActivityLogPin(
+      stateDir,
+      { pinId: pinned.pinId, correlationId: "pin-release-unlistable-3533" },
+      env,
+    );
+    fsCalls.failLogsListingCall = null;
+
+    expect(released).toStrictEqual({ status: "rejected", reason: "storage-unavailable" });
+    expect(pinRecordNames()).toHaveLength(1);
+    expect(linesWithOp(stateDir, "activity-log.pin.expired")).toContainEqual(
+      expect.objectContaining({
+        correlationId: "pin-release-unlistable-3533",
+        expiryReason: "released",
+        removalStatus: "failed",
+      }),
+    );
+  });
 });
 
 describe("activity log storage health", () => {

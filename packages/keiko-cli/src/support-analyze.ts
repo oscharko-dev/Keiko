@@ -61,7 +61,9 @@ import {
   isActivityLogProductVersion,
   isActivityLogSequence,
   validateActivityLogOperationRecord,
+  type ActivityLogCompletenessState,
   type ActivityLogEventEnvelope,
+  type ActivityLogLossState,
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
@@ -165,6 +167,28 @@ export interface ProcessSummary {
 
 export type ActivityLogEvidenceClassification =
   "supported" | "legacy" | "unsupported" | "corrupt" | "truncated" | "incomplete";
+
+export interface ActivityLogEvidenceIntegrity {
+  readonly completeness: ActivityLogCompletenessState;
+  readonly loss: ActivityLogLossState;
+}
+
+// ADR-0173 D10's closed vocabularies, derived from the analyzer's own verdict instead of the
+// constructor defaults. Only supported or legacy evidence (which implies no malformed line) is
+// complete; a truncated or corrupt artifact is a known, counted subset whose unreadable bytes stand
+// where a record should be; unsupported lines are preserved but excluded; incomplete identity or
+// writer evidence means completeness cannot be established at all. Shared by the analysis evidence
+// line and the SupportIncident descriptor (#3533) so both state one verdict the same way.
+export const ACTIVITY_LOG_EVIDENCE_INTEGRITY: Readonly<
+  Record<ActivityLogEvidenceClassification, ActivityLogEvidenceIntegrity>
+> = {
+  supported: { completeness: "complete", loss: "none" },
+  legacy: { completeness: "complete", loss: "none" },
+  unsupported: { completeness: "partial", loss: "none" },
+  corrupt: { completeness: "partial", loss: "event-dropped" },
+  truncated: { completeness: "partial", loss: "event-dropped" },
+  incomplete: { completeness: "unknown", loss: "none" },
+};
 
 export type ProcessSequenceAnomalyKind = "gap" | "duplicate" | "decreasing" | "reset";
 

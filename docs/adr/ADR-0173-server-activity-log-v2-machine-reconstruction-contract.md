@@ -404,6 +404,15 @@ rejects broad or unknown scope, duplicates, stale/expired records, and any extra
 to authorize prohibited fields, silent loss, or incomplete evidence. Exemptions cannot modify an
 operation schema or reduce a supported class's sufficiency requirement.
 
+**One command enforces the contract permanently.** `npm run check:activity-log` builds the packages
+and then evaluates the complete registered inventory on every run by composing the checks that own
+each rule: `check:op-catalog` (registry, exemptions, failure-class coverage, failure-surface
+inventory, proof and scenario resolution), `check:error-observability`, `arch:check` with
+`arch:check:negative`, and `check:release-impact`. Required CI runs that exact command. It takes no
+changed-file input, so diff awareness can never narrow what it proves. The exemption validator also
+requires the record's owner to be the operation's owning package and its expiry to lie at most 180
+days ahead, so no record is unowned or permanent.
+
 **Every production process has a writer, and a missing one is visible (#3532).** The registry is
 authoritative only when every production emitter reaches the sink that enforces it. The
 process-wide logger therefore resolves the runtime state directory exactly as the CLI does: a
@@ -899,8 +908,7 @@ At most 64 pins are active. The pin record is published before the current segme
 the next retention pass honors it. Pinned sealed segments count against `KEIKO_LOG_PIN_QUOTA_BYTES`,
 oldest pin first, and only while the quota lasts. A pin the quota cannot hold is still recorded with
 `quotaStatus: "exceeded"`. Its unprotected remainder produces one `activity-log.pin.quota-exhausted`
-loss marker with segment counts, bytes and the seq span. Expired and invalid pin records are removed
-with `activity-log.pin.expired`. #3530 provides the primitive; #3533 decides when and what to pin.
+loss marker with segment counts, bytes and the seq span. Expired and invalid pin records are removed with `activity-log.pin.expired`. `releaseActivityLogPin` removes a pin before its expiry, for example once its incident was reported or dismissed; the same line records it with `expiryReason: "released"`. Neither pin function ever throws: an unlistable directory or a failed removal is a closed, evidenced rejection, because both are reachable from a sink's own write path. #3530 provides the primitive; #3533 decides when and what to pin.
 The legacy update-audit import pins its durable batch (`reason: "durable-batch"`).
 
 **Pressure and health.** `activity-log.pressure` records transitions between these closed states:
