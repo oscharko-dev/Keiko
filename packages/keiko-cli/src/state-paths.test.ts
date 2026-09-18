@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   activityLogPinFileName,
   activityLogSegmentFileName,
+  supportIncidentFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   ATLASSIAN_CREDENTIAL_ARTIFACTS,
@@ -259,6 +260,7 @@ function seedRuntimeState(root: string): string {
   mkdirSync(join(stateDir, "editor-hot-exit"), { recursive: true });
   mkdirSync(join(stateDir, "updates", "snapshots", "snap-1"), { recursive: true });
   mkdirSync(join(stateDir, "logs"), { recursive: true });
+  mkdirSync(join(stateDir, "support-incidents"), { recursive: true });
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
   touch(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
@@ -323,6 +325,8 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "logs", "operator-notes.txt")); // a foreign file — must be retained
   mkdirSync(join(stateDir, "logs", "archive"), { recursive: true });
   touch(join(stateDir, "logs", "archive", "old.log")); // nested dir — must be retained, not recursed
+  touch(join(stateDir, "support-incidents", INCIDENT_RECORD));
+  touch(join(stateDir, "support-incidents", "incident-draft.json")); // outside the grammar — retained
   touch(join(stateDir, "user-notes.txt")); // a customer file — must be retained
   return stateDir;
 }
@@ -337,6 +341,7 @@ const SEGMENT_IDENTITY = {
 const SEALED_SEGMENT = activityLogSegmentFileName(SEGMENT_IDENTITY, "sealed");
 const ACTIVE_SEGMENT = activityLogSegmentFileName({ ...SEGMENT_IDENTITY, index: 2 }, "active");
 const PIN_RECORD = activityLogPinFileName("0123456789abcdef01234567");
+const INCIDENT_RECORD = supportIncidentFileName("0123456789abcdef0123456789abcdef");
 
 function categoryOf(
   scan: ReturnType<typeof scanRuntimeState>,
@@ -461,6 +466,11 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(logsRetained).toContain("logs/operator-notes.txt");
     expect(logsRetained).toContain("logs/archive");
     expect(logsRetained.some((relPath) => relPath.startsWith("logs/archive/"))).toBe(false);
+    // #3533: the local incident store is owned by its closed grammar, like `logs/`.
+    expect(categoryOf(scan, "support-incidents")).toBe("support-incident");
+    expect(categoryOf(scan, `support-incidents/${INCIDENT_RECORD}`)).toBe("support-incident");
+    expect(categoryOf(scan, "support-incidents/incident-draft.json")).toBeUndefined();
+    expect(scan.retained.map((r) => r.relPath)).toContain("support-incidents/incident-draft.json");
   });
 
   // #3531: the rebuildable segment-manifest store owns exactly `manifest-<segmentId>.json`.

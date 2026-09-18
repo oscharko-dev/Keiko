@@ -25,7 +25,11 @@ import {
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { isActivityLogOwnedFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  SUPPORT_INCIDENT_DIRECTORY_NAME,
+  isActivityLogOwnedFileName,
+  parseSupportIncidentFileName,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { assertRealpathContained } from "./launcher-paths.js";
@@ -467,7 +471,8 @@ export type RuntimeStateCategory =
   | "evidence"
   | "quality-intelligence"
   | "update-recovery"
-  | "activity-log";
+  | "activity-log"
+  | "support-incident";
 
 // A SQLite store file plus its exact WAL/SHM sidecars and `.corrupt.<ts>` quarantine copies
 // — and ONLY those. Matching is exact-name or a known dotted suffix, never a bare `${base}-`
@@ -741,6 +746,15 @@ const updateSubtree: OwnedSubtree = {
 // `logs/`, or an unexpected nested directory, must be retained rather than claimed by
 // `repair`/`uninstall` — a `whole` subtree here would let anything placed under `logs/` get
 // chmod'd or removed as if Keiko had written it (#2902 PR review).
+// `support-incidents/` holds the local SupportIncident candidates (#3533). Its closed file grammar is
+// the contract's (`incident-<32 hex>.json`), so an operator file dropped there stays foreign.
+const supportIncidentsSubtree: OwnedSubtree = {
+  category: "support-incident",
+  whole: false,
+  ownsFile: (name) => parseSupportIncidentFileName(name) !== undefined,
+  childSubtree: NO_CHILD,
+};
+
 const logsSubtree: OwnedSubtree = {
   category: "activity-log",
   whole: false,
@@ -783,6 +797,7 @@ const TOP_LEVEL_CHILD_SUBTREES: ReadonlyMap<string, OwnedSubtree> = new Map([
   [EDITOR_HOT_EXIT_SUBDIR, editorHotExitSubtree],
   [UPDATE_SUBDIR, updateSubtree],
   [LOGS_SUBDIR, logsSubtree],
+  [SUPPORT_INCIDENT_DIRECTORY_NAME, supportIncidentsSubtree],
   [ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME, activityLogManifestsSubtree],
 ]);
 
