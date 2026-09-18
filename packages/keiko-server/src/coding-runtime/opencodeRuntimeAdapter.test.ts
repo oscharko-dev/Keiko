@@ -17,6 +17,10 @@ import {
 } from "./opencodeRuntimeAdapter.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const DIGEST = "a".repeat(64);
 const SECRET = "SENTINEL_OPENCODE_RUNTIME_SECRET";
