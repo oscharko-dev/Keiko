@@ -3,6 +3,10 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  activityLogPinFileName,
+  activityLogSegmentFileName,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   ATLASSIAN_CREDENTIAL_ARTIFACTS,
   DEFAULT_STATE_DIR_NAME,
   KEIKO_STATE_FILES,
@@ -312,12 +316,27 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "updates", "snapshots", "snap-1", "manifest.json"));
   touch(join(stateDir, "logs", "server.log"));
   touch(join(stateDir, "logs", "server-2026-06-20.log"));
+  touch(join(stateDir, "logs", SEALED_SEGMENT));
+  touch(join(stateDir, "logs", ACTIVE_SEGMENT));
+  touch(join(stateDir, "logs", PIN_RECORD));
+  touch(join(stateDir, "logs", "activity-not-a-segment.jsonl")); // outside the grammar — retained
   touch(join(stateDir, "logs", "operator-notes.txt")); // a foreign file — must be retained
   mkdirSync(join(stateDir, "logs", "archive"), { recursive: true });
   touch(join(stateDir, "logs", "archive", "old.log")); // nested dir — must be retained, not recursed
   touch(join(stateDir, "user-notes.txt")); // a customer file — must be retained
   return stateDir;
 }
+
+// Activity Log names come from the shared closed grammar (#3530), never a hand-written spelling.
+const SEGMENT_IDENTITY = {
+  startMs: Date.parse("2026-06-20T10:00:00.000Z"),
+  pid: 4242,
+  instanceId: "a1b2c3d4",
+  index: 1,
+};
+const SEALED_SEGMENT = activityLogSegmentFileName(SEGMENT_IDENTITY, "sealed");
+const ACTIVE_SEGMENT = activityLogSegmentFileName({ ...SEGMENT_IDENTITY, index: 2 }, "active");
+const PIN_RECORD = activityLogPinFileName("0123456789abcdef01234567");
 
 function categoryOf(
   scan: ReturnType<typeof scanRuntimeState>,
@@ -429,9 +448,13 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "logs")).toBe("activity-log");
     expect(categoryOf(scan, "logs/server.log")).toBe("activity-log");
     expect(categoryOf(scan, "logs/server-2026-06-20.log")).toBe("activity-log");
-    // `logsSubtree` is classified, not `whole`: only the two recognized log-sink names are
-    // owned. A foreign file or an unexpected nested directory under `logs/` must be retained,
-    // not claimed by `repair`/`uninstall` (#2902 PR review).
+    expect(categoryOf(scan, `logs/${SEALED_SEGMENT}`)).toBe("activity-log");
+    expect(categoryOf(scan, `logs/${ACTIVE_SEGMENT}`)).toBe("activity-log");
+    expect(categoryOf(scan, `logs/${PIN_RECORD}`)).toBe("activity-log");
+    // `logsSubtree` is classified, not `whole`: only the Activity Log's closed grammar (segments,
+    // pin records, legacy files) is owned. A foreign file, a near-miss name, or an unexpected nested
+    // directory under `logs/` must be retained, not claimed by `repair`/`uninstall` (#2902 PR review).
+    expect(categoryOf(scan, "logs/activity-not-a-segment.jsonl")).toBeUndefined();
     expect(categoryOf(scan, "logs/operator-notes.txt")).toBeUndefined();
     expect(categoryOf(scan, "logs/archive")).toBeUndefined();
     const logsRetained = scan.retained.map((r) => r.relPath);

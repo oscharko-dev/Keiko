@@ -10,6 +10,7 @@ import {
   parseActivityLogFileName,
   parseActivityLogPinFileName,
   parseActivityLogSegmentId,
+  readableActivityLogFileNames,
   type ActivityLogSegmentIdentity,
 } from "./observability.js";
 
@@ -151,6 +152,23 @@ describe("Activity Log file-name grammar", () => {
       next,
       peerSamePid,
     ]);
+  });
+
+  it("reads one name per segment, dropping an active name shadowed by its sealed twin", () => {
+    const sealed = activityLogSegmentFileName(SEGMENT, "sealed");
+    const activeTwin = activityLogSegmentFileName(SEGMENT, "active");
+    const next = activityLogSegmentFileName({ ...SEGMENT, index: 8 }, "active");
+    const ordered = orderActivityLogFileNames(["server.log", next, activeTwin, sealed]);
+
+    expect(readableActivityLogFileNames(ordered).map((file) => file.name)).toStrictEqual([
+      "server.log",
+      sealed,
+      next,
+    ]);
+    // Without a sealed twin, an active segment is the live file and is read.
+    expect(
+      readableActivityLogFileNames(orderActivityLogFileNames([activeTwin])).map((f) => f.name),
+    ).toStrictEqual([activeTwin]);
   });
 
   it("names retention-pin records with a closed id grammar", () => {

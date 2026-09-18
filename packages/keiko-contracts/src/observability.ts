@@ -45,6 +45,7 @@ export {
   parseActivityLogFileName,
   parseActivityLogPinFileName,
   parseActivityLogSegmentId,
+  readableActivityLogFileNames,
   type ActivityLogFileName,
   type ActivityLogLegacyArchiveFileName,
   type ActivityLogLegacyCurrentFileName,
