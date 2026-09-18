@@ -110,6 +110,79 @@ function fatalActivityErrorKind(
   );
 }
 
+// `process.exiting` is the lifecycle END of one process. Every shutdown branch records it exactly
+// once: the in-process signals (`sigint`, `sigterm`, `sighup`), the pid-bound shutdown request
+// `keiko stop` writes, the server closing on its own, a fatal exception or server error
+// (`fatal-exception`), and — as the last resort — Node's own `exit` event for an exit no other
+// branch observed (`process-exit`). Registered here, beside `process.fatal`, because both the UI
+// process lifecycle and the process-level fatal guard emit it.
+const PROCESS_EXITING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "process.exiting",
+  category: "process",
+  owner: "keiko-cli",
+  emitter: "process-activity-log.processExitingActivityLogEvent",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "sigint",
+        "sigterm",
+        "sighup",
+        "server-close",
+        "shutdown-request",
+        "fatal-exception",
+        "process-exit",
+      ],
+    },
+    uptimeMs: { type: "number", dataClass: "duration", required: true },
+    onShutdownErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["shutdown-hook-failed", "process-shutdown"],
+  proofIds: ["process.exiting.reason", "process.exiting.uptime"],
+  releaseImpact: "patch",
+});
+
+type ProcessExitingFields = ActivityLogFields<typeof PROCESS_EXITING_OPERATION>;
+export type ProcessExitReason = ProcessExitingFields["reason"];
+type ProcessExitingEvent = RegisteredActivityLogEvent<typeof PROCESS_EXITING_OPERATION> &
+  ActivityLogEventEnvelope & { readonly extra: ProcessExitingFields };
+
+export interface ProcessExitingActivityInput {
+  readonly reason: ProcessExitReason;
+  readonly uptimeMs: number;
+  readonly onShutdownErrorKind?: string | undefined;
+}
+
+export function processExitingActivityLogEvent(
+  input: ProcessExitingActivityInput,
+): ProcessExitingEvent {
+  const onShutdownErrorKind =
+    input.onShutdownErrorKind === undefined
+      ? undefined
+      : classifyErrorKind(input.onShutdownErrorKind);
+  return activityLogEvent(
+    PROCESS_EXITING_OPERATION,
+    input.reason === "fatal-exception" ? { level: "error", errorKind: "internal" } : {},
+    {
+      reason: input.reason,
+      uptimeMs: Number.isFinite(input.uptimeMs) ? Math.max(0, input.uptimeMs) : 0,
+      ...(onShutdownErrorKind === undefined ? {} : { onShutdownErrorKind }),
+    },
+  );
+}
+
 export function processFatalActivityLogEvent(input: ProcessFatalActivityInput): ProcessFatalEvent {
   const failureKind = classifyErrorKind(input.failureKind) ?? "unknown";
   const sessionId = boundedSessionId(input.sessionId);

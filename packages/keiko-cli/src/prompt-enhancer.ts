@@ -15,6 +15,8 @@ import { validatePromptEnhancementWireRequest } from "@oscharko-dev/keiko-contra
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 // GEN-PERF-CLI-001 — gateway/harness/workflows/evidence load at dispatch; the
 // contracts + security leaves above are cheap and stay static.
+import type { ProcessServerLogSink } from "@oscharko-dev/keiko-server";
+import { cliActivityLogSink } from "./cli-activity-log.js";
 import { loadEvidence, loadHarness, loadModelGateway, loadWorkflows } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 
@@ -361,11 +363,13 @@ export async function runPromptEnhancerCli(
   const gateway = await loadModelGateway();
   const config = resolveGatewayConfig(parsed.flags, env, io, deps, gateway);
   if (!config.ok) return config.code;
-  // A real enhancement is about to run — now load the remaining three graphs.
-  const [harness, workflows, evidence] = await Promise.all([
+  // A real enhancement is about to run — now load the remaining three graphs, and the process-wide
+  // Activity Log port the gateway writes through when model-assisted refinement is configured.
+  const [harness, workflows, evidence, log] = await Promise.all([
     loadHarness(),
     loadWorkflows(),
     loadEvidence(),
+    config.config === undefined ? Promise.resolve(undefined) : cliActivityLogSink(),
   ]);
   const run = deps.run ?? workflows.runPromptEnhancement;
   let result: PromptEnhancementWireResponse;
@@ -373,7 +377,8 @@ export async function runPromptEnhancerCli(
     result = await run(parsed.request, {
       gatewayRoutingConfig: workflows.promptEnhancementGatewayRoutingConfig(config.config),
       modelPortFactory:
-        deps.modelPortFactory ?? promptEnhancerModelPortFactory(config.config, gateway, harness),
+        deps.modelPortFactory ??
+        promptEnhancerModelPortFactory(config.config, gateway, harness, log),
     });
   } catch (error) {
     if (error instanceof workflows.PromptEnhancementInputError) {
@@ -394,9 +399,10 @@ function promptEnhancerModelPortFactory(
   config: GatewayConfig | undefined,
   gatewayModule: GatewayModule,
   harness: HarnessModule,
+  log: ProcessServerLogSink | undefined,
 ): ((modelId: string) => ModelPort | undefined) | undefined {
   if (config === undefined) return undefined;
-  const gateway = new gatewayModule.Gateway(config);
+  const gateway = new gatewayModule.Gateway(config, log === undefined ? undefined : { log });
   const port = new harness.GatewayModelPort(gateway);
   return (modelId: string): ModelPort | undefined =>
     config.providers.some((provider) => provider.modelId === modelId) ? port : undefined;

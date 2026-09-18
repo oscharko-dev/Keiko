@@ -38,10 +38,17 @@
 
 import type {
   ClientDiagnosticIngestRequest,
+  ClientDiagnosticLossCounts,
   ClientDiagnosticReadyState,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { type ClientDiagnosticMeta, setClientDiagnosticWriter } from "./client-diagnostics";
+import {
+  type ClientDiagnosticMeta,
+  recordClientDiagnosticLoss,
+  restoreClientDiagnosticLoss,
+  setClientDiagnosticWriter,
+  takeClientDiagnosticLoss,
+} from "./client-diagnostics";
 import { bffFetchJson } from "./http";
 
 function writeToBrowserConsole(message: string): void {
@@ -102,39 +109,28 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
 // `exactOptionalPropertyTypes` is honoured because `ClientDiagnosticIngestRequest`'s optional fields
 // are all typed `T | undefined` (keiko-contracts), so assigning `undefined` outright is legal — and
 // `JSON.stringify` drops an `undefined`-valued key from the wire body regardless, so an absent
-// correlation id never reaches the request at all.
+// correlation id never reaches the request at all. `loss` carries the page's counted delivery loss
+// since its last delivered report (#3532).
 function clientDiagnosticPostBody(
   message: string,
-  correlationId: string | undefined,
-  gitChangeDescription: ClientDiagnosticMeta["gitChangeDescription"],
-  workspaceTrustBinding: ClientDiagnosticMeta["workspaceTrustBinding"],
+  meta: ClientDiagnosticMeta | undefined,
+  loss: ClientDiagnosticLossCounts | undefined,
 ): ClientDiagnosticIngestRequest {
   const bounded =
     message.length > CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH
       ? message.slice(0, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)
       : message;
-  const clientTs = new Date().toISOString();
-  const validId = validCorrelationId(correlationId);
-  const sseMatch = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message);
-  if (sseMatch === null)
-    return {
-      message: bounded,
-      clientTs,
-      correlationId: validId,
-      gitChangeDescription,
-      workspaceTrustBinding,
-    };
-  const readyStateDigit = sseMatch[1];
-  if (readyStateDigit === undefined) return { message: bounded, clientTs, correlationId: validId };
-  return {
+  const base = {
     message: bounded,
-    clientTs,
-    correlationId: validId,
-    gitChangeDescription,
-    workspaceTrustBinding,
-    readyState: parsedSseReadyState(readyStateDigit),
-    kind: "sse-error",
+    clientTs: new Date().toISOString(),
+    correlationId: validCorrelationId(meta?.correlationId),
+    gitChangeDescription: meta?.gitChangeDescription,
+    workspaceTrustBinding: meta?.workspaceTrustBinding,
+    loss,
   };
+  const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];
+  if (readyStateDigit === undefined) return { ...base, kind: meta?.kind };
+  return { ...base, readyState: parsedSseReadyState(readyStateDigit), kind: "sse-error" };
 }
 
 // Process-wide (module-scope), not per-diagnostic: a flapping stream or a hostile page must not be
@@ -192,32 +188,57 @@ export function resetClientDiagnosticPostStateForTests(): void {
 // diagnose" — silently dropping a failed POST left a developer with no way to tell the server never
 // received the diagnostic). This never calls back through `reportClientDiagnostic`, which would
 // re-enter `fanOutClientDiagnostic` and risk a loop under a persistently failing transport.
-function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
-  if (!admittedByClientPostRateLimit(Date.now())) {
-    postThrottledCount += 1;
-    postThrottledInWindow += 1;
-    if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
-    return;
-  }
+// A failed delivery loses this report AND the loss counts it was carrying: the counts go back to
+// the page's ledger for the next report, and the report itself is counted as a failed POST.
+function recordFailedPost(loss: ClientDiagnosticLossCounts | undefined): void {
+  postFailureCount += 1;
+  restoreClientDiagnosticLoss(loss);
+  recordClientDiagnosticLoss("postsFailed");
+  writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
+}
+
+function sendClientDiagnostic(message: string, meta: ClientDiagnosticMeta | undefined): void {
+  const loss = takeClientDiagnosticLoss();
   try {
-    const body = clientDiagnosticPostBody(
-      message,
-      meta?.correlationId,
-      meta?.gitChangeDescription,
-      meta?.workspaceTrustBinding,
-    );
+    const body = clientDiagnosticPostBody(message, meta, loss);
     void bffFetchJson<undefined>("/api/diagnostics/client", {
       method: "POST",
       body: JSON.stringify(body),
       keepalive: true,
     }).catch(() => {
-      postFailureCount += 1;
-      writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
+      recordFailedPost(loss);
     });
   } catch {
-    postFailureCount += 1;
-    writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
+    recordFailedPost(loss);
   }
+}
+
+function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
+  if (!admittedByClientPostRateLimit(Date.now())) {
+    postThrottledCount += 1;
+    postThrottledInWindow += 1;
+    recordClientDiagnosticLoss("postsThrottled");
+    if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
+    return;
+  }
+  sendClientDiagnostic(message, meta);
+}
+
+// Loss counted after the page's last report would otherwise stay in the tab forever: a storm of
+// suppressed rejections followed by silence has no "next report" to ride on. When the page is
+// hidden for good, one final keepalive report carries whatever is still counted. It bypasses the
+// client throttle — it is at most one report per page lifetime — and the server still rate-limits.
+const LOSS_FLUSH_MESSAGE = "[keiko] client diagnostic delivery loss summary"; // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
+
+export function flushClientDiagnosticLoss(): void {
+  const loss = takeClientDiagnosticLoss();
+  if (loss === undefined) return;
+  restoreClientDiagnosticLoss(loss);
+  sendClientDiagnostic(LOSS_FLUSH_MESSAGE, { kind: "other" });
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("pagehide", flushClientDiagnosticLoss);
 }
 
 // The fan-out composite: every diagnostic reaches both transports. Console first, so a developer

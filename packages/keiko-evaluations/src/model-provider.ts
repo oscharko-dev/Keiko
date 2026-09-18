@@ -11,6 +11,7 @@ import {
   loadConfigFromFile,
   type EnvSource,
   type GatewayConfig,
+  type GatewayDeps,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { GatewayModelPort } from "@oscharko-dev/keiko-harness";
@@ -31,6 +32,10 @@ export interface EvaluationModelProviderDeps {
   // Config file path for live mode. If omitted, KEIKO_CONFIG_FILE must be set.
   readonly configPath?: string | undefined;
   readonly configLoader?: EvaluationConfigLoader | undefined;
+  // The Activity Log port the live Model Gateway writes through (#3532). Injected by the higher
+  // layer that owns the process log (the CLI passes the server's process-wide port), so a live
+  // evaluation leaves the same gateway evidence a BFF call does instead of an unwired no-op.
+  readonly logSink?: GatewayDeps["log"] | undefined;
 }
 
 // Builds the ModelPort for the given mode. In live mode this loads the gateway config and constructs
@@ -46,5 +51,7 @@ export function createEvaluationModelProvider(deps: EvaluationModelProviderDeps)
     throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
   }
   const config = (deps.configLoader ?? loadConfigFromFile)(path, env);
-  return new GatewayModelPort(new Gateway(config));
+  return new GatewayModelPort(
+    new Gateway(config, deps.logSink === undefined ? undefined : { log: deps.logSink }),
+  );
 }

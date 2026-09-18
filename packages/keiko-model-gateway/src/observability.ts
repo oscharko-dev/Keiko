@@ -26,6 +26,7 @@ import {
   activityLogEvent,
   classifyErrorKind,
   defineActivityLogOperation,
+  recordActivityLogLoss,
   withActivityLogCorrelation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -134,6 +135,9 @@ function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
       try {
         sink.write(event);
       } catch (cause) {
+        // Every failure is a lost line and is counted in the process loss ledger; only the
+        // stderr notice is limited to once per sink.
+        recordActivityLogLoss("port-sink-failed");
         reportFailedLogSink(sink, event, cause);
       }
     },

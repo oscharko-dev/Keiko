@@ -27,6 +27,7 @@ import type {
   TaskType,
 } from "@oscharko-dev/keiko-harness";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { cliActivityLogSink } from "./cli-activity-log.js";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import { loadEvidence, loadHarness, loadModelGateway, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
@@ -352,7 +353,8 @@ async function resolveModel(
       io.err("Error: no configured chat model is available.\n");
       return 1;
     }
-    return { port: new harness.GatewayModelPort(new gateway.Gateway(config)), modelId };
+    const log = await cliActivityLogSink();
+    return { port: new harness.GatewayModelPort(new gateway.Gateway(config, { log })), modelId };
   } catch (error) {
     if (error instanceof gateway.GatewayError) {
       io.err(

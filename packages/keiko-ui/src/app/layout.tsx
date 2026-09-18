@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
+import { ClientDiagnosticsRoot } from "./ClientDiagnosticsRoot";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -59,6 +60,7 @@ export default function RootLayout({ children }: { readonly children: ReactNode 
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
         <script dangerouslySetInnerHTML={{ __html: LOCALE_BOOTSTRAP }} />
         <script dangerouslySetInnerHTML={{ __html: APP_BOOT_RECOVERY_BOOTSTRAP }} />
+        <ClientDiagnosticsRoot />
         {children}
       </body>
     </html>

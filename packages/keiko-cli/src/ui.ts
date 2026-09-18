@@ -21,6 +21,7 @@ import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { UpdateInstallModeKind } from "@oscharko-dev/keiko-contracts";
+import type { ActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   activityLogEvent,
   classifyErrorKind,
@@ -51,7 +52,11 @@ import {
 // the measured ~410ms per-command module-loading tax (`keiko --version` included).
 // Only type imports may reference the package at module scope here.
 import { loadServer as loadServerModule } from "./lazy-modules.js";
-import { processFatalActivityLogEvent } from "./process-activity-log.js";
+import {
+  processExitingActivityLogEvent,
+  processFatalActivityLogEvent,
+  type ProcessExitReason,
+} from "./process-activity-log.js";
 import type { CliIo } from "./runner.js";
 import type { CliSecurityLogSinkFactory } from "./security-log.js";
 import {
@@ -72,35 +77,7 @@ const SQLITE_FLAG = "--experimental-sqlite";
 const LOCAL_DOTENV_ENV_NAME_ALLOWLIST: ReadonlySet<string> = new Set(["FIGMA_ACCESS_TOKEN"]);
 const DEFAULT_STATE_DIR = ".keiko";
 
-const PROCESS_EXITING_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "process.exiting",
-  category: "process",
-  owner: "keiko-cli",
-  emitter: "ui.writeProcessExiting",
-  fields: {
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["sigint", "sigterm", "server-close", "shutdown-request", "fatal-exception"],
-    },
-    uptimeMs: { type: "number", dataClass: "duration", required: true },
-    onShutdownErrorKind: {
-      type: "string",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 64,
-    },
-  },
-  causal: "none",
-  lifecycle: "end",
-  analyzerProjection: "process-lifecycle",
-  failureClasses: ["shutdown-hook-failed", "process-shutdown"],
-  proofIds: ["process.exiting.reason", "process.exiting.uptime"],
-  releaseImpact: "patch",
-});
+export type { ProcessExitReason } from "./process-activity-log.js";
 
 const PROCESS_HEARTBEAT_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -332,6 +309,10 @@ export interface UiCliDeps {
         options: ImportLegacyUpdateAuditSnapshotOptions,
       ) => LegacyUpdateAuditImportOutcome | Promise<LegacyUpdateAuditImportOutcome>)
     | undefined;
+  // Test seam for the diagnostic-readiness self-check (#3532). The real launch runs keiko-server's
+  // `checkActivityLogReadiness` before listening; the injected-server path runs this one instead,
+  // or nothing when it is absent.
+  readonly activityLogReadiness?: (() => ActivityLogReadinessSnapshot) | undefined;
 }
 
 interface LiveCspSource {
@@ -728,23 +709,32 @@ function closeServerBounded(server: Server, onDone: () => void, graceMs: number)
   });
 }
 
+interface DurableServerErrorContext {
+  readonly server: Server;
+  readonly io: CliIo;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly exit: (code: number) => void;
+  readonly graceMs: number;
+  readonly onFatalExit: (() => void) | undefined;
+}
+
 async function handleDurableServerError(
-  server: Server,
-  io: CliIo,
-  activityLog: ServerLogSink | undefined,
+  context: DurableServerErrorContext,
   error: Error,
-  exit: (code: number) => void,
-  graceMs: number,
 ): Promise<void> {
   const described = await classifyServerError(error);
-  io.err(`keiko ui: server error (${described.errorClass}).\n`);
-  writeDurableServerErrorLog(activityLog, described);
+  context.io.err(`keiko ui: server error (${described.errorClass}).\n`);
+  writeDurableServerErrorLog(context.activityLog, described);
+  // The fatal branch ends the process too: it records `process.exiting` with reason
+  // `fatal-exception` before the bounded close, so the server's own `close` event can no longer
+  // relabel this crash as an ordinary `server-close`.
+  context.onFatalExit?.();
   closeServerBounded(
-    server,
+    context.server,
     () => {
-      exit(1);
+      context.exit(1);
     },
-    graceMs,
+    context.graceMs,
   );
 }
 
@@ -763,10 +753,12 @@ export function attachDurableServerErrorListener(
   activityLog?: ServerLogSink,
   exit: (code: number) => void = (code): void => process.exit(code),
   graceMs: number = SHUTDOWN_FORCE_CLOSE_GRACE_MS,
+  onFatalExit?: () => void,
 ): void {
   if (typeof server.on !== "function") return;
+  const context = { server, io, activityLog, exit, graceMs, onFatalExit };
   server.on("error", (error: Error) => {
-    void handleDurableServerError(server, io, activityLog, error, exit, graceMs);
+    void handleDurableServerError(context, error);
   });
 }
 
@@ -805,6 +797,11 @@ class ShutdownSession {
   private readonly handleSigterm = (): void => {
     this.beginDrain("sigterm");
   };
+  // A closed terminal (SIGHUP) is a shutdown like any other: without this listener Node's default
+  // action killed the process with no `process.exiting` line and no loss summary.
+  private readonly handleSighup = (): void => {
+    this.beginDrain("sighup");
+  };
   private readonly onClose = (): void => {
     if (this.begun) return;
     this.begun = true;
@@ -824,6 +821,7 @@ class ShutdownSession {
     this.server.once("close", this.onClose);
     process.once("SIGINT", this.handleSigint);
     process.once("SIGTERM", this.handleSigterm);
+    process.once("SIGHUP", this.handleSighup);
   }
 
   public watchRequest(peek: () => boolean): void {
@@ -851,6 +849,7 @@ class ShutdownSession {
   private detachSignals(): void {
     process.removeListener("SIGINT", this.handleSigint);
     process.removeListener("SIGTERM", this.handleSigterm);
+    process.removeListener("SIGHUP", this.handleSighup);
   }
 
   private settle(): void {
@@ -878,14 +877,22 @@ export function waitForShutdown(
   });
 }
 
-// The reason label `process.exiting` carries. `waitForShutdown`'s own handlers produce
-// sigint/sigterm (in-process signals), shutdown-request (the pid-bound `<stateDir>/ui.shutdown`
-// sentinel `keiko stop` writes — the Windows-safe channel, issue #3351), and server-close.
-// `fatal-exception` is reserved for a future top-level uncaught-exception/unhandled-rejection
-// handler outside this work item's scope, kept here so that producer can reuse the same closed
-// vocabulary instead of inventing a second one.
-export type ProcessExitReason =
-  "sigint" | "sigterm" | "server-close" | "shutdown-request" | "fatal-exception";
+// The reason label `process.exiting` carries (`ProcessExitReason`, process-activity-log.ts).
+// `waitForShutdown`'s own handlers produce sigint/sigterm/sighup (in-process signals),
+// shutdown-request (the pid-bound `<stateDir>/ui.shutdown` sentinel `keiko stop` writes — the
+// Windows-safe channel, issue #3351), and server-close. The durable server-error listener produces
+// `fatal-exception`, and the process `exit` fallback produces `process-exit` for an exit no other
+// branch observed. Whichever branch runs first claims the one exit line through `ProcessExitLatch`.
+export class ProcessExitLatch {
+  private claimed = false;
+
+  /** True exactly once: the caller that receives it writes the process's only exit line. */
+  public claim(): boolean {
+    if (this.claimed) return false;
+    this.claimed = true;
+    return true;
+  }
+}
 
 // What `waitForShutdown` needs to report the process-lifecycle exit line and release the
 // heartbeat resources `startUiServer` scheduled. All optional: the injected-server test path
@@ -909,6 +916,13 @@ export interface WaitForShutdownActivity {
   // this pid; this peek is how the child observes that request. Optional so injected-server
   // tests of `waitForShutdown` keep the signal-only contract.
   readonly peekShutdownRequest?: (() => boolean) | undefined;
+  // Shared with the durable server-error listener and the process `exit` fallback so the process
+  // writes exactly one `process.exiting` line, whichever branch runs first.
+  readonly exitLatch?: ProcessExitLatch | undefined;
+  // Runs once, immediately before the exit line: the real launch flushes the BFF's trailing
+  // suppressed counts and persists the exit loss summary here (#3532). A throw is recorded as
+  // `onShutdownErrorKind`, exactly like a failing `onShutdown`.
+  readonly beforeExitEvidence?: (() => void) | undefined;
 }
 
 // The independent-channel idiom `knowledge-log.ts`'s `warnFailedKnowledgeLogSink` uses: when the
@@ -927,7 +941,18 @@ function warnShutdownHookFailed(errorKind: string): void {
   }
 }
 
+// Runs one shutdown hook and returns the content-free class of what it threw, if anything.
+function runShutdownHook(hook: (() => void) | undefined): string | undefined {
+  try {
+    hook?.();
+    return undefined;
+  } catch (error) {
+    return safeCliErrorKind(error);
+  }
+}
+
 function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessExitReason): void {
+  if (activity.exitLatch?.claim() === false) return;
   // A throwing onShutdown must not suppress this line (see WaitForShutdownActivity's doc
   // comment) — caught here rather than left to propagate into the SIGINT/SIGTERM/server-close
   // listener that calls this function, which would turn a heartbeat-teardown failure into an
@@ -938,27 +963,19 @@ function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessE
   // heartbeat-teardown failure never vanishes with the shutdown path that produced it.
   // Only the error's CLASS is recorded, never its message: a message is foreign free text, and
   // the producer side never reads one — the same rule every other instrumentation site follows.
-  let onShutdownErrorKind: string | undefined;
-  try {
-    activity.onShutdown?.();
-  } catch (error) {
-    onShutdownErrorKind = safeCliErrorKind(error);
-  }
+  const onShutdownErrorKind =
+    runShutdownHook(activity.onShutdown) ?? runShutdownHook(activity.beforeExitEvidence);
   const { activityLog, startedAt, closeActivityLog } = activity;
   if (activityLog === undefined || startedAt === undefined) {
     if (onShutdownErrorKind !== undefined) warnShutdownHookFailed(onShutdownErrorKind);
     return;
   }
   activityLog.write(
-    activityLogEvent(
-      PROCESS_EXITING_OPERATION,
-      {},
-      {
-        reason,
-        uptimeMs: Math.max(0, Date.now() - startedAt),
-        ...(onShutdownErrorKind === undefined ? {} : { onShutdownErrorKind }),
-      },
-    ),
+    processExitingActivityLogEvent({
+      reason,
+      uptimeMs: Date.now() - startedAt,
+      onShutdownErrorKind,
+    }),
   );
   if (closeActivityLog !== undefined) {
     closeActivityLog();
@@ -1078,11 +1095,17 @@ async function buildHandlerDepsOrReport(
     });
   } catch (error) {
     if (error instanceof UiStoreError) {
-      io.err(`keiko ui: ${error.message}\n`);
+      io.err(uiStoreRefusal(error.code));
       return 2;
     }
     throw error;
   }
+}
+
+// A store refusal is reported by its closed code only: the process's stderr is an operator channel,
+// never a place for an error's free text (#3532).
+function uiStoreRefusal(code: string): string {
+  return `keiko ui: the UI store refused startup (${code}).\n`;
 }
 
 export function createPortableHandoffShutdownTrigger(input: {
@@ -1116,7 +1139,7 @@ async function registerLaunchProjectOrReport(
     return null;
   } catch (error) {
     if (error instanceof UiStoreError) {
-      io.err(`keiko ui: ${error.message}\n`);
+      io.err(uiStoreRefusal(error.code));
       return 2;
     }
     throw error;
@@ -1212,11 +1235,17 @@ export function startProcessHeartbeat(
   activityLog: ServerLogSink,
   intervalMs: number = HEARTBEAT_INTERVAL_MS,
   createHistogram: () => EventLoopHistogram = monitorEventLoopDelay,
+  onTick?: () => void,
 ): () => void {
   const histogram = createHistogram();
   histogram.enable();
   const interval = setInterval(() => {
     writeHeartbeat(activityLog, histogram);
+    // The heartbeat cadence also re-evaluates readiness and persists a changed loss summary
+    // (#3532). A throwing hook must not stop the heartbeat itself; its class is reported on the
+    // independent process-warning channel.
+    const tickErrorKind = runShutdownHook(onTick);
+    if (tickErrorKind !== undefined) warnShutdownHookFailed(tickErrorKind);
   }, intervalMs);
   interval.unref();
   return (): void => {
@@ -1272,6 +1301,8 @@ interface ProcessStartedContext {
   readonly handlerDeps: UiHandlerDeps;
   readonly stateDirSource: StateDirSource;
   readonly logLevel: ServerLogThreshold;
+  // Runs on every heartbeat tick of a real launch (readiness refresh and loss summary).
+  readonly onHeartbeat: (() => void) | undefined;
   // Threaded from `UiCliDeps.installModeProbe`. Undefined on every real launch that does not
   // override it (the real detector runs) and on the injected-server path with no override (no
   // probe runs at all, matching today's behavior) — defined only when a test explicitly injects
@@ -1321,7 +1352,14 @@ async function reportProcessStarted(
       },
     ),
   );
-  return isRealLaunch ? startProcessHeartbeat(activityLog) : undefined;
+  return isRealLaunch
+    ? startProcessHeartbeat(
+        activityLog,
+        HEARTBEAT_INTERVAL_MS,
+        monitorEventLoopDelay,
+        context.onHeartbeat,
+      )
+    : undefined;
 }
 
 // One options object rather than a positional list: the parameters are all context for the same
@@ -1468,16 +1506,41 @@ async function reconcileAfterListen(
   }
 }
 
-async function reportStartedAndWaitForShutdown(input: {
+// The #3532 evidence hooks a real launch threads into the lifecycle: the heartbeat re-evaluates
+// readiness and persists a changed loss summary; the exit path flushes the BFF's trailing
+// suppressed counts and persists the final loss summary. Absent on the injected-server path.
+interface LaunchEvidenceHooks {
+  readonly onHeartbeat: (() => void) | undefined;
+  readonly beforeExitEvidence: (() => void) | undefined;
+}
+
+interface ReportStartedInput {
   readonly server: Server;
   readonly options: StartUiServerOptions;
   readonly activityLog: ServerLogSink | undefined;
   readonly closeActivityLog: (() => void) | undefined;
   readonly isRealLaunch: boolean;
-}): Promise<void> {
-  const { server, options, activityLog, closeActivityLog, isRealLaunch } = input;
+  readonly startedAt: number;
+  readonly exitLatch: ProcessExitLatch;
+  readonly hooks: LaunchEvidenceHooks;
+}
+
+// Last-resort exit evidence: an exit that none of the shutdown branches observed (a
+// `process.exit` from elsewhere) still records `process.exiting` synchronously from Node's `exit`
+// event. The shared latch makes this a no-op after any ordinary shutdown.
+function armProcessExitFallback(activity: WaitForShutdownActivity): () => void {
+  const onExit = (): void => {
+    writeProcessExiting(activity, "process-exit");
+  };
+  process.once("exit", onExit);
+  return (): void => {
+    process.removeListener("exit", onExit);
+  };
+}
+
+async function reportStartedAndWaitForShutdown(input: ReportStartedInput): Promise<void> {
+  const { server, options, activityLog, closeActivityLog, isRealLaunch, startedAt } = input;
   const { parsed, handlerDeps, io, deps, stateDir, stateDirSource, logLevel } = options;
-  const startedAt = Date.now();
   io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
   const stopHeartbeat = await reportProcessStarted({
     activityLog,
@@ -1487,15 +1550,24 @@ async function reportStartedAndWaitForShutdown(input: {
     stateDirSource,
     logLevel,
     installModeProbe: deps.installModeProbe,
+    onHeartbeat: input.hooks.onHeartbeat,
   });
-  await maybeWaitForShutdown(server, deps, {
+  const activity: WaitForShutdownActivity = {
     activityLog,
     startedAt,
     onShutdown: stopHeartbeat,
     closeActivityLog,
     peekShutdownRequest: () =>
       peekShutdownRequest(stateDir, process.pid, process.env[KEIKO_UI_LAUNCH_ID_ENV]),
-  });
+    exitLatch: input.exitLatch,
+    beforeExitEvidence: input.hooks.beforeExitEvidence,
+  };
+  const disarmExitFallback = isRealLaunch ? armProcessExitFallback(activity) : undefined;
+  try {
+    await maybeWaitForShutdown(server, deps, activity);
+  } finally {
+    disarmExitFallback?.();
+  }
 }
 
 async function importLegacyAuditAfterRecovery(
@@ -1523,19 +1595,68 @@ async function importLegacyAuditAfterRecovery(
   return outcome;
 }
 
+function readinessSummary(snapshot: ActivityLogReadinessSnapshot): string {
+  const reasons = snapshot.reasons.length === 0 ? "" : ` (${snapshot.reasons.join(", ")})`;
+  return `${snapshot.readiness}${reasons}`;
+}
+
+// The diagnostic-readiness self-check runs before the server accepts any work (#3532): the real
+// launch validates the catalog, probes the production sink with a real synced write, checks storage
+// and the logger wiring, and persists the result as `activity-log.readiness`. Anything but `ready`
+// is printed before the listening line, so an operator sees degraded evidence before relying on it.
+type LoadedServerModule = Awaited<ReturnType<typeof loadServerModule>>;
+
+function runStartupReadinessCheck(
+  options: StartUiServerOptions,
+  loadedServer: LoadedServerModule | undefined,
+): void {
+  const check =
+    options.deps.activityLogReadiness ??
+    (loadedServer === undefined
+      ? undefined
+      : (): ActivityLogReadinessSnapshot =>
+          loadedServer.checkActivityLogReadiness({
+            stateDir: options.stateDir,
+            env: options.runtimeEnv,
+          }));
+  if (check === undefined) return;
+  const snapshot = check();
+  if (snapshot.readiness !== "ready") {
+    options.io.err(`keiko ui: diagnostic evidence is ${readinessSummary(snapshot)}.\n`);
+  }
+}
+
+function launchEvidenceHooks(
+  server: LoadedServerModule | undefined,
+  stateDir: string,
+): LaunchEvidenceHooks {
+  if (server === undefined) return { onHeartbeat: undefined, beforeExitEvidence: undefined };
+  return {
+    onHeartbeat: (): void => {
+      server.refreshActivityLogReadiness({ stateDir });
+      server.persistActivityLogLossSummary("heartbeat");
+    },
+    beforeExitEvidence: (): void => {
+      server.flushClientDiagnosticsIngestCounts();
+      server.persistActivityLogLossSummary("exit");
+    },
+  };
+}
+
 async function startUiServer(options: StartUiServerOptions): Promise<void> {
   const { staticRoot, csp, cspProvider, parsed, handlerDeps, io, deps, stateDir } = options;
   const { runtimeEnv } = options;
   const isRealLaunch = deps.createServer === undefined;
   // Injected-server tests must not force-load the real server module graph. The same rule governs
-  // the activity log: `createFileServerLogSink` mkdirs `<stateDir>/logs` on construction, so
-  // building it on the injected path would write a directory outside the test's fixture. A test
-  // may still inject its own sink via `deps.activityLog` to exercise the lifecycle log lines
-  // without either of those.
+  // the activity log: the production sink mkdirs `<stateDir>/logs` on construction, so building it
+  // on the injected path would write a directory outside the test's fixture. A test may still
+  // inject its own sink via `deps.activityLog` to exercise the lifecycle log lines without either
+  // of those. The real launch uses the level-gated production sink, which never filters the
+  // mandatory lifecycle and loss evidence (#3532).
+  const loadedServer = isRealLaunch ? await loadServerModule() : undefined;
   const factory = deps.createServer ?? (await loadServerModule()).createUiServer;
   const activityLog: ServerLogSink | undefined =
-    deps.activityLog ??
-    (isRealLaunch ? (await loadServerModule()).createFileServerLogSink(stateDir) : undefined);
+    deps.activityLog ?? loadedServer?.createActivityLogSink(stateDir);
   // Reaches the loaded module's `closeFileServerLogSinks` (ADR-0173 export) directly for the
   // shutdown path, rather than relying solely on `activityLog.close?.()` — see
   // `WaitForShutdownActivity.closeActivityLog`'s doc comment. `loadServerModule()` here is the
@@ -1544,6 +1665,7 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   const closeActivityLog = isRealLaunch
     ? (await loadServerModule()).closeFileServerLogSinks
     : undefined;
+  runStartupReadinessCheck(options, loadedServer);
   const startupRecovery = handlerDeps.updateStartupRecovery;
   const readiness = { open: startupRecovery === undefined };
   const recoveryContext = {
@@ -1567,11 +1689,26 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
+  const startedAt = Date.now();
+  const exitLatch = new ProcessExitLatch();
+  const hooks = launchEvidenceHooks(loadedServer, stateDir);
   // KEIKO-0858 / #2906 round 3 (comment 3865273692): durable server-lifetime error listener
   // replaces the settled-rejection one-shot listen() removes. A post-listen error now reaches
   // io.err (body-free) AND the activity log, then drives a bounded fatal shutdown, instead of
-  // being logged and left running, or crashing the process with a raw stack.
-  attachDurableServerErrorListener(server, io, activityLog);
+  // being logged and left running, or crashing the process with a raw stack. It shares the exit
+  // latch, so the crash is recorded as `fatal-exception`, never relabelled by the close it causes.
+  attachDurableServerErrorListener(server, io, activityLog, undefined, undefined, () => {
+    writeProcessExiting(
+      {
+        activityLog,
+        startedAt,
+        closeActivityLog,
+        exitLatch,
+        beforeExitEvidence: hooks.beforeExitEvidence,
+      },
+      "fatal-exception",
+    );
+  });
   await reconcileAfterListen({ ...recoveryContext, current: recoveryCurrent, server });
   if (recoveryCurrent !== undefined) readiness.open = true;
   await importLegacyAuditAfterRecovery(options, isRealLaunch, activityLog);
@@ -1586,6 +1723,9 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     activityLog,
     isRealLaunch,
     closeActivityLog,
+    startedAt,
+    exitLatch,
+    hooks,
   });
 }
 
@@ -1607,8 +1747,8 @@ export async function createLiveCspSource(
       warned = false;
     } catch (error) {
       if (!warned) {
-        const message = error instanceof Error ? error.message : String(error);
-        io.err(`Warning: failed to reload CSP hashes from ${hashesFile}: ${message}\n`);
+        // The content-free class only: a filesystem error's text carries the path it failed on.
+        io.err(`Warning: failed to reload CSP hashes (${safeCliErrorKind(error)}).\n`);
         warned = true;
       }
     } finally {

@@ -80,7 +80,6 @@ import {
   buildConfigSnapshotSection,
   buildEvidenceManifestSection,
   buildSupportBundleManifest,
-  buildUiLogSection,
   bundleSha256Hex,
   bundleText,
   CURRENT_LOG_FILE_NAME,
@@ -88,22 +87,18 @@ import {
   describeErrorKind,
   discoverServerLogFiles,
   readKeptFiles,
-  readVerifiedLogText,
   selectLogFilesWithinBudget,
   serializeBundleLines,
   sha256SidecarPath,
-  UI_LOG_FILE_NAME,
   UI_LOG_SECTION,
   type CurrentFileTailTruncated,
   type SkippedLogFile,
   type SupportBundleConfigSnapshotSection,
   type SupportBundleEvidenceManifestSection,
-  type SupportBundleUiLogSection,
 } from "./support-export.js";
 
 const USAGE = `Usage:
   keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N]
-                        [--include-ui-log --i-understand-this-is-unredacted]
                         [--include-evidence RUNID[,RUNID...]]
   keiko support analyze FILE [--correlation-id ID] [--json] [--clusters]
                         [--seed] [--emit-fixture PATH]
@@ -125,11 +120,12 @@ If a process stops mid-publication, rerun the same explicit --out command; for t
 rerun from the same working directory. Keiko recovers the durable prior bytes before taking a new
 clock or log snapshot, or fails closed when the bounded recovery slot conflicts.
 
-<state-dir>/ui.log (the UI/BFF process's raw, unredacted stdout+stderr) is excluded by default and
-always named in the manifest's sectionsExcluded — attaching it requires BOTH --include-ui-log AND
---i-understand-this-is-unredacted; either flag alone still excludes it. --include-evidence attaches
-the FULL EvidenceStore manifest for each listed runId (beyond the index-only summary above) for
-deep replay; a runId that does not exist under --state-dir contributes no section.
+A legacy <state-dir>/ui.log (raw UI process output written by earlier versions) is never read into
+a report and is always named in the manifest's sectionsExcluded; every diagnostic the UI process
+produces is an Activity Log line. --include-evidence attaches the FULL EvidenceStore manifest for
+each listed runId (beyond the index-only summary above) for deep replay; a runId that does not
+exist under --state-dir contributes no section. After a successful export the command reports the
+state directory's diagnostic readiness (ready, degraded or unavailable, with closed reasons).
 
 analyze reads FILE (a support bundle or a raw server.log — auto-detected), groups its lines by
 correlationId, and prints one reconstructed timeline per id. Each process lifetime is ordered by
@@ -336,12 +332,15 @@ interface ExportArgs {
   readonly out: string | undefined;
   readonly stateDir: string | undefined;
   readonly maxBytes: number | undefined;
-  // Both required together to attach <state-dir>/ui.log — a single flag is never sufficient
-  // consent (design doc §6.3). See `runSupportExport`'s `uiLogIncluded`.
-  readonly includeUiLog: boolean;
-  readonly iUnderstandUnredacted: boolean;
   readonly includeEvidenceRunIds: readonly string[];
 }
+
+// The flags that once attached the raw `ui.log` (#3532). They are refused explicitly rather than
+// ignored, so an operator who still passes them learns that no report can carry raw UI output.
+const RETIRED_UI_LOG_FLAGS: readonly string[] = [
+  "--include-ui-log",
+  "--i-understand-this-is-unredacted",
+];
 
 interface AnalyzeArgs {
   readonly file: string;
@@ -386,6 +385,14 @@ function parseIncludeEvidenceIds(raw: string | undefined): readonly string[] {
 
 function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
   if (args.includes("--help") || args.includes("-h")) return { kind: "help" };
+  if (RETIRED_UI_LOG_FLAGS.some((flag) => args.includes(flag))) {
+    return {
+      kind: "usage",
+      message:
+        "keiko support export: --include-ui-log is no longer supported; raw UI output is never " +
+        `part of a support report. Every UI diagnostic is in the Activity Log.\n${USAGE}`,
+    };
+  }
   const out = flagValue(args, "--out");
   const stateDir = flagValue(args, "--state-dir");
   const maxBytesRaw = flagValue(args, "--max-bytes");
@@ -409,8 +416,6 @@ function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
       out,
       stateDir,
       maxBytes,
-      includeUiLog: args.includes("--include-ui-log"),
-      iUnderstandUnredacted: args.includes("--i-understand-this-is-unredacted"),
       includeEvidenceRunIds: parseIncludeEvidenceIds(includeEvidenceRaw),
     },
   };
@@ -1241,36 +1246,6 @@ function logContentManifestFields(
   };
 }
 
-// A missing, unreadable, or unsafe ui.log (no `keiko start` has ever run against this state dir, a
-// permission error, or a symlink/hard link/non-regular entry the verified read refuses) means there
-// is nothing to attach — never a failed export, and never a read through a link. The manifest's
-// `sectionsExcluded` still names the section.
-function readUiLogContentOrUndefined(stateDir: string): string | undefined {
-  try {
-    return readVerifiedLogText(join(stateDir, UI_LOG_FILE_NAME), stateDir);
-  } catch {
-    return undefined;
-  }
-}
-
-// The double-confirmation gate (design doc §6.3): BOTH `--include-ui-log` AND
-// `--i-understand-this-is-unredacted` must be present — a single flag is never sufficient consent.
-// `excluded` is true whenever the section was NOT attached (gate failed, OR the gate passed but
-// there was no content to attach), so the manifest's `sectionsExcluded` can always name "ui-log"
-// except in the one case it was genuinely included.
-interface UiLogInclusion {
-  readonly section: SupportBundleUiLogSection | undefined;
-  readonly excluded: boolean;
-}
-
-function resolveUiLogInclusion(stateDir: string, args: ExportArgs): UiLogInclusion {
-  const consented = args.includeUiLog && args.iUnderstandUnredacted;
-  const content = consented ? readUiLogContentOrUndefined(stateDir) : undefined;
-  return content === undefined
-    ? { section: undefined, excluded: true }
-    : { section: buildUiLogSection(content), excluded: false };
-}
-
 // A `KEIKO_`-prefixed env name is collected with the prefix fused on, so `redactLogFields`'s
 // field-NAME denylist (an exact match on the WHOLE normalized name, `log-redaction.ts`) can never
 // fire on it: normalization turns `KEIKO_DEFAULT_API_KEY` into `keikodefaultapikey`, which does
@@ -1359,18 +1334,13 @@ async function resolveIncludedEvidenceSections(
 }
 
 // Assembles every Wave 6 `$section` record in the bundle's fixed order: config-snapshot (always),
-// then each requested evidence-manifest, then ui-log last (when its gate passed) — content
-// verbatim, so it sits closest to the raw log lines that follow it.
+// then each requested evidence-manifest. No section ever carries raw UI output (#3532).
 function assembleWave6Sections(
   env: EnvSource,
   server: Awaited<ReturnType<typeof loadServer>>,
-  uiLog: UiLogInclusion,
   evidenceSections: readonly SupportBundleEvidenceManifestSection[],
 ): readonly unknown[] {
-  const configSnapshot = resolveConfigSnapshotSection(env, server);
-  return uiLog.section === undefined
-    ? [configSnapshot, ...evidenceSections]
-    : [configSnapshot, ...evidenceSections, uiLog.section];
+  return [resolveConfigSnapshotSection(env, server), ...evidenceSections];
 }
 
 async function recordRolledBackRecovery(
@@ -1464,7 +1434,6 @@ interface FreshSupportData {
   readonly server: LoadedServer;
   readonly auditSummary: Awaited<ReturnType<typeof auditLocalStateResult>>;
   readonly stores: Awaited<ReturnType<LoadedServer["collectStoreFingerprints"]>>;
-  readonly uiLog: UiLogInclusion;
   readonly evidenceSections: readonly SupportBundleEvidenceManifestSection[];
   readonly generatedAtDate: Date;
 }
@@ -1500,7 +1469,6 @@ async function collectFreshSupportData(
   }
   reportStoreFingerprintProgress(io);
   const stores = await server.collectStoreFingerprints({ stateDir: context.stateDir, env });
-  const uiLog = resolveUiLogInclusion(context.stateDir, args);
   const evidenceSections = await resolveIncludedEvidenceSections(
     evidenceDir,
     args.includeEvidenceRunIds,
@@ -1512,7 +1480,6 @@ async function collectFreshSupportData(
     server,
     auditSummary,
     stores,
-    uiLog,
     evidenceSections,
     generatedAtDate: context.now(),
   };
@@ -1534,9 +1501,10 @@ async function publishFreshSupportExport(
     evidenceIndexCount: data.evidenceIndexCount,
     storeFingerprints: data.stores.fingerprints,
     storesUnavailable: data.stores.unavailable,
-    sectionsExcluded: data.uiLog.excluded ? [UI_LOG_SECTION] : [],
+    // A legacy raw `ui.log` is never read into a report; the manifest keeps naming it as excluded.
+    sectionsExcluded: [UI_LOG_SECTION],
   });
-  const sections = assembleWave6Sections(env, data.server, data.uiLog, data.evidenceSections);
+  const sections = assembleWave6Sections(env, data.server, data.evidenceSections);
   const lines = serializeBundleLines(manifest, sections, data.logContent.contentLines);
   const outPath = resolveOutPath(context.cwd, args.out, data.generatedAtDate);
   const publication = publishSupportBundle(
@@ -1578,7 +1546,7 @@ async function runSupportExport(
     return recoveredSupportExportExitCode(recovery, stateDir, io, publicationContext);
   }
   if (recovery.status === "rolled-back") await recordRolledBackRecovery(recovery, stateDir);
-  return publishFreshSupportExport(args, io, env, deps, {
+  const exitCode = await publishFreshSupportExport(args, io, env, deps, {
     cwd,
     now,
     stateDir,
@@ -1586,6 +1554,22 @@ async function runSupportExport(
     publication: publicationContext,
     recoveryState: recovery.status,
   });
+  if (exitCode === 0) await reportSupportReadiness(stateDir, env, io);
+  return exitCode;
+}
+
+// `keiko support export` also states the exported directory's diagnostic readiness (#3532). The
+// self-check persists its own `activity-log.readiness` line after the export, so the report it just
+// wrote stays exactly the evidence that existed when it was taken. This command inspects a state
+// directory it does not serve, so its own logger's wiring is not part of that directory's answer.
+async function reportSupportReadiness(stateDir: string, env: EnvSource, io: CliIo): Promise<void> {
+  const snapshot = (await loadServer()).checkActivityLogReadiness({
+    stateDir,
+    env,
+    validatePortWiring: false,
+  });
+  const reasons = snapshot.reasons.length === 0 ? "" : ` (${snapshot.reasons.join(", ")})`;
+  io.out(`Diagnostic evidence: ${snapshot.readiness}${reasons}.\n`);
 }
 
 function reportMissingCorrelationId(correlationId: string, io: CliIo): number {

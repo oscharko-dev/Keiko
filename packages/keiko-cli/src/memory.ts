@@ -22,6 +22,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts";
+import { cliActivityLogSink } from "./cli-activity-log.js";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
 // GEN-PERF-CLI-001 — server/evidence/gateway graphs load per subcommand at dispatch;
 // the memory-vault import above is a light leaf (contracts+security only) and stays static.
@@ -81,17 +82,23 @@ function flagValue(args: readonly string[], name: string): string | undefined {
   return value === undefined || value.startsWith("--") ? undefined : value;
 }
 
-function resolveVault(
+// The production vault is opened with the process-wide Activity Log port wired to both of its log
+// seams (#3532): vault open, quarantine, and the keychain tier's fallback reach the runtime state
+// directory's Activity Log exactly as they do when the BFF opens the same vault.
+async function resolveVault(
   args: readonly string[],
   env: EnvSource,
   deps: MemoryCliDeps,
-): MemoryVaultStore {
+): Promise<MemoryVaultStore> {
   if (deps.vault !== undefined) return deps.vault;
   const memoryDir = flagValue(args, "--memory-dir");
   if (deps.openVault !== undefined) return deps.openVault(memoryDir, env);
+  const log = await cliActivityLogSink();
   return createMemoryVault({
     ...(memoryDir !== undefined ? { memoryDir } : {}),
     env,
+    logSink: log,
+    securityLogSink: log,
   });
 }
 
@@ -172,8 +179,13 @@ function renderMaintenanceReport(counts: ReturnType<ServerModule["runMemoryMaint
   ].join("\n");
 }
 
-function runStats(args: readonly string[], io: CliIo, env: EnvSource, deps: MemoryCliDeps): number {
-  const vault = resolveVault(args, env, deps);
+async function runStats(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps: MemoryCliDeps,
+): Promise<number> {
+  const vault = await resolveVault(args, env, deps);
   try {
     const records = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
       includeExpired: true,
@@ -199,7 +211,7 @@ async function runDiagnostics(
   deps: MemoryCliDeps,
 ): Promise<number> {
   const [{ exportMemoryDiagnostics }, evidence] = await Promise.all([loadServer(), loadEvidence()]);
-  const vault = resolveVault(args, env, deps);
+  const vault = await resolveVault(args, env, deps);
   const memoryDir = resolveMemoryDir(flagValue(args, "--memory-dir"), env);
   const evidenceDir = evidence.resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
   const evidenceStore = deps.evidenceStore ?? evidence.createNodeEvidenceStore(evidenceDir);
@@ -235,7 +247,7 @@ async function runMaintain(
     { runMemoryMaintenance, memoryRetentionPolicy, memorySemanticizationMultipliers },
     evidence,
   ] = await Promise.all([loadServer(), loadEvidence()]);
-  const vault = resolveVault(args, env, deps);
+  const vault = await resolveVault(args, env, deps);
   const evidenceDir = evidence.resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
   const evidenceStore = deps.evidenceStore ?? evidence.createNodeEvidenceStore(evidenceDir);
   // Honour KEIKO_MEMORY_SEMANTICIZATION on the CLI exactly as the two server passes do, so the
@@ -412,7 +424,7 @@ async function reembed(
     );
     return 0;
   }
-  const vault = resolveVault(args, env, deps);
+  const vault = await resolveVault(args, env, deps);
   try {
     const force = args.includes("--force");
     if (force) {
@@ -559,7 +571,7 @@ async function dispatchSubcommand(
   // previous synchronous throws did.
   try {
     if (sub === "maintain") return await runMaintain(args, io, env, deps);
-    if (sub === "stats") return runStats(args, io, env, deps);
+    if (sub === "stats") return await runStats(args, io, env, deps);
     if (sub === "diagnostics") return await runDiagnostics(args, io, env, deps);
     if (sub === "reembed") return await runReembed(args, io, env, deps);
   } catch (error) {

@@ -2,8 +2,15 @@ import { homedir as defaultHomedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   emitSecurityLogEvent,
   securityErrorKind,
+  type SecurityLogEvent,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 
@@ -55,6 +62,137 @@ Read-only. Never decrypts and never mutates the tree; no vault key is required.
 Exit code: 0 healthy, 1 audit failure, 2 usage error.`;
 
 const TAG: Readonly<Record<string, string>> = { pass: "PASS", fail: "FAIL", skip: "skip" };
+
+// The audit's own Activity Log evidence (#3532). These three operations used to be plain objects,
+// which the production file sink refuses as unregistered: every audit ran while its start, verdict
+// and failure evidence was silently rejected at the write boundary. Registered here, they persist
+// through the same sink with the invocation's correlation id and closed, body-free fields only —
+// the audited tree is identified by its SHA-256, never by its path.
+const CLI_AUDIT_TARGET_FIELD = {
+  type: "string",
+  dataClass: "digest",
+  required: true,
+  maxLength: 64,
+} as const;
+
+const CLI_AUDIT_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.audit.started",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "audit.auditStartedEvent",
+  fields: { targetSha256: CLI_AUDIT_TARGET_FIELD },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["cli-audit"],
+  proofIds: ["cli.audit.started.real-sink-line"],
+  releaseImpact: "patch",
+});
+
+const CLI_AUDIT_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.audit.completed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "audit.auditCompletedEvent",
+  fields: {
+    healthy: { type: "boolean", dataClass: "closed-enum", required: true },
+    classCount: { type: "integer", dataClass: "count", required: true },
+    findingCount: { type: "integer", dataClass: "count", required: true },
+    targetSha256: CLI_AUDIT_TARGET_FIELD,
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["cli-audit"],
+  proofIds: ["cli.audit.completed.real-sink-line"],
+  releaseImpact: "patch",
+});
+
+const CLI_AUDIT_FAILURE_REASONS = [
+  "missing-export",
+  "invalid-result",
+  "threw",
+  "activity-log-unavailable",
+  "activity-log-open-failed",
+  "auditor-unavailable",
+] as const;
+type CliAuditFailureReason = (typeof CLI_AUDIT_FAILURE_REASONS)[number];
+
+const CLI_AUDIT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.audit.failed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "audit.auditFailedEvent",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "missing-export",
+        "invalid-result",
+        "threw",
+        "activity-log-unavailable",
+        "activity-log-open-failed",
+        "auditor-unavailable",
+      ],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    targetSha256: CLI_AUDIT_TARGET_FIELD,
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["cli-audit"],
+  proofIds: ["cli.audit.failed.real-sink-line"],
+  releaseImpact: "patch",
+});
+
+const CLI_AUDIT_FAILURE_ERROR_KINDS = {
+  "missing-export": "validation-failed",
+  "invalid-result": "validation-failed",
+  threw: "internal",
+  "activity-log-unavailable": "unavailable",
+  "activity-log-open-failed": "unavailable",
+  "auditor-unavailable": "unavailable",
+} as const satisfies Readonly<Record<CliAuditFailureReason, ActivityLogErrorKind>>;
+
+function auditStartedEvent(targetSha256: string): SecurityLogEvent {
+  return activityLogEvent(CLI_AUDIT_STARTED_OPERATION, { level: "info" }, { targetSha256 });
+}
+
+function auditCompletedEvent(result: AuditResult, targetSha256: string): SecurityLogEvent {
+  return activityLogEvent(
+    CLI_AUDIT_COMPLETED_OPERATION,
+    { level: "info" },
+    {
+      healthy: result.ok,
+      classCount: result.classes.length,
+      findingCount: result.classes.reduce((count, entry) => count + entry.findings.length, 0),
+      targetSha256,
+    },
+  );
+}
+
+// `failureKind` is the content-free class of what failed (a constructor name or code that passed
+// the shared shape gate), so a reader can tell a load error from a configuration gap.
+function auditFailedEvent(
+  reason: CliAuditFailureReason,
+  failureKind: string,
+  targetSha256: string,
+): SecurityLogEvent {
+  return activityLogEvent(
+    CLI_AUDIT_FAILED_OPERATION,
+    { level: "error", errorKind: CLI_AUDIT_FAILURE_ERROR_KINDS[reason] },
+    { reason, failureKind: classifyErrorKind(failureKind) ?? "unknown", targetSha256 },
+  );
+}
 
 export interface AuditClass {
   readonly id: string;
@@ -307,28 +445,15 @@ async function runLocalStateAudit(
     result = await loadAuditResult(stateDir, auditorPath, deps);
   } catch (error) {
     if (!(error instanceof AuditLoadError)) throw error;
-    emitSecurityLogEvent(activityLogSink, {
-      level: "error",
-      category: "diagnostic",
-      op: "cli.audit.failed",
-      errorKind: securityErrorKind(error),
-      extra: { reason: error.reason, targetSha256 },
-    });
+    emitSecurityLogEvent(
+      activityLogSink,
+      auditFailedEvent(error.reason, securityErrorKind(error), targetSha256),
+    );
     reportLoadFailure(error, io);
     return 1;
   }
 
-  emitSecurityLogEvent(activityLogSink, {
-    level: "info",
-    category: "diagnostic",
-    op: "cli.audit.completed",
-    extra: {
-      healthy: result.ok,
-      classCount: result.classes.length,
-      findingCount: result.classes.reduce((count, entry) => count + entry.findings.length, 0),
-      targetSha256,
-    },
-  });
+  emitSecurityLogEvent(activityLogSink, auditCompletedEvent(result, targetSha256));
 
   if (json) {
     // Exactly the serialized result plus a newline, nothing else on stdout: a consumer piping
@@ -380,21 +505,15 @@ interface AuditActivityContext {
 
 function emitAuditPreparationFailure(
   context: AuditActivityContext,
-  errorKind: string,
-  reason: string,
+  failureKind: string,
+  reason: Extract<CliAuditFailureReason, "activity-log-unavailable" | "activity-log-open-failed">,
 ): void {
   const sink = createCliSecurityLogSink(
     context.activityStateDir,
     context.factory,
     context.correlationId,
   );
-  emitSecurityLogEvent(sink, {
-    level: "error",
-    category: "diagnostic",
-    op: "cli.audit.failed",
-    errorKind,
-    extra: { reason, targetSha256: context.targetSha256 },
-  });
+  emitSecurityLogEvent(sink, auditFailedEvent(reason, failureKind, context.targetSha256));
 }
 
 function resolveAuditActivityContext(
@@ -441,12 +560,7 @@ function openAuditActivity(
     context.factory,
     context.correlationId,
   );
-  emitSecurityLogEvent(sink, {
-    level: "info",
-    category: "diagnostic",
-    op: "cli.audit.started",
-    extra: { targetSha256: context.targetSha256 },
-  });
+  emitSecurityLogEvent(sink, auditStartedEvent(context.targetSha256));
   return { kind: "ready", sink, targetSha256: context.targetSha256 };
 }
 
@@ -508,13 +622,10 @@ export async function runAuditCli(
 
   const auditorPath = resolveAuditorPath(env, io);
   if (auditorPath === undefined) {
-    emitSecurityLogEvent(activity.sink, {
-      level: "error",
-      category: "diagnostic",
-      op: "cli.audit.failed",
-      errorKind: "AuditConfigurationError",
-      extra: { reason: "auditor-unavailable", targetSha256: activity.targetSha256 },
-    });
+    emitSecurityLogEvent(
+      activity.sink,
+      auditFailedEvent("auditor-unavailable", "AuditConfigurationError", activity.targetSha256),
+    );
     return 1;
   }
   return runLocalStateAudit(
