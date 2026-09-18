@@ -66,6 +66,55 @@ export {
   type ActivityLogLossCounters,
   type ActivityLogLossReason,
 } from "./activity-log-loss.js";
+// The body-free SupportIncident descriptor (#3533) is a selection artifact over this log, so it
+// travels with the same runtime entry point instead of a parallel package surface.
+export {
+  DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+  DEFECT_FINGERPRINT_PATTERN,
+  MAX_DEFECT_FINGERPRINT_FRAMES,
+  MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
+  MAX_SUPPORT_INCIDENT_RECORD_BYTES,
+  SUPPORT_INCIDENT_DIRECTORY_NAME,
+  SUPPORT_INCIDENT_EVIDENCE_INTEGRITY,
+  SUPPORT_INCIDENT_ID_PATTERN,
+  SUPPORT_INCIDENT_PIN_STATUSES,
+  SUPPORT_INCIDENT_SCHEMA_VERSION,
+  SUPPORT_INCIDENT_STATES,
+  SUPPORT_INCIDENT_TRIGGERS,
+  SUPPORT_INCIDENT_UNATTRIBUTED,
+  UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
+  defectFingerprintPreimage,
+  isDefectFingerprint,
+  isSupportIncidentId,
+  isSupportIncidentSurface,
+  normalizeKeikoFrame,
+  normalizeKeikoFrameSignature,
+  parseSupportIncidentFileName,
+  parseSupportIncidentRecord,
+  supportIncidentBuild,
+  supportIncidentFileName,
+  supportIncidentPrivateProjection,
+  supportIncidentPublicProjection,
+  type DefectFingerprintInput,
+  type SupportIncident,
+  type SupportIncidentBuild,
+  type SupportIncidentCorrelation,
+  type SupportIncidentCoverage,
+  type SupportIncidentEvidence,
+  type SupportIncidentEvidenceIntegrity,
+  type SupportIncidentFingerprint,
+  type SupportIncidentPin,
+  type SupportIncidentPinStatus,
+  type SupportIncidentPrivateProjection,
+  type SupportIncidentPublicProjection,
+  type SupportIncidentRecord,
+  type SupportIncidentSegmentReference,
+  type SupportIncidentState,
+  type SupportIncidentSufficiency,
+  type SupportIncidentSurface,
+  type SupportIncidentTrigger,
+  type SupportIncidentWindow,
+} from "./support-incident.js";
 
 /**
  * The shape an error KIND may take: a leading letter, then up to 63 more letters, digits,
@@ -728,6 +777,11 @@ const ACTIVITY_LOG_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
 ]);
 const ACTIVITY_LOG_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/u;
 export const ACTIVITY_LOG_UNKNOWN_CORRELATION_ID = "unknown-correlation-id";
+
+/** True for a value of the one correlation-id shape every Activity Log envelope accepts. */
+export function isActivityLogCorrelationId(value: unknown): value is string {
+  return typeof value === "string" && ACTIVITY_LOG_CORRELATION_ID.test(value);
+}
 
 function validOptionalCorrelationId(value: string | undefined): boolean {
   return value === undefined || ACTIVITY_LOG_CORRELATION_ID.test(value);
