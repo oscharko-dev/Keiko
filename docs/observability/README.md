@@ -718,7 +718,12 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   segment's bytes and the build's catalog alone, so a rebuild reproduces it byte for byte. The
   Activity Log writer never writes one: query, export and rebuild do, and they remove the manifests
   of segments retention has deleted. A missing, torn or stale manifest is rebuilt, and deleting the
-  directory is always safe.
+  directory is always safe. Trust is the same OS-user boundary as the segments themselves: a process
+  already running as that user could hand-edit a stored manifest and its digest together — a forged
+  manifest passes its own self-consistency check because the digest binds it to its own bytes, not
+  to the segment it describes — hiding a segment from a routine query. It cannot alter the segment
+  itself, and `keiko support manifest verify` detects the forgery by re-deriving every manifest
+  directly from its segment and reporting any stored one that differs.
 - **Bounds.** Reads use one 64 KiB buffer and hold at most one line of up to 1 MiB. A closure holds
   at most 4096 correlations, a result at most `--max-bytes`. The correlation filter uses about 10
   bits per key (roughly 1% false positives), at most 128 KiB. A checked-in long-history test builds
