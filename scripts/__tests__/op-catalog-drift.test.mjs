@@ -22,7 +22,10 @@ import {
   validateActivityLogFailureClassContracts,
   validateActivityLogRegistryExemptions,
 } from "../generate-op-catalog.mjs";
-import { unregisteredFailurePathViolations } from "../check-error-observability.mjs";
+import {
+  newFailurePathFindings,
+  unregisteredFailurePathViolations,
+} from "../check-error-observability.mjs";
 import {
   TOOL_CATALOG_OPERATIONS_PATH,
   generateToolCatalogOperations,
@@ -398,6 +401,41 @@ describe("new failure-path observability", () => {
       expect.objectContaining({ owner: "fallbackFailure", kind: "unregistered-catch" }),
       expect.objectContaining({ owner: "responseWriteFailure", kind: "unregistered-catch" }),
       expect.objectContaining({ owner: "databaseRecordFailure", kind: "unregistered-catch" }),
+    ]);
+  });
+
+  it("keys each class member's catch by its own owner", () => {
+    const source = [
+      "class Store {",
+      "  constructor() { try { run(); } catch {} }",
+      "  get value() { try { return run(); } catch { return 0; } }",
+      "  load() { try { run(); } catch {} }",
+      "  save() { try { run(); } catch {} }",
+      "  flush = () => { try { run(); } catch {} };",
+      "}",
+    ].join("\n");
+    expect(
+      unregisteredFailurePathViolations(source, "packages/fixture/src/store.ts").map(
+        (finding) => finding.owner,
+      ),
+    ).toEqual(["Store.constructor", "Store.get value", "Store.load", "Store.save", "Store.flush"]);
+  });
+
+  it("does not let a fixed catch in one method hide a new one in another", () => {
+    const base = [
+      "class Store {",
+      "  load() { try { run(); } catch {} }",
+      "  save() { try { run(); } catch (error) { reportFailure(error); } }",
+      "}",
+    ].join("\n");
+    const head = [
+      "class Store {",
+      "  load() { try { run(); } catch (error) { reportFailure(error); } }",
+      "  save() { try { run(); } catch {} }",
+      "}",
+    ].join("\n");
+    expect(newFailurePathFindings(base, head, "packages/fixture/src/store.ts")).toEqual([
+      expect.objectContaining({ owner: "Store.save", kind: "unregistered-catch" }),
     ]);
   });
 

@@ -67,18 +67,51 @@ function check(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function propertyNameText(name) {
+  return ts.isIdentifier(name) ||
+    ts.isPrivateIdentifier(name) ||
+    ts.isStringLiteral(name) ||
+    ts.isNumericLiteral(name)
+    ? name.text
+    : name.getText();
+}
+
+function isClassMember(node) {
+  return (
+    (ts.isMethodDeclaration(node) ||
+      ts.isGetAccessorDeclaration(node) ||
+      ts.isSetAccessorDeclaration(node) ||
+      ts.isConstructorDeclaration(node) ||
+      ts.isPropertyDeclaration(node)) &&
+    ts.isClassLike(node.parent)
+  );
+}
+
+// Class members get their own owner, `Class.member`, so two catches in different methods of one
+// class never share a key: the base-versus-head diff counts findings per owner, and a shared key
+// would let a new silent catch in one method hide behind a fixed one in another.
+function classMemberName(member) {
+  const className = member.parent.name?.text ?? "<class>";
+  if (ts.isConstructorDeclaration(member)) return `${className}.constructor`;
+  const memberName = propertyNameText(member.name);
+  if (ts.isGetAccessorDeclaration(member)) return `${className}.get ${memberName}`;
+  if (ts.isSetAccessorDeclaration(member)) return `${className}.set ${memberName}`;
+  return `${className}.${memberName}`;
+}
+
+function functionOwnerName(node) {
+  if (ts.isFunctionDeclaration(node) && node.name !== undefined) return node.name.text;
+  if (isClassMember(node) && !ts.isPropertyDeclaration(node)) return classMemberName(node);
+  if (!ts.isFunctionExpression(node) && !ts.isArrowFunction(node)) return undefined;
+  const holder = node.parent;
+  if (ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name)) return holder.name.text;
+  return isClassMember(holder) ? classMemberName(holder) : undefined;
+}
+
 function catchFunctionName(node) {
-  let current = node.parent;
-  while (current !== undefined) {
-    if (ts.isFunctionDeclaration(current) && current.name !== undefined) return current.name.text;
-    if (
-      (ts.isFunctionExpression(current) || ts.isArrowFunction(current)) &&
-      ts.isVariableDeclaration(current.parent) &&
-      ts.isIdentifier(current.parent.name)
-    ) {
-      return current.parent.name.text;
-    }
-    current = current.parent;
+  for (let current = node.parent; current !== undefined; current = current.parent) {
+    const owner = functionOwnerName(current);
+    if (owner !== undefined) return owner;
   }
   return "<anonymous>";
 }
@@ -315,7 +348,8 @@ function findingSignature(finding) {
   return `${finding.kind}:${finding.owner}`;
 }
 
-function newFindings(baseSource, headSource, path) {
+// Findings in the head revision of one file that its base revision did not already have.
+export function newFailurePathFindings(baseSource, headSource, path) {
   const baseCounts = Map.groupBy(
     unregisteredFailurePathViolations(baseSource, path),
     findingSignature,
@@ -381,7 +415,7 @@ export function unregisteredFailurePathDiffViolations(repoRoot = REPO_ROOT) {
   const baseCommit = resolveGateBaseCommit(repoRoot);
   return changedProductionTypeScriptFiles(repoRoot, baseCommit).flatMap((path) => {
     const headSource = readFileSync(resolve(repoRoot, path), "utf8");
-    return newFindings(baseFileSource(repoRoot, baseCommit, path), headSource, path);
+    return newFailurePathFindings(baseFileSource(repoRoot, baseCommit, path), headSource, path);
   });
 }
 
