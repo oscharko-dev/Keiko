@@ -331,6 +331,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
   ],
   [
+    "packages/keiko-server/src/observability/server-log.ts:listingOrUndefined",
+    "An unlistable directory becomes a storage-unavailable outcome the registered pin events persist.",
+  ],
+  [
     "packages/keiko-server/src/observability/server-log.ts:tightenLegacyFile",
     "A legacy file that cannot be narrowed stays in place; the retention event persists the failure.",
   ],

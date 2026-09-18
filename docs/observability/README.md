@@ -93,7 +93,7 @@ Each value must be a positive whole number within its range. Anything else falls
 default, so a typo never removes the bound.
 
 A pin protects a time window, or named segments, from retention until it expires, within the pin
-quota. `activity-log.pin.created` and `activity-log.pin.expired` record its lifecycle. A pin that
+quota. `activity-log.pin.created` and `activity-log.pin.expired` record its lifecycle; a pin released before its expiry is recorded with `expiryReason: "released"`. A pin that
 the quota cannot hold is still recorded, with `quotaStatus: "exceeded"`. One
 `activity-log.pin.quota-exhausted` line then states how much evidence stays unprotected.
 
