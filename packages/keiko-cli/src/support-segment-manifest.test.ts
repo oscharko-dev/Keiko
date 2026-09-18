@@ -68,6 +68,7 @@ function incidentCreatedLine(process: ReturnType<typeof fixtureProcess>, atMs: n
       pinStatus: "pinned",
       pinnedSegmentCount: 1,
       pinnedBytes: 10,
+      evidenceLostBeforePin: false,
       windowSeconds: 1200,
       expiresInSeconds: 1_209_600,
       openIncidentCount: 1,
