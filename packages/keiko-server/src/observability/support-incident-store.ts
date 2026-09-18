@@ -12,7 +12,10 @@
 //
 // Records are immutable once published (exclusive create, never replaced). A crash can leave at
 // most a torn record, which fails the closed-schema parse and is reported as `invalid` so the
-// caller removes it — the same recovery the Activity Log applies to an unreadable pin record.
+// caller removes it — the same recovery the Activity Log applies to an unreadable pin record. A
+// record of another schema version (for example one a newer Keiko wrote before a downgrade) is
+// never interpreted: it counts as unreadable and is swept the same way, which keeps the store
+// bounded; its Activity Log pin still lapses at the pin's own expiry.
 
 import {
   closeSync,

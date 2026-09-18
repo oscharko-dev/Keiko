@@ -41,8 +41,9 @@ Tests for changed behavior assert the emitted line and the support-analyzer proj
 the catalog with `npm run generate:op-catalog`, then run `npm run check:activity-log`, the Activity
 Log implementation gate, which required CI runs unchanged. Every run builds the packages and
 evaluates the complete registered inventory by composing `check:op-catalog`,
-`check:error-observability`, `arch:check`, `arch:check:negative`, and `check:release-impact`; it
-takes no changed-file input, so a narrower change set never narrows what it proves.
+`test:activity-log-scenarios` (the curated end-to-end scenario matrix), `check:error-observability`,
+`arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
+a narrower change set never narrows what it proves.
 
 The generated registry also publishes the stable implementation-obligation categories and the
 failure-class coverage matrix consumed by permanent quality gates. Its release expectation is

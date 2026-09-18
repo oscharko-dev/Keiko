@@ -400,11 +400,11 @@ jobs:
         run: npm run check:e2e-suite-wiring
       - name: Activity Log implementation gate
         # The one documented local command, run unchanged. Over the full registered inventory it
-        # composes the typed registry and failure-surface inventory drift with proof and scenario
-        # resolution (check:op-catalog), the error observability probes that drive the REAL built
-        # BFF and its failure paths (check:error-observability), arch:check with its negative
-        # fixtures, and check:release-impact. It builds the packages first, so no check judges stale
-        # output, and it runs every check even after one fails, so a run reports all of them.
+        # composes registry/inventory drift with proof and scenario resolution (check:op-catalog),
+        # the curated end-to-end scenario matrix (test:activity-log-scenarios), the probes that
+        # drive the REAL built BFF and its failure paths (check:error-observability), arch:check
+        # with its negative fixtures, and check:release-impact. It builds the packages first, so no
+        # check judges stale output, and runs every check even after one fails.
         run: npm run check:activity-log
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
