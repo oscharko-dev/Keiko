@@ -421,14 +421,14 @@ function toolCatalogFields(
   return {};
 }
 
-interface ParsedLine {
+export interface ParsedLine {
   readonly view: ServerLogLineView;
   readonly correlationId: string | undefined;
   readonly hasFullIdentity: boolean;
   readonly fileIndex: number;
 }
 
-type LineClassification =
+export type LineClassification =
   | {
       readonly kind: "line";
       readonly evidence: "supported" | "legacy";
@@ -727,7 +727,7 @@ function recordEvidence(
 // A `$section`-tagged line is bundle metadata, not evidence. Unsupported versions are classified
 // before their unknown envelope is interpreted; every supported or legacy record still requires
 // the common ts/category/op shape.
-function classifyLine(
+export function classifyLine(
   raw: string,
   fileIndex: number,
   terminalFragment: boolean,
@@ -1188,7 +1188,7 @@ function buildOpClusters(lines: readonly ParsedLine[]): readonly OpCluster[] {
   }));
 }
 
-interface MutableEvidenceCounts {
+export interface MutableEvidenceCounts {
   supported: number;
   legacy: number;
   unsupported: number;
@@ -1197,11 +1197,11 @@ interface MutableEvidenceCounts {
   incomplete: number;
 }
 
-function emptyEvidenceCounts(): MutableEvidenceCounts {
+export function emptyEvidenceCounts(): MutableEvidenceCounts {
   return { supported: 0, legacy: 0, unsupported: 0, corrupt: 0, truncated: 0, incomplete: 0 };
 }
 
-function incrementEvidence(
+export function incrementEvidence(
   counts: MutableEvidenceCounts,
   classification: ActivityLogEvidenceClassification,
 ): void {
@@ -1226,7 +1226,7 @@ function overallEvidenceClassification(
   return "supported";
 }
 
-function evidenceSummary(
+export function evidenceSummary(
   counts: MutableEvidenceCounts,
   sequenceAnomalies: readonly ProcessSequenceAnomaly[],
 ): ActivityLogEvidenceSummary {
@@ -1261,7 +1261,7 @@ function evidenceWarnings(evidence: ActivityLogEvidenceSummary): readonly string
   return warnings;
 }
 
-interface SequenceState {
+export interface SequenceState {
   readonly seen: Set<number>;
   previous: number;
 }
@@ -1283,7 +1283,10 @@ function sequenceAnomaly(
   };
 }
 
-function lineSequenceAnomalies(line: ParsedLine, state: SequenceState): ProcessSequenceAnomaly[] {
+export function lineSequenceAnomalies(
+  line: ParsedLine,
+  state: SequenceState,
+): ProcessSequenceAnomaly[] {
   const anomalies: ProcessSequenceAnomaly[] = [];
   const seq = orZero(line.view.seq);
   if (seq > state.previous + 1) {
@@ -1383,23 +1386,13 @@ function sourceFileBoundary(value: unknown): SourceFileBoundary | undefined {
     : undefined;
 }
 
-function leadingSectionCount(contentLines: readonly string[]): number {
-  let count = 0;
-  for (const raw of contentLines) {
-    if (typeof tryParseJsonObject(raw)?.$section !== "string") break;
-    count += 1;
-  }
-  return count;
-}
-
-function bundleFragmentIndexes(
-  manifestLine: string | undefined,
-  contentLines: readonly string[],
-): ReadonlySet<number> {
+// The declared fragment positions, relative to the first content line after the bundle's leading
+// `$section` records (their count is only known once the first evidence line streams past).
+function bundleRelativeFragments(manifestLine: string | undefined): ReadonlySet<number> {
   const entries: unknown = tryParseJsonObject(manifestLine ?? "")?.sourceLogFileLines;
   if (!Array.isArray(entries) || entries.length > MAX_SOURCE_LOG_FILE_ENTRIES) return new Set();
   const fragments = new Set<number>();
-  let offset = leadingSectionCount(contentLines);
+  let offset = 0;
   for (const entry of entries) {
     const boundary = sourceFileBoundary(entry);
     if (boundary === undefined) return new Set();
@@ -1409,27 +1402,88 @@ function bundleFragmentIndexes(
   return fragments;
 }
 
+/** One line of an Activity Log artifact; only a final torn fragment is not `terminated`. */
+export interface ActivityLogTextLine {
+  readonly text: string;
+  readonly terminated: boolean;
+}
+
+function* textLines(text: string): Generator<ActivityLogTextLine> {
+  const lines = splitLines(text);
+  const lastIndex = lines.length - 1;
+  for (const [index, line] of lines.entries()) {
+    yield { text: line, terminated: index < lastIndex || text.endsWith("\n") };
+  }
+}
+
+interface LineAccumulation {
+  readonly parsedLines: ParsedLine[];
+  readonly evidenceCounts: MutableEvidenceCounts;
+  malformedLineCount: number;
+  // Content lines seen, and how many leading `$section` records preceded the first evidence line.
+  contentIndex: number;
+  leadingSections: number | undefined;
+}
+
+function accumulateContentLine(
+  accumulation: LineAccumulation,
+  line: ActivityLogTextLine,
+  fragments: ReadonlySet<number>,
+  options: SupportAnalyzeOptions,
+): void {
+  const index = accumulation.contentIndex;
+  accumulation.contentIndex += 1;
+  // A line that turns out to be a section ignores the flag, so the tentative offset is safe.
+  const leading = accumulation.leadingSections ?? index;
+  const terminalFragment = fragments.has(index - leading) || !line.terminated;
+  const classification = classifyLine(line.text, index, terminalFragment, options);
+  if (classification.kind === "section") return;
+  accumulation.leadingSections ??= index;
+  incrementEvidence(accumulation.evidenceCounts, classification.evidence);
+  if (classification.kind === "line") accumulation.parsedLines.push(classification.parsed);
+  else if (classification.evidence !== "unsupported") accumulation.malformedLineCount += 1;
+}
+
 export function analyzeLogText(
   text: string,
   options: SupportAnalyzeOptions = {},
 ): AnalyzeAllResult {
-  const lines = splitLines(text);
-  const kind = detectSourceKind(lines[0]);
-  const contentLines = kind === "bundle" ? lines.slice(1) : lines;
+  return analyzeLogLines(textLines(text), options);
+}
+
+/**
+ * Streams an Activity Log artifact line by line (#3531): the text is never held whole, so memory
+ * follows the retained evidence rather than the artifact size. Ordering and every verdict are
+ * identical to `analyzeLogText`, which delegates here.
+ */
+export function analyzeLogLines(
+  lines: Iterable<ActivityLogTextLine>,
+  options: SupportAnalyzeOptions = {},
+): AnalyzeAllResult {
+  const iterator = lines[Symbol.iterator]();
+  const first = iterator.next();
+  const firstLine: ActivityLogTextLine | undefined = first.done === true ? undefined : first.value;
+  const kind = detectSourceKind(firstLine?.text);
   const fragments =
-    kind === "bundle" ? bundleFragmentIndexes(lines[0], contentLines) : new Set<number>();
-  const parsedLines: ParsedLine[] = [];
-  const evidenceCounts = emptyEvidenceCounts();
-  let malformedLineCount = 0;
-  for (const [index, raw] of contentLines.entries()) {
-    const terminalFragment =
-      fragments.has(index) || (index === contentLines.length - 1 && !text.endsWith("\n"));
-    const classification = classifyLine(raw, index, terminalFragment, options);
-    if (classification.kind === "section") continue;
-    incrementEvidence(evidenceCounts, classification.evidence);
-    if (classification.kind === "line") parsedLines.push(classification.parsed);
-    else if (classification.evidence !== "unsupported") malformedLineCount += 1;
+    kind === "bundle" ? bundleRelativeFragments(firstLine?.text) : new Set<number>();
+  const accumulation: LineAccumulation = {
+    parsedLines: [],
+    evidenceCounts: emptyEvidenceCounts(),
+    malformedLineCount: 0,
+    contentIndex: 0,
+    leadingSections: undefined,
+  };
+  if (firstLine !== undefined && kind === "raw-log") {
+    accumulateContentLine(accumulation, firstLine, fragments, options);
   }
+  for (let next = iterator.next(); next.done !== true; next = iterator.next()) {
+    accumulateContentLine(accumulation, next.value, fragments, options);
+  }
+  return analyzeParsedLines(kind, accumulation);
+}
+
+function analyzeParsedLines(kind: SourceKind, accumulation: LineAccumulation): AnalyzeAllResult {
+  const { parsedLines, evidenceCounts, malformedLineCount } = accumulation;
   const groups = groupByCorrelationId(parsedLines);
   const timelines = [...groups.entries()].map(([correlationId, group]) =>
     buildTimeline(correlationId, group),
@@ -1469,7 +1523,7 @@ export function timelineSufficiency(
   );
 }
 
-function sufficiencyLine(line: ParsedLine): ActivityLogSufficiencyLine {
+export function sufficiencyLine(line: ParsedLine): ActivityLogSufficiencyLine {
   return {
     op: line.view.op,
     correlationId: line.correlationId,

@@ -11,7 +11,7 @@
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
 import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -63,7 +63,7 @@ import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./secu
 import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
 import {
   ACTIVITY_LOG_EVIDENCE_INTEGRITY,
-  analyzeLogText,
+  analyzeLogLines,
   buildReproductionSeed,
   findTimeline,
   hasIssueToPrJourneyOps,
@@ -81,6 +81,7 @@ import {
   type OpCluster,
   type ReproductionSeed,
 } from "./support-analyze.js";
+import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
 import { runSupportIncidentCli } from "./support-incident.js";
 import {
   buildConfigSnapshotSection,
@@ -964,7 +965,7 @@ const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "closed-enum",
       required: false,
-      maxItems: 13,
+      maxItems: 17,
       values: [...DIAGNOSTIC_SUFFICIENCY_REASONS],
     },
     completeClassCount: { type: "integer", dataClass: "count", required: true },
@@ -1796,6 +1797,27 @@ function readAnalyzeSource(filePath: string, io: CliIo): string | number {
   return result;
 }
 
+// Streams FILE through the bounded line reader (#3531) instead of loading it whole. A failure to
+// open or read it is reported content-free, like `readAnalyzeSource`; any other error propagates.
+function streamAnalyzeSource(
+  filePath: string,
+  options: SupportAnalyzeOptions,
+  io: CliIo,
+): AnalyzeAllResult | number {
+  let result: AnalyzeAllResult | number;
+  try {
+    result = analyzeLogLines(
+      readActivityLogFileLines(() => openSync(filePath, "r")),
+      options,
+    );
+  } catch (error) {
+    if (!(error instanceof ActivityLogReadError)) throw error;
+    io.err(`keiko support analyze: could not read ${filePath} — ${error.causeKind}\n`);
+    result = 1;
+  }
+  return result;
+}
+
 function resolveFixturePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
 }
@@ -1973,7 +1995,8 @@ async function persistSupportAnalysisEvidence(
 }
 
 interface AnalyzedSupportResultContext {
-  readonly text: string;
+  // Only --seed/--emit-fixture need the whole text; every other analysis streams (#3531).
+  readonly readText: () => string | number;
   readonly args: AnalyzeArgs;
   readonly cwd: string;
   readonly filePath: string;
@@ -1991,7 +2014,9 @@ async function emitAnalyzedSupportResult(
     return 1;
   if (context.args.clusters) return emitClusters(result.clusters, context.args.json, context.io);
   if (context.args.seed || context.args.emitFixture !== undefined) {
-    return runSeedAndFixture(context.text, context.args, context.cwd, context.io, context.options);
+    const text = context.readText();
+    if (typeof text === "number") return text;
+    return runSeedAndFixture(text, context.args, context.cwd, context.io, context.options);
   }
   const report = buildAnalysisReport(result, context.filePath, context.deps);
   if (context.args.correlationId === undefined) {
@@ -2018,15 +2043,16 @@ async function runSupportAnalyze(
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
   const filePath = isAbsolute(args.file) ? args.file : resolve(cwd, args.file);
-  const text = readAnalyzeSource(filePath, io);
-  if (typeof text === "number") return text;
-
-  const basic = analyzeLogText(text);
+  const basic = streamAnalyzeSource(filePath, {}, io);
+  if (typeof basic === "number") return basic;
   const options = await loadToolAnalysisOptions(basic, io);
   const result =
-    options.toolLifecycleValidator === undefined ? basic : analyzeLogText(text, options);
+    options.toolLifecycleValidator === undefined
+      ? basic
+      : streamAnalyzeSource(filePath, options, io);
+  if (typeof result === "number") return result;
   return emitAnalyzedSupportResult(result, {
-    text,
+    readText: () => readAnalyzeSource(filePath, io),
     args,
     cwd,
     filePath,

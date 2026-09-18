@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0ecb67216cf3c9a54fdaadc7813e196467fa2fd9548dca0718d8cddcb29ebe38" as const;
+  "95854abbca4705b710350b24b5fc60e013ae1392b785fa3d48f4077cff4e4e55" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -22501,13 +22501,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string-array",
         dataClass: "closed-enum",
         required: false,
-        maxItems: 13,
+        maxItems: 17,
         values: [
           "no-registered-evidence",
           "no-registered-failure",
           "corrupt-evidence",
           "parent-correlation-missing",
           "lifecycle-start-missing",
+          "report-budget-exceeded",
+          "evidence-not-retained",
+          "segment-unreadable",
           "truncated-evidence",
           "unsupported-evidence",
           "incomplete-evidence",
@@ -22516,6 +22519,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "events-dropped",
           "correlation-unknown",
           "evidence-partial",
+          "context-truncated",
         ],
       },
       completeClassCount: {

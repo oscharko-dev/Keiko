@@ -730,8 +730,9 @@ export function recordRegisteredFailureIncident(
       trigger: "registered-failure",
       input: failureFingerprintInput(evidence),
       correlation,
+      // The failing operation's own correlation (validated), so the candidate's lines join it.
       evidenceCorrelationId:
-        evidence.correlationId ?? correlation.rootCorrelationId ?? randomUUID(),
+        correlation.childCorrelationIds[0] ?? correlation.rootCorrelationId ?? randomUUID(),
     },
     options,
   );

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0ecb67216cf3c9a54fdaadc7813e196467fa2fd9548dca0718d8cddcb29ebe38"
+    "catalogDigest": "95854abbca4705b710350b24b5fc60e013ae1392b785fa3d48f4077cff4e4e55"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -53,10 +53,10 @@
   "summary": {
     "operationCount": 420,
     "proofCount": 428,
-    "resolvedProofCount": 398,
+    "resolvedProofCount": 399,
     "failureClassCount": 308,
     "scenarioCount": 29,
-    "resolvedScenarioCount": 16
+    "resolvedScenarioCount": 24
   },
   "surfaces": [
     {
@@ -1862,7 +1862,9 @@
     "server-log.target-mutated.registered-line": [
       "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
     ],
-    "server-log.write-failed.stderr-line": [],
+    "server-log.write-failed.stderr-line": [
+      "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
+    ],
     "server.diagnostic.failure.activity-log-line": [
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts"
     ],
@@ -2001,17 +2003,19 @@
       "tests/activity-log-scenarios/client-diagnostics-ui.test.ts"
     ],
     "client-diagnostics.loss": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
-    "editor-delivery.crash": [],
-    "editor-delivery.dependency-failure": [],
-    "editor-delivery.loss": [],
-    "editor-delivery.rejection": [],
+    "editor-delivery.crash": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
+    "editor-delivery.dependency-failure": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
+    "editor-delivery.loss": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
+    "editor-delivery.rejection": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
     "lifecycle-crash.crash": ["tests/activity-log-scenarios/lifecycle-crash.test.ts"],
     "lifecycle-crash.dependency-failure": [],
     "lifecycle-crash.loss": [],
-    "memory-knowledge.crash": [],
-    "memory-knowledge.dependency-failure": [],
-    "memory-knowledge.loss": [],
-    "memory-knowledge.rejection": [],
+    "memory-knowledge.crash": ["tests/activity-log-scenarios/memory-knowledge.test.ts"],
+    "memory-knowledge.dependency-failure": [
+      "tests/activity-log-scenarios/memory-knowledge.test.ts"
+    ],
+    "memory-knowledge.loss": ["tests/activity-log-scenarios/memory-knowledge.test.ts"],
+    "memory-knowledge.rejection": ["tests/activity-log-scenarios/memory-knowledge.test.ts"],
     "model-gateway.crash": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "model-gateway.dependency-failure": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "model-gateway.loss": ["tests/activity-log-scenarios/model-gateway.test.ts"],
