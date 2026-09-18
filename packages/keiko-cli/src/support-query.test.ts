@@ -284,6 +284,35 @@ describe("support query causal closure (#3531)", () => {
     });
   });
 
+  // Regression (review 4050607039): a closure that fully resolved and streamed every one of its
+  // correlations, but whose event bodies exceeded --max-bytes, must keep reporting the real closure
+  // it found — not "nothing observed", which is indistinguishable from genuine evidence loss
+  // (`parent-correlation-missing` / `evidence-not-retained`).
+  it("keeps the real closure and candidate metrics when the resolved closure exceeds the byte budget", () => {
+    writeGraph(stateDir);
+    const full = query(stateDir, correlationSelection(IDS.root)).result;
+    const { result } = query(stateDir, correlationSelection(IDS.root), { maxResultBytes: 1500 });
+
+    expect(result.events).toEqual([]);
+    expect(result.truncation.state).toBe("budget-exceeded");
+    expect(result.diagnosticSufficiency).toMatchObject({
+      status: "insufficient",
+      reasons: ["report-budget-exceeded"],
+    });
+    // Same closure the unbounded run found: every member was actually observed while streaming.
+    expect(result.closure).toMatchObject({
+      correlationCount: full.closure?.correlationCount,
+      rootCount: full.closure?.rootCount,
+      ancestorCount: full.closure?.ancestorCount,
+      descendantCount: full.closure?.descendantCount,
+      missingCorrelationCount: 0,
+    });
+    expect(result.closure?.edges).toEqual(full.closure?.edges);
+    // The sibling path (runEventSelection) always preserves collector.candidateCount; the closure
+    // path must too, instead of hardcoding 0.
+    expect(result.metrics.candidateEventCount).toBeGreaterThan(0);
+  });
+
   it("returns report-budget-exceeded when the closure exceeds the correlation bound", () => {
     writeGraph(stateDir);
     const { result } = query(stateDir, correlationSelection(IDS.root), {

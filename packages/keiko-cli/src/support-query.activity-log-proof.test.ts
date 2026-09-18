@@ -120,6 +120,46 @@ describe("support query activity log proofs (#3531)", () => {
     }
   });
 
+  // Regression (review 4050607039): a closure that fully resolves and streams every correlation
+  // but whose event bodies exceed --max-bytes must not persist an inconsistent pair — a nonzero
+  // closureCorrelationCount next to a hardcoded candidateEventCount: 0, indistinguishable from real
+  // evidence loss once written to the Activity Log.
+  it("persists a consistent closure/candidate pair when a resolved closure exceeds --max-bytes", async () => {
+    const stateDir = stateWithHistory();
+    const { io, out } = makeIo();
+
+    const code = await runSupportCli(
+      ["query", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--max-bytes", "50", "--json"],
+      io,
+      {},
+    );
+
+    expect(code).toBe(0);
+    const result = JSON.parse(out()) as {
+      readonly events: readonly unknown[];
+      readonly truncation: { readonly state: string };
+    };
+    expect(result.events).toEqual([]);
+    expect(result.truncation.state).toBe("budget-exceeded");
+    const completed = expectActivityLogProof(
+      "support.query.completed.query-evidence",
+      lineOf(stateDir, "support.query.completed"),
+    );
+    expect(completed).toMatchObject({
+      surface: "query",
+      queryClass: "correlation",
+      truncation: "budget-exceeded",
+      sufficiency: "insufficient",
+      closureCorrelationCount: 2,
+    });
+    // The regression: candidateEventCount must reflect the closure that was actually streamed
+    // (both correlations), never the hardcoded 0 a fully-resolved-but-over-budget closure produced.
+    expect(completed.candidateEventCount).toBeGreaterThan(0);
+    for (const forbidden of [ROOT_ID, CHILD_ID, stateDir, "fedcba01"]) {
+      expect(JSON.stringify(completed)).not.toContain(forbidden);
+    }
+  });
+
   it("persists support.query.failed with a closed error kind when the incident lookup fails", async () => {
     const stateDir = stateWithHistory();
     const { io, err } = makeIo();

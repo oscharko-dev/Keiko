@@ -861,21 +861,28 @@ function missingClosureReasons(
   return reasons;
 }
 
+// A closure that streamed to completion still knows exactly which members it observed and which
+// edges it found — only the event bodies were dropped for exceeding the byte budget. Passing that
+// already-collected `ClosureEvents` keeps `closureSummary` from reporting a fully-resolved closure
+// as if every correlation were missing (indistinguishable from real evidence loss). When nothing
+// was collected yet (the closure itself exceeded the correlation bound before any event streaming
+// ran), `collected` is omitted and the summary falls back to "nothing observed", which is accurate.
 function budgetExceededOutcome(
   selection: SupportClosureSelection,
   closure: ClosureState,
   state: EngineState,
   requiredBytes: number,
+  collected?: ClosureEvents,
 ): SelectionOutcome {
   return {
     events: [],
-    candidateEventCount: 0,
+    candidateEventCount: collected?.collector.candidateCount ?? 0,
     requiredBytes,
     omittedContextEventCount: 0,
     truncation: "budget-exceeded",
     reasons: ["report-budget-exceeded"],
     required: selection.requiredClasses,
-    closure: closureSummary(closure, undefined, state.passCount),
+    closure: closureSummary(closure, collected, state.passCount),
   };
 }
 
@@ -889,7 +896,13 @@ function runClosureSelection(
     return budgetExceededOutcome(selection, closure, state, 0);
   const collected = collectClosureEvents(state, closure.members, selection.windows);
   if (collected.collector.exceeded) {
-    return budgetExceededOutcome(selection, closure, state, collected.collector.requiredBytes);
+    return budgetExceededOutcome(
+      selection,
+      closure,
+      state,
+      collected.collector.requiredBytes,
+      collected,
+    );
   }
   const remaining = state.input.limits.maxResultBytes - collected.collector.requiredBytes;
   const context = collectContext(state, collected.collector.events, remaining);
