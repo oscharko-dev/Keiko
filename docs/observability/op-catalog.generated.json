@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f0ac08de6dff7b58343cb7167bd3f748130d14e99e9c329463f05e71d579ea56",
+    "catalogDigest": "67ff50d56ea3f5266a775aa3203d11da5fff8e6247ff4d55f56e6ed39ede9fe1",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -469,7 +469,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["startup", "heartbeat", "transition"]
+            "values": ["startup", "transition"]
           },
           "lostEvents": {
             "type": "integer",
@@ -486,8 +486,8 @@
           "activity-log.readiness.transition-line"
         ],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/observability/activity-log-readiness.ts:58",
-        "emitterSites": ["packages/keiko-server/src/observability/activity-log-readiness.ts:136"]
+        "registrationSite": "packages/keiko-server/src/observability/activity-log-readiness.ts:59",
+        "emitterSites": ["packages/keiko-server/src/observability/activity-log-readiness.ts:137"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -66526,13 +66526,13 @@
     {
       "op": "activity-log.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/activity-log-readiness.ts:356",
+      "site": "packages/keiko-server/src/observability/activity-log-readiness.ts:357",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/activity-log-readiness.ts:61",
+      "site": "packages/keiko-server/src/observability/activity-log-readiness.ts:62",
       "package": "keiko-server"
     },
     {
@@ -68229,7 +68229,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1940",
+      "site": "packages/keiko-server/src/deps.ts:1941",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -68587,7 +68587,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4095",
+      "site": "packages/keiko-server/src/deps.ts:4094",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -68680,7 +68680,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2745",
+      "site": "packages/keiko-server/src/deps.ts:2744",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -66,14 +66,14 @@ levels.
 
 ## Log locations and debug mode
 
-| Path                     | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.keiko/logs/server.log` | Redacted server activity log (JSON Lines). Keiko rotates it at UTC day boundaries into one closed-grammar dated archive, retains the configured bounded window (seven by default), and emits typed rotation/retention outcomes plus a 256 MiB capacity warning. Never truncate a live file. See [Observability: the server activity log](../observability/README.md) for details, `KEIKO_LOG_LEVEL`, and `keiko support export`/`keiko support analyze`. |
-| `.keiko/ui.log`          | Local UI process log. Written by `keiko start` for the background UI process.                                                                                                                                                                                                                                                                                                                                                                            |
-| `.keiko/ui.pid`          | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.                                                                                                                                                                                                                                                                                                                                                        |
-| `.keiko/ui.shutdown`     | Pid-bound graceful-stop request written by `keiko stop` / `restart` / `uninstall --force`. The UI drains when it sees its own pid here; Windows cannot deliver cross-process `SIGTERM`. Removed once the process is confirmed gone.                                                                                                                                                                                                                      |
-| `.keiko/evidence/`       | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                                                                                                                                                                                                                              |
-| `~/.keiko/keiko-ui.db`   | Local UI state database. User-scoped, not project-scoped.                                                                                                                                                                                                                                                                                                                                                                                                |
+| Path                   | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.keiko/logs/`         | Redacted server activity log (JSON Lines), stored as immutable segments: one active segment per running process, read-only sealed segments, and any legacy `server.log` or `server-YYYY-MM-DD.log` files. Keiko bounds the directory by bytes and age (256 MiB and 14 days by default) and records seals, crash recovery, retention, pins and storage pressure as typed body-free events. Never edit, truncate or delete a file in it by hand. See [Observability: the server activity log](../observability/README.md) for details, `KEIKO_LOG_LEVEL`, and `keiko support export`/`keiko support analyze`. |
+| `.keiko/ui.log`        | Local UI process log. Written by `keiko start` for the background UI process.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `.keiko/ui.pid`        | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `.keiko/ui.shutdown`   | Pid-bound graceful-stop request written by `keiko stop` / `restart` / `uninstall --force`. The UI drains when it sees its own pid here; Windows cannot deliver cross-process `SIGTERM`. Removed once the process is confirmed gone.                                                                                                                                                                                                                                                                                                                                                                         |
+| `.keiko/evidence/`     | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `~/.keiko/keiko-ui.db` | Local UI state database. User-scoped, not project-scoped.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 `keiko support export` exclusively creates its report and integrity sidecar; it never replaces an
 existing destination. After an interrupted export, rerun with the same explicit `--out` path. For
@@ -85,11 +85,11 @@ If Keiko aborts startup with an Activity Log safe-artifact failure, use the clos
 stderr to recover; the diagnostic intentionally does not echo the configured path:
 
 1. Stop processes using the same state directory and inspect the operator-selected `<stateDir>` and
-   its `logs/server.log` target without following links. Preserve suspicious entries for review;
+   its `logs/` directory without following links. Preserve suspicious entries for review;
    Keiko never deletes or rewrites them as recovery.
 2. For `unsafe-ancestor`, `unsafe-target`, `target-mutated`, or `permission-unsafe`, verify that every
-   state-directory component is an expected real directory and that `server.log`, when present, is
-   a regular single-link file owned by the expected account. Do not replace an unknown symlink,
+   state-directory component is an expected real directory and that every file in `logs/` is a
+   regular single-link file owned by the expected account. Do not replace an unknown symlink,
    reparse point, hard link, or non-regular file in place.
 3. For `open-failed`, `permission-failed`, `write-failed`, or `durability-failed`, verify the selected
    filesystem is writable, has free space, and permits private directory/file creation and durable
@@ -98,8 +98,8 @@ stderr to recover; the diagnostic intentionally does not echo the configured pat
 4. Retry with a clean, operator-controlled state directory. A repeated `target-mutated` or unsafe
    target result indicates continuing mutation or an untrusted path; stop retrying and investigate
    that boundary instead of weakening the check.
-5. After startup succeeds, run `keiko support analyze <stateDir>/logs/server.log` and confirm the
-   new evidence is current. Treat an incomplete/unavailable writer or an unexplained sequence gap as
+5. After startup succeeds, run `keiko support analyze` on the newest segment in `<stateDir>/logs/`
+   and confirm the new evidence is current. Treat an incomplete/unavailable writer or an unexplained sequence gap as
    evidence loss, not as a recovered complete log.
 
 To capture verbose output for a single command run, invoke the CLI in the
@@ -772,46 +772,65 @@ The diagnostic record includes `correlationId`, `source`
 
 ---
 
-### 12. Activity Log daily rotation or retention reports a failure
+### 12. Activity Log storage reports pressure or a failed retention
 
-| Field             | Value                                    |
-| ----------------- | ---------------------------------------- |
-| Severity          | High                                     |
-| Surface           | Activity Log persistence                 |
-| Stable identifier | `server-log.rotation: durability-failed` |
+| Field             | Value                                                            |
+| ----------------- | ---------------------------------------------------------------- |
+| Severity          | High                                                             |
+| Surface           | Activity Log persistence                                         |
+| Stable identifier | `activity-log.pressure`, `activity-log.retention.pruned: failed` |
 
 **Symptom**
 
-The Activity Log contains `server-log.rotation` with `persistenceStatus: "failed"` or
-`retentionStatus: "failed"`. The record includes only closed reasons and archived/pruned/retained
-counts; it deliberately contains no filesystem path.
+The Activity Log contains one of these lines:
+
+- `activity-log.pressure` with `pressureState` `disk-full`, `budget-exceeded`, `backpressure`,
+  `low-disk-space` or `retention-blocked`;
+- `activity-log.retention.pruned` with `retentionStatus: "partial"` or `"failed"`;
+- `activity-log.segment.recovered` with `recoveryStatus: "failed"`.
+
+The records carry closed states, counts and byte sizes only; they deliberately contain no filesystem
+path. `droppedEventCount` states how many events were lost.
 
 **Root Cause**
 
-Keiko refused a day-boundary mutation because the log directory changed identity, was redirected or
-not owner-private, the current/archive target failed regular-owner-link checks, the filesystem
-mutation failed, or a retention target could not be safely removed. The triggering product
-operation continues; the failure is evidence that the configured retention bound needs operator
-attention, not permission to weaken the filesystem checks.
+One of three conditions:
+
+- The filesystem is full or below the low-space threshold.
+- The unprotected files exceed `KEIKO_LOG_RETENTION_BYTES` and retention could not free enough,
+  for example because deletions failed or many processes hold active segments.
+- Keiko refused a seal, a recovery or a deletion. The log directory changed identity, was
+  redirected or was not owner-private, or a target failed the regular, owner-matched, single-link
+  checks.
+
+The triggering product operation continues. The line is evidence that the storage bound needs
+operator attention, not permission to weaken the filesystem checks.
 
 **Diagnostic Steps**
 
-1. Stop every Keiko process using the state directory.
-2. Inspect `<stateDir>` and `<stateDir>/logs` without following links. On POSIX confirm both are
-   owned by the expected account and mode `0700`; on Windows confirm the selected owner's ACL and
-   that neither path is a junction/reparse redirect.
-3. Confirm `server.log` and every `server-YYYY-MM-DD.log` candidate are regular owner-matched files.
-   An archive eligible for pruning must have one link. Preserve any unexpected link, symlink,
-   device, FIFO, malformed date, stage, or backup for investigation.
-4. Run `keiko support analyze <stateDir>/logs/server.log` and inspect the latest rotation outcome and
-   counts. Do not infer a path from the body-free record.
+1. Run `keiko support analyze` on the newest segment in `<stateDir>/logs/`, or on a
+   `keiko support export` bundle. Read the latest `activity-log.pressure`,
+   `activity-log.retention.pruned` and `activity-log.segment.recovered` lines: the state,
+   `droppedEventCount`, and the used, budget, pin-quota and free bytes. Do not infer a path from the
+   body-free record.
+2. Check the free space on the filesystem that holds `<stateDir>`.
+3. Stop every Keiko process using the state directory. Inspect `<stateDir>` and `<stateDir>/logs`
+   without following links. On POSIX, confirm that both are owned by the expected account and have
+   mode `0700`. On Windows, confirm the selected owner's ACL and that neither path is a junction or
+   reparse redirect.
+4. Confirm that every `activity-*.jsonl`, `server.log` and `server-YYYY-MM-DD.log` file is a
+   regular, owner-matched file with one link. Preserve any unexpected link, symlink, device, FIFO or
+   unknown name for investigation.
 
 **Resolution**
 
-Restore an owner-controlled, non-redirected `logs` directory and move suspicious entries aside only
-while all writers are stopped. Restart Keiko and confirm the next `server-log.rotation` reports a
-closed successful/skipped rotation outcome and a non-failing retention outcome. Never delete a
-lookalike file merely to force the count down, and never truncate or replace a live `server.log`.
+Free disk space. Raise `KEIKO_LOG_RETENTION_BYTES` only within the space the filesystem can hold.
+Restore an owner-controlled, non-redirected `logs` directory, and move suspicious entries aside
+only while all writers are stopped. Restart Keiko and confirm that the next
+`activity-log.pressure` line reports `cleared`, or that no new pressure line appears, and that the
+next `activity-log.retention.pruned` reports `pruned`. Never delete, truncate or edit a segment by
+hand to force the usage down. Retention removes the oldest unpinned files itself once the directory
+is safe again.
 
 ---
 

@@ -1,8 +1,9 @@
 # Observability: the server activity log
 
 Keiko configures one operator-readable activity log for every local install. `KEIKO_LOG_LEVEL`
-controls its threshold and can explicitly disable writes with `silent`; a silent interval has no
-reconstruction evidence and must not be interpreted as an active writer. This page documents the
+controls its threshold. `silent` suppresses ordinary events but never the log's own lifecycle,
+loss and readiness evidence, and a silent interval is reported as degraded readiness rather than
+passing for an active writer. This page documents the
 log itself, how its lines join together across a request's lifecycle, and how to read it with
 `keiko support export` / `keiko support analyze`. It is the consumer-facing counterpart to
 [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md), which records
@@ -39,7 +40,7 @@ that the last line on disk before a hang or a crash is the last line the process
 When a state directory is configured, failure to create or open its log directory aborts startup
 with a closed safe-artifact error. Keiko never silently substitutes a null sink for a configured
 activity log; an in-memory/null sink exists only where a caller explicitly selected one, such as a
-unit-test composition without a state directory.
+unit test that installs the test writer (see [Writer wiring](#writer-wiring-loss-accounting-and-readiness)).
 
 ### Segments
 
@@ -142,10 +143,80 @@ lines that carry them stay readable.
 `KEIKO_LOG_LEVEL` gates volume, not content: an event below the configured threshold returns
 before any string or JSON work happens at all, so a quiet level is also the cheap one. Accepted
 values are `debug`, `info` (the default when unset or unrecognized), `warn`, and `error`, plus the
-threshold-only `silent` to turn the log off entirely. A handful of common aliases are also
+threshold-only `silent` to turn ordinary events off. A handful of common aliases are also
 accepted (`trace`/`verbose` → `debug`, `warning` → `warn`, `fatal`/`critical` → `error`,
 `off`/`none` → `silent`); a typo falls back to `info` rather than crashing the process or silently
 disabling the log the operator is trying to read.
+
+The log's own evidence is written at every level, `silent` included: `process.started`,
+`process.exiting`, `process.fatal`, `activity-log.readiness`, `activity-log.loss`, and every
+operation registered with `lifecycle: "loss"`. A quieted log therefore still says that it was
+quieted (readiness reason `level-silent`) and whether it lost anything.
+
+## Writer wiring, loss accounting, and readiness
+
+**Every process writes, or says that it cannot.** A process resolves its log directory the way the
+CLI does: a non-empty `KEIKO_STATE_DIR`, resolved against the working directory when relative,
+otherwise `<cwd>/.keiko`. Commands that never set the variable (`keiko run`, `keiko memory`,
+`keiko evaluate`, `keiko update`) therefore write the same log that `keiko start` in that directory
+would. When the directory cannot be opened, the logger counts every event it receives as lost
+(`logger-unavailable`) and tries again on the next event. A writer that discards events exists only
+in tests, where the vitest setup files install it explicitly.
+
+**Domain packages write through the process sink.** Each domain package owns an injected log port
+(`SecurityLogSink`, `KnowledgeLogSink`, `MemoryVaultLogSink`, `ConsolidationLogSink`,
+`ModelGatewayLogSink`), and the server and CLI composition roots pass every port the process sink.
+A port catches its own sink failures and counts every one of them. A new package follows the same
+pattern; ADR-0173 D6 states it as five rules.
+
+**The UI process has no second log.** `keiko start` ignores the UI process's stdout and stderr,
+because every diagnostic already reaches this log. Earlier versions copied that raw output into
+`<stateDir>/ui.log`. An existing `ui.log` is left in place, never read into a support report, and
+removed with the rest of the runtime state by `keiko uninstall --state`. When the UI does not become
+healthy, `keiko start` names a closed outcome (`process-exited` or `health-timeout`), and a crash is
+recorded as `process.fatal`.
+
+**Loss is counted under a closed reason.** Every place that loses an event counts it in one bounded,
+process-wide ledger:
+
+| Reason                                                                                                                           | Counted when                                                                              |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `logger-write-failed`                                                                                                            | The logger caught a failure while building or writing an event.                           |
+| `logger-unavailable`                                                                                                             | No writable log directory existed for the process.                                        |
+| `schema-rejected`                                                                                                                | The sink's registry validation refused an event.                                          |
+| `persistence-failed`                                                                                                             | The file sink dropped an event after a failed append.                                     |
+| `diagnostic-sink-failed`                                                                                                         | A server diagnostic record could not be delivered.                                        |
+| `port-sink-failed`                                                                                                               | A domain package's log port threw. Every failure counts, not only the first.              |
+| `client-rejected`, `client-rate-suppressed`                                                                                      | The BFF refused a malformed or oversized browser report, or its rate limiter dropped one. |
+| `client-buffer-evicted`, `client-post-throttled`, `client-post-failed`, `client-rejection-suppressed`, `client-error-suppressed` | The browser reported loss on its own side of the transport.                               |
+| `collector-dropped`                                                                                                              | The CLI's deferred security-event collector dropped events.                               |
+| `summary-write-failed`                                                                                                           | The loss summary itself could not be written.                                             |
+
+The counters are persisted as an `activity-log.loss` summary, one count field per reason that lost
+anything. A heartbeat writes a summary only when the counters changed; the exit summary is always
+written, so a clean shutdown also proves that nothing was lost. A summary that cannot be written only increments
+`summary-write-failed`, so the accounting never recurses into a failing sink. The browser sends its
+counts with its next report, and once more when the page is hidden.
+
+**Readiness says whether this log can be trusted right now.** Each process evaluates a closed state:
+
+- `ready`: every check passed.
+- `degraded`: evidence is being recorded, with a named gap.
+- `unavailable`: the registry identity is incoherent, or the log cannot be written at all.
+
+The reasons are closed too: `catalog-mismatch`, `sink-unwritable`, `storage-pressure`,
+`budget-exceeded`, `port-unwired` and `level-silent`. The startup check runs before the server
+listens and persists an `activity-log.readiness` line through the real append path. The heartbeat
+re-evaluates it and logs every transition.
+
+| Where to read it                   | What it shows                                                        |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `keiko status`                     | `Diagnostic evidence: <state> (<reasons>); lost events: N.`          |
+| `keiko ui` (foreground)            | A line naming the state and reasons when readiness is not `ready`.   |
+| `keiko support export`             | The exported directory's readiness, after the report is written.     |
+| `GET /api/health`                  | The `diagnostics` block: state, reasons, writer kind, lost events.   |
+| The desktop footer                 | A badge when readiness is `degraded` or `unavailable`, with reasons. |
+| The log (`activity-log.readiness`) | The startup state and every later transition.                        |
 
 ## The op catalog
 
@@ -337,6 +408,9 @@ Read the log in this order for one failure:
 5. For process-level events (`process.started`, `process.heartbeat`, `process.exiting`), which
    carry no `correlationId` and so never belong to a per-correlation timeline, read
    `keiko support analyze`'s `processes[]` summary instead, keyed by `(pid, instanceId)`.
+6. Before you trust an absence, read that process's `activity-log.readiness` and
+   `activity-log.loss` lines. A missing line during a period with a non-zero loss count is lost
+   evidence, not proof that nothing happened.
 
 ## Worked example: `keiko support analyze`
 

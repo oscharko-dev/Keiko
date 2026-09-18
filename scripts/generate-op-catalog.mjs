@@ -81,6 +81,8 @@ import {
 } from "../packages/keiko-contracts/dist/observability.js";
 import { ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS } from "../packages/keiko-contracts/dist/activity-log-failure-class-contracts.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
+import { generateFailureSurfaceInventory } from "./lib/activity-log-failure-surface-inventory.mjs";
+import { FAILURE_SURFACE_INVENTORY_RELATIVE_PATH } from "./lib/activity-log-failure-surfaces.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import {
   TOOL_CATALOG_OPERATIONS_PATH,
@@ -2310,14 +2312,27 @@ export function generateOpCatalog(repoRoot = REPO_ROOT) {
   };
 }
 
-async function main() {
-  const catalog = generateOpCatalog();
-  const operationsBytes = await toolCatalogOperationsBytes(REPO_ROOT);
-  const catalogBytes = await format(`${JSON.stringify(catalog, null, 2)}\n`, {
+// The failure-surface inventory (#3532) is a view over the typed registry this generator derives,
+// so it is regenerated and drift-pinned together with the catalog, never maintained by hand.
+export function generateActivityLogFailureSurfaceInventory(
+  repoRoot = REPO_ROOT,
+  typedRegistry = generateTypedActivityLogRegistry(repoRoot),
+) {
+  return generateFailureSurfaceInventory(repoRoot, typedRegistry);
+}
+
+export async function formatGeneratedJson(value) {
+  return format(`${JSON.stringify(value, null, 2)}\n`, {
     parser: "json",
     printWidth: 100,
     tabWidth: 2,
   });
+}
+
+async function writeGeneratedFiles(catalog, inventory) {
+  const operationsBytes = await toolCatalogOperationsBytes(REPO_ROOT);
+  const catalogBytes = await formatGeneratedJson(catalog);
+  const inventoryBytes = await formatGeneratedJson(inventory);
   const runtimeRegistryBytes = await format(runtimeRegistryModule(catalog.typedRegistry), {
     parser: "typescript",
     printWidth: 100,
@@ -2327,11 +2342,39 @@ async function main() {
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, catalogBytes, "utf8");
   writeFileSync(
+    join(REPO_ROOT, ...FAILURE_SURFACE_INVENTORY_RELATIVE_PATH.split("/")),
+    inventoryBytes,
+    "utf8",
+  );
+  writeFileSync(
     join(REPO_ROOT, ...RUNTIME_REGISTRY_RELATIVE_PATH.split("/")),
     runtimeRegistryBytes,
     "utf8",
   );
   writeFileSync(join(REPO_ROOT, TOOL_CATALOG_OPERATIONS_PATH), operationsBytes, "utf8");
+}
+
+function reportInventory(inventory) {
+  const { summary } = inventory;
+  console.log(
+    `  failure-surface inventory: ${String(summary.resolvedProofCount)}/${String(summary.proofCount)} ` +
+      `proofs and ${String(summary.resolvedScenarioCount)}/${String(summary.scenarioCount)} ` +
+      `scenarios resolved, ${String(inventory.violations.length)} violation(s). ` +
+      `Wrote ${FAILURE_SURFACE_INVENTORY_RELATIVE_PATH}.`,
+  );
+  if (inventory.violations.length > 0) {
+    console.error(
+      `  failure-surface inventory violations: ${JSON.stringify(inventory.violations)}`,
+    );
+    process.exitCode = 1;
+  }
+}
+
+async function main() {
+  const catalog = generateOpCatalog();
+  const inventory = generateActivityLogFailureSurfaceInventory(REPO_ROOT, catalog.typedRegistry);
+  await writeGeneratedFiles(catalog, inventory);
+  reportInventory(inventory);
   const dynamicCount = catalog.legacyDiscovery.dynamicCount;
   console.log(
     `generate:op-catalog OK — ${catalog.entries.length} legacy entries ` +
