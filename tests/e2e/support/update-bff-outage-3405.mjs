@@ -145,7 +145,6 @@ if (
   // cannot serve as an injection seam for this real-BFF outage journey.
   process.exitCode = await runCli(process.argv.slice(2), io, process.env);
 } else {
-  process.stdout.write("KEIKO_E2E_UPDATE_OUTAGE_BFF\n");
   process.exitCode = await runUiCli(process.argv.slice(3), io, process.env, {
     buildHandlerDeps: createHarnessHandlerDeps,
   });

@@ -118,7 +118,7 @@ const DISPATCH_NO_SPAWN_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["git-delivery-authority-continuity"],
-  proofIds: ["git.delivery.dispatch.no-spawn"],
+  proofIds: ["git.delivery.dispatch.no-spawn.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -134,7 +134,7 @@ const UPSTREAM_TRACKING_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["git-upstream-tracking"],
-  proofIds: ["git.delivery.push.upstream-tracking-failed"],
+  proofIds: ["git.delivery.push.upstream-tracking-failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -270,7 +270,7 @@ const MUTATION_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-mutation"],
-  proofIds: ["git.delivery.mutation.completed"],
+  proofIds: ["git.delivery.mutation.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -302,7 +302,7 @@ const MUTATION_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["git-delivery-precondition"],
-  proofIds: ["git.delivery.mutation.failed"],
+  proofIds: ["git.delivery.mutation.failed.emitted-line"],
   releaseImpact: "patch",
 });
 

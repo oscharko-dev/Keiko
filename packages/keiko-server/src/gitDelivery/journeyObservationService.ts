@@ -30,7 +30,7 @@ const JOURNEY_OBSERVATION_OPERATION_BASE = {
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-journey-observation"],
-  proofIds: ["git.journey-observation"],
+  proofIds: ["git.journey-observation.emitted-line"],
   releaseImpact: "patch",
 } as const;
 

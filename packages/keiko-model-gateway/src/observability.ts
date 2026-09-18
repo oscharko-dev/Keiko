@@ -125,7 +125,7 @@ const GATEWAY_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "loss",
   analyzerProjection: "capability",
   failureClasses: ["activity-log-sink-failure"],
-  proofIds: ["model-gateway.log-sink-failed.emitted-line"],
+  proofIds: ["gateway.log.sink-failed.emitted-line"],
   releaseImpact: "patch",
 });
 

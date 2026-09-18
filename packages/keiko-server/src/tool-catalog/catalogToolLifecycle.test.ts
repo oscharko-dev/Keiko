@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import {
+  activityLogLossCounters,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
 import { emitToolLifecycleEvent, validateToolLifecycleEvent } from "./catalogToolLifecycle.js";
@@ -217,5 +221,21 @@ describe("closed runtime lifecycle emission", () => {
     expect(port.diagnostics.record).toHaveBeenCalledWith(
       expect.objectContaining({ source: "tool-catalog-lifecycle-primary" }),
     );
+  });
+  // #3532: a lifecycle line a sink refused is lost, and the process loss ledger counts it.
+  it("counts every lifecycle line a failing sink loses", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      const port = sinks();
+      const failing = {
+        write: vi.fn(() => {
+          throw new Error("private failure body");
+        }),
+      };
+      emitToolLifecycleEvent({ ...port, primary: failing, auxiliary: failing }, phase("terminal"));
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(2);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
   });
 });

@@ -101,7 +101,7 @@ const CODING_RUNTIME_OPERATION_REFUSED_BASE = {
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-operation-refusal"],
-  proofIds: ["coding-runtime.operation-refused.emitted-line"],
+  proofIds: ["coding-runtime.operation.refused.emitted-line"],
   releaseImpact: "patch",
 } as const;
 

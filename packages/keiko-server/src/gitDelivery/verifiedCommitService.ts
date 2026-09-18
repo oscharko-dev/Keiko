@@ -201,7 +201,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-verified-commit"],
-  proofIds: ["git.verified-commit"],
+  proofIds: ["git.verified-commit.emitted-line"],
   releaseImpact: "patch",
 });
 

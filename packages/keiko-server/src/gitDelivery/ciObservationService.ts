@@ -160,7 +160,7 @@ const CI_OBSERVATION_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-ci-observation"],
-  proofIds: ["git.ci-observation"],
+  proofIds: ["git.ci-observation.emitted-line"],
   releaseImpact: "patch",
 });
 

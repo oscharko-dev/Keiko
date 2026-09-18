@@ -74,7 +74,7 @@ const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-tls-trust"],
-  proofIds: ["http.gateway-tls-trust-failed.emitted-line"],
+  proofIds: ["http.gateway.tls.trust-failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -97,7 +97,7 @@ const HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-tls-trust"],
-  proofIds: ["http.gateway-tls-ca-fallback.emitted-line"],
+  proofIds: ["http.gateway.tls.ca-bundle-fallback.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -137,7 +137,7 @@ const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-egress"],
-  proofIds: ["http.gateway-egress-planned.emitted-line"],
+  proofIds: ["http.gateway.egress.planned.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -163,7 +163,7 @@ const HTTP_GATEWAY_FETCH_STARTED_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-http-fetch"],
-  proofIds: ["http.gateway-fetch-started.emitted-line"],
+  proofIds: ["http.gateway.fetch.started.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -186,7 +186,7 @@ const HTTP_GATEWAY_FETCH_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-http-fetch"],
-  proofIds: ["http.gateway-fetch-completed.emitted-line"],
+  proofIds: ["http.gateway.fetch.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -215,7 +215,7 @@ const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-http-fetch", "gateway-egress"],
-  proofIds: ["http.gateway-fetch-failed.emitted-line"],
+  proofIds: ["http.gateway.fetch.failed.emitted-line"],
   releaseImpact: "patch",
 });
 

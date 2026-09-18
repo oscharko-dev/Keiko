@@ -54,7 +54,7 @@ const DRAFT_REPOSITORY_DRIFT_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["git-draft-repository-drift"],
-  proofIds: ["git.draft-delivery.repository-drift"],
+  proofIds: ["git.draft-delivery.repository-drift.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -108,7 +108,7 @@ const DRAFT_REMOTE_OBSERVED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-draft-remote-observation"],
-  proofIds: ["git.draft-remote.observed"],
+  proofIds: ["git.draft-remote.observed.emitted-line"],
   releaseImpact: "patch",
 });
 

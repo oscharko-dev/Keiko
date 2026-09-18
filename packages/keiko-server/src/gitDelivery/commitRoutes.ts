@@ -139,7 +139,7 @@ const COMMIT_PREVIEW_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-commit-preview"],
-  proofIds: ["git.commit.preview.completed"],
+  proofIds: ["git.commit.preview.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -181,7 +181,7 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-commit-draft"],
-  proofIds: ["git.commit.draft.completed"],
+  proofIds: ["git.commit.draft.completed.emitted-line"],
   releaseImpact: "patch",
 });
 

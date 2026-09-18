@@ -147,7 +147,7 @@ const EDITOR_PRODUCER_TURN_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["editor-producer-turn"],
-  proofIds: ["editor.producer-turn-completed.emitted-line"],
+  proofIds: ["editor.producer-turn.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
