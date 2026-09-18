@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1a3da470af5bf166f3eb78110de0e8f26d0ea7a00d103b317e191dcd17ba0df9"
+    "catalogDigest": "aef1814edb06c600020cd19916f213f2bf8bb3274e812823a4d5c8a796ee6cf5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -53,7 +53,7 @@
   "summary": {
     "operationCount": 423,
     "proofCount": 431,
-    "resolvedProofCount": 399,
+    "resolvedProofCount": 402,
     "failureClassCount": 309,
     "scenarioCount": 29,
     "resolvedScenarioCount": 24
@@ -1918,9 +1918,15 @@
     "support.incident.rejected.emitted-line": [
       "packages/keiko-server/src/observability/support-incident.test.ts"
     ],
-    "support.manifest.rebuilt.manifest-evidence": [],
-    "support.query.completed.query-evidence": [],
-    "support.query.failed.failure-evidence": [],
+    "support.manifest.rebuilt.manifest-evidence": [
+      "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
+    ],
+    "support.query.completed.query-evidence": [
+      "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
+    ],
+    "support.query.failed.failure-evidence": [
+      "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
+    ],
     "task-workspace.identity.creation-time-probe.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
     ],

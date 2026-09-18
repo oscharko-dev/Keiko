@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1a3da470af5bf166f3eb78110de0e8f26d0ea7a00d103b317e191dcd17ba0df9" as const;
+  "aef1814edb06c600020cd19916f213f2bf8bb3274e812823a4d5c8a796ee6cf5" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -25370,8 +25370,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
   supportedClassCount: 309,
-  completeClassCount: 308,
-  completeness: "incomplete",
+  completeClassCount: 309,
+  completeness: "complete",
   classes: [
     {
       failureClass: "activity-log-contract",
@@ -52889,8 +52889,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           missingObligations: [],
         },
       ],
-      missingObligations: ["evidence-classes"],
-      completeness: "incomplete",
+      missingObligations: [],
+      completeness: "complete",
     },
     {
       failureClass: "task-workspace-lifecycle",
