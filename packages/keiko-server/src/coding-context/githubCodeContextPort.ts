@@ -23,6 +23,8 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
+  type ActivityLogFieldContract,
+  type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -43,12 +45,54 @@ const GH_API_TIMEOUT_MS = 30_000;
 // look like a syntax problem when the marker reached `JSON.parse`.
 const GH_API_MAX_STDOUT_BYTES = GOVERNED_GIT_REMOTE_SANDBOX_POLICY.maxOutputBytes;
 
-const GITHUB_CONTEXT_READ_OPERATION = defineActivityLogOperation({
+type GitHubReadOperationHeader = Pick<
+  ActivityLogOperationRegistration,
+  "contractKind" | "schemaVersion"
+>;
+type GitHubReadOperationOwnership = Pick<ActivityLogOperationRegistration, "category" | "owner">;
+
+const GITHUB_READ_OPERATION_HEADER = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "coding-context.github.read",
+} as const satisfies GitHubReadOperationHeader;
+const GITHUB_READ_OPERATION_OWNERSHIP = {
   category: "process",
   owner: "keiko-server",
+} as const satisfies GitHubReadOperationOwnership;
+
+const GITHUB_READ_SUCCESS_OUTCOMES = ["succeeded", "cancelled"] as const;
+const GITHUB_READ_GH_OUTCOMES = [
+  "gh-denied",
+  "gh-failed",
+  "gh-transient-failure",
+  "gh-output-truncated",
+  "gh-invalid-json",
+] as const;
+const GITHUB_READ_OUTCOME_VALUES = [
+  ...GITHUB_READ_SUCCESS_OUTCOMES,
+  ...GITHUB_READ_GH_OUTCOMES,
+  "failed",
+] as const;
+
+const GITHUB_READ_FRAMES_FIELD_CONTRACT = {
+  type: "string-array",
+  dataClass: "safe-platform-class",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const satisfies ActivityLogFieldContract;
+const GITHUB_READ_CAUSE_CHAIN_FIELD_CONTRACT = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const satisfies ActivityLogFieldContract;
+
+const GITHUB_CONTEXT_READ_OPERATION = defineActivityLogOperation({
+  ...GITHUB_READ_OPERATION_HEADER,
+  op: "coding-context.github.read",
+  ...GITHUB_READ_OPERATION_OWNERSHIP,
   emitter: "coding-context/githubCodeContextPort.recordRead",
   fields: {
     byteCount: { type: "integer", dataClass: "count", required: true },
@@ -56,32 +100,11 @@ const GITHUB_CONTEXT_READ_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [
-        "succeeded",
-        "cancelled",
-        "gh-denied",
-        "gh-failed",
-        "gh-transient-failure",
-        "gh-output-truncated",
-        "gh-invalid-json",
-        "failed",
-      ],
+      values: GITHUB_READ_OUTCOME_VALUES,
     },
     failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    frames: GITHUB_READ_FRAMES_FIELD_CONTRACT,
+    causeChain: GITHUB_READ_CAUSE_CHAIN_FIELD_CONTRACT,
   },
   causal: "correlation",
   lifecycle: "end",

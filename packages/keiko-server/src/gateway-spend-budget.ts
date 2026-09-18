@@ -2,6 +2,8 @@ import { isAbsolute } from "node:path";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogFieldContract,
+  type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
@@ -27,48 +29,59 @@ type Rejection =
   | "spend-budget-exceeded"
   | "spend-ledger-unavailable";
 
-const REJECTION_REASONS = new Set<Rejection>([
+const REJECTION_REASON_VALUES = [
   "spend-budget-invalid",
   "spend-pricing-unavailable",
   "spend-bound-unavailable",
   "spend-budget-exceeded",
   "spend-ledger-unavailable",
-]);
+] as const satisfies readonly Rejection[];
+const REJECTION_REASONS = new Set<Rejection>(REJECTION_REASON_VALUES);
 
-const GATEWAY_SPEND_REJECTED_OPERATION = defineActivityLogOperation({
+type GatewaySpendOperationHeader = Pick<
+  ActivityLogOperationRegistration,
+  "contractKind" | "schemaVersion"
+>;
+type GatewaySpendOperationOwnership = Pick<ActivityLogOperationRegistration, "category" | "owner">;
+
+const GATEWAY_SPEND_OPERATION_HEADER = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "gateway.spend.rejected",
+} as const satisfies GatewaySpendOperationHeader;
+const GATEWAY_SPEND_OPERATION_OWNERSHIP = {
   category: "gateway",
   owner: "keiko-server",
+} as const satisfies GatewaySpendOperationOwnership;
+
+const REJECTION_FRAMES_FIELD_CONTRACT = {
+  type: "string-array",
+  dataClass: "safe-platform-class",
+  required: true,
+  maxLength: 512,
+  maxItems: 8,
+} as const satisfies ActivityLogFieldContract;
+const REJECTION_CAUSE_CHAIN_FIELD_CONTRACT = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: true,
+  maxLength: 128,
+  maxItems: 5,
+} as const satisfies ActivityLogFieldContract;
+
+const GATEWAY_SPEND_REJECTED_OPERATION = defineActivityLogOperation({
+  ...GATEWAY_SPEND_OPERATION_HEADER,
+  op: "gateway.spend.rejected",
+  ...GATEWAY_SPEND_OPERATION_OWNERSHIP,
   emitter: "gateway-spend-budget.reject",
   fields: {
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [
-        "spend-budget-invalid",
-        "spend-pricing-unavailable",
-        "spend-bound-unavailable",
-        "spend-budget-exceeded",
-        "spend-ledger-unavailable",
-      ],
+      values: REJECTION_REASON_VALUES,
     },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    frames: REJECTION_FRAMES_FIELD_CONTRACT,
+    causeChain: REJECTION_CAUSE_CHAIN_FIELD_CONTRACT,
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -79,11 +92,9 @@ const GATEWAY_SPEND_REJECTED_OPERATION = defineActivityLogOperation({
 });
 
 const GATEWAY_SPEND_SETTLED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...GATEWAY_SPEND_OPERATION_HEADER,
   op: "gateway.spend.settled",
-  category: "gateway",
-  owner: "keiko-server",
+  ...GATEWAY_SPEND_OPERATION_OWNERSHIP,
   emitter: "gateway-spend-budget.reservation.settle",
   fields: {
     chargedNanoUsd: { type: "integer", dataClass: "count", required: true },
@@ -105,11 +116,9 @@ const GATEWAY_SPEND_SETTLED_OPERATION = defineActivityLogOperation({
 });
 
 const GATEWAY_SPEND_CEILING_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...GATEWAY_SPEND_OPERATION_HEADER,
   op: "gateway.spend.ceiling",
-  category: "gateway",
-  owner: "keiko-server",
+  ...GATEWAY_SPEND_OPERATION_OWNERSHIP,
   emitter: "gateway-spend-budget.PersistentGatewaySpendBudget.reportCeiling",
   fields: {
     disposition: {
@@ -131,11 +140,9 @@ const GATEWAY_SPEND_CEILING_OPERATION = defineActivityLogOperation({
 });
 
 const GATEWAY_SPEND_RESERVED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...GATEWAY_SPEND_OPERATION_HEADER,
   op: "gateway.spend.reserved",
-  category: "gateway",
-  owner: "keiko-server",
+  ...GATEWAY_SPEND_OPERATION_OWNERSHIP,
   emitter: "gateway-spend-budget.PersistentGatewaySpendBudget.reserve",
   fields: {
     reservedNanoUsd: { type: "integer", dataClass: "count", required: true },

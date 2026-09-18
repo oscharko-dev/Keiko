@@ -20,6 +20,8 @@ import {
   type ActivityLogErrorKind,
   type ActivityLogEventEnvelope,
   type ActivityLogEventFields,
+  type ActivityLogFieldContract,
+  type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isValidCorrelationId } from "../correlation.js";
 import { redactLogFields } from "../observability/log-redaction.js";
@@ -64,24 +66,99 @@ const METRIC_FIELDS = new Set(["durationMs", "inputBytes", "outputBytes", "resul
 const TOKEN = /^[A-Za-z0-9_.-]{1,128}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
 const READINESS: ReadonlySet<string> = new Set(TOOL_HANDLER_READINESS);
-const BIND_REASONS: ReadonlySet<string> = new Set([
-  ...TOOL_RESULT_REASONS.failed,
-  ...TOOL_RESULT_REASONS.invalid,
-  ...TOOL_RESULT_REASONS.denied,
-]);
 
-const TOOL_CATALOG_PROJECTION_OPERATION = defineActivityLogOperation({
+const HANDLER_FAILURE_REASONS = [
+  "handler-unavailable",
+  "handler-mismatch",
+  "handler-failed",
+  "result-contract-failed",
+  "effect-outcome-unknown",
+  "budget-port-failed",
+] as const;
+const AUTHORITY_VALIDITY_REASONS = [
+  "authority-invalid",
+  "authority-expired",
+  "authority-revoked",
+  "hard-denial",
+] as const;
+const TOOL_SELECTION_REASONS = [
+  "unknown-tool",
+  "unoffered-tool",
+  "ambiguous-alias",
+  "invalid-arguments",
+  "version-mismatch",
+  "projection-mismatch",
+  "unsupported-capability",
+] as const;
+const APPROVAL_AND_SCOPE_REASONS = [
+  "approval-required",
+  "approval-rejected",
+  "budget-exhausted",
+  "workspace-denied",
+  "effect-denied",
+] as const;
+const STATE_CONTINUITY_REASONS = [
+  "cursor-invalid",
+  "cursor-expired",
+  "cursor-replayed",
+  "workspace-stale",
+  "replay-conflict",
+  "recovery-required",
+] as const;
+const IN_FLIGHT_TERMINATION_REASONS = [
+  "invocation-in-flight",
+  "capacity-exhausted",
+  "explicit-cancellation",
+  "parent-cancelled",
+  "deadline-exceeded",
+] as const;
+const BIND_UNAVAILABLE_REASON_VALUES = [
+  ...AUTHORITY_VALIDITY_REASONS,
+  ...APPROVAL_AND_SCOPE_REASONS,
+  ...TOOL_SELECTION_REASONS,
+  ...STATE_CONTINUITY_REASONS,
+  ...HANDLER_FAILURE_REASONS,
+] as const;
+const INVOCATION_SETTLED_REASON_VALUES = [
+  "none",
+  ...AUTHORITY_VALIDITY_REASONS,
+  ...APPROVAL_AND_SCOPE_REASONS,
+  ...TOOL_SELECTION_REASONS,
+  ...STATE_CONTINUITY_REASONS,
+  ...IN_FLIGHT_TERMINATION_REASONS,
+  ...HANDLER_FAILURE_REASONS,
+] as const;
+const BIND_REASONS: ReadonlySet<string> = new Set(BIND_UNAVAILABLE_REASON_VALUES);
+
+type ToolCatalogOperationHeader = Pick<
+  ActivityLogOperationRegistration,
+  "contractKind" | "schemaVersion"
+>;
+type ToolCatalogOperationOwnership = Pick<ActivityLogOperationRegistration, "category" | "owner">;
+
+const TOOL_CATALOG_OPERATION_HEADER = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "tool-catalog.projection",
+} as const satisfies ToolCatalogOperationHeader;
+const TOOL_CATALOG_OPERATION_OWNERSHIP = {
   category: "security",
   owner: "keiko-server",
+} as const satisfies ToolCatalogOperationOwnership;
+
+const TOOL_CATALOG_IDENTITY_FIELD_CONTRACTS = {
+  catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+  profileVersion: { type: "integer", dataClass: "count", required: true },
+  projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
+const TOOL_CATALOG_PROJECTION_OPERATION = defineActivityLogOperation({
+  ...TOOL_CATALOG_OPERATION_HEADER,
+  op: "tool-catalog.projection",
+  ...TOOL_CATALOG_OPERATION_OWNERSHIP,
   emitter: "tool-catalog.catalogToolLifecycle.writeProjection",
   fields: {
-    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    profileVersion: { type: "integer", dataClass: "count", required: true },
-    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    ...TOOL_CATALOG_IDENTITY_FIELD_CONTRACTS,
     readiness: {
       type: "string",
       dataClass: "closed-enum",
@@ -99,17 +176,12 @@ const TOOL_CATALOG_PROJECTION_OPERATION = defineActivityLogOperation({
 });
 
 const TOOL_CATALOG_BIND_READY_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...TOOL_CATALOG_OPERATION_HEADER,
   op: "tool-catalog.bind-ready",
-  category: "security",
-  owner: "keiko-server",
+  ...TOOL_CATALOG_OPERATION_OWNERSHIP,
   emitter: "tool-catalog.catalogToolLifecycle.writeBindingReady",
   fields: {
-    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    profileVersion: { type: "integer", dataClass: "count", required: true },
-    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    ...TOOL_CATALOG_IDENTITY_FIELD_CONTRACTS,
     readiness: {
       type: "string",
       dataClass: "closed-enum",
@@ -127,17 +199,12 @@ const TOOL_CATALOG_BIND_READY_OPERATION = defineActivityLogOperation({
 });
 
 const TOOL_CATALOG_BIND_UNAVAILABLE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...TOOL_CATALOG_OPERATION_HEADER,
   op: "tool-catalog.bind-unavailable",
-  category: "security",
-  owner: "keiko-server",
+  ...TOOL_CATALOG_OPERATION_OWNERSHIP,
   emitter: "tool-catalog.catalogToolLifecycle.writeBindingUnavailable",
   fields: {
-    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    profileVersion: { type: "integer", dataClass: "count", required: true },
-    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    ...TOOL_CATALOG_IDENTITY_FIELD_CONTRACTS,
     readiness: {
       type: "string",
       dataClass: "closed-enum",
@@ -148,36 +215,7 @@ const TOOL_CATALOG_BIND_UNAVAILABLE_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [
-        "authority-invalid",
-        "authority-expired",
-        "authority-revoked",
-        "hard-denial",
-        "approval-required",
-        "approval-rejected",
-        "budget-exhausted",
-        "workspace-denied",
-        "effect-denied",
-        "unknown-tool",
-        "unoffered-tool",
-        "ambiguous-alias",
-        "invalid-arguments",
-        "version-mismatch",
-        "projection-mismatch",
-        "unsupported-capability",
-        "cursor-invalid",
-        "cursor-expired",
-        "cursor-replayed",
-        "workspace-stale",
-        "replay-conflict",
-        "recovery-required",
-        "handler-unavailable",
-        "handler-mismatch",
-        "handler-failed",
-        "result-contract-failed",
-        "effect-outcome-unknown",
-        "budget-port-failed",
-      ],
+      values: BIND_UNAVAILABLE_REASON_VALUES,
     },
   },
   causal: "correlation",
@@ -189,17 +227,12 @@ const TOOL_CATALOG_BIND_UNAVAILABLE_OPERATION = defineActivityLogOperation({
 });
 
 const TOOL_CATALOG_INVOCATION_STARTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...TOOL_CATALOG_OPERATION_HEADER,
   op: "tool-catalog.invocation-started",
-  category: "security",
-  owner: "keiko-server",
+  ...TOOL_CATALOG_OPERATION_OWNERSHIP,
   emitter: "tool-catalog.catalogToolLifecycle.writeInvocationStarted",
   fields: {
-    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    profileVersion: { type: "integer", dataClass: "count", required: true },
-    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    ...TOOL_CATALOG_IDENTITY_FIELD_CONTRACTS,
     invocationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     toolCanonicalId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     toolContractVersion: { type: "integer", dataClass: "count", required: true },
@@ -226,17 +259,12 @@ const TOOL_CATALOG_INVOCATION_STARTED_OPERATION = defineActivityLogOperation({
 });
 
 const TOOL_CATALOG_INVOCATION_SETTLED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...TOOL_CATALOG_OPERATION_HEADER,
   op: "tool-catalog.invocation-settled",
-  category: "security",
-  owner: "keiko-server",
+  ...TOOL_CATALOG_OPERATION_OWNERSHIP,
   emitter: "tool-catalog.catalogToolLifecycle.writeInvocationSettled",
   fields: {
-    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    profileVersion: { type: "integer", dataClass: "count", required: true },
-    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    ...TOOL_CATALOG_IDENTITY_FIELD_CONTRACTS,
     invocationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     toolCanonicalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     toolContractVersion: { type: "integer", dataClass: "count", required: false },
@@ -259,42 +287,7 @@ const TOOL_CATALOG_INVOCATION_SETTLED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [
-        "none",
-        "authority-invalid",
-        "authority-expired",
-        "authority-revoked",
-        "hard-denial",
-        "approval-required",
-        "approval-rejected",
-        "budget-exhausted",
-        "workspace-denied",
-        "effect-denied",
-        "unknown-tool",
-        "unoffered-tool",
-        "ambiguous-alias",
-        "invalid-arguments",
-        "version-mismatch",
-        "projection-mismatch",
-        "unsupported-capability",
-        "cursor-invalid",
-        "cursor-expired",
-        "cursor-replayed",
-        "workspace-stale",
-        "replay-conflict",
-        "recovery-required",
-        "invocation-in-flight",
-        "capacity-exhausted",
-        "explicit-cancellation",
-        "parent-cancelled",
-        "deadline-exceeded",
-        "handler-unavailable",
-        "handler-mismatch",
-        "handler-failed",
-        "result-contract-failed",
-        "effect-outcome-unknown",
-        "budget-port-failed",
-      ],
+      values: INVOCATION_SETTLED_REASON_VALUES,
     },
     durationMs: { type: "integer", dataClass: "duration", required: true },
     effectStarted: { type: "boolean", dataClass: "closed-enum", required: true },
@@ -332,17 +325,12 @@ const TOOL_CATALOG_INVOCATION_SETTLED_OPERATION = defineActivityLogOperation({
 });
 
 const TOOL_CATALOG_COMPLETION_DISCARDED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...TOOL_CATALOG_OPERATION_HEADER,
   op: "tool-catalog.completion-discarded",
-  category: "security",
-  owner: "keiko-server",
+  ...TOOL_CATALOG_OPERATION_OWNERSHIP,
   emitter: "tool-catalog.catalogToolLifecycle.writeCompletionDiscarded",
   fields: {
-    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    profileVersion: { type: "integer", dataClass: "count", required: true },
-    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    ...TOOL_CATALOG_IDENTITY_FIELD_CONTRACTS,
     invocationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     toolCanonicalId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     toolContractVersion: { type: "integer", dataClass: "count", required: true },

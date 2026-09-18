@@ -24,97 +24,75 @@ export interface ChatTurnActivityFields {
   readonly imageAttachmentBytes: number;
 }
 
-const CHAT_CREATION_REJECTED_OPERATION = defineActivityLogOperation({
+const CHAT_REJECTION_REGISTRATION = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "chat.creation.rejected",
   category: "gateway",
   owner: "keiko-server",
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["chat-admission"],
+  releaseImpact: "patch",
+} as const;
+
+const CHAT_REJECTION_COMMON_FIELDS = {
+  modelKind: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
+  },
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const;
+
+const CHAT_CREATION_REJECTED_OPERATION = defineActivityLogOperation({
+  ...CHAT_REJECTION_REGISTRATION,
+  op: "chat.creation.rejected",
   emitter: "chat-activity.logChatCreationRejectionEvent",
   fields: {
+    ...CHAT_REJECTION_COMMON_FIELDS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["readiness", "configuration"],
     },
-    modelKind: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["chat-admission"],
   proofIds: ["chat.creation.rejected.reason"],
-  releaseImpact: "patch",
 });
 
 const CHAT_SEND_REJECTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CHAT_REJECTION_REGISTRATION,
   op: "chat.send.rejected",
-  category: "gateway",
-  owner: "keiko-server",
   emitter: "chat-activity.logChatRejectionEvent.send",
   fields: {
+    ...CHAT_REJECTION_COMMON_FIELDS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["readiness", "generation", "grounding-scope"],
     },
-    modelKind: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["chat-admission"],
   proofIds: ["chat.send.rejected.reason"],
-  releaseImpact: "patch",
 });
 
 const CHAT_REGENERATION_REJECTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CHAT_REJECTION_REGISTRATION,
   op: "chat.regeneration.rejected",
-  category: "gateway",
-  owner: "keiko-server",
   emitter: "chat-activity.logChatRejectionEvent.regeneration",
   fields: {
+    ...CHAT_REJECTION_COMMON_FIELDS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["readiness", "generation", "grounding-scope"],
     },
-    modelKind: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["chat-admission"],
   proofIds: ["chat.regeneration.rejected.reason"],
-  releaseImpact: "patch",
 });
 
 const CHAT_TURN_STARTED_OPERATION = defineActivityLogOperation({

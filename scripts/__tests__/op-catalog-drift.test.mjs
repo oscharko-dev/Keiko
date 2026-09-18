@@ -298,6 +298,73 @@ describe("op catalog drift", () => {
     );
   });
 
+  it("discovers a typed registration composed from closed const spreads", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-typed-registry-spread",
+      [
+        'import { activityLogEvent, defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        "const sharedFields = {",
+        '  runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },',
+        "} as const;",
+        "const sharedRegistration = {",
+        '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+        '  category: "diagnostic" as const, owner: "zzz-fixture-typed-registry-spread",',
+        '  emitter: "fixture", causal: "correlation" as const, lifecycle: "end" as const,',
+        '  analyzerProjection: "timeline" as const, releaseImpact: "patch" as const,',
+        "} as const;",
+        'const sharedFailureClasses = ["fixture-failure"] as const;',
+        "const operation = defineActivityLogOperation({",
+        "  ...sharedRegistration,",
+        '  op: "fixture.registry.spread",',
+        "  fields: { ...sharedFields },",
+        '  failureClasses: [...sharedFailureClasses], proofIds: ["fixture-proof"],',
+        "});",
+        'activityLogEvent(operation, {}, { runId: "run-1" });',
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry.violations).toEqual([]);
+        expect(registry.operations).toEqual([
+          expect.objectContaining({
+            op: "fixture.registry.spread",
+            owner: "zzz-fixture-typed-registry-spread",
+            fields: expect.objectContaining({
+              runId: expect.objectContaining({ dataClass: "opaque-id" }),
+            }),
+          }),
+        ]);
+      },
+    );
+  });
+
+  it("rejects a typed registration composed from a runtime spread", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-typed-registry-dynamic-spread",
+      [
+        'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        "const runtimeFields = Object.freeze({});",
+        "defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+        '  op: "fixture.registry.dynamic-spread", category: "diagnostic",',
+        '  owner: "zzz-fixture-typed-registry-dynamic-spread", emitter: "fixture",',
+        "  fields: { ...runtimeFields },",
+        '  causal: "correlation", lifecycle: "end", analyzerProjection: "timeline",',
+        '  failureClasses: ["fixture-failure"], proofIds: ["fixture-proof"],',
+        '  releaseImpact: "patch",',
+        "});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+    );
+  });
+
   it("adds mandatory loss and completeness fields to every registered operation", () => {
     withTypedRegistryFixture(
       "zzz-fixture-incomplete-failure-class",

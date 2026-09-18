@@ -217,88 +217,72 @@ const GATEWAY_TOOL_CATALOG_REPAIR_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
+const GATEWAY_CALL_STARTED_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "gateway.chat.started",
   category: "gateway",
   owner: "keiko-model-gateway",
   emitter: "gateway.logCallStarted",
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  releaseImpact: "patch",
+} as const;
+
+const GATEWAY_CALL_STARTED_IDENTITY_FIELDS = {
+  requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+  modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+  endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  costClass: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["low", "medium", "high"],
+  },
+  timeoutMs: { type: "number", dataClass: "duration", required: true },
+  maxRetries: { type: "integer", dataClass: "count", required: true },
+} as const;
+
+const GATEWAY_CALL_STARTED_EXECUTION_FIELDS = {
+  reasoningEffort: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["minimal", "low", "medium", "high", "xhigh"],
+  },
+  streaming: {
+    type: "boolean",
+    dataClass: "closed-enum",
+    required: true,
+  },
+} as const;
+
+const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
+  ...GATEWAY_CALL_STARTED_OPERATION_BASE,
+  op: "gateway.chat.started",
   fields: {
-    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
-    costClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["low", "medium", "high"],
-    },
-    timeoutMs: { type: "number", dataClass: "duration", required: true },
-    maxRetries: { type: "integer", dataClass: "count", required: true },
+    ...GATEWAY_CALL_STARTED_IDENTITY_FIELDS,
     requestBudgetMs: { type: "number", dataClass: "duration", required: true },
     upstreamStreaming: {
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
     },
-    reasoningEffort: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["minimal", "low", "medium", "high", "xhigh"],
-    },
-    streaming: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
+    ...GATEWAY_CALL_STARTED_EXECUTION_FIELDS,
   },
-  causal: "correlation",
-  lifecycle: "start",
-  analyzerProjection: "timeline",
   failureClasses: ["gateway-chat-call"],
   proofIds: ["gateway.chat-started.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_STREAM_STARTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...GATEWAY_CALL_STARTED_OPERATION_BASE,
   op: "gateway.stream.started",
-  category: "gateway",
-  owner: "keiko-model-gateway",
-  emitter: "gateway.logCallStarted",
   fields: {
-    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
-    costClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["low", "medium", "high"],
-    },
-    timeoutMs: { type: "number", dataClass: "duration", required: true },
-    maxRetries: { type: "integer", dataClass: "count", required: true },
-    reasoningEffort: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["minimal", "low", "medium", "high", "xhigh"],
-    },
-    streaming: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
+    ...GATEWAY_CALL_STARTED_IDENTITY_FIELDS,
+    ...GATEWAY_CALL_STARTED_EXECUTION_FIELDS,
   },
-  causal: "correlation",
-  lifecycle: "start",
-  analyzerProjection: "timeline",
   failureClasses: ["gateway-stream-call"],
   proofIds: ["gateway.stream-started.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_CHAT_FAILED_OPERATION = defineActivityLogOperation({

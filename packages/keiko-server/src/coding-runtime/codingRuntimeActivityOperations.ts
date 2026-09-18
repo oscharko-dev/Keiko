@@ -82,67 +82,81 @@ export const CODING_RUNTIME_TOOL_RESULT_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-export const RUNTIME_CONFINEMENT_FAILED_OPERATION = defineActivityLogOperation({
+const RUNTIME_CONFINEMENT_DIAGNOSTIC_KINDS = [
+  "cleanup-failed",
+  "host-relay-failed",
+  "internal-failure",
+  "invalid-backend",
+  "invalid-command",
+  "invalid-cwd",
+  "invalid-gateway-host",
+  "invalid-gateway-port",
+  "invalid-mode",
+  "loopback-setup-failed",
+  "loopback-tool-unavailable",
+  "namespace-relay-failed",
+  "unsupported-platform",
+] as const;
+
+const RUNTIME_CONFINEMENT_FAILURE_TRACE_FIELDS = {
+  frames: {
+    type: "string-array",
+    dataClass: "opaque-id",
+    required: true,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: true,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;
+
+const RUNTIME_CONFINEMENT_FAILED_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "runtime.confinement.failed",
   category: "process",
   owner: "keiko-server",
   emitter: "coding-runtime.shared.runtimeConfinementFailed",
-  fields: {
-    backend: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["bubblewrap", "unshare", "seatbelt", "none"],
-    },
-    diagnosticSource: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["linux-gateway-launcher"],
-    },
-    diagnosticKind: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "cleanup-failed",
-        "host-relay-failed",
-        "internal-failure",
-        "invalid-backend",
-        "invalid-command",
-        "invalid-cwd",
-        "invalid-gateway-host",
-        "invalid-gateway-port",
-        "invalid-mode",
-        "loopback-setup-failed",
-        "loopback-tool-unavailable",
-        "namespace-relay-failed",
-        "unsupported-platform",
-      ],
-    },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
-  },
   causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["runtime-confinement"],
   proofIds: ["runtime.confinement.failed.emitted-line"],
   releaseImpact: "patch",
+} as const;
+
+const RUNTIME_CONFINEMENT_FAILED_FIELDS = {
+  backend: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["bubblewrap", "unshare", "seatbelt", "none"],
+  },
+  diagnosticSource: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["linux-gateway-launcher"],
+  },
+  diagnosticKind: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: RUNTIME_CONFINEMENT_DIAGNOSTIC_KINDS,
+  },
+  ...RUNTIME_CONFINEMENT_FAILURE_TRACE_FIELDS,
+} as const;
+
+export const RUNTIME_CONFINEMENT_FAILED_OPERATION = defineActivityLogOperation({
+  ...RUNTIME_CONFINEMENT_FAILED_BASE,
+  fields: {
+    ...RUNTIME_CONFINEMENT_FAILED_FIELDS,
+  },
 });
 
 export const RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION = defineActivityLogOperation({

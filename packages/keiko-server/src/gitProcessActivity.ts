@@ -55,6 +55,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
+  type ActivityLogFieldContract,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -92,6 +93,32 @@ const TIMEOUT_ERROR_KIND = "timeout";
 /** `errorKind` for a run Keiko's byte cap cut. Not a git failure either — Keiko stopped reading. */
 const TRUNCATED_ERROR_KIND = "output-truncated";
 
+const GIT_PROCESS_OUTCOME_FIELD_CONTRACTS = {
+  subcommand: {
+    type: "string",
+    dataClass: "safe-platform-class",
+    required: true,
+    maxLength: 64,
+  },
+  endedBy: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["not-started", "exit", "signal", "unknown"],
+  },
+  exitCode: { type: "integer", dataClass: "count", required: false },
+  signal: { type: "string", dataClass: "safe-platform-class", required: false, maxLength: 16 },
+  truncated: { type: "boolean", dataClass: "closed-enum", required: true },
+  timedOut: { type: "boolean", dataClass: "closed-enum", required: true },
+  aborted: { type: "boolean", dataClass: "closed-enum", required: true },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
+const GIT_PROCESS_FAILURE_FIELD_CONTRACTS = {
+  failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
 const GIT_PROCESS_REFUSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -100,23 +127,7 @@ const GIT_PROCESS_REFUSED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gitProcessActivity.logGitProcessOutcome.refused",
   fields: {
-    subcommand: {
-      type: "string",
-      dataClass: "safe-platform-class",
-      required: true,
-      maxLength: 64,
-    },
-    endedBy: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["not-started", "exit", "signal", "unknown"],
-    },
-    exitCode: { type: "integer", dataClass: "count", required: false },
-    signal: { type: "string", dataClass: "safe-platform-class", required: false, maxLength: 16 },
-    truncated: { type: "boolean", dataClass: "closed-enum", required: true },
-    timedOut: { type: "boolean", dataClass: "closed-enum", required: true },
-    aborted: { type: "boolean", dataClass: "closed-enum", required: true },
+    ...GIT_PROCESS_OUTCOME_FIELD_CONTRACTS,
     refusal: {
       type: "string",
       dataClass: "closed-enum",
@@ -128,9 +139,7 @@ const GIT_PROCESS_REFUSED_OPERATION = defineActivityLogOperation({
         "untrusted-executable",
       ],
     },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...GIT_PROCESS_FAILURE_FIELD_CONTRACTS,
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -148,26 +157,8 @@ const GIT_PROCESS_FAILED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gitProcessActivity.logGitProcessOutcome.failed",
   fields: {
-    subcommand: {
-      type: "string",
-      dataClass: "safe-platform-class",
-      required: true,
-      maxLength: 64,
-    },
-    endedBy: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["not-started", "exit", "signal", "unknown"],
-    },
-    exitCode: { type: "integer", dataClass: "count", required: false },
-    signal: { type: "string", dataClass: "safe-platform-class", required: false, maxLength: 16 },
-    truncated: { type: "boolean", dataClass: "closed-enum", required: true },
-    timedOut: { type: "boolean", dataClass: "closed-enum", required: true },
-    aborted: { type: "boolean", dataClass: "closed-enum", required: true },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...GIT_PROCESS_OUTCOME_FIELD_CONTRACTS,
+    ...GIT_PROCESS_FAILURE_FIELD_CONTRACTS,
   },
   causal: "correlation",
   lifecycle: "failure",

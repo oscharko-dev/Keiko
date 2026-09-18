@@ -50,81 +50,73 @@ const MAX_STREAM_RECONNECTS = 3;
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
 
-const CODING_RUNTIME_READINESS_FAILED_OPERATION = defineActivityLogOperation({
+const OPEN_CODE_READINESS_PHASES = [
+  "target-attestation",
+  "config-materialization",
+  "endpoint",
+  "authenticated-health",
+  "authenticated-health-version",
+  "unauthenticated-health",
+  "openapi-digest",
+  "gateway-challenge",
+  "tool-facade-challenge",
+  "sse-history-reconciliation",
+  "session-echo",
+] as const;
+
+const CODING_RUNTIME_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "coding-runtime.readiness.failed",
   category: "process",
   owner: "keiko-server",
+  causal: "correlation",
+  releaseImpact: "patch",
+} as const;
+
+const OPEN_CODE_READINESS_PHASE_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: OPEN_CODE_READINESS_PHASES,
+} as const;
+
+const OPEN_CODE_READINESS_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: true,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const OPEN_CODE_READINESS_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: true,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const CODING_RUNTIME_READINESS_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_OPERATION_BASE,
+  op: "coding-runtime.readiness.failed",
   emitter: "coding-runtime.opencodeRuntimeAdapter.startRuntime",
   fields: {
-    phase: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "target-attestation",
-        "config-materialization",
-        "endpoint",
-        "authenticated-health",
-        "authenticated-health-version",
-        "unauthenticated-health",
-        "openapi-digest",
-        "gateway-challenge",
-        "tool-facade-challenge",
-        "sse-history-reconciliation",
-        "session-echo",
-      ],
-    },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    phase: OPEN_CODE_READINESS_PHASE_FIELD,
+    frames: OPEN_CODE_READINESS_FRAMES_FIELD,
+    causeChain: OPEN_CODE_READINESS_CAUSE_CHAIN_FIELD,
   },
-  causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-readiness"],
   proofIds: ["coding-runtime.readiness.failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_READINESS_PHASE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_RUNTIME_OPERATION_BASE,
   op: "coding-runtime.readiness.phase",
-  category: "process",
-  owner: "keiko-server",
   emitter: "coding-runtime.opencodeRuntimeAdapter.recordReadinessPhase",
   fields: {
-    phase: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "target-attestation",
-        "config-materialization",
-        "endpoint",
-        "authenticated-health",
-        "authenticated-health-version",
-        "unauthenticated-health",
-        "openapi-digest",
-        "gateway-challenge",
-        "tool-facade-challenge",
-        "sse-history-reconciliation",
-        "session-echo",
-      ],
-    },
+    phase: OPEN_CODE_READINESS_PHASE_FIELD,
     dependencyInstallPolicy: {
       type: "string",
       dataClass: "closed-enum",
@@ -137,20 +129,15 @@ const CODING_RUNTIME_READINESS_PHASE_OPERATION = defineActivityLogOperation({
     compactionAuto: { type: "boolean", dataClass: "closed-enum", required: false },
     compactionPrune: { type: "boolean", dataClass: "closed-enum", required: false },
   },
-  causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["coding-runtime-readiness"],
   proofIds: ["coding-runtime.readiness.phase.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_COMPACTION_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_RUNTIME_OPERATION_BASE,
   op: "coding-runtime.compaction",
-  category: "process",
-  owner: "keiko-server",
   emitter: "coding-runtime.opencodeRuntimeAdapter.recordCompactionActivity",
   fields: {
     event: {
@@ -187,12 +174,10 @@ const CODING_RUNTIME_COMPACTION_OPERATION = defineActivityLogOperation({
       values: ["content-filter", "error", "length", "unknown"],
     },
   },
-  causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["coding-runtime-compaction"],
   proofIds: ["coding-runtime.compaction.emitted-line"],
-  releaseImpact: "patch",
 });
 
 /**
@@ -217,18 +202,7 @@ export type OpenCodeSyncHint =
   | { readonly id: string; readonly requiresHistoryIdentity?: true }
   | { readonly requiresHistoryIdentity: false; readonly control?: OpenCodeLiveControl };
 
-export type OpenCodeReadinessPhase =
-  | "target-attestation"
-  | "config-materialization"
-  | "endpoint"
-  | "authenticated-health"
-  | "authenticated-health-version"
-  | "unauthenticated-health"
-  | "openapi-digest"
-  | "gateway-challenge"
-  | "tool-facade-challenge"
-  | "sse-history-reconciliation"
-  | "session-echo";
+export type OpenCodeReadinessPhase = (typeof OPEN_CODE_READINESS_PHASES)[number];
 
 export interface OpenCodeAdapterFailure {
   readonly ok: false;

@@ -66,162 +66,206 @@ import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
 import { createPrDescriptionReceiptStore } from "./prDescriptionReceiptStore.js";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
 
-const JOURNEY_READINESS_REFRESHED_OPERATION = defineActivityLogOperation({
+const GIT_JOURNEY_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "git.journey-readiness.refreshed",
   category: "process",
   owner: "keiko-server",
+  causal: "correlation",
+  analyzerProjection: "timeline",
+  releaseImpact: "patch",
+} as const;
+
+const JOURNEY_RUN_ID_FIELD = {
+  type: "string",
+  dataClass: "opaque-id",
+  required: true,
+  maxLength: 128,
+} as const;
+
+const JOURNEY_RECORDED_FIELD = {
+  type: "boolean",
+  dataClass: "closed-enum",
+  required: true,
+} as const;
+
+const REQUIRED_CLOSED_ENUM_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+} as const;
+
+const OPTIONAL_CLOSED_ENUM_FIELD = {
+  ...REQUIRED_CLOSED_ENUM_FIELD,
+  required: false,
+} as const;
+
+const OPTIONAL_ERROR_KIND_FIELD = {
+  type: "string",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 64,
+} as const;
+
+const JOURNEY_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "safe-platform-class",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const JOURNEY_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const JOURNEY_ERROR_FIELDS = {
+  failureKind: OPTIONAL_ERROR_KIND_FIELD,
+  errorClass: OPTIONAL_ERROR_KIND_FIELD,
+  code: OPTIONAL_ERROR_KIND_FIELD,
+  frames: JOURNEY_FRAMES_FIELD,
+  causeChain: JOURNEY_CAUSE_CHAIN_FIELD,
+} as const;
+
+const JOURNEY_READINESS_STATES = [
+  "technical-ready",
+  "pending",
+  "failed",
+  "blocked",
+  "unknown",
+] as const;
+
+const JOURNEY_READINESS_REASONS = [
+  "observed",
+  "reader-unavailable",
+  "not-observed",
+  "read-failed",
+] as const;
+
+const CI_READINESS_REASONS = [
+  "authority-denied",
+  "auth-required",
+  "invalid-binding",
+  "cancelled",
+  "provider-forbidden",
+  "provider-not-found",
+  "rate-limited",
+  "provider-unavailable",
+  "timeout",
+  "pagination-exhausted",
+  "output-truncated",
+  "malformed-response",
+  "visibility-unknown",
+  "requirements-ambiguous",
+  "revision-changed",
+  "required-checks-passed",
+  "required-checks-pending",
+  "required-checks-failed",
+  "required-checks-blocked",
+  "required-checks-unknown",
+  "pull-request-closed",
+  "merge-conflict",
+  "base-outdated",
+  "merge-context-unknown",
+  "repair-budget-exhausted",
+] as const;
+
+const JOURNEY_OUTCOME_STATES = [
+  "awaiting-ready-approval",
+  "keiko-technical-ready",
+  "ready-for-human-review",
+  "awaiting-human-requirements",
+  "merged-awaiting-issue-closure",
+  "completed",
+  "blocked",
+  "cancelled",
+  "recovery-required",
+] as const;
+
+const JOURNEY_OUTCOME_REASONS = [
+  "ready-approval-required",
+  "technical-ready",
+  "human-review-ready",
+  "required-reviews-missing",
+  "changes-requested",
+  "unresolved-conversations",
+  "review-visibility-unknown",
+  "issue-closure-pending",
+  "merge-and-closure-observed",
+  "closed-unmerged",
+  "issue-closed-without-merge",
+  "retargeted",
+  "head-changed",
+  "readiness-unavailable",
+  "readiness-stale",
+  "checks-not-ready",
+  "description-unavailable",
+  "description-stale",
+  "description-not-applied",
+  "provider-unavailable",
+  "authority-denied",
+  "observation-superseded",
+  "cancelled",
+  "ready-effect-uncertain",
+] as const;
+
+const JOURNEY_READINESS_REFRESHED_OPERATION = defineActivityLogOperation({
+  ...GIT_JOURNEY_OPERATION_BASE,
+  op: "git.journey-readiness.refreshed",
   emitter: "gitDelivery/journeyRoutes",
   fields: {
-    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    runId: JOURNEY_RUN_ID_FIELD,
     state: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: ["technical-ready", "pending", "failed", "blocked", "unknown"],
+      ...OPTIONAL_CLOSED_ENUM_FIELD,
+      values: JOURNEY_READINESS_STATES,
     },
     reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["observed", "reader-unavailable", "not-observed", "read-failed"],
+      ...REQUIRED_CLOSED_ENUM_FIELD,
+      values: JOURNEY_READINESS_REASONS,
     },
     readinessReason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "authority-denied",
-        "auth-required",
-        "invalid-binding",
-        "cancelled",
-        "provider-forbidden",
-        "provider-not-found",
-        "rate-limited",
-        "provider-unavailable",
-        "timeout",
-        "pagination-exhausted",
-        "output-truncated",
-        "malformed-response",
-        "visibility-unknown",
-        "requirements-ambiguous",
-        "revision-changed",
-        "required-checks-passed",
-        "required-checks-pending",
-        "required-checks-failed",
-        "required-checks-blocked",
-        "required-checks-unknown",
-        "pull-request-closed",
-        "merge-conflict",
-        "base-outdated",
-        "merge-context-unknown",
-        "repair-budget-exhausted",
-      ],
+      ...OPTIONAL_CLOSED_ENUM_FIELD,
+      values: CI_READINESS_REASONS,
     },
-    recorded: { type: "boolean", dataClass: "closed-enum", required: true },
+    recorded: JOURNEY_RECORDED_FIELD,
     store: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
+      ...OPTIONAL_CLOSED_ENUM_FIELD,
       values: ["available", "unavailable"],
     },
-    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
-    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
-    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...JOURNEY_ERROR_FIELDS,
   },
-  causal: "correlation",
   lifecycle: "state",
-  analyzerProjection: "timeline",
   failureClasses: ["git-journey-readiness"],
   proofIds: ["git.journey-readiness.refreshed"],
-  releaseImpact: "patch",
 });
 
 const JOURNEY_OUTCOME_RECORDED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...GIT_JOURNEY_OPERATION_BASE,
   op: "git.journey-outcome.recorded",
-  category: "process",
-  owner: "keiko-server",
   emitter: "gitDelivery/journeyRoutes.recordJourneyOutcome",
   fields: {
-    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    runId: JOURNEY_RUN_ID_FIELD,
     state: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "awaiting-ready-approval",
-        "keiko-technical-ready",
-        "ready-for-human-review",
-        "awaiting-human-requirements",
-        "merged-awaiting-issue-closure",
-        "completed",
-        "blocked",
-        "cancelled",
-        "recovery-required",
-      ],
+      ...REQUIRED_CLOSED_ENUM_FIELD,
+      values: JOURNEY_OUTCOME_STATES,
     },
     reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "ready-approval-required",
-        "technical-ready",
-        "human-review-ready",
-        "required-reviews-missing",
-        "changes-requested",
-        "unresolved-conversations",
-        "review-visibility-unknown",
-        "issue-closure-pending",
-        "merge-and-closure-observed",
-        "closed-unmerged",
-        "issue-closed-without-merge",
-        "retargeted",
-        "head-changed",
-        "readiness-unavailable",
-        "readiness-stale",
-        "checks-not-ready",
-        "description-unavailable",
-        "description-stale",
-        "description-not-applied",
-        "provider-unavailable",
-        "authority-denied",
-        "observation-superseded",
-        "cancelled",
-        "ready-effect-uncertain",
-      ],
+      ...REQUIRED_CLOSED_ENUM_FIELD,
+      values: JOURNEY_OUTCOME_REASONS,
     },
-    recorded: { type: "boolean", dataClass: "closed-enum", required: true },
+    recorded: JOURNEY_RECORDED_FIELD,
     store: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
+      ...OPTIONAL_CLOSED_ENUM_FIELD,
       values: ["unavailable"],
     },
   },
-  causal: "correlation",
   lifecycle: "end",
-  analyzerProjection: "timeline",
   failureClasses: ["git-journey-outcome-persistence"],
   proofIds: ["git.journey-outcome.recorded"],
-  releaseImpact: "patch",
 });
 
 // ─── Error envelope ─────────────────────────────────────────────────────────────────────────────

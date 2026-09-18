@@ -433,6 +433,30 @@ const SERVER_LOG_LINE_DROPPED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const SERVER_LOG_ARTIFACT_CLASS_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: ["activity-log"],
+} as const;
+
+const SERVER_LOG_TARGET_ASSURANCE_FIELDS = {
+  permissionAssurance: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["verified-private", "platform-inherited"],
+  },
+  containmentAssurance: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["private-root-guarded", "platform-inherited"],
+  },
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const;
+
 const SERVER_LOG_TARGET_MUTATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -442,26 +466,8 @@ const SERVER_LOG_TARGET_MUTATED_OPERATION = defineActivityLogOperation({
   emitter: "observability/server-log.mutationEvidence",
   fields: {
     failedOp: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
-    artifactClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["activity-log"],
-    },
-    permissionAssurance: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["verified-private", "platform-inherited"],
-    },
-    containmentAssurance: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["private-root-guarded", "platform-inherited"],
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    artifactClass: SERVER_LOG_ARTIFACT_CLASS_FIELD,
+    ...SERVER_LOG_TARGET_ASSURANCE_FIELDS,
   },
   causal: "correlation",
   lifecycle: "loss",
@@ -1037,32 +1043,14 @@ const SERVER_LOG_SAFE_OPEN_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "observability/server-log.safeOpenEvidence",
   fields: {
-    artifactClass: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["activity-log"],
-    },
+    artifactClass: SERVER_LOG_ARTIFACT_CLASS_FIELD,
     persistenceStatus: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["opened"],
     },
-    permissionAssurance: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["verified-private", "platform-inherited"],
-    },
-    containmentAssurance: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["private-root-guarded", "platform-inherited"],
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...SERVER_LOG_TARGET_ASSURANCE_FIELDS,
   },
   causal: "correlation",
   lifecycle: "state",

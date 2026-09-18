@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "cc1937fb6b4f1bd40061f1824a264bdafcd5b96b06ee85f2169256e7a7e08b5b" as const;
+  "1151fa3375a2ee5c81f06ec987164a5533b7facd7cbfccb51b2fdd61de0b2384" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -98,17 +98,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      reason: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["readiness", "configuration"],
-      },
       modelKind: {
         type: "string",
         dataClass: "closed-enum",
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["readiness", "configuration"],
       },
     },
     causal: "correlation",
@@ -136,17 +136,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      reason: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["readiness", "generation", "grounding-scope"],
-      },
       modelKind: {
         type: "string",
         dataClass: "closed-enum",
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["readiness", "generation", "grounding-scope"],
       },
     },
     causal: "correlation",
@@ -305,17 +305,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      reason: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["readiness", "generation", "grounding-scope"],
-      },
       modelKind: {
         type: "string",
         dataClass: "closed-enum",
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["readiness", "generation", "grounding-scope"],
       },
     },
     causal: "correlation",
@@ -2284,12 +2284,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
       },
-      operation: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["follow-up"],
-      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -2303,6 +2297,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
         maxItems: 5,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["follow-up"],
       },
     },
     causal: "correlation",
@@ -2336,12 +2336,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
       },
-      operation: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["initial-turn-dispatch"],
-      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -2355,6 +2349,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
         maxItems: 5,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["initial-turn-dispatch"],
       },
     },
     causal: "correlation",
@@ -2388,12 +2388,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
       },
-      operation: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["initial-turn-stop"],
-      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -2407,6 +2401,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
         maxItems: 5,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["initial-turn-stop"],
       },
     },
     causal: "correlation",
@@ -2623,12 +2623,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
       },
-      operation: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["answer", "reject"],
-      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -2642,6 +2636,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
         maxItems: 5,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["answer", "reject"],
       },
     },
     causal: "correlation",
@@ -2675,12 +2675,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
       },
-      operation: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["list"],
-      },
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -2694,6 +2688,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 128,
         maxItems: 5,
+      },
+      operation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["list"],
       },
     },
     causal: "correlation",
@@ -2778,7 +2778,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       reasonCode: {
         type: "string",
         dataClass: "closed-enum",
-        required: false,
         values: [
           "nested-child-denied",
           "not-a-child-agent-request",
@@ -2804,6 +2803,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "malformed-tool-arguments-denied",
           "child-runner-error",
         ],
+        required: false,
       },
     },
     causal: "correlation",
@@ -2846,7 +2846,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       reasonCode: {
         type: "string",
         dataClass: "closed-enum",
-        required: true,
         values: [
           "nested-child-denied",
           "not-a-child-agent-request",
@@ -2872,6 +2871,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "malformed-tool-arguments-denied",
           "child-runner-error",
         ],
+        required: true,
       },
       frames: {
         type: "string-array",
@@ -3961,12 +3961,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
       },
-      effectiveMode: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
-      },
       runtimeSource: {
         type: "string",
         dataClass: "closed-enum",
@@ -3982,6 +3976,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "openai-api-key-through-gateway",
           "chatgpt-codex-subscription-profile",
         ],
+      },
+      effectiveMode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
       },
       hasPredecessor: {
         type: "boolean",
@@ -6200,16 +6200,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 64,
       },
+      inputCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       modelId: {
         type: "string",
         dataClass: "opaque-id",
         required: true,
         maxLength: 256,
-      },
-      inputCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
       },
       bodyBytes: {
         type: "integer",
@@ -6384,6 +6384,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 64,
       },
+      inputCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       reason: {
         type: "string",
         dataClass: "closed-enum",
@@ -6395,11 +6400,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "malformed-item",
           "unfilled-slot",
         ],
-      },
-      inputCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
       },
     },
     causal: "none",
@@ -7682,16 +7682,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 64,
       },
+      inputCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       modelId: {
         type: "string",
         dataClass: "opaque-id",
         required: true,
         maxLength: 256,
-      },
-      inputCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
       },
       bodyBytes: {
         type: "integer",

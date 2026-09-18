@@ -75,7 +75,41 @@ interface AdmissionInput {
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
 }
 
-type Stage = "admission" | "resolution" | "revalidation" | "base-branch" | "context" | "reattach";
+const CODING_RUNTIME_ISSUE_STAGES = [
+  "admission",
+  "resolution",
+  "revalidation",
+  "base-branch",
+  "context",
+  "reattach",
+] as const;
+type Stage = (typeof CODING_RUNTIME_ISSUE_STAGES)[number];
+
+const CODING_RUNTIME_ISSUE_BINDING_FAILURES = [
+  "invalid-reference",
+  "repository-mismatch",
+  "auth-required",
+  "issue-unavailable",
+  "clone-failed",
+  "authority-denied",
+  "cancelled",
+] as const;
+
+const CODING_RUNTIME_ISSUE_BINDING_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const CODING_RUNTIME_ISSUE_BINDING_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
 
 const CODING_RUNTIME_ISSUE_BINDING_REFUSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -90,36 +124,16 @@ const CODING_RUNTIME_ISSUE_BINDING_REFUSED_OPERATION = defineActivityLogOperatio
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["admission", "resolution", "revalidation", "base-branch", "context", "reattach"],
+      values: [...CODING_RUNTIME_ISSUE_STAGES],
     },
     issueBindingFailure: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: [
-        "invalid-reference",
-        "repository-mismatch",
-        "auth-required",
-        "issue-unavailable",
-        "clone-failed",
-        "authority-denied",
-        "cancelled",
-      ],
+      values: [...CODING_RUNTIME_ISSUE_BINDING_FAILURES],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    frames: CODING_RUNTIME_ISSUE_BINDING_FRAMES_FIELD,
+    causeChain: CODING_RUNTIME_ISSUE_BINDING_CAUSE_CHAIN_FIELD,
   },
   causal: "correlation",
   lifecycle: "failure",

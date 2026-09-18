@@ -50,6 +50,42 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+const CODING_RUNTIME_TASK_REPLACEMENT_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [
+    "aborted",
+    "adapter-rejected",
+    "commit-rejected",
+    "exception",
+    "interrupt-exception",
+    "interrupt-rejected",
+    "mutation-failed",
+    "no-record",
+    "no-reservation",
+    "pending-mutations-unsettled",
+    "terminal-exception",
+    "terminal-failed",
+  ],
+} as const;
+
+const CODING_RUNTIME_TASK_REPLACEMENT_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const CODING_RUNTIME_TASK_REPLACEMENT_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
 const CODING_RUNTIME_TASK_REPLACEMENT_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -67,39 +103,9 @@ const CODING_RUNTIME_TASK_REPLACEMENT_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["accepted", "rejected", "started"],
     },
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "aborted",
-        "adapter-rejected",
-        "commit-rejected",
-        "exception",
-        "interrupt-exception",
-        "interrupt-rejected",
-        "mutation-failed",
-        "no-record",
-        "no-reservation",
-        "pending-mutations-unsettled",
-        "terminal-exception",
-        "terminal-failed",
-      ],
-    },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    reason: CODING_RUNTIME_TASK_REPLACEMENT_REASON_FIELD,
+    frames: CODING_RUNTIME_TASK_REPLACEMENT_FRAMES_FIELD,
+    causeChain: CODING_RUNTIME_TASK_REPLACEMENT_CAUSE_CHAIN_FIELD,
   },
   causal: "correlation",
   lifecycle: "state",

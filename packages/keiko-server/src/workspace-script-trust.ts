@@ -64,13 +64,29 @@ const TRUST_POLICY_VERSION = "m11.trust.1";
 // install must never grow this table without limit; pruning keeps the most-recently-updated rows.
 const MAX_TRUST_RECORDS = 4_096;
 
-const WORKSPACE_SCRIPT_TRUST_GRANTED_OPERATION = defineActivityLogOperation({
+const WORKSPACE_SCRIPT_TRUST_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "workspace-script-trust.granted",
   category: "security",
   owner: "keiko-server",
-  emitter: "workspace-script-trust.recordHumanDecision.granted",
+  analyzerProjection: "timeline",
+  releaseImpact: "patch",
+} as const;
+
+const COMPLETE_ACTIVITY_LOG_FIELDS = {
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const;
+
+const OPTIONAL_MANIFEST_DIGEST_FIELD = {
+  type: "string",
+  dataClass: "digest",
+  required: false,
+  maxLength: 64,
+} as const;
+
+const WORKSPACE_SCRIPT_TRUST_DECISION_OPERATION_BASE = {
+  ...WORKSPACE_SCRIPT_TRUST_OPERATION_BASE,
   fields: {
     basis: {
       type: "string",
@@ -78,62 +94,39 @@ const WORKSPACE_SCRIPT_TRUST_GRANTED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["known", "unknown", "unavailable", "absent"],
     },
-    manifestDigest: {
-      type: "string",
-      dataClass: "digest",
-      required: false,
-      maxLength: 64,
-    },
+    manifestDigest: OPTIONAL_MANIFEST_DIGEST_FIELD,
     revision: { type: "integer", dataClass: "count", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...COMPLETE_ACTIVITY_LOG_FIELDS,
   },
   causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
   failureClasses: ["workspace-script-trust"],
+} as const;
+
+const RUN_MANIFEST_OPERATION_BASE = {
+  ...WORKSPACE_SCRIPT_TRUST_OPERATION_BASE,
+  causal: "parent-correlation",
+  failureClasses: ["workspace-script-trust-admission"],
+} as const;
+
+const WORKSPACE_SCRIPT_TRUST_GRANTED_OPERATION = defineActivityLogOperation({
+  ...WORKSPACE_SCRIPT_TRUST_DECISION_OPERATION_BASE,
+  op: "workspace-script-trust.granted",
+  emitter: "workspace-script-trust.recordHumanDecision.granted",
+  lifecycle: "state",
   proofIds: ["workspace-script-trust.granted.line"],
-  releaseImpact: "patch",
 });
 
 const WORKSPACE_SCRIPT_TRUST_REVOKED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...WORKSPACE_SCRIPT_TRUST_DECISION_OPERATION_BASE,
   op: "workspace-script-trust.revoked",
-  category: "security",
-  owner: "keiko-server",
   emitter: "workspace-script-trust.recordHumanDecision.revoked",
-  fields: {
-    basis: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["known", "unknown", "unavailable", "absent"],
-    },
-    manifestDigest: {
-      type: "string",
-      dataClass: "digest",
-      required: false,
-      maxLength: 64,
-    },
-    revision: { type: "integer", dataClass: "count", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
-  },
-  causal: "correlation",
   lifecycle: "end",
-  analyzerProjection: "timeline",
-  failureClasses: ["workspace-script-trust"],
   proofIds: ["workspace-script-trust.revoked.line"],
-  releaseImpact: "patch",
 });
 
 const RUN_MANIFEST_NOT_ADMITTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RUN_MANIFEST_OPERATION_BASE,
   op: "workspace-script-trust.run-manifest-not-admitted",
-  category: "security",
-  owner: "keiko-server",
   emitter: "workspace-script-trust.admitRunManifest.refused",
   fields: {
     reason: {
@@ -147,23 +140,16 @@ const RUN_MANIFEST_NOT_ADMITTED_OPERATION = defineActivityLogOperation({
         "manifest-unreadable",
       ],
     },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...COMPLETE_ACTIVITY_LOG_FIELDS,
   },
-  causal: "parent-correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
-  failureClasses: ["workspace-script-trust-admission"],
   proofIds: ["workspace-script-trust.run-manifest-not-admitted.line"],
-  releaseImpact: "patch",
 });
 
 const RUN_MANIFEST_ADMITTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RUN_MANIFEST_OPERATION_BASE,
   op: "workspace-script-trust.run-manifest-admitted",
-  category: "security",
-  owner: "keiko-server",
   emitter: "workspace-script-trust.admitRunManifest",
   fields: {
     basis: {
@@ -172,42 +158,24 @@ const RUN_MANIFEST_ADMITTED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["known", "absent"],
     },
-    manifestDigest: {
-      type: "string",
-      dataClass: "digest",
-      required: false,
-      maxLength: 64,
-    },
+    manifestDigest: OPTIONAL_MANIFEST_DIGEST_FIELD,
     expiresAt: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...COMPLETE_ACTIVITY_LOG_FIELDS,
   },
-  causal: "parent-correlation",
   lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["workspace-script-trust-admission"],
   proofIds: ["workspace-script-trust.run-manifest-admitted.line"],
-  releaseImpact: "patch",
 });
 
 const RUN_MANIFEST_REVOKED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RUN_MANIFEST_OPERATION_BASE,
   op: "workspace-script-trust.run-manifest-revoked",
-  category: "security",
-  owner: "keiko-server",
   emitter: "workspace-script-trust.revokeRunAdmissions",
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...COMPLETE_ACTIVITY_LOG_FIELDS,
   },
-  causal: "parent-correlation",
   lifecycle: "end",
-  analyzerProjection: "timeline",
-  failureClasses: ["workspace-script-trust-admission"],
   proofIds: ["workspace-script-trust.run-manifest-revoked.line"],
-  releaseImpact: "patch",
 });
 
 export const WORKSPACE_SCRIPT_TRUST_ERROR_CODES = {

@@ -43,74 +43,90 @@ import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-const CODING_RUNTIME_OPERATION_REFUSED_OPERATION = defineActivityLogOperation({
+type RuntimeMutationRefusalReason = CodingWorkbenchRuntimeFailureCode | "payload-too-large";
+
+// Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
+// route it backs so a log line names exactly which mutation was refused.
+const RUNTIME_MUTATION_OPERATIONS = [
+  "start",
+  "approval",
+  "stop",
+  "takeover",
+  "retry",
+  "recovery-ack",
+  "pause",
+  "resume",
+  "research-revoke",
+  "follow-up",
+  "answer",
+  "reject",
+] as const;
+
+type RuntimeMutationOperationName = (typeof RUNTIME_MUTATION_OPERATIONS)[number];
+
+const RUNTIME_REFUSAL_REASONS = [
+  "runtime-unavailable",
+  "active-run-conflict",
+  "invalid-intent",
+  "approval-activation-failed",
+  "authority-resolution-failed",
+  "authority-expired",
+  "authority-replayed",
+  "task-drift",
+  "workspace-drift",
+  "project-drift",
+  "branch-drift",
+  "scope-drift",
+  "budget-drift",
+  "authority-budget-exceeded",
+  "source-drift",
+  "runtime-failed",
+  "revoked",
+  "recovery-required",
+  "replay-cap-exhausted",
+  "issue-context-unavailable",
+  "question-answer-rejected",
+  "delivery-not-evidenced",
+  "payload-too-large",
+] as const satisfies readonly RuntimeMutationRefusalReason[];
+
+const CODING_RUNTIME_OPERATION_REFUSED_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "coding-runtime.operation.refused",
   category: "process",
   owner: "keiko-server",
   emitter: "coding-runtime.codingRuntimeRoutes.logRuntimeOperationRefusal",
-  fields: {
-    operation: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "start",
-        "approval",
-        "stop",
-        "takeover",
-        "retry",
-        "recovery-ack",
-        "pause",
-        "resume",
-        "research-revoke",
-        "follow-up",
-        "answer",
-        "reject",
-      ],
-    },
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "runtime-unavailable",
-        "active-run-conflict",
-        "invalid-intent",
-        "approval-activation-failed",
-        "authority-resolution-failed",
-        "authority-expired",
-        "authority-replayed",
-        "task-drift",
-        "workspace-drift",
-        "project-drift",
-        "branch-drift",
-        "scope-drift",
-        "budget-drift",
-        "authority-budget-exceeded",
-        "source-drift",
-        "runtime-failed",
-        "revoked",
-        "recovery-required",
-        "replay-cap-exhausted",
-        "issue-context-unavailable",
-        "question-answer-rejected",
-        "delivery-not-evidenced",
-        "payload-too-large",
-      ],
-    },
-    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
-  },
   causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-operation-refusal"],
   proofIds: ["coding-runtime.operation-refused.emitted-line"],
   releaseImpact: "patch",
-});
+} as const;
 
-type RuntimeMutationRefusalReason = CodingWorkbenchRuntimeFailureCode | "payload-too-large";
+const CODING_RUNTIME_OPERATION_REFUSED_FIELDS = {
+  operation: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: RUNTIME_MUTATION_OPERATIONS,
+  },
+  reason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: RUNTIME_REFUSAL_REASONS,
+  },
+  runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+} as const;
+
+const CODING_RUNTIME_OPERATION_REFUSED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_OPERATION_REFUSED_BASE,
+  fields: {
+    ...CODING_RUNTIME_OPERATION_REFUSED_FIELDS,
+  },
+});
 
 const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   Readonly<Record<RuntimeMutationRefusalReason, ActivityLogErrorKind>>
@@ -202,22 +218,6 @@ function notFound(correlationId?: string): RouteResult {
     body: errorBody("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found.", correlationId),
   };
 }
-
-// Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
-// route it backs so a log line names exactly which mutation was refused.
-type RuntimeMutationOperationName =
-  | "start"
-  | "approval"
-  | "stop"
-  | "takeover"
-  | "retry"
-  | "recovery-ack"
-  | "pause"
-  | "resume"
-  | "research-revoke"
-  | "follow-up"
-  | "answer"
-  | "reject";
 
 // AGENTS.md §8 rule 1 / epic #3384 defect B: a refused runtime operation (a malformed body, a
 // replay-cap exhaustion, a question answer the runtime rejected, ...) used to return its 400/403

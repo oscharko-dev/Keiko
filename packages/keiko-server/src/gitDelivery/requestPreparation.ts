@@ -45,6 +45,34 @@ import {
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
 
+const GIT_DELIVERY_OPERATION_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: [
+    "status",
+    "diff",
+    "branch-list",
+    "branch-create",
+    "branch-switch",
+    "stage",
+    "unstage",
+    "commit",
+    "fetch",
+    "pull",
+    "push",
+    "pull-request",
+    "merge",
+  ],
+} as const;
+
+const GIT_DELIVERY_PHASE_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: ["admission", "continuity"],
+} as const;
+
 const AUTHORITY_DENIED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -53,32 +81,8 @@ const AUTHORITY_DENIED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gitDelivery/requestPreparation.logGitDeliveryAuthorityDenial",
   fields: {
-    operation: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "status",
-        "diff",
-        "branch-list",
-        "branch-create",
-        "branch-switch",
-        "stage",
-        "unstage",
-        "commit",
-        "fetch",
-        "pull",
-        "push",
-        "pull-request",
-        "merge",
-      ],
-    },
-    phase: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["admission", "continuity"],
-    },
+    operation: GIT_DELIVERY_OPERATION_FIELD,
+    phase: GIT_DELIVERY_PHASE_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -113,32 +117,8 @@ const AUTHORITY_ADMITTED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gitDelivery/requestPreparation.logGitDeliveryAuthorityAdmission",
   fields: {
-    operation: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "status",
-        "diff",
-        "branch-list",
-        "branch-create",
-        "branch-switch",
-        "stage",
-        "unstage",
-        "commit",
-        "fetch",
-        "pull",
-        "push",
-        "pull-request",
-        "merge",
-      ],
-    },
-    phase: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["admission", "continuity"],
-    },
+    operation: GIT_DELIVERY_OPERATION_FIELD,
+    phase: GIT_DELIVERY_PHASE_FIELD,
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     source: {
       type: "string",

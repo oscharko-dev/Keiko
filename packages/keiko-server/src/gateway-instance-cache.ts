@@ -67,83 +67,84 @@ function isLifecycleResetReason(reason: RuntimeSelectionReason): reason is Lifec
   return LIFECYCLE_RESET_REASONS.has(reason);
 }
 
-const GATEWAY_INSTANCE_REUSED_OPERATION = defineActivityLogOperation({
+const GATEWAY_INSTANCE_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "gateway.instance.reused",
   category: "gateway",
   owner: "keiko-server",
-  emitter: "gateway-instance-cache.logRuntimeSelection.reused",
-  fields: {
-    generation: { type: "integer", dataClass: "count", required: true },
-  },
   causal: "none",
   lifecycle: "state",
+  releaseImpact: "patch",
+} as const;
+
+const GATEWAY_INSTANCE_GENERATION_FIELD = {
+  type: "integer",
+  dataClass: "count",
+  required: true,
+} as const;
+
+const GATEWAY_INSTANCE_LIFECYCLE_RESET_FIELD = {
+  type: "boolean",
+  dataClass: "closed-enum",
+  required: true,
+} as const;
+
+const GATEWAY_INSTANCE_REUSED_OPERATION = defineActivityLogOperation({
+  ...GATEWAY_INSTANCE_OPERATION_BASE,
+  op: "gateway.instance.reused",
+  emitter: "gateway-instance-cache.logRuntimeSelection.reused",
+  fields: {
+    generation: GATEWAY_INSTANCE_GENERATION_FIELD,
+  },
   analyzerProjection: "timeline",
   failureClasses: ["gateway-instance-lifecycle"],
   proofIds: ["gateway.instance.reused.line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_INSTANCE_RESET_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...GATEWAY_INSTANCE_OPERATION_BASE,
   op: "gateway.instance.reset",
-  category: "gateway",
-  owner: "keiko-server",
   emitter: "gateway-instance-cache.logRuntimeSelection.reset",
   fields: {
-    generation: { type: "integer", dataClass: "count", required: true },
+    generation: GATEWAY_INSTANCE_GENERATION_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["recovered", "generation-changed"],
     },
-    lifecycleReset: { type: "boolean", dataClass: "closed-enum", required: true },
+    lifecycleReset: GATEWAY_INSTANCE_LIFECYCLE_RESET_FIELD,
   },
-  causal: "none",
-  lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-instance-lifecycle"],
   proofIds: ["gateway.instance.reset.line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_INSTANCE_BOUND_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...GATEWAY_INSTANCE_OPERATION_BASE,
   op: "gateway.instance.bound",
-  category: "gateway",
-  owner: "keiko-server",
   emitter: "gateway-instance-cache.logRuntimeSelection.bound",
   fields: {
-    generation: { type: "integer", dataClass: "count", required: true },
+    generation: GATEWAY_INSTANCE_GENERATION_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["created", "rebound"],
     },
-    lifecycleReset: { type: "boolean", dataClass: "closed-enum", required: true },
+    lifecycleReset: GATEWAY_INSTANCE_LIFECYCLE_RESET_FIELD,
   },
-  causal: "none",
-  lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-instance-lifecycle"],
   proofIds: ["gateway.instance.bound.line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_INSTANCE_UNAVAILABLE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...GATEWAY_INSTANCE_OPERATION_BASE,
   op: "gateway.instance.unavailable",
-  category: "gateway",
-  owner: "keiko-server",
   emitter: "gateway-instance-cache.logRuntimeUnavailable",
   fields: {
-    generation: { type: "integer", dataClass: "count", required: true },
+    generation: GATEWAY_INSTANCE_GENERATION_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -151,12 +152,9 @@ const GATEWAY_INSTANCE_UNAVAILABLE_OPERATION = defineActivityLogOperation({
       values: ["still-unconfigured", "unconfigured", "config-withdrawn"],
     },
   },
-  causal: "none",
-  lifecycle: "state",
   analyzerProjection: "capability",
   failureClasses: ["gateway-instance-unavailable"],
   proofIds: ["gateway.instance.unavailable.line"],
-  releaseImpact: "patch",
 });
 
 function runtimeSelectionReason(

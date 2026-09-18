@@ -476,6 +476,14 @@ function constInitializer(checker, identifier) {
 function literalRegistryObject(value, checker, seen) {
   const result = Object.create(null);
   for (const property of value.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      const spread = literalRegistryValue(property.expression, checker, seen);
+      if (spread === undefined || typeof spread !== "object" || Array.isArray(spread)) {
+        return undefined;
+      }
+      Object.assign(result, spread);
+      continue;
+    }
     if (!ts.isPropertyAssignment(property)) return undefined;
     const name = propertyNameText(property.name);
     const propertyValue = literalRegistryValue(property.initializer, checker, seen);
@@ -485,19 +493,34 @@ function literalRegistryObject(value, checker, seen) {
   return result;
 }
 
+function literalRegistryIdentifier(identifier, checker, seen) {
+  const initializer = constInitializer(checker, identifier);
+  if (initializer === undefined || seen.has(initializer)) return undefined;
+  return literalRegistryValue(initializer, checker, new Set([...seen, initializer]));
+}
+
+function literalRegistryArray(value, checker, seen) {
+  const items = [];
+  for (const item of value.elements) {
+    if (ts.isSpreadElement(item)) {
+      const spread = literalRegistryValue(item.expression, checker, seen);
+      if (!Array.isArray(spread)) return undefined;
+      items.push(...spread);
+      continue;
+    }
+    const itemValue = literalRegistryValue(item, checker, seen);
+    if (itemValue === undefined) return undefined;
+    items.push(itemValue);
+  }
+  return items;
+}
+
 function literalRegistryValue(expression, checker, seen = new Set()) {
   const value = unwrapExpression(expression);
   const primitive = literalPrimitive(value);
   if (primitive !== undefined) return primitive.value;
-  if (ts.isIdentifier(value)) {
-    const initializer = constInitializer(checker, value);
-    if (initializer === undefined || seen.has(initializer)) return undefined;
-    return literalRegistryValue(initializer, checker, new Set([...seen, initializer]));
-  }
-  if (ts.isArrayLiteralExpression(value)) {
-    const items = value.elements.map((item) => literalRegistryValue(item, checker, seen));
-    return items.includes(undefined) ? undefined : items;
-  }
+  if (ts.isIdentifier(value)) return literalRegistryIdentifier(value, checker, seen);
+  if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, checker, seen);
   return ts.isObjectLiteralExpression(value)
     ? literalRegistryObject(value, checker, seen)
     : undefined;
@@ -677,6 +700,9 @@ function typedRegistryProgram(repoRoot) {
       paths: {
         "@oscharko-dev/keiko-contracts/runtime/observability": [
           "packages/keiko-contracts/src/observability.ts",
+        ],
+        "@oscharko-dev/keiko-contracts/runtime/pr-description": [
+          "packages/keiko-contracts/src/pr-description.ts",
         ],
       },
       target: ts.ScriptTarget.ES2022,

@@ -47,32 +47,7 @@ import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 /** A governance terminal from the gate or the orchestrator — every non-accepted outcome status. */
 export type ReadOnlyChildTerminal = Exclude<AuxiliaryOutcomeStatus, "accepted">;
 
-type ReadOnlyChildReasonCode =
-  | "nested-child-denied"
-  | "not-a-child-agent-request"
-  | "parent-envelope-invalid"
-  | "child-run-id-invalid"
-  | "invalid-max-tool-calls"
-  | "workspace-read-denied"
-  | "workspace-write-denied"
-  | "command-execution-denied"
-  | "verification-denied"
-  | "connector-access-denied"
-  | "network-egress-denied"
-  | "delivery-denied"
-  | "child-max-tool-calls"
-  | "parent-budget-exceeded"
-  | "parent-paused"
-  | "parent-stopped"
-  | "parent-question"
-  | "awaiting-approval"
-  | "authority-revoked"
-  | "timeout"
-  | "fabricated-tool-denied"
-  | "malformed-tool-arguments-denied"
-  | "child-runner-error";
-
-const READ_ONLY_CHILD_REASON_CODES: ReadonlySet<string> = new Set<ReadOnlyChildReasonCode>([
+const READ_ONLY_CHILD_REASON_CODE_VALUES = [
   "nested-child-denied",
   "not-a-child-agent-request",
   "parent-envelope-invalid",
@@ -96,7 +71,13 @@ const READ_ONLY_CHILD_REASON_CODES: ReadonlySet<string> = new Set<ReadOnlyChildR
   "fabricated-tool-denied",
   "malformed-tool-arguments-denied",
   "child-runner-error",
-]);
+] as const;
+
+type ReadOnlyChildReasonCode = (typeof READ_ONLY_CHILD_REASON_CODE_VALUES)[number];
+
+const READ_ONLY_CHILD_REASON_CODES: ReadonlySet<string> = new Set<ReadOnlyChildReasonCode>(
+  READ_ONLY_CHILD_REASON_CODE_VALUES,
+);
 
 function closedChildReasonCode(reason: string): ReadOnlyChildReasonCode {
   return READ_ONLY_CHILD_REASON_CODES.has(reason)
@@ -104,126 +85,100 @@ function closedChildReasonCode(reason: string): ReadOnlyChildReasonCode {
     : "child-runner-error";
 }
 
-const CODING_RUNTIME_READ_ONLY_CHILD_COMPLETED_OPERATION = defineActivityLogOperation({
+const READ_ONLY_CHILD_FAILURE_TERMINALS = [
+  "denied",
+  "limit-reached",
+  "stopped",
+  "unavailable",
+] as const;
+
+const READ_ONLY_CHILD_TERMINALS = ["accepted", ...READ_ONLY_CHILD_FAILURE_TERMINALS] as const;
+
+const READ_ONLY_CHILD_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
+  owner: "keiko-server",
+  causal: "correlation",
+  releaseImpact: "patch",
+} as const;
+
+const READ_ONLY_CHILD_RUN_ID_FIELD = {
+  type: "string",
+  dataClass: "opaque-id",
+  required: true,
+  maxLength: 128,
+} as const;
+
+const READ_ONLY_CHILD_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  values: READ_ONLY_CHILD_REASON_CODE_VALUES,
+} as const;
+
+const READ_ONLY_CHILD_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: true,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const READ_ONLY_CHILD_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: true,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const CODING_RUNTIME_READ_ONLY_CHILD_COMPLETED_OPERATION = defineActivityLogOperation({
+  ...READ_ONLY_CHILD_OPERATION_BASE,
   op: "coding-runtime.read-only-child.completed",
   category: "process",
-  owner: "keiko-server",
   emitter: "coding-runtime.readOnlyChildOrchestrator.writeCompletedActivityLog",
   fields: {
-    childRunId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    childRunId: READ_ONLY_CHILD_RUN_ID_FIELD,
     terminal: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["accepted", "denied", "limit-reached", "stopped", "unavailable"],
+      values: READ_ONLY_CHILD_TERMINALS,
     },
     reasonCode: {
-      type: "string",
-      dataClass: "closed-enum",
+      ...READ_ONLY_CHILD_REASON_FIELD,
       required: false,
-      values: [
-        "nested-child-denied",
-        "not-a-child-agent-request",
-        "parent-envelope-invalid",
-        "child-run-id-invalid",
-        "invalid-max-tool-calls",
-        "workspace-read-denied",
-        "workspace-write-denied",
-        "command-execution-denied",
-        "verification-denied",
-        "connector-access-denied",
-        "network-egress-denied",
-        "delivery-denied",
-        "child-max-tool-calls",
-        "parent-budget-exceeded",
-        "parent-paused",
-        "parent-stopped",
-        "parent-question",
-        "awaiting-approval",
-        "authority-revoked",
-        "timeout",
-        "fabricated-tool-denied",
-        "malformed-tool-arguments-denied",
-        "child-runner-error",
-      ],
     },
   },
-  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["read-only-child-run"],
   proofIds: ["coding-runtime.read-only-child.completed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_READ_ONLY_CHILD_RUNNER_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...READ_ONLY_CHILD_OPERATION_BASE,
   op: "coding-runtime.read-only-child.runner-failed",
   category: "security",
-  owner: "keiko-server",
   emitter: "coding-runtime.readOnlyChildOrchestrator.emitRunnerFault",
   fields: {
-    childRunId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    childRunId: READ_ONLY_CHILD_RUN_ID_FIELD,
     terminal: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["denied", "limit-reached", "stopped", "unavailable"],
+      values: READ_ONLY_CHILD_FAILURE_TERMINALS,
     },
     reasonCode: {
-      type: "string",
-      dataClass: "closed-enum",
+      ...READ_ONLY_CHILD_REASON_FIELD,
       required: true,
-      values: [
-        "nested-child-denied",
-        "not-a-child-agent-request",
-        "parent-envelope-invalid",
-        "child-run-id-invalid",
-        "invalid-max-tool-calls",
-        "workspace-read-denied",
-        "workspace-write-denied",
-        "command-execution-denied",
-        "verification-denied",
-        "connector-access-denied",
-        "network-egress-denied",
-        "delivery-denied",
-        "child-max-tool-calls",
-        "parent-budget-exceeded",
-        "parent-paused",
-        "parent-stopped",
-        "parent-question",
-        "awaiting-approval",
-        "authority-revoked",
-        "timeout",
-        "fabricated-tool-denied",
-        "malformed-tool-arguments-denied",
-        "child-runner-error",
-      ],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    frames: READ_ONLY_CHILD_FRAMES_FIELD,
+    causeChain: READ_ONLY_CHILD_CAUSE_CHAIN_FIELD,
   },
-  causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["read-only-child-runner"],
   proofIds: ["coding-runtime.read-only-child.runner-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 function childTerminalErrorKind(terminal: ReadOnlyChildTerminal): ActivityLogErrorKind {

@@ -3,6 +3,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
   type ActivityLogEventEnvelope,
+  type ActivityLogFieldContract,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
@@ -12,6 +13,32 @@ import {
 } from "../knowledge-log.js";
 import type { IndexingLogContext } from "./types.js";
 
+const PREFLIGHT_CACHED_FIELD_CONTRACTS = {
+  capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+  modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+  expectedDimensions: { type: "integer", dataClass: "count", required: false },
+  fingerprinted: { type: "boolean", dataClass: "closed-enum", required: true },
+  endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+  cached: { type: "boolean", dataClass: "closed-enum", required: true },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
+const PREFLIGHT_COMPLETED_FIELD_CONTRACTS = {
+  capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+  modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+  expectedDimensions: { type: "integer", dataClass: "count", required: false },
+  fingerprinted: { type: "boolean", dataClass: "closed-enum", required: true },
+  endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+  observedDimensions: { type: "integer", dataClass: "count", required: true },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
+const PREFLIGHT_IDENTITY_STATE_FIELD_CONTRACTS = {
+  capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  observedDimensions: { type: "integer", dataClass: "count", required: true },
+  providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
 const PREFLIGHT_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -19,23 +46,7 @@ const PREFLIGHT_STARTED_OPERATION = defineActivityLogOperation({
   category: "embedding",
   owner: "keiko-local-knowledge",
   emitter: "indexing/preflight-activity-log.emitPreflightActivity",
-  fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-    modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-    expectedDimensions: { type: "integer", dataClass: "count", required: false },
-    fingerprinted: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
-    cached: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
-  },
+  fields: PREFLIGHT_CACHED_FIELD_CONTRACTS,
   causal: "correlation",
   lifecycle: "start",
   analyzerProjection: "capability",
@@ -85,19 +96,7 @@ const PREFLIGHT_COMPLETED_OPERATION = defineActivityLogOperation({
   category: "embedding",
   owner: "keiko-local-knowledge",
   emitter: "indexing/preflight-activity-log.emitPreflightActivity",
-  fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-    modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-    expectedDimensions: { type: "integer", dataClass: "count", required: false },
-    fingerprinted: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
-    observedDimensions: { type: "integer", dataClass: "count", required: true },
-  },
+  fields: PREFLIGHT_COMPLETED_FIELD_CONTRACTS,
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "capability",
@@ -113,23 +112,7 @@ const PREFLIGHT_CACHE_HIT_OPERATION = defineActivityLogOperation({
   category: "embedding",
   owner: "keiko-local-knowledge",
   emitter: "indexing/preflight-activity-log.emitPreflightActivity",
-  fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-    modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-    expectedDimensions: { type: "integer", dataClass: "count", required: false },
-    fingerprinted: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
-    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
-    cached: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
-  },
+  fields: PREFLIGHT_CACHED_FIELD_CONTRACTS,
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "capability",
@@ -166,11 +149,7 @@ const PREFLIGHT_IDENTITY_ADOPTED_OPERATION = defineActivityLogOperation({
   category: "embedding",
   owner: "keiko-local-knowledge",
   emitter: "indexing/preflight-activity-log.emitPreflightActivity",
-  fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    observedDimensions: { type: "integer", dataClass: "count", required: true },
-    providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-  },
+  fields: PREFLIGHT_IDENTITY_STATE_FIELD_CONTRACTS,
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "capability",
@@ -186,11 +165,7 @@ const PREFLIGHT_IDENTITY_REFRESHED_OPERATION = defineActivityLogOperation({
   category: "embedding",
   owner: "keiko-local-knowledge",
   emitter: "indexing/preflight-activity-log.emitPreflightActivity",
-  fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    observedDimensions: { type: "integer", dataClass: "count", required: true },
-    providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-  },
+  fields: PREFLIGHT_IDENTITY_STATE_FIELD_CONTRACTS,
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "capability",

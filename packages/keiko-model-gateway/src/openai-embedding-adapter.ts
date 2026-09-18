@@ -33,65 +33,77 @@ import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js
 // `timeoutMs` cannot report a deadline the request is not actually running under.
 const DEFAULT_EMBEDDING_TIMEOUT_MS = 30_000;
 
-const EMBEDDING_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
+const EMBEDDING_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "embedding.request.dispatch",
   category: "embedding",
   owner: "keiko-model-gateway",
+  causal: "none",
+  releaseImpact: "patch",
+} as const;
+
+const ENDPOINT_DIGEST_FIELD = {
+  type: "string",
+  dataClass: "digest",
+  required: true,
+  maxLength: 64,
+} as const;
+const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
+const CLOSED_BOOLEAN_FIELD = {
+  type: "boolean",
+  dataClass: "closed-enum",
+  required: true,
+} as const;
+const EMBEDDING_BATCH_FIELDS = {
+  endpointDigest: ENDPOINT_DIGEST_FIELD,
+  inputCount: COUNT_FIELD,
+} as const;
+const EMBEDDING_DISPATCH_FIELDS = {
+  ...EMBEDDING_BATCH_FIELDS,
+  modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+  bodyBytes: COUNT_FIELD,
+  timeoutMs: { type: "number", dataClass: "duration", required: true },
+  minimalShape: CLOSED_BOOLEAN_FIELD,
+} as const;
+const EMBEDDING_LADDER_PROGRESS_FIELDS = {
+  endpointDigest: ENDPOINT_DIGEST_FIELD,
+  total: COUNT_FIELD,
+  completed: COUNT_FIELD,
+} as const;
+
+const EMBEDDING_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
+  ...EMBEDDING_OPERATION_BASE,
+  op: "embedding.request.dispatch",
   emitter: "openai-embedding-adapter.logScalarDispatch",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
-    bodyBytes: { type: "integer", dataClass: "count", required: true },
-    timeoutMs: { type: "number", dataClass: "duration", required: true },
-    minimalShape: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
+    ...EMBEDDING_DISPATCH_FIELDS,
   },
-  causal: "none",
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-request"],
   proofIds: ["embedding.request-dispatch.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_REQUEST_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.request.failed",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.requestOpenAIEmbedding",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    minimalShape: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
+    endpointDigest: ENDPOINT_DIGEST_FIELD,
+    minimalShape: CLOSED_BOOLEAN_FIELD,
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-request"],
   proofIds: ["embedding.request-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_REQUEST_MINIMAL_RETRY_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.request.minimal-shape-retry",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.handleScalarErrorResponse",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    endpointDigest: ENDPOINT_DIGEST_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -99,86 +111,57 @@ const EMBEDDING_REQUEST_MINIMAL_RETRY_OPERATION = defineActivityLogOperation({
       values: ["strict-gateway-rejection"],
     },
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-request"],
   proofIds: ["embedding.request-minimal-retry.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_REQUEST_MINIMAL_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.request.minimal-shape-failed",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.requestMinimalShapeEmbedding",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    endpointDigest: ENDPOINT_DIGEST_FIELD,
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-request"],
   proofIds: ["embedding.request-minimal-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_ENDPOINT_STRICT_MEMOIZED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.endpoint.strict-shape-memoized",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.strictShapeMemo",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    endpointDigest: ENDPOINT_DIGEST_FIELD,
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-compatibility"],
   proofIds: ["embedding.endpoint-strict-memoized.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_DISPATCH_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.dispatch",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.logBatchDispatch",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
-    bodyBytes: { type: "integer", dataClass: "count", required: true },
-    timeoutMs: { type: "number", dataClass: "duration", required: true },
-    minimalShape: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
+    ...EMBEDDING_DISPATCH_FIELDS,
   },
-  causal: "none",
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-batch"],
   proofIds: ["embedding.batch-dispatch.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_INVALID_RESPONSE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.invalid-response",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.invalidBatchResponse",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    ...EMBEDDING_BATCH_FIELDS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -191,26 +174,19 @@ const EMBEDDING_BATCH_INVALID_RESPONSE_OPERATION = defineActivityLogOperation({
         "unfilled-slot",
       ],
     },
-    inputCount: { type: "integer", dataClass: "count", required: true },
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-batch"],
   proofIds: ["embedding.batch-invalid-response.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_DEGRADE_SKIPPED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.degrade-skipped",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.degradeToScalarAfterBatchFailure",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_BATCH_FIELDS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -223,43 +199,31 @@ const EMBEDDING_BATCH_DEGRADE_SKIPPED_OPERATION = defineActivityLogOperation({
       ],
     },
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-compatibility"],
   proofIds: ["embedding.batch-degrade-skipped.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_DEGRADING_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.degrading-to-scalar",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.degradeToScalarAfterBatchFailure",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_BATCH_FIELDS,
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-compatibility"],
   proofIds: ["embedding.batch-degrading.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_DEGRADE_INCONCLUSIVE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.degrade-inconclusive",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.degradeToScalarAfterBatchFailure",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_BATCH_FIELDS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -267,68 +231,46 @@ const EMBEDDING_BATCH_DEGRADE_INCONCLUSIVE_OPERATION = defineActivityLogOperatio
       values: ["scalar-probe-also-failed"],
     },
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-compatibility"],
   proofIds: ["embedding.batch-degrade-inconclusive.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_DEGRADED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.degraded-to-scalar",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.degradeToScalarAfterBatchFailure",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
-    memoized: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
-    embedded: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_BATCH_FIELDS,
+    memoized: CLOSED_BOOLEAN_FIELD,
+    embedded: COUNT_FIELD,
   },
-  causal: "none",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-compatibility"],
   proofIds: ["embedding.batch-degraded.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_SCALAR_MEMO_HIT_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.scalar-memo-hit",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.requestOpenAIEmbeddingBatch",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_BATCH_FIELDS,
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-compatibility"],
   proofIds: ["embedding.batch-scalar-memo-hit.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_MINIMAL_RETRY_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.minimal-shape-retry",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.handleBatchErrorResponse",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_BATCH_FIELDS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -336,29 +278,19 @@ const EMBEDDING_BATCH_MINIMAL_RETRY_OPERATION = defineActivityLogOperation({
       values: ["strict-gateway-rejection"],
     },
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-batch"],
   proofIds: ["embedding.batch-minimal-retry.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_BATCH_ARRAY_UNSUPPORTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.batch.array-unsupported",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.degradeToScalarsForArrayRejectingEndpoint",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    inputCount: { type: "integer", dataClass: "count", required: true },
-    memoized: {
-      type: "boolean",
-      dataClass: "closed-enum",
-      required: true,
-    },
+    ...EMBEDDING_BATCH_FIELDS,
+    memoized: CLOSED_BOOLEAN_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -366,93 +298,65 @@ const EMBEDDING_BATCH_ARRAY_UNSUPPORTED_OPERATION = defineActivityLogOperation({
       values: ["minimal-array-rejected"],
     },
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-batch"],
   proofIds: ["embedding.batch-array-unsupported.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_LADDER_DEADLINE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.scalar-ladder.deadline-expired",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.requestScalarFallbackBatch",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    total: { type: "integer", dataClass: "count", required: true },
-    completed: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_LADDER_PROGRESS_FIELDS,
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-scalar-ladder"],
   proofIds: ["embedding.ladder-deadline.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_LADDER_ITEM_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.scalar-ladder.item-failed",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.requestScalarFallbackBatch",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    total: { type: "integer", dataClass: "count", required: true },
-    completed: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_LADDER_PROGRESS_FIELDS,
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-scalar-ladder"],
   proofIds: ["embedding.ladder-item-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_LADDER_ITEM_COMPLETED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.scalar-ladder.item-completed",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.logLadderItem",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    index: { type: "integer", dataClass: "count", required: true },
-    total: { type: "integer", dataClass: "count", required: true },
-    inputChars: { type: "integer", dataClass: "count", required: true },
+    endpointDigest: ENDPOINT_DIGEST_FIELD,
+    index: COUNT_FIELD,
+    total: COUNT_FIELD,
+    inputChars: COUNT_FIELD,
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-scalar-ladder"],
   proofIds: ["embedding.ladder-item-completed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_LADDER_COMPLETED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...EMBEDDING_OPERATION_BASE,
   op: "embedding.scalar-ladder.completed",
-  category: "embedding",
-  owner: "keiko-model-gateway",
   emitter: "openai-embedding-adapter.requestScalarFallbackBatch",
   fields: {
-    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    total: { type: "integer", dataClass: "count", required: true },
-    completed: { type: "integer", dataClass: "count", required: true },
+    ...EMBEDDING_LADDER_PROGRESS_FIELDS,
   },
-  causal: "none",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-scalar-ladder"],
   proofIds: ["embedding.ladder-completed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 function embeddingEndpointDigest(endpoint: string): string {
@@ -745,7 +649,11 @@ interface BuiltRequest {
   readonly callerSignal: AbortSignal | undefined;
 }
 
-function buildRequest(request: OpenAIEmbeddingRequest, minimalShape = false): BuiltRequest {
+function buildEmbeddingRequest(
+  request: OpenAIEmbeddingRequest | OpenAIEmbeddingBatchRequest,
+  input: string | readonly string[],
+  minimalShape: boolean,
+): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
   // Reuse the shared Bearer-prefixing helper from config.ts so this transport handles the
   // same `bearer ` / `x-litellm-key` / `api-key` cases the chat adapter handles, including
@@ -761,7 +669,7 @@ function buildRequest(request: OpenAIEmbeddingRequest, minimalShape = false): Bu
   // change the vector-space identity of the returned embeddings.
   const body = JSON.stringify({
     model: request.modelId,
-    input: request.input,
+    input,
     ...(minimalShape ? {} : { encoding_format: "float" }),
     ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
   });
@@ -776,6 +684,10 @@ function buildRequest(request: OpenAIEmbeddingRequest, minimalShape = false): Bu
     timeoutSignal,
     callerSignal: request.signal,
   };
+}
+
+function buildRequest(request: OpenAIEmbeddingRequest, minimalShape = false): BuiltRequest {
+  return buildEmbeddingRequest(request, request.input, minimalShape);
 }
 
 // One attempt line for a SCALAR request, emitted before the socket work starts. Shared by the
@@ -980,30 +892,7 @@ function buildBatchRequest(
   request: OpenAIEmbeddingBatchRequest,
   minimalShape = false,
 ): BuiltRequest {
-  const name = headerName(request.apiKeyHeaderName);
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    [name]: apiKeyHeaderValue(name, request.apiKey),
-  };
-  // OpenAI-compatible body: `input` is the array. Identical envelope to the scalar path
-  // except the array value, so the same gateway/TLS/egress handling applies.
-  const body = JSON.stringify({
-    model: request.modelId,
-    input: request.inputs,
-    ...(minimalShape ? {} : { encoding_format: "float" }),
-    ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
-  });
-  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS);
-  const signal =
-    request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
-  return {
-    url: joinUrl(request),
-    headers,
-    body,
-    signal,
-    timeoutSignal,
-    callerSignal: request.signal,
-  };
+  return buildEmbeddingRequest(request, request.inputs, minimalShape);
 }
 
 // Attempt line for an ARRAY request. This is the call the 0.3.13 incident hung inside: 36 inputs,

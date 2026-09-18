@@ -36,6 +36,7 @@ import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-reposit
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogFieldContract,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
@@ -98,6 +99,47 @@ import {
 } from "./requestPreparation.js";
 import type { GitDeliveryDeliveredPullRequestAdmission } from "./runBoundAuthority.js";
 
+const MARK_READY_OUTCOME_FIELD_CONTRACTS = {
+  prExternalId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+  outcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["succeeded", "failed", "aborted", "partial"],
+  },
+  durationMs: { type: "number", dataClass: "duration", required: true },
+  errorCode: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "provider-rejected",
+      "network-failure",
+      "conflict",
+      "precondition-failed",
+      "signature-failed",
+      "timeout",
+      "internal-error",
+    ],
+  },
+  rejectionReason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "already-exists",
+      "base-missing",
+      "head-unpublished",
+      "validation-error",
+      "permission-denied",
+      "not-found",
+      "rate-limited",
+      "provider-unavailable",
+      "unknown",
+    ],
+  },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
 const MARK_READY_REFRESHED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -149,46 +191,7 @@ const MARK_READY_EXECUTED_OPERATION = defineActivityLogOperation({
   category: "security",
   owner: "keiko-server",
   emitter: "gitDelivery/prMarkReadyExecution.logMarkReadyOutcome",
-  fields: {
-    prExternalId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["succeeded", "failed", "aborted", "partial"],
-    },
-    durationMs: { type: "number", dataClass: "duration", required: true },
-    errorCode: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "provider-rejected",
-        "network-failure",
-        "conflict",
-        "precondition-failed",
-        "signature-failed",
-        "timeout",
-        "internal-error",
-      ],
-    },
-    rejectionReason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "already-exists",
-        "base-missing",
-        "head-unpublished",
-        "validation-error",
-        "permission-denied",
-        "not-found",
-        "rate-limited",
-        "provider-unavailable",
-        "unknown",
-      ],
-    },
-  },
+  fields: MARK_READY_OUTCOME_FIELD_CONTRACTS,
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -204,46 +207,7 @@ const MARK_READY_DRIFT_OPERATION = defineActivityLogOperation({
   category: "security",
   owner: "keiko-server",
   emitter: "gitDelivery/prMarkReadyExecution.logMarkReadyOutcome.drift",
-  fields: {
-    prExternalId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["succeeded", "failed", "aborted", "partial"],
-    },
-    durationMs: { type: "number", dataClass: "duration", required: true },
-    errorCode: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "provider-rejected",
-        "network-failure",
-        "conflict",
-        "precondition-failed",
-        "signature-failed",
-        "timeout",
-        "internal-error",
-      ],
-    },
-    rejectionReason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "already-exists",
-        "base-missing",
-        "head-unpublished",
-        "validation-error",
-        "permission-denied",
-        "not-found",
-        "rate-limited",
-        "provider-unavailable",
-        "unknown",
-      ],
-    },
-  },
+  fields: MARK_READY_OUTCOME_FIELD_CONTRACTS,
   causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",

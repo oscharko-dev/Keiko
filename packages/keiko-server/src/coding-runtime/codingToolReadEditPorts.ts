@@ -326,6 +326,47 @@ type WorkspaceReadFailureReason =
   | "preflight-refused"
   | "response-too-large";
 
+const CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [
+    "unsupported-platform",
+    "workspace-unavailable",
+    "artifact-unverified",
+    "busy",
+    "cancelled",
+    "timeout",
+    "process-failed",
+    "protocol-invalid",
+    "denied",
+    "not-found",
+    "not-text",
+    "too-large",
+    "unstable",
+    "exception",
+    "postflight-refused",
+    "preflight-refused",
+    "response-too-large",
+  ],
+} as const;
+
+const CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const CODING_RUNTIME_WORKSPACE_READ_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
 const CODING_RUNTIME_WORKSPACE_READ_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -340,47 +381,12 @@ const CODING_RUNTIME_WORKSPACE_READ_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["completed", "failed"],
     },
-    reason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: false,
-      values: [
-        "unsupported-platform",
-        "workspace-unavailable",
-        "artifact-unverified",
-        "busy",
-        "cancelled",
-        "timeout",
-        "process-failed",
-        "protocol-invalid",
-        "denied",
-        "not-found",
-        "not-text",
-        "too-large",
-        "unstable",
-        "exception",
-        "postflight-refused",
-        "preflight-refused",
-        "response-too-large",
-      ],
-    },
+    reason: CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD,
     targetPathSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     startLine: { type: "integer", dataClass: "count", required: false },
     maxLines: { type: "integer", dataClass: "count", required: false },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    frames: CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD,
+    causeChain: CODING_RUNTIME_WORKSPACE_READ_CAUSE_CHAIN_FIELD,
   },
   causal: "correlation",
   lifecycle: "state",

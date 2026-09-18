@@ -55,194 +55,104 @@ interface RuntimeOperationCoordinatorDeps {
   readonly activityLog?: ServerLogSink | undefined;
 }
 
-const CODING_RUNTIME_FOLLOW_UP_DISPATCH_FAILED_OPERATION = defineActivityLogOperation({
+const CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "coding-runtime.follow-up.dispatch-failed",
   category: "process",
   owner: "keiko-server",
   emitter: "coding-runtime.codingRuntimeOperationCoordinator.transportFailure",
-  fields: {
-    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    operation: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["follow-up"],
-    },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
-  },
   causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
+  releaseImpact: "patch",
+} as const;
+
+const CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS = {
+  runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+  frames: {
+    type: "string-array",
+    dataClass: "opaque-id",
+    required: true,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: true,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;
+
+const CODING_RUNTIME_FOLLOW_UP_DISPATCH_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
+  op: "coding-runtime.follow-up.dispatch-failed",
+  fields: {
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: { type: "string", dataClass: "closed-enum", required: true, values: ["follow-up"] },
+  },
   failureClasses: ["coding-runtime-follow-up-dispatch"],
   proofIds: ["coding-runtime.follow-up.dispatch-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_QUESTION_LIST_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
   op: "coding-runtime.question.list-failed",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.codingRuntimeOperationCoordinator.transportFailure",
   fields: {
-    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
-    operation: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["list"],
-    },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: { type: "string", dataClass: "closed-enum", required: true, values: ["list"] },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-question-list"],
   proofIds: ["coding-runtime.question.list-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_QUESTION_AUTHORITY_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
   op: "coding-runtime.question.authority-resolution-failed",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.codingRuntimeOperationCoordinator.transportFailure",
   fields: {
-    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
     operation: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["answer", "reject"],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-question-authority"],
   proofIds: ["coding-runtime.question.authority-resolution-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_INITIAL_TURN_DISPATCH_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
   op: "coding-runtime.initial-turn.dispatch-failed",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.codingRuntimeOperationCoordinator.transportFailure",
   fields: {
-    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
     operation: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["initial-turn-dispatch"],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-initial-turn-dispatch"],
   proofIds: ["coding-runtime.initial-turn.dispatch-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_INITIAL_TURN_STOP_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
   op: "coding-runtime.initial-turn.stop-failed",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.codingRuntimeOperationCoordinator.transportFailure",
   fields: {
-    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
     operation: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["initial-turn-stop"],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: true,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: true,
-      maxLength: 128,
-      maxItems: 5,
-    },
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["coding-runtime-initial-turn-stop"],
   proofIds: ["coding-runtime.initial-turn.stop-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const CODING_RUNTIME_QUESTION_LIST_REVISION_REBOUND_OPERATION = defineActivityLogOperation({

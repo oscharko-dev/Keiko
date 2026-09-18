@@ -41,52 +41,43 @@ export const WINDOWS_SHORTCUT_MAX_BYTES = 128 * 1024;
 export const WINDOWS_SHORTCUT_TIMEOUT_MS = 30_000;
 const WINDOWS_SHORTCUT_FALLBACK_SCHEMA = "keiko-windows-shortcut-v1";
 
-const SECURITY_WINDOWS_SHORTCUT_SYSTEM_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+const SECURITY_WINDOWS_SHORTCUT_FAILURE_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "security.windows-shortcut.system-root-refused",
-  category: "security",
   owner: "keiko-security",
   emitter: "windows-shortcuts.logShortcutHostFailure",
-  fields: {
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    mode: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["create", "read"],
-    },
-  },
   causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
+  releaseImpact: "patch",
+} as const;
+
+const SECURITY_WINDOWS_SHORTCUT_FAILURE_FIELDS = {
+  failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  mode: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["create", "read"],
+  },
+} as const;
+
+const SECURITY_WINDOWS_SHORTCUT_SYSTEM_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_WINDOWS_SHORTCUT_FAILURE_BASE,
+  op: "security.windows-shortcut.system-root-refused",
+  category: "security",
+  fields: { ...SECURITY_WINDOWS_SHORTCUT_FAILURE_FIELDS },
   failureClasses: ["windows-shortcut-system-root"],
   proofIds: ["security.windows-shortcut.system-root-refused.mode"],
-  releaseImpact: "patch",
 });
 
 const SECURITY_WINDOWS_SHORTCUT_SYSTEM_BINARY_MISSING_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...SECURITY_WINDOWS_SHORTCUT_FAILURE_BASE,
   op: "security.windows-shortcut.system-binary-missing",
   category: "diagnostic",
-  owner: "keiko-security",
-  emitter: "windows-shortcuts.logShortcutHostFailure",
-  fields: {
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    mode: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["create", "read"],
-    },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
+  fields: { ...SECURITY_WINDOWS_SHORTCUT_FAILURE_FIELDS },
   failureClasses: ["windows-shortcut-system-binary"],
   proofIds: ["security.windows-shortcut.system-binary-missing.mode"],
-  releaseImpact: "patch",
 });
 
 const WINDOWS_SHORTCUT_SCRIPT = [

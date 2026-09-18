@@ -158,6 +158,35 @@ function vaultFailureEvidence(error: unknown): VaultFailureEvidence {
   };
 }
 
+const SECURITY_VAULT_FAILURE_REGISTRATION = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "security",
+  owner: "keiko-security",
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  releaseImpact: "patch",
+} as const;
+
+const SECURITY_VAULT_FAILURE_FIELDS = {
+  failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  frames: {
+    type: "string-array",
+    dataClass: "safe-platform-class",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;
+
 const SECURITY_VAULT_KEY_RESOLVED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -182,35 +211,12 @@ const SECURITY_VAULT_KEY_RESOLVED_OPERATION = defineActivityLogOperation({
 });
 
 const SECURITY_VAULT_KEY_RESOLUTION_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
   op: "security.vault.key-resolution-failed",
-  category: "security",
-  owner: "keiko-security",
   emitter: "secret-vault.emitKeyResolutionFailed",
-  fields: {
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
-  },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
+  fields: { ...SECURITY_VAULT_FAILURE_FIELDS },
   failureClasses: ["security-vault-key-resolution"],
   proofIds: ["security.vault.key-resolution-failed.evidence"],
-  releaseImpact: "patch",
 });
 
 const SECURITY_VAULT_ENTRIES_MERGED_OPERATION = defineActivityLogOperation({
@@ -246,135 +252,51 @@ const SECURITY_VAULT_ENTRIES_DELETED_OPERATION = defineActivityLogOperation({
 });
 
 const SECURITY_VAULT_ENTRIES_DELETE_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
   op: "security.vault.entries-delete-failed",
-  category: "security",
-  owner: "keiko-security",
   emitter: "secret-vault.deleteManyWithLog",
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["security-vault-delete"],
   proofIds: ["security.vault.entries-delete-failed.count"],
-  releaseImpact: "patch",
 });
 
 const SECURITY_VAULT_ENTRIES_MERGE_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
   op: "security.vault.entries-merge-failed",
-  category: "security",
-  owner: "keiko-security",
   emitter: "secret-vault.setManyWithLog",
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["security-vault-write"],
   proofIds: ["security.vault.entries-merge-failed.count"],
-  releaseImpact: "patch",
 });
 
 const SECURITY_VAULT_SHARD_UNREADABLE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
   op: "security.vault.shard-unreadable",
-  category: "security",
-  owner: "keiko-security",
   emitter: "secret-vault.emitShardUnreadable",
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["security-vault-read"],
   proofIds: ["security.vault.shard-unreadable.count"],
-  releaseImpact: "patch",
 });
 
 const SECURITY_VAULT_ENTRIES_ROLLBACK_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
   op: "security.vault.entries-rollback-failed",
-  category: "security",
-  owner: "keiko-security",
   emitter: "secret-vault.rollbackCommittedShards",
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
   },
-  causal: "correlation",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
   failureClasses: ["security-vault-rollback"],
   proofIds: ["security.vault.entries-rollback-failed.count"],
-  releaseImpact: "patch",
 });
 
 export type SecretVaultStoreErrorCode =

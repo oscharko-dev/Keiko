@@ -23,196 +23,133 @@ export type CliWindowsSystemSurface =
   | "portable-failure-alert"
   | "start-open-browser";
 
-const WINDOWS_LAUNCHER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+const WINDOWS_SYSTEM_FAILURE_KIND_FIELD = {
+  type: "string",
+  dataClass: "error-kind",
+  required: true,
+  maxLength: 64,
+} as const;
+
+const WINDOWS_LAUNCHER_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["launcher-install"],
+  },
+  failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
+} as const;
+
+const WINDOWS_LEGACY_LAUNCHER_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["legacy-start-menu-cleanup"],
+  },
+  failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
+} as const;
+
+const WINDOWS_PORTABLE_ALERT_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["portable-failure-alert"],
+  },
+  failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
+} as const;
+
+const WINDOWS_LIFECYCLE_OPENER_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["start-open-browser"],
+  },
+  failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
+} as const;
+
+const WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "security.windows-launcher.system-root-refused",
   category: "security",
   owner: "keiko-cli",
   emitter: "security-log.emitWindowsSystemRootRefusal",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["launcher-install"],
-    },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-  },
   causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["windows-system-root-refused"],
-  proofIds: ["windows.launcher.system-root-refused"],
   releaseImpact: "patch",
+} as const;
+
+const WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "security-log.emitWindowsSystemBinaryMissing",
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["windows-system-binary-unavailable"],
+  releaseImpact: "patch",
+} as const;
+
+const WINDOWS_LAUNCHER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
+  op: "security.windows-launcher.system-root-refused",
+  fields: WINDOWS_LAUNCHER_FIELDS,
+  proofIds: ["windows.launcher.system-root-refused"],
 });
 
 const WINDOWS_LEGACY_LAUNCHER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
   op: "security.windows-portable-legacy-launcher.system-root-refused",
-  category: "security",
-  owner: "keiko-cli",
-  emitter: "security-log.emitWindowsSystemRootRefusal",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["legacy-start-menu-cleanup"],
-    },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-system-root-refused"],
+  fields: WINDOWS_LEGACY_LAUNCHER_FIELDS,
   proofIds: ["windows.legacy-launcher.system-root-refused"],
-  releaseImpact: "patch",
 });
 
 const WINDOWS_PORTABLE_ALERT_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
   op: "security.windows-portable-alert.system-root-refused",
-  category: "security",
-  owner: "keiko-cli",
-  emitter: "security-log.emitWindowsSystemRootRefusal",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["portable-failure-alert"],
-    },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-system-root-refused"],
+  fields: WINDOWS_PORTABLE_ALERT_FIELDS,
   proofIds: ["windows.portable-alert.system-root-refused"],
-  releaseImpact: "patch",
 });
 
 const WINDOWS_LIFECYCLE_OPENER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
   op: "security.windows-lifecycle-opener.system-root-refused",
-  category: "security",
-  owner: "keiko-cli",
-  emitter: "security-log.emitWindowsSystemRootRefusal",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["start-open-browser"],
-    },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-system-root-refused"],
+  fields: WINDOWS_LIFECYCLE_OPENER_FIELDS,
   proofIds: ["windows.lifecycle-opener.system-root-refused"],
-  releaseImpact: "patch",
 });
 
 const WINDOWS_LAUNCHER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
   op: "security.windows-launcher.system-binary-missing",
-  category: "diagnostic",
-  owner: "keiko-cli",
-  emitter: "security-log.emitWindowsSystemBinaryMissing",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["launcher-install"],
-    },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-system-binary-unavailable"],
+  fields: WINDOWS_LAUNCHER_FIELDS,
   proofIds: ["windows.launcher.system-binary-missing"],
-  releaseImpact: "patch",
 });
 
 const WINDOWS_LEGACY_LAUNCHER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
   op: "security.windows-portable-legacy-launcher.system-binary-missing",
-  category: "diagnostic",
-  owner: "keiko-cli",
-  emitter: "security-log.emitWindowsSystemBinaryMissing",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["legacy-start-menu-cleanup"],
-    },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-system-binary-unavailable"],
+  fields: WINDOWS_LEGACY_LAUNCHER_FIELDS,
   proofIds: ["windows.legacy-launcher.system-binary-missing"],
-  releaseImpact: "patch",
 });
 
 const WINDOWS_PORTABLE_ALERT_BINARY_MISSING_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
+  fields: WINDOWS_PORTABLE_ALERT_FIELDS,
   op: "security.windows-portable-alert.system-binary-missing",
-  category: "diagnostic",
-  owner: "keiko-cli",
-  emitter: "security-log.emitWindowsSystemBinaryMissing",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["portable-failure-alert"],
-    },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-system-binary-unavailable"],
   proofIds: ["windows.portable-alert.system-binary-missing"],
-  releaseImpact: "patch",
 });
 
 const WINDOWS_LIFECYCLE_OPENER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
   op: "security.windows-lifecycle-opener.system-binary-missing",
-  category: "diagnostic",
-  owner: "keiko-cli",
-  emitter: "security-log.emitWindowsSystemBinaryMissing",
-  fields: {
-    surface: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["start-open-browser"],
-    },
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-  },
-  causal: "none",
-  lifecycle: "failure",
-  analyzerProjection: "failure-cluster",
-  failureClasses: ["windows-system-binary-unavailable"],
+  fields: WINDOWS_LIFECYCLE_OPENER_FIELDS,
   proofIds: ["windows.lifecycle-opener.system-binary-missing"],
-  releaseImpact: "patch",
 });
 
 function emitWindowsSystemRootRefusal(
