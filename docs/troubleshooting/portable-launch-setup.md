@@ -300,10 +300,11 @@ Use the existing local UI entries for port and health failures:
 
 ```bash
 keiko status
-tail -n 200 .keiko/ui.log
+keiko support export --out keiko-support.jsonl
+keiko support analyze keiko-support.jsonl --clusters
 ```
 
-If `.keiko/ui.log` reports `EADDRINUSE`, follow the port-conflict entry in
+If `keiko ui` in the foreground reports `EADDRINUSE`, follow the port-conflict entry in
 [Troubleshooting Guide](README.md#2-port-is-already-in-use). If release downloads fail later,
 confirm whether a proxy or firewall blocks GitHub Release Asset downloads.
 

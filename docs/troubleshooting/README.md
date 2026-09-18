@@ -69,7 +69,7 @@ levels.
 | Path                   | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.keiko/logs/`         | Redacted server activity log (JSON Lines), stored as immutable segments: one active segment per running process, read-only sealed segments, and any legacy `server.log` or `server-YYYY-MM-DD.log` files. Keiko bounds the directory by bytes and age (256 MiB and 14 days by default) and records seals, crash recovery, retention, pins and storage pressure as typed body-free events. Never edit, truncate or delete a file in it by hand. See [Observability: the server activity log](../observability/README.md) for details, `KEIKO_LOG_LEVEL`, and `keiko support export`/`keiko support analyze`. |
-| `.keiko/ui.log`        | Local UI process log. Written by `keiko start` for the background UI process.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `.keiko/ui.log`        | Retired. Earlier releases wrote raw UI process output here. Keiko no longer creates it, never reads it into a report, and `keiko uninstall --state` removes an old copy. UI diagnostics are in the Activity Log (`.keiko/logs/`).                                                                                                                                                                                                                                                                                                                                                                           |
 | `.keiko/ui.pid`        | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `.keiko/ui.shutdown`   | Pid-bound graceful-stop request written by `keiko stop` / `restart` / `uninstall --force`. The UI drains when it sees its own pid here; Windows cannot deliver cross-process `SIGTERM`. Removed once the process is confirmed gone.                                                                                                                                                                                                                                                                                                                                                                         |
 | `.keiko/evidence/`     | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -115,8 +115,8 @@ foreground process with `Ctrl+C` when finished and remove the log file
 once it has been reviewed and redacted.
 
 When a CLI verification or workflow command produces unexpected output,
-attach the redacted command output and the relevant section of
-`.keiko/ui.log`. Do not attach `~/.keiko/keiko-ui.db`, runtime config
+attach the redacted command output and, if you choose to share it, a bundle
+from `keiko support export`, which holds the redacted Activity Log. Do not attach `~/.keiko/keiko-ui.db`, runtime config
 files, or files under `.keiko/evidence/` without first reviewing them for
 project content.
 
@@ -135,8 +135,9 @@ project content.
 **Symptom**
 
 `keiko start` (or `npm run keiko:start`) prints
-`keiko start: UI did not become healthy. Logs: <path>/.keiko/ui.log` and
-exits with code `1`. The pid file under `.keiko/ui.pid` is removed by the
+`keiko start: UI did not become healthy (process-exited)` or
+`(health-timeout)`, followed by the Activity Log location, and exits with
+code `1`. The pid file under `.keiko/ui.pid` is removed by the
 lifecycle command before exit. Subsequent calls to `keiko status` report
 that Keiko UI is not running.
 
@@ -147,9 +148,9 @@ The lifecycle command spawns the UI process and polls
 timeout elapses or the child process exits. The error is emitted when the
 child process started but never returned a healthy response inside the
 configured timeout window (default 20 seconds via `KEIKO_START_TIMEOUT_SECS`).
-The two common causes are an immediate process crash recorded in
-`.keiko/ui.log` and a slow start on cold caches where the default timeout
-is too tight.
+The two common causes are an immediate process crash (`process-exited`),
+recorded in the Activity Log as `process.fatal`, and a slow start on cold
+caches where the default timeout is too tight (`health-timeout`).
 
 **Diagnostic Steps**
 
@@ -157,15 +158,16 @@ is too tight.
 # Confirm Keiko is not already running on the same port.
 keiko status
 
-# Read the most recent UI log lines for the immediate stack trace or error.
-tail -n 200 .keiko/ui.log
+# Export the redacted Activity Log and look for the crash (process.fatal).
+keiko support export --out keiko-support.jsonl
+keiko support analyze keiko-support.jsonl --clusters
 
 # Run the UI in the foreground to surface startup errors interactively.
 npx keiko ui --port 1983
 ```
 
-If `.keiko/ui.log` shows a Node.js stack trace, the UI process crashed
-during startup. If the foreground invocation returns
+If the analysis shows a `process.fatal` line, the UI process crashed
+during startup; its `errorKind` and Keiko stack frames locate the failure. If the foreground invocation returns
 `Keiko UI listening on http://127.0.0.1:1983` and serves
 `/api/health`, the previous failure was a startup-timeout race rather
 than a process crash.
@@ -175,8 +177,8 @@ than a process crash.
 - Stop and remove the stale pid file: `npm run keiko:stop`, then delete
   `.keiko/ui.pid` only if it is present and the process is no longer
   alive.
-- If `.keiko/ui.log` contains a crash, address the underlying error
-  reported in the log (typically a port conflict or a Node.js version
+- If the Activity Log contains `process.fatal`, address the underlying
+  error it classifies (typically a port conflict or a Node.js version
   older than 22; see the [Requirements](../../README.md#requirements)
   section).
 - If the foreground UI starts cleanly, raise the start timeout for slow
@@ -195,7 +197,7 @@ than a process crash.
 
 **Symptom**
 
-The UI fails to start. `.keiko/ui.log` (or the foreground command output)
+The UI fails to start. The foreground command output (`keiko ui`)
 contains `Error: listen EADDRINUSE: address already in use 127.0.0.1:1983`
 or an equivalent message naming a different port. `keiko status` reports
 that Keiko UI is not running, even though the bind error has been
