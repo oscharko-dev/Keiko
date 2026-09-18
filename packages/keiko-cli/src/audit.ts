@@ -6,6 +6,7 @@ import {
   classifyErrorKind,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
+  type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   emitSecurityLogEvent,
@@ -112,16 +113,6 @@ const CLI_AUDIT_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const CLI_AUDIT_FAILURE_REASONS = [
-  "missing-export",
-  "invalid-result",
-  "threw",
-  "activity-log-unavailable",
-  "activity-log-open-failed",
-  "auditor-unavailable",
-] as const;
-type CliAuditFailureReason = (typeof CLI_AUDIT_FAILURE_REASONS)[number];
-
 const CLI_AUDIT_FAILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -153,6 +144,9 @@ const CLI_AUDIT_FAILED_OPERATION = defineActivityLogOperation({
   proofIds: ["cli.audit.failed.real-sink-line"],
   releaseImpact: "patch",
 });
+
+// The closed failure reasons come from the registration itself, so the two can never drift.
+type CliAuditFailureReason = ActivityLogFields<typeof CLI_AUDIT_FAILED_OPERATION>["reason"];
 
 const CLI_AUDIT_FAILURE_ERROR_KINDS = {
   "missing-export": "validation-failed",

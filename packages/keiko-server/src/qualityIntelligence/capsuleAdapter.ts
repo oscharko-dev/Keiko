@@ -74,6 +74,17 @@ function reportCapsuleStoreFailure(
   );
 }
 
+// Opens the knowledge store with the process-wide Activity Log port, like every other store open.
+function openCapsuleStore(
+  dbPath: string,
+  protection: ReturnType<typeof localKnowledgeProtectionOptions>,
+): ReturnType<typeof openKnowledgeStore> {
+  const logSink = processServerLogSink();
+  return openKnowledgeStore(
+    protection === undefined ? { dbPath, logSink } : { dbPath, protection, logSink },
+  );
+}
+
 /**
  * Builds a CapsuleResolver that opens the LK store ONCE (per resolver) and returns the full corpus
  * text for any capsule or capsule-set. Returns `undefined` when `deps.uiDbPath` is not set.
@@ -97,10 +108,7 @@ export function makeCapsuleResolver(
     if (openFailed) return null;
     if (store !== null) return store;
     try {
-      const logSink = processServerLogSink();
-      store = openKnowledgeStore(
-        protection === undefined ? { dbPath, logSink } : { dbPath, protection, logSink },
-      );
+      store = openCapsuleStore(dbPath, protection);
       return store;
     } catch (error) {
       openFailed = true;

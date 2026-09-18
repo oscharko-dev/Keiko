@@ -113,7 +113,7 @@ export function activityLogLossSummaryEvent(
       ...lossSummaryCounts(counters),
       completeness: lost ? "partial" : "complete",
       loss: lost ? "event-dropped" : "none",
-    } as LossSummaryFields,
+    },
   );
 }
 

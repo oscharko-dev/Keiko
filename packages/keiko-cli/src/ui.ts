@@ -1647,28 +1647,76 @@ function launchEvidenceHooks(
   };
 }
 
+interface LaunchActivityLog {
+  readonly loadedServer: LoadedServerModule | undefined;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly closeActivityLog: LoadedServerModule["closeFileServerLogSinks"] | undefined;
+}
+
+// Injected-server tests must not force-load the real server module graph. The same rule governs
+// the activity log: the production sink mkdirs `<stateDir>/logs` on construction, so building it
+// on the injected path would write a directory outside the test's fixture. A test may still inject
+// its own sink via `deps.activityLog` to exercise the lifecycle log lines without either of those.
+// The real launch uses the level-gated production sink, which never filters the mandatory lifecycle
+// and loss evidence (#3532). `closeActivityLog` is the loaded module's `closeFileServerLogSinks`
+// (ADR-0173 export) for the shutdown path, rather than relying solely on `activityLog.close?.()` —
+// see `WaitForShutdownActivity.closeActivityLog`'s doc comment.
+async function launchActivityLog(
+  options: StartUiServerOptions,
+  isRealLaunch: boolean,
+): Promise<LaunchActivityLog> {
+  const loadedServer = isRealLaunch ? await loadServerModule() : undefined;
+  return {
+    loadedServer,
+    activityLog: options.deps.activityLog ?? loadedServer?.createActivityLogSink(options.stateDir),
+    closeActivityLog: loadedServer?.closeFileServerLogSinks,
+  };
+}
+
+// KEIKO-0858 / #2906 round 3 (comment 3865273692): durable server-lifetime error listener replaces
+// the settled-rejection one-shot listen() removes. A post-listen error now reaches io.err
+// (body-free) AND the activity log, then drives a bounded fatal shutdown, instead of being logged
+// and left running, or crashing the process with a raw stack. It shares the exit latch, so the crash
+// is recorded as `fatal-exception`, never relabelled by the close it causes.
+// Everything the exit paths share is created right after listen: the uptime origin, the one exit
+// latch, and the evidence hooks.
+interface ExitEvidence {
+  readonly startedAt: number;
+  readonly exitLatch: ProcessExitLatch;
+  readonly hooks: LaunchEvidenceHooks;
+}
+
+function armExitEvidence(
+  server: Parameters<typeof attachDurableServerErrorListener>[0],
+  io: CliIo,
+  launch: LaunchActivityLog,
+  stateDir: string,
+): ExitEvidence {
+  const exit: ExitEvidence = {
+    startedAt: Date.now(),
+    exitLatch: new ProcessExitLatch(),
+    hooks: launchEvidenceHooks(launch.loadedServer, stateDir),
+  };
+  const activity: WaitForShutdownActivity = {
+    activityLog: launch.activityLog,
+    startedAt: exit.startedAt,
+    closeActivityLog: launch.closeActivityLog,
+    exitLatch: exit.exitLatch,
+    beforeExitEvidence: exit.hooks.beforeExitEvidence,
+  };
+  attachDurableServerErrorListener(server, io, launch.activityLog, undefined, undefined, () => {
+    writeProcessExiting(activity, "fatal-exception");
+  });
+  return exit;
+}
+
 async function startUiServer(options: StartUiServerOptions): Promise<void> {
   const { staticRoot, csp, cspProvider, parsed, handlerDeps, io, deps, stateDir } = options;
   const { runtimeEnv } = options;
   const isRealLaunch = deps.createServer === undefined;
-  // Injected-server tests must not force-load the real server module graph. The same rule governs
-  // the activity log: the production sink mkdirs `<stateDir>/logs` on construction, so building it
-  // on the injected path would write a directory outside the test's fixture. A test may still
-  // inject its own sink via `deps.activityLog` to exercise the lifecycle log lines without either
-  // of those. The real launch uses the level-gated production sink, which never filters the
-  // mandatory lifecycle and loss evidence (#3532).
-  const loadedServer = isRealLaunch ? await loadServerModule() : undefined;
+  const launch = await launchActivityLog(options, isRealLaunch);
+  const { loadedServer, activityLog, closeActivityLog } = launch;
   const factory = deps.createServer ?? (await loadServerModule()).createUiServer;
-  const activityLog: ServerLogSink | undefined =
-    deps.activityLog ?? loadedServer?.createActivityLogSink(stateDir);
-  // Reaches the loaded module's `closeFileServerLogSinks` (ADR-0173 export) directly for the
-  // shutdown path, rather than relying solely on `activityLog.close?.()` — see
-  // `WaitForShutdownActivity.closeActivityLog`'s doc comment. `loadServerModule()` here is the
-  // same memoized call the factory/activityLog lines above already made, so this costs nothing
-  // extra on the real launch path and is never reached on the injected-server path.
-  const closeActivityLog = isRealLaunch
-    ? (await loadServerModule()).closeFileServerLogSinks
-    : undefined;
   runStartupReadinessCheck(options, loadedServer);
   const startupRecovery = handlerDeps.updateStartupRecovery;
   const readiness = { open: startupRecovery === undefined };
@@ -1693,26 +1741,7 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
-  const startedAt = Date.now();
-  const exitLatch = new ProcessExitLatch();
-  const hooks = launchEvidenceHooks(loadedServer, stateDir);
-  // KEIKO-0858 / #2906 round 3 (comment 3865273692): durable server-lifetime error listener
-  // replaces the settled-rejection one-shot listen() removes. A post-listen error now reaches
-  // io.err (body-free) AND the activity log, then drives a bounded fatal shutdown, instead of
-  // being logged and left running, or crashing the process with a raw stack. It shares the exit
-  // latch, so the crash is recorded as `fatal-exception`, never relabelled by the close it causes.
-  attachDurableServerErrorListener(server, io, activityLog, undefined, undefined, () => {
-    writeProcessExiting(
-      {
-        activityLog,
-        startedAt,
-        closeActivityLog,
-        exitLatch,
-        beforeExitEvidence: hooks.beforeExitEvidence,
-      },
-      "fatal-exception",
-    );
-  });
+  const exit = armExitEvidence(server, io, launch, stateDir);
   await reconcileAfterListen({ ...recoveryContext, current: recoveryCurrent, server });
   if (recoveryCurrent !== undefined) readiness.open = true;
   await importLegacyAuditAfterRecovery(options, isRealLaunch, activityLog);
@@ -1727,9 +1756,7 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     activityLog,
     isRealLaunch,
     closeActivityLog,
-    startedAt,
-    exitLatch,
-    hooks,
+    ...exit,
   });
 }
 

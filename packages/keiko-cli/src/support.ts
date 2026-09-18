@@ -910,7 +910,10 @@ const SUPPORT_EXPORT_PUBLICATION_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["support-publication", "support-publication-acknowledgement"],
-  proofIds: ["support.export.publication.publication-evidence", "support.export.publication.commit-last"],
+  proofIds: [
+    "support.export.publication.publication-evidence",
+    "support.export.publication.commit-last",
+  ],
   releaseImpact: "patch",
 });
 
