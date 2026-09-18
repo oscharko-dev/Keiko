@@ -956,23 +956,17 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
   });
 });
 
-// `PrDescriptionApplicationResult` (prDescriptionTypes.ts) is a three-member union — "preview",
-// "observed", "blocked" — and `PrDescriptionApplicationService.executeApproved` is typed to return
-// any of the three, even though the one production implementation (prDescriptionService.ts) never
-// resolves "preview" from `executeApproved`: every internal failure already normalizes to
-// `{ outcome: "blocked", reason }` through its own `failure()` helper. The apply route's `else`
-// branch that logs `pr-description.apply.failed` therefore only exists for a service that reports an
-// outcome the route does not recognize as blocked or observed. This drives that exact branch through
-// the real route handler and the real `logApplyLifecycle` emitter with the documented `serviceFactory`
-// test seam (see its own doc comment: "inject a fully fake PrDescriptionApplicationService directly"),
-// carrying a genuine `PrDescriptionPreview` obtained from the fixture's real service rather than a
-// hand-built one.
-describe("pr-description routes — apply outcome the route does not recognize (#3399)", () => {
-  it("logs pr-description.apply.failed when the service reports an outcome apply does not treat as blocked or observed", async () => {
+// `PrDescriptionApplicationService.executeApproved` settles to "observed" or "blocked" only (its type
+// says so), so `pr-description.apply.failed` marks the one remaining failure path: an apply whose
+// promise rejects instead of settling. The route closes the lifecycle with that line and rethrows, so
+// the top-level catch still answers with the opaque 500 while the timeline never ends at "started".
+// Driven through the documented `serviceFactory` seam with a service whose apply rejects.
+describe("pr-description routes — an apply that rejects is logged as failed and rethrown (#3399)", () => {
+  it("writes pr-description.apply.failed and lets the rejection reach the top-level catch", async () => {
     const held = await fixture.service.preview({ language: "en" });
     if (held.outcome !== "preview") throw new Error("missing actual preview");
     const { preview } = held;
-    const unrecognizedOutcomeService: PrDescriptionApplicationService = {
+    const rejectingService: PrDescriptionApplicationService = {
       preview: () => Promise.resolve({ outcome: "preview", preview }),
       previewArtifact: () => Promise.resolve({ outcome: "preview", preview }),
       holdDraftArtifact: () => undefined,
@@ -981,7 +975,7 @@ describe("pr-description routes — apply outcome the route does not recognize (
       issueApproval: () => undefined,
       matchesApproval: () => false,
       consumeApproval: () => ({}),
-      executeApproved: () => Promise.resolve({ outcome: "preview", preview }),
+      executeApproved: () => Promise.reject(new Error("forced apply rejection")),
       reconcile: () => Promise.resolve({ outcome: "preview", preview }),
       invalidate: (): void => undefined,
     };
@@ -989,18 +983,19 @@ describe("pr-description routes — apply outcome the route does not recognize (
     const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
     const applyHandler = createHandlePrDescriptionApply({
       execution: { activityLog },
-      serviceFactory: () => unrecognizedOutcomeService,
+      serviceFactory: () => rejectingService,
     });
 
-    const res = await applyHandler(
-      {
-        ...ctxFor(APPLY, body({ proposalId: preview.proposalId })),
-        correlationId: "corr-pr-description-apply-failed",
-      },
-      deps(),
-    );
+    await expect(
+      applyHandler(
+        {
+          ...ctxFor(APPLY, body({ proposalId: preview.proposalId })),
+          correlationId: "corr-pr-description-apply-failed",
+        },
+        deps(),
+      ),
+    ).rejects.toThrow("forced apply rejection");
 
-    expect(res.status).toBe(200);
     const applyEvents = events.filter((event) => event.op.startsWith("pr-description.apply."));
     expect(applyEvents.map((event) => event.op)).toEqual([
       "pr-description.apply.started",

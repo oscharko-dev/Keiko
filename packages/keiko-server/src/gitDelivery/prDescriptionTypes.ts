@@ -61,6 +61,14 @@ export type PrDescriptionApplicationResult =
   | { readonly outcome: "preview"; readonly preview: PrDescriptionPreview }
   | { readonly outcome: "observed"; readonly status: PrDescriptionApplicationStatus }
   | { readonly outcome: "blocked"; readonly reason: PrDescriptionApplicationReason };
+/**
+ * What an approved apply settles to: the provider state it observed, or the reason it was blocked.
+ * Every internal failure already normalizes to `blocked`, so an apply never answers with a preview.
+ */
+export type PrDescriptionExecutionResult = Extract<
+  PrDescriptionApplicationResult,
+  { readonly outcome: "observed" | "blocked" }
+>;
 export interface PrDescriptionServiceOptions {
   readonly context: () => PrDescriptionContext | undefined;
   readonly snapshots: GitChangeSnapshotService;
@@ -108,7 +116,7 @@ export interface PrDescriptionApplicationService {
     proposalId: string,
     lease: object,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal },
-  ): Promise<PrDescriptionApplicationResult>;
+  ): Promise<PrDescriptionExecutionResult>;
   reconcile(): Promise<PrDescriptionApplicationResult>;
   invalidate(): void;
 }
