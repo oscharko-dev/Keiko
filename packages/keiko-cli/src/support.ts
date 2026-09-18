@@ -133,13 +133,13 @@ exist under --state-dir contributes no section. After a successful export the co
 state directory's diagnostic readiness (ready, degraded or unavailable, with closed reasons).
 
 analyze reads FILE (a support bundle or one raw Activity Log file — auto-detected), groups its
-lines by correlationId, and prints one reconstructed timeline per id. Each process lifetime is
-ordered by seq; lifetimes are ordered by the position of their first line in the file, because the log
-envelope promises no order across processes. The default and per-correlation reports identify the
-resolved input file, an inferable raw-log state directory, newest valid event and instance, and
-whether the raw log is current and apparently active. A raw log more than five minutes behind the
-analysis clock is reported as stale; bundles are historical artifacts and are never presented as
-live processes.
+lines by correlationId, and prints one reconstructed timeline per id.
+Each process lifetime is ordered by seq; lifetimes are ordered by the position of their first line
+in the file, because the log envelope promises no order across processes. The default and
+per-correlation reports identify the resolved input file, an inferable raw-log state directory,
+newest valid event and instance, and whether the raw log is current and apparently active. A raw
+log more than five minutes behind the analysis clock is reported as stale; bundles are historical
+artifacts and are never presented as live processes.
 --correlation-id narrows to a single id; --json emits the machine-readable form. --clusters prints
 a whole-file view of every parsed line grouped by (category, op, errorKind), independent of
 --correlation-id: a count and up to 5 sample correlation ids per group. --seed (requires
