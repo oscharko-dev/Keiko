@@ -122,6 +122,27 @@ describe("production OpenCode backend composition", () => {
           sampleDigest: "f".repeat(64),
         },
       });
+      const acceptedProof = expectActivityLogProof(
+        "coding-runtime.context-usage.observed.emitted-line",
+        formatActivityLogProofLine(events[0] ?? {}),
+      );
+      expect(acceptedProof).toMatchObject({
+        correlationId: "run-windows",
+        state: "accepted",
+        capacityTokens: 128_000,
+        usedInputTokens: 42_000,
+        reservedOutputTokens: 4_096,
+        sampleDigest: "e".repeat(64),
+      });
+      const rejectedProof = expectActivityLogProof(
+        "coding-runtime.context-usage.observed.emitted-line",
+        formatActivityLogProofLine(events[1] ?? {}),
+      );
+      expect(rejectedProof).toMatchObject({
+        correlationId: "run-windows",
+        state: "rejected",
+        sampleDigest: "f".repeat(64),
+      });
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

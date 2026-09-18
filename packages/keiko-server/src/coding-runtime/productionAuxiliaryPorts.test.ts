@@ -25,6 +25,10 @@ import type { ExplicitSkillInvocationTracker } from "./explicitSkillInvocation.j
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const AUTHORITY_EXPIRES_AT = "2026-07-20T01:00:00.000Z";
 
@@ -613,6 +617,17 @@ describe("approved skill discovery through the production ports (#3417)", () => 
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain("skl_");
+    const persisted = expectActivityLogProof(
+      "coding-runtime.skill-discovery.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      runId: "run-2387",
+      catalogRevision: 1,
+      catalogDigest: catalog.digest(),
+      approvedCount: 3,
+      listedCount: 1,
+    });
   });
 
   it("lists an explicit-only skill while the operator's turn requests it", async () => {

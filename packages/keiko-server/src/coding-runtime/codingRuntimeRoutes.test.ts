@@ -8,6 +8,10 @@ import type {
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   createFakeSessionPairingPort,
@@ -420,6 +424,16 @@ describe("coding runtime routes", () => {
         },
       }),
     ]);
+    const [refusedLine] = records;
+    if (typeof refusedLine !== "object" || refusedLine === null) {
+      throw new Error("expected operation.refused line");
+    }
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.operation.refused.emitted-line",
+        formatActivityLogProofLine(refusedLine),
+      ),
+    ).toMatchObject({ operation: "answer", reason: "invalid-intent" });
   });
 
   it("#3384 defect B: logs the closed failure code the runtime returned, e.g. replay-cap-exhausted", async () => {

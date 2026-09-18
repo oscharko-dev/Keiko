@@ -72,6 +72,10 @@ import {
   type ServerLogSink,
 } from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const storeOpenFault = vi.hoisted(() => ({
   callCount: 0,
@@ -1740,6 +1744,18 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(failed)).not.toContain(rejectedValue);
     expect(JSON.stringify(failed)).not.toContain(docsRoot);
     expect(JSON.stringify(failed)).not.toContain("customer body must not appear");
+
+    // Activity Log proof (#3532): the captured event, formatted exactly as the production file
+    // sink persists it, resolves indexing.detached-run.failed for the op-catalog.
+    const failedProof = expectActivityLogProof(
+      "indexing.detached-run.failed.line",
+      formatActivityLogProofLine(failed ?? {}),
+    );
+    expect(failedProof).toMatchObject({
+      stage: "pre-orchestrator",
+      failureKind: "Error",
+      causeChain: ["TypeError"],
+    });
 
     // The failed launch must release its capsule slot, or every later start answers 409.
     const retried = await handleStartLocalKnowledgeCapsuleIndexing(

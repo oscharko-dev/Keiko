@@ -49,6 +49,10 @@ import {
   type UpdateSessionLock,
 } from "./update-session-lock.js";
 import type { WindowsGenerationBinding } from "./update-portable-windows-generation.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const roots: string[] = [];
 const NOW = Date.parse("2026-09-07T10:00:00.000Z");
@@ -868,6 +872,14 @@ describe("portable normal startup recovery", () => {
         },
       }),
     );
+    const completedEvent = events.find(
+      (event) => event.op === "portable.normal-startup-recovery.completed",
+    );
+    const persisted = expectActivityLogProof(
+      "portable.normal-startup-recovery.completed.outcome",
+      formatActivityLogProofLine(completedEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "unaccepted-settled", target: "windows-x64" });
   });
 
   it("rejects an unaccepted Windows handoff when the N-1 generation no longer attests", async () => {
@@ -942,6 +954,14 @@ describe("portable normal startup recovery", () => {
         },
       }),
     );
+    const completedEvent = events.find(
+      (event) => event.op === "portable.normal-startup-recovery.completed",
+    );
+    const persisted = expectActivityLogProof(
+      "portable.normal-startup-recovery.completed.outcome",
+      formatActivityLogProofLine(completedEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "native-recovered", target: "windows-x64" });
     const auditEvent = events.find((event) => event.op === "update.runtime.event");
     expect(auditEvent?.correlationId).toBe(fixture.session.correlationId);
     expect(auditEvent?.extra).toMatchObject({
@@ -1292,6 +1312,14 @@ describe("portable normal startup recovery", () => {
         },
       }),
     );
+    const requiredEvent = events.find(
+      (event) => event.op === "portable.normal-startup-recovery.required",
+    );
+    const persisted = expectActivityLogProof(
+      "portable.normal-startup-recovery.required.reason",
+      formatActivityLogProofLine(requiredEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "ownership-live-or-mismatch" });
     expect(JSON.stringify(events)).not.toContain(fixture.stateDir);
     expect(JSON.stringify(events)).not.toContain("old tree");
   });
