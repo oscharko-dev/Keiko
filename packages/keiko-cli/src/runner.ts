@@ -29,6 +29,10 @@ import {
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  ACTIVITY_LOG_EVENT_REGISTRATION,
+  activityLogEventRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 // The version constant comes from the contracts LEAF, not the keiko-sdk barrel:
 // the sdk package eagerly re-exports harness/workflows/evidence/gateway/
 // evaluations, so importing SDK_VERSION from it loaded the entire product graph
@@ -105,6 +109,26 @@ interface DeferredLogFailure {
   readonly message: string;
 }
 
+function withInvocationCorrelation(
+  event: SecurityLogEvent,
+  invocationCorrelationId: string | undefined,
+): SecurityLogEvent {
+  if (invocationCorrelationId === undefined || event.correlationId === invocationCorrelationId) {
+    return event;
+  }
+  const forwarded = { ...event, correlationId: invocationCorrelationId };
+  const registration = activityLogEventRegistration(event);
+  if (registration !== undefined) {
+    Object.defineProperty(forwarded, ACTIVITY_LOG_EVENT_REGISTRATION, {
+      value: registration,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  }
+  return forwarded;
+}
+
 function pendingSecurityLogEvent(
   stateDir: string,
   event: SecurityLogEvent,
@@ -112,10 +136,7 @@ function pendingSecurityLogEvent(
 ): PendingSecurityLogEvent {
   return {
     stateDir,
-    event:
-      invocationCorrelationId === undefined
-        ? event
-        : { ...event, correlationId: invocationCorrelationId },
+    event: withInvocationCorrelation(event, invocationCorrelationId),
   };
 }
 
