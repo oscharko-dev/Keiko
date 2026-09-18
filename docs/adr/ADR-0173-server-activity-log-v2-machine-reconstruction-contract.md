@@ -1013,6 +1013,30 @@ non-replacing link, closed names, and target-handle verification narrow and dete
 They do not claim to eliminate it. This residual is part of the stated OS-user threat model and is
 never a reason to disable or defer bounded retention.
 
+### D15 — Local support incidents are a body-free descriptor over pinned evidence
+
+An incident is a control artifact over the Activity Log, not a second log (#3533). A local candidate
+is created automatically for a registered failure operation logged at `error` with at least one
+supported failure class, or explicitly by the user (`keiko support incident report`); a closed
+`trigger` records which. Eligibility derives from the registry, never from a UI-side list.
+Candidate creation runs outside the logging call and never transfers data.
+
+On creation the candidate pins a bounded window (15 minutes before, 5 minutes after) through D14's pin
+primitive, across every process instance. No causal-closure computation happens at pin time; a later
+selective export chooses the closure from the pinned window.
+
+Two identifiers serve two purposes. `incidentId` is random and names one occurrence.
+`defectFingerprint` is deterministic and versioned over allowlisted stable inputs (owning surface,
+operation, closed `errorKind`, normalized Keiko frame signature) and carries no time, process,
+instance, host, user or path value; it groups recurrences for deduplication and fix linkage. A change
+to its inputs or algorithm bumps the algorithm version; a golden-value test enforces that.
+
+The descriptor has a strict public projection and a richer, still body-free private projection from
+the same record; both expose the sufficiency status, and only the private one carries reasons and
+coverage. The store is owner-private, closed-grammar and quota-bounded (32 open candidates, 8 of them
+reserved for explicit reports, 4 KiB each), and candidates expire after 14 days. Acknowledge, dismiss
+and report remain explicit human actions; nothing is disclosed automatically.
+
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract

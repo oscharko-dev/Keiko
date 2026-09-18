@@ -495,7 +495,8 @@ already recorded:
 1. **Get the artifact.** `keiko support export --out bundle.jsonl` (adds store fingerprints, a
    manifest and — with `--include-evidence` — evidence manifests), or one raw Activity Log file
    from `<stateDir>/logs/` (a segment or a legacy file); the analyzer auto-detects which it was
-   handed.
+   handed. If Keiko recorded a local incident candidate, `keiko support incident show <id> --json`
+   names its defect fingerprint, correlations and pinned evidence window.
 2. **Reconstruct.** `keiko support analyze bundle.jsonl` prints every timeline;
    `--correlation-id <id> --json` narrows to one as a machine-readable `LogTimeline`; `--clusters`
    groups every parsed line of the file by category, `op` and `errorKind` (errors and successes

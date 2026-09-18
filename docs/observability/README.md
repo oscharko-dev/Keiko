@@ -588,6 +588,53 @@ step's `redactionViolations` and withheld from the seed instead of rendered, and
 false` step (no redactor supplied) carries no content fields at all rather than trusting an
 unverified line.
 
+## Local support incidents
+
+Keiko keeps a small, local list of incident candidates, so the evidence of a failure is still there
+when someone looks at it. Nothing is ever sent anywhere; a candidate only protects and describes
+evidence that is already in the Activity Log.
+
+A candidate is created in two ways:
+
+- **Automatically.** An event logged at level `error` whose operation the registry declares with the
+  `failure` lifecycle and at least one supported failure class creates one. There is one open
+  automatic candidate per defect fingerprint; a recurrence is logged as
+  `support.incident.deduplicated`. Each process evaluates at most one failure per fingerprint every
+  60 seconds and at most six per minute.
+- **By you.** `keiko support incident report` records a problem Keiko did not detect. It needs no
+  failure event; every report is its own occurrence.
+
+Each candidate pins the Activity Log from 15 minutes before to 5 minutes after the incident, across
+every process, including segments sealed later in that window. The pin expires with the candidate
+after 14 days, is released by `dismiss`, and holds only within `KEIKO_LOG_PIN_QUOTA_BYTES`; the
+candidate shows `pinned`, `quota-exceeded` or `rejected`.
+
+| Command                               | What it does                                                 |
+| ------------------------------------- | ------------------------------------------------------------ |
+| `keiko support incident list`         | Lists the open candidates.                                   |
+| `keiko support incident preview <id>` | Shows the public projection: the fields safe to share.       |
+| `keiko support incident show <id>`    | Adds the private, still body-free fields for local analysis. |
+| `keiko support incident report`       | Records a problem you noticed.                               |
+| `keiko support incident dismiss <id>` | Deletes the candidate and releases its pin.                  |
+
+Every command accepts `--state-dir` and `--json`. Exit codes: `0` success, `1` not found, rejected
+or window not resolvable, `2` usage error.
+
+- **Identifiers.** `incidentId` is 128 random bits and names one occurrence. `defectFingerprint` is a
+  versioned SHA-256 over the owning surface, the operation, the closed `errorKind` and the normalized
+  Keiko module frames. It contains no line, column, build, time, process, host, user or path value,
+  so the same defect groups together across builds. Defects that are indistinguishable by those
+  inputs share a fingerprint by design.
+- **Sufficiency.** A candidate reports `complete`, `degraded` or `insufficient` with closed reasons,
+  from the same projection `keiko support analyze` uses. A report whose window holds no registered
+  failure is `insufficient` with `no-registered-failure`: an instrumentation gap, never a complete
+  record.
+- **Store.** Candidates live in `<stateDir>/support-incidents/` (owner-only), one
+  `incident-<32 hex>.json` of at most 4 KiB each. At most 32 are open, at most 24 of them automatic,
+  so explicit reports always have room. A full store rejects the new candidate
+  (`support.incident.rejected`) and never evicts an existing one. Candidates expire after 14 days
+  (`support.incident.expired`).
+
 ## See also
 
 - [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) — the full
