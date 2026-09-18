@@ -152,7 +152,8 @@ describe("support activity log proofs", () => {
   it("persists support.export.publication with evidence that matches the actually-committed bundle", async () => {
     const outDir = makeRoot("keiko-support-proof-out-");
     const stateDir = makeRoot("keiko-support-proof-state-");
-    mkdirSync(join(stateDir, "logs"), { recursive: true });
+    // Owner-only, as the product creates it: a looser directory cannot have its segment sealed.
+    mkdirSync(join(stateDir, "logs"), { recursive: true, mode: 0o700 });
     const generatedAt = new Date("2026-08-21T12:00:00.000Z");
     const { io } = makeIo();
 

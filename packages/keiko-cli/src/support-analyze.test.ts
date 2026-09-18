@@ -2,13 +2,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  activityLogLossCounters,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   causeChain as productionCauseChain,
@@ -106,6 +107,26 @@ function productionLogCategory(op: string): ServerLogCategory {
 // the production formatter without the physical sink's registration gate: this analyzer suite
 // deliberately needs legacy and adversarial record shapes, while server-log.test.ts separately
 // proves that those shapes cannot reach a current production file.
+//
+// The physical sink refuses every fixture shape written here (they are deliberately unregistered),
+// and that refusal is what lets the first fixture's correlation reach the sink's own safe-open line
+// without persisting a second copy of the fixture. The refusal is counted as `schema-rejected` and
+// announced on stderr; the count is asserted and the notice captured, so priming can neither leak
+// output into this suite nor start persisting a fixture unnoticed.
+function primeFileSink(
+  fileSink: ServerLogSink,
+  event: Parameters<ServerLogSink["write"]>[0],
+): void {
+  const rejectedBefore = activityLogLossCounters()["schema-rejected"];
+  const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  try {
+    fileSink.write(event);
+  } finally {
+    stderrWrite.mockRestore();
+  }
+  expect(activityLogLossCounters()["schema-rejected"]).toBe(rejectedBefore + 1);
+}
+
 function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => void): string {
   const stateDir = mkdtempSync(join(tmpdir(), prefix));
   const fileSink = createFileServerLogSink(stateDir, { level: "debug" });
@@ -114,7 +135,7 @@ function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => v
   const fixtureSink: ServerLogSink = {
     write(event): void {
       if (!primed) {
-        fileSink.write(event);
+        primeFileSink(fileSink, event);
         primed = true;
       }
       fixtureLines.push(formatServerLogLine(event));

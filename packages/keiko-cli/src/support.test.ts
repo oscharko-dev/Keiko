@@ -416,7 +416,9 @@ describe("runSupportCli export", () => {
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-support-cli-state-"));
     outDir = mkdtempSync(join(tmpdir(), "keiko-support-cli-out-"));
-    mkdirSync(join(stateDir, "logs"), { recursive: true });
+    // Owner-only, as the product creates it: sealing and retention refuse any looser directory,
+    // so a default-mode (0755) fixture left every segment unsealed behind a write-failed notice.
+    mkdirSync(join(stateDir, "logs"), { recursive: true, mode: 0o700 });
   });
 
   afterEach(() => {
@@ -1157,7 +1159,7 @@ describe("runSupportCli export", () => {
 
   it("defaults stateDirSource to 'default' when neither --state-dir nor KEIKO_STATE_DIR is set", async () => {
     const cwdWithDefaultState = mkdtempSync(join(tmpdir(), "keiko-support-cli-default-"));
-    mkdirSync(join(cwdWithDefaultState, ".keiko", "logs"), { recursive: true });
+    mkdirSync(join(cwdWithDefaultState, ".keiko", "logs"), { recursive: true, mode: 0o700 });
 
     const c = makeIo();
     const code = await runSupportCli(["export"], c.io, AUDIT_ENV, {
@@ -1989,7 +1991,7 @@ describe("runSupportCli analyze", () => {
   it("identifies the analyzed raw-log context and warns when it is obviously stale", async () => {
     const stateDir = join(dir, ".keiko");
     const logDir = join(stateDir, "logs");
-    mkdirSync(logDir, { recursive: true });
+    mkdirSync(logDir, { recursive: true, mode: 0o700 });
     const filePath = join(logDir, "server.log");
     writeFileSync(filePath, `${JSON.stringify(validV2AnalysisRecord({ pid: 4242 }))}\n`);
 
@@ -2029,7 +2031,7 @@ describe("runSupportCli analyze", () => {
     // non-positive or non-safe-integer pid.
     const stateDir = join(dir, ".keiko");
     const logDir = join(stateDir, "logs");
-    mkdirSync(logDir, { recursive: true });
+    mkdirSync(logDir, { recursive: true, mode: 0o700 });
     const filePath = join(logDir, "server.log");
     writeFileSync(filePath, `${JSON.stringify(validV2AnalysisRecord({ pid: 0 }))}\n`);
 
