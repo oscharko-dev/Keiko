@@ -27,7 +27,9 @@
 // at the same instant, so an unreported incident releases its evidence predictably.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import {
+  ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   ACTIVITY_LOG_OPERATION_SURFACES,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
@@ -47,9 +49,16 @@ import {
   type SupportIncidentCorrelation,
   type SupportIncidentPin,
   type SupportIncidentRecord,
+  type SupportIncidentSegmentReference,
   type SupportIncidentTrigger,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  activityLogPinCovers,
+  isActivityLogSegmentEntry,
+  listActivityLogDirectory,
+  type ActivityLogPinRecord,
+} from "./activity-log-store.js";
 import type { ServerLogEnv } from "./log-level.js";
 import {
   createFileServerLogSink,
@@ -779,6 +788,40 @@ export function listSupportIncidents(
   return sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), correlationId).flatMap(
     (entry) => (entry.record === undefined ? [] : [entry.record]),
   );
+}
+
+export interface SupportIncidentSegmentFile extends SupportIncidentSegmentReference {
+  // Local read location for the CLI resolver only; never part of a descriptor or projection.
+  readonly path: string;
+}
+
+/**
+ * The Activity Log segments the incident window covers now, in logical-log order, selected by the
+ * retention pin's own coverage rule (#3530) so the resolver and retention can never disagree. A
+ * window pin also covers segments sealed after the incident, so this set can grow until the window
+ * closes. Legacy daily files predate segments and are never selected.
+ */
+export function supportIncidentSegmentFiles(
+  stateDir: string,
+  record: SupportIncidentRecord,
+): readonly SupportIncidentSegmentFile[] {
+  const coverage: ActivityLogPinRecord = {
+    schemaVersion: 1,
+    pinId: record.pin.pinId ?? "0".repeat(24),
+    reason: "incident",
+    createdAtMs: record.createdAtMs,
+    expiresAtMs: record.expiresAtMs,
+    scope: { kind: "window", fromMs: record.window.fromMs, toMs: record.window.toMs },
+  };
+  return listActivityLogDirectory(join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME))
+    .files.filter(isActivityLogSegmentEntry)
+    .filter((entry) => activityLogPinCovers(coverage, entry))
+    .map((entry) => ({
+      segmentId: entry.file.segmentId,
+      state: entry.file.kind,
+      sizeBytes: entry.sizeBytes,
+      path: entry.path,
+    }));
 }
 
 export type SupportIncidentDismissal = "dismissed" | "not-found" | "failed";

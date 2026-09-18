@@ -60,6 +60,7 @@ import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
 import {
+  ACTIVITY_LOG_EVIDENCE_INTEGRITY,
   analyzeLogText,
   buildReproductionSeed,
   findTimeline,
@@ -78,6 +79,7 @@ import {
   type OpCluster,
   type ReproductionSeed,
 } from "./support-analyze.js";
+import { runSupportIncidentCli } from "./support-incident.js";
 import {
   buildConfigSnapshotSection,
   buildEvidenceManifestSection,
@@ -104,6 +106,7 @@ const USAGE = `Usage:
                         [--include-evidence RUNID[,RUNID...]]
   keiko support analyze FILE [--correlation-id ID] [--json] [--clusters]
                         [--seed] [--emit-fixture PATH]
+  keiko support incident list|show|preview|report|dismiss [ID] [--state-dir PATH] [--json]
 
 export writes a redacted .jsonl support bundle: a manifest line (local-state audit summary,
 evidence-index count, exactly which log files were copied, and a redacted schema/integrity
@@ -363,7 +366,9 @@ export type ParsedSupportArgs =
   | { readonly kind: "help" }
   | { readonly kind: "usage"; readonly message: string }
   | { readonly kind: "export"; readonly value: ExportArgs }
-  | { readonly kind: "analyze"; readonly value: AnalyzeArgs };
+  | { readonly kind: "analyze"; readonly value: AnalyzeArgs }
+  // #3533: local incident candidates; the incident module parses its own arguments.
+  | { readonly kind: "incident"; readonly args: readonly string[] };
 
 type ParseResult<T> =
   | { readonly kind: "help" }
@@ -487,6 +492,7 @@ export function parseSupportArgs(args: readonly string[]): ParsedSupportArgs {
     const parsed = parseAnalyzeArgs(rest);
     return parsed.kind === "ok" ? { kind: "analyze", value: parsed.value } : parsed;
   }
+  if (subcommand === "incident") return { kind: "incident", args: rest };
   return { kind: "usage", message: `keiko support: unknown subcommand: ${subcommand}\n${USAGE}` };
 }
 
@@ -956,27 +962,6 @@ const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-type SupportAnalysisIntegrity = Pick<
-  ActivityLogFields<typeof SUPPORT_ANALYZE_CLASSIFICATION_OPERATION>,
-  "completeness" | "loss"
->;
-
-// ADR-0173 D10's closed vocabularies, derived from the analyzer's own verdict instead of the
-// constructor defaults. Only supported or legacy evidence (which implies no malformed line) is
-// complete; a truncated or corrupt artifact is a known, counted subset whose unreadable bytes stand
-// where a record should be; unsupported lines are preserved but excluded; incomplete identity or
-// writer evidence means completeness cannot be established at all.
-const SUPPORT_ANALYSIS_INTEGRITY: Readonly<
-  Record<ActivityLogEvidenceClassification, SupportAnalysisIntegrity>
-> = {
-  supported: { completeness: "complete", loss: "none" },
-  legacy: { completeness: "complete", loss: "none" },
-  unsupported: { completeness: "partial", loss: "none" },
-  corrupt: { completeness: "partial", loss: "event-dropped" },
-  truncated: { completeness: "partial", loss: "event-dropped" },
-  incomplete: { completeness: "unknown", loss: "none" },
-};
-
 type SupportPublicationEvidenceFields = ActivityLogFields<
   typeof SUPPORT_EXPORT_PUBLICATION_OPERATION
 >;
@@ -1098,7 +1083,7 @@ function emitSupportAnalysisEvidence(
           incompleteLineCount: result.evidence.incompleteLineCount,
           sequenceAnomalyCount: result.evidence.sequenceAnomalies.length,
           malformedLineCount: result.malformedLineCount,
-          ...SUPPORT_ANALYSIS_INTEGRITY[result.evidence.classification],
+          ...ACTIVITY_LOG_EVIDENCE_INTEGRITY[result.evidence.classification],
         },
       ),
     );
@@ -2039,6 +2024,9 @@ export async function runSupportCli(
   }
   if (parsed.kind === "export") {
     return runSupportExport(parsed.value, io, env, deps);
+  }
+  if (parsed.kind === "incident") {
+    return runSupportIncidentCli(parsed.args, io, env, { cwd: deps.cwd });
   }
   return runSupportAnalyze(parsed.value, io, env, deps);
 }
