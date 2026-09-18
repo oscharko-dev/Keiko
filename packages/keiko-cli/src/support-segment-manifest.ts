@@ -675,9 +675,17 @@ function validEvidence(value: unknown): boolean {
 }
 
 // A saturated filter has no bits; any other is whole bytes inside the bounds.
-function validFilterBits(bits: unknown, saturated: boolean): boolean {
+function validFilterBits(bits: unknown, saturated: boolean): bits is number {
   if (!isCount(bits) || bits % 8 !== 0 || bits > MAX_FILTER_BYTES * 8) return false;
   return saturated || bits >= MIN_FILTER_BITS;
+}
+
+// The bit array must be exactly `bits / 8` bytes of canonical base64: a short array would read as
+// zeros and could prune a segment that holds the key.
+function validFilterData(data: unknown, bits: number): boolean {
+  if (typeof data !== "string") return false;
+  const bytes = Buffer.from(data, "base64");
+  return bytes.length === bits / 8 && bytes.toString("base64") === data;
 }
 
 function validFilter(value: unknown): boolean {
@@ -688,7 +696,8 @@ function validFilter(value: unknown): boolean {
     validFilterBits(value.bits, value.saturated) &&
     isCount(value.hashes) &&
     value.hashes <= 16 &&
-    typeof value.data === "string"
+    (value.saturated || value.hashes > 0) &&
+    validFilterData(value.data, value.bits)
   );
 }
 
