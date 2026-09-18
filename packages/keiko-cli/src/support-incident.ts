@@ -23,7 +23,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
-import type { SupportIncidentSegmentFile } from "@oscharko-dev/keiko-server";
+import type {
+  SupportIncidentCreation,
+  SupportIncidentSegmentFile,
+} from "@oscharko-dev/keiko-server";
 import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
 import { flagValue } from "./cli-arg-parsing.js";
 import { loadServer } from "./lazy-modules.js";
@@ -369,6 +372,14 @@ function runShow(context: IncidentContext, incidentId: string, publicOnly: boole
   return 0;
 }
 
+// A user report is never deduplicated (only a registered failure claims a fingerprint), but the
+// shared creation result names its incident either way.
+function recordedIncidentId(
+  result: Exclude<SupportIncidentCreation, { readonly status: "rejected" }>,
+): string {
+  return result.status === "created" ? result.record.incidentId : result.incidentId;
+}
+
 function runReport(context: IncidentContext): number {
   const result = context.server.recordUserReportedIncident(context.stateDir);
   if (context.json) {
@@ -376,15 +387,16 @@ function runReport(context: IncidentContext): number {
       context.io,
       result.status === "rejected"
         ? { status: result.status, reason: result.reason }
-        : { status: result.status, incidentId: result.record.incidentId },
+        : { status: result.status, incidentId: recordedIncidentId(result) },
     );
   } else if (result.status === "rejected") {
     context.io.err(`keiko support incident: the report could not be recorded (${result.reason})\n`);
   } else {
+    const incidentId = recordedIncidentId(result);
     context.io.out(
-      `Recorded incident ${result.record.incidentId}. Its evidence window is kept until you ` +
+      `Recorded incident ${incidentId}. Its evidence window is kept until you ` +
         `dismiss it or it expires. Nothing was sent.\n` +
-        `Next: keiko support incident preview ${result.record.incidentId}\n`,
+        `Next: keiko support incident preview ${incidentId}\n`,
     );
   }
   return result.status === "rejected" ? 1 : 0;

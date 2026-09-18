@@ -1115,11 +1115,16 @@ candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics fr
 reports from the top down, so the reserve holds without a shared counter) before its record is
 written. Both claim grammars are recognized by the same `parseSupportIncidentFileName` the
 repair/uninstall ownership predicate already calls, so state-paths.ts needed no change to own them.
-A claim releases with its record on dismissal or expiry; one whose record was never written (a crash
-between the two) is swept as an orphan against a fresh, per-claim read taken at sweep time, never a
-snapshot taken earlier in the same pass, so a claim another process just published is never mistaken
-for one that failed to publish. Acknowledge, dismiss and report remain explicit human actions;
-nothing is disclosed automatically.
+A claim releases with its record on dismissal or expiry. Between a claim and its record, and between
+a record's exclusive create and its bytes, another process can see a claim without a record or an
+unreadable record at any moment, so such a file is treated as in flight until it is older than a
+one-minute grace by its own mtime: a second occurrence of the same defect deduplicates onto the id
+the claim names instead of taking the claim over, and neither the orphan sweep nor torn-record
+recovery removes it. Only an older file has lost its writer (a crash in that gap) and is swept,
+against a fresh, per-claim read taken at sweep time, never a snapshot taken earlier in the same
+pass. An occurrence that finds an abandoned claim the sweep could not remove, or a claim still torn
+on a second read, gives up as `store-unavailable` rather than publish a second candidate.
+Acknowledge, dismiss and report remain explicit human actions; nothing is disclosed automatically.
 
 ### D16 — Queries select whole causal closures through derived segment manifests
 

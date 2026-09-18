@@ -93,6 +93,7 @@ import {
   serializeSupportIncidentRecord,
   supportIncidentDirectory,
   writeSupportIncidentRecord,
+  type SupportIncidentClaim,
   type SupportIncidentClaimEntry,
   type SupportIncidentStoreEntry,
 } from "./support-incident-store.js";
@@ -112,6 +113,21 @@ export const MAX_SUPPORT_INCIDENTS = SUPPORT_INCIDENT_SLOT_COUNT;
 export const MAX_REGISTERED_FAILURE_INCIDENTS = 24;
 /** A process re-evaluates one defectFingerprint at most this often. */
 export const SUPPORT_INCIDENT_SUPPRESSION_MS = MINUTE_MS;
+/**
+ * A store file younger than this may still be mid-publication by another process: a record or a
+ * claim is exclusive-created before its bytes are written, and a claim exists before the record it
+ * names. Only an older file has lost its writer (a crash in that gap), so only an older torn
+ * record, or an older claim whose record is missing, is ever removed or taken over (#3533 review
+ * 4050606506). A younger claim is honored as held.
+ */
+export const SUPPORT_INCIDENT_IN_FLIGHT_GRACE_MS = MINUTE_MS;
+
+// The wall clock against the file's own mtime, never an injected `nowMs`: a file's age is a
+// filesystem fact. A file from the future (the clock stepped back) stays in flight until the clock
+// passes it.
+function abandonedStoreFile(modifiedAtMs: number): boolean {
+  return Date.now() - modifiedAtMs >= SUPPORT_INCIDENT_IN_FLIGHT_GRACE_MS;
+}
 
 // ─── Lifecycle operations ──────────────────────────────────────────────────────────────────────
 
@@ -342,9 +358,19 @@ function createdEvidence(
   );
 }
 
+// The candidate an occurrence folds into: its record's own facts, or, while another process is
+// still publishing that record, the id its fingerprint claim names with this occurrence's own
+// fingerprint and trigger, which are by construction the ones that claim is keyed on.
+interface DeduplicationTarget {
+  readonly incidentId: string;
+  readonly defectFingerprint: string;
+  readonly fingerprintAlgorithm: SupportIncidentRecord["fingerprint"]["algorithm"];
+  readonly trigger: SupportIncidentTrigger;
+}
+
 function deduplicatedEvidence(
   stateDir: string,
-  record: SupportIncidentRecord,
+  target: DeduplicationTarget,
   correlationId: string,
   openIncidentCount: number,
 ): void {
@@ -354,10 +380,10 @@ function deduplicatedEvidence(
       SUPPORT_INCIDENT_DEDUPLICATED_OPERATION,
       { correlationId },
       {
-        incidentId: record.incidentId,
-        defectFingerprint: record.fingerprint.defectFingerprint,
-        fingerprintAlgorithm: record.fingerprint.algorithm,
-        trigger: record.trigger,
+        incidentId: target.incidentId,
+        defectFingerprint: target.defectFingerprint,
+        fingerprintAlgorithm: target.fingerprintAlgorithm,
+        trigger: target.trigger,
         openIncidentCount,
       },
     ),
@@ -539,7 +565,13 @@ function failureCorrelation(evidence: SupportIncidentFailureEvidence): SupportIn
 
 export type SupportIncidentCreation =
   | { readonly status: "created"; readonly record: SupportIncidentRecord }
-  | { readonly status: "deduplicated"; readonly record: SupportIncidentRecord }
+  | {
+      readonly status: "deduplicated";
+      readonly incidentId: string;
+      // `undefined` while another process is still publishing the record this occurrence folds
+      // into: its fingerprint claim is held and names it, but the record is not written yet.
+      readonly record: SupportIncidentRecord | undefined;
+    }
   | { readonly status: "rejected"; readonly reason: SupportIncidentRejection };
 
 export interface SupportIncidentOptions {
@@ -808,18 +840,50 @@ function publishCandidate(
 
 type DedupOutcome =
   | { readonly status: "claimed" }
-  | { readonly status: "duplicate"; readonly record: SupportIncidentRecord }
+  | {
+      readonly status: "duplicate";
+      readonly incidentId: string;
+      readonly record: SupportIncidentRecord | undefined;
+    }
   | { readonly status: "unavailable" };
+
+type HeldClaim =
+  | {
+      readonly kind: "duplicate";
+      readonly incidentId: string;
+      readonly record: SupportIncidentRecord | undefined;
+    }
+  | { readonly kind: "read-again" }
+  | { readonly kind: "abandoned" };
+
+// What a fingerprint claim another occurrence holds means for this one. Its record exists: a plain
+// duplicate. Its record is missing but the claim is younger than the in-flight grace: the holder
+// is still publishing, so this occurrence is its duplicate, or, when the holder has not written its
+// id yet, the claim is read again. An older claim has lost its holder; removing it is the sweep's
+// job, which ran just before, so one still here could not be removed.
+function classifyHeldClaim(stateDir: string, holder: SupportIncidentClaim | undefined): HeldClaim {
+  if (holder === undefined) return { kind: "read-again" }; // released since the claim attempt
+  const { incidentId } = holder;
+  const record =
+    incidentId === undefined ? undefined : readSupportIncidentRecord(stateDir, incidentId);
+  if (incidentId !== undefined && record !== undefined) {
+    return { kind: "duplicate", incidentId, record };
+  }
+  if (abandonedStoreFile(holder.claimedAtMs)) return { kind: "abandoned" };
+  return incidentId === undefined
+    ? { kind: "read-again" }
+    : { kind: "duplicate", incidentId, record: undefined };
+}
 
 /**
  * Atomically decides "is this fingerprint already open" (#3533 review 4050606506): exclusive-
  * create on the fingerprint's own claim file can succeed for only one caller, so two processes
  * racing the identical registered failure can never both believe they are first -- the exclusive
  * create on the incident record's own random-id file name alone never protected the fingerprint
- * itself, only the filename. The loser reads the winner's incidentId and deduplicates onto it. A
- * claim whose referenced record is missing (a crash before it was written, or a cleanup pass that
- * raced ahead of this read) is stale: it is removed and the attempt retried once before this
- * gives up as unavailable rather than risk a second, indistinguishable publish.
+ * itself, only the filename. The loser deduplicates onto the id the winner's claim names, even
+ * while the winner is still writing its record. A claim torn mid-write is read once more. An
+ * abandoned claim the sweep could not remove, or a claim still torn on the second read, makes this
+ * occurrence give up as unavailable rather than risk a second, indistinguishable publish.
  */
 function claimOrFindDuplicate(
   stateDir: string,
@@ -832,11 +896,14 @@ function claimOrFindDuplicate(
       if (claimSupportIncidentFingerprint(stateDir, defectFingerprint, incidentId)) {
         return { status: "claimed" };
       }
-      const holderId = readSupportIncidentFingerprintClaim(stateDir, defectFingerprint);
-      const holderRecord =
-        holderId === undefined ? undefined : readSupportIncidentRecord(stateDir, holderId);
-      if (holderRecord !== undefined) return { status: "duplicate", record: holderRecord };
-      releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint);
+      const held = classifyHeldClaim(
+        stateDir,
+        readSupportIncidentFingerprintClaim(stateDir, defectFingerprint),
+      );
+      if (held.kind === "duplicate") {
+        return { status: "duplicate", incidentId: held.incidentId, record: held.record };
+      }
+      if (held.kind === "abandoned") return { status: "unavailable" };
     } catch (error) {
       reportServerLogFailure(error, { op: SUPPORT_INCIDENT_CREATED_OPERATION.op, correlationId });
       return { status: "unavailable" };
@@ -870,6 +937,27 @@ function sweptEntriesOrReject(
 type DedupHandled =
   { readonly done: true; readonly result: SupportIncidentCreation } | { readonly done: false };
 
+function deduplicationTarget(
+  incidentId: string,
+  record: SupportIncidentRecord | undefined,
+  context: CandidateContext,
+  draft: CandidateDraft,
+): DeduplicationTarget {
+  return record === undefined
+    ? {
+        incidentId,
+        defectFingerprint: context.defectFingerprint,
+        fingerprintAlgorithm: DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+        trigger: draft.trigger,
+      }
+    : {
+        incidentId,
+        defectFingerprint: record.fingerprint.defectFingerprint,
+        fingerprintAlgorithm: record.fingerprint.algorithm,
+        trigger: record.trigger,
+      };
+}
+
 // Handles the two outcomes that end candidate creation before quota or publish is even reached;
 // "claimed" (the common case) falls through and lets createCandidate proceed.
 function handleDedup(
@@ -891,8 +979,16 @@ function handleDedup(
   }
   if (dedup.status === "duplicate") {
     releasePrePinned(context, draft);
-    deduplicatedEvidence(stateDir, dedup.record, draft.evidenceCorrelationId, openIncidentCount);
-    return { done: true, result: { status: "deduplicated", record: dedup.record } };
+    deduplicatedEvidence(
+      stateDir,
+      deduplicationTarget(dedup.incidentId, dedup.record, context, draft),
+      draft.evidenceCorrelationId,
+      openIncidentCount,
+    );
+    return {
+      done: true,
+      result: { status: "deduplicated", incidentId: dedup.incidentId, record: dedup.record },
+    };
   }
   return { done: false };
 }
@@ -991,8 +1087,16 @@ export function recordUserReportedIncident(
 
 // ─── Reading, expiry, dismissal ────────────────────────────────────────────────────────────────
 
-function expiredOrInvalid(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
-  return entry.record === undefined || entry.record.expiresAtMs <= nowMs;
+function openEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
+  return entry.record !== undefined && entry.record.expiresAtMs > nowMs;
+}
+
+// An expired record, or an unreadable one whose writer is gone. An unreadable record younger than
+// the in-flight grace may still be mid-write by another process: it is neither open nor removed.
+function removableEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
+  return entry.record === undefined
+    ? abandonedStoreFile(entry.modifiedAtMs)
+    : entry.record.expiresAtMs <= nowMs;
 }
 
 // Releases the quota-slot claim, and (for a registered failure) the fingerprint claim, that a
@@ -1028,9 +1132,11 @@ function removeEntry(stateDir: string, entry: SupportIncidentStoreEntry): boolea
   return true;
 }
 
-// A claim whose referenced incidentId names no record right now is an orphan: a crash between
-// claiming and writing that record, or a record already removed by the loop above in this same
-// pass. Checks each claim against a FRESH read, never a pre-computed "open" set: entries/open is
+// A claim whose referenced incidentId names no record right now is an orphan once it is older than
+// the in-flight grace: a crash between claiming and writing that record, or a record already
+// removed by the loop above in this same pass. A younger claim may belong to an occurrence still
+// publishing its record in another process, so it is left alone (#3533 review 4050606506).
+// Checks each claim against a FRESH read, never a pre-computed "open" set: entries/open is
 // a snapshot taken earlier in this same sweep, and a claim (with its record) can legitimately be
 // published by another process in the gap between that snapshot and this loop -- reusing the
 // stale snapshot here would delete a brand-new, perfectly live claim out from under its owner,
@@ -1045,6 +1151,7 @@ function sweepOrphanedClaims(stateDir: string): void {
     return;
   }
   for (const claim of claims) {
+    if (!abandonedStoreFile(claim.claimedAtMs)) continue;
     if (
       claim.incidentId !== undefined &&
       readSupportIncidentRecord(stateDir, claim.incidentId) !== undefined
@@ -1060,9 +1167,10 @@ function sweepOrphanedClaims(stateDir: string): void {
 }
 
 /**
- * Removes every expired or unreadable record (predictable expiry and torn-record recovery), emits
- * one `support.incident.expired` line per removal, sweeps orphaned dedup/quota claims, and returns
- * the records that remain open.
+ * Removes every expired record and every unreadable one whose writer is gone (predictable expiry
+ * and torn-record recovery), emits one `support.incident.expired` line per removal, sweeps orphaned
+ * dedup/quota claims, and returns the records that remain open. A file still inside the in-flight
+ * grace is left to the process publishing it.
  */
 function sweepExpiredEntries(
   stateDir: string,
@@ -1070,9 +1178,9 @@ function sweepExpiredEntries(
   correlationId: string,
 ): readonly SupportIncidentStoreEntry[] {
   const entries = listSupportIncidentEntries(stateDir);
-  const open = entries.filter((entry) => !expiredOrInvalid(entry, nowMs));
+  const open = entries.filter((entry) => openEntry(entry, nowMs));
   for (const entry of entries) {
-    if (!expiredOrInvalid(entry, nowMs)) continue;
+    if (!removableEntry(entry, nowMs)) continue;
     const removed = removeEntry(stateDir, entry);
     expiredEvidence(stateDir, { entry, removed, correlationId, openIncidentCount: open.length });
   }

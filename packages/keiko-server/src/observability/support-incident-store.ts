@@ -53,6 +53,9 @@ const ARTIFACT_CLASS = "manifest";
 export interface SupportIncidentStoreEntry {
   readonly incidentId: string;
   readonly sizeBytes: number;
+  // The file's mtime: a record is exclusive-created before its bytes are written, so an unreadable
+  // record this young may still be mid-write by another process rather than torn.
+  readonly modifiedAtMs: number;
   // `undefined` when the record is unreadable or outside the closed schema (torn or foreign).
   readonly record: SupportIncidentRecord | undefined;
 }
@@ -68,13 +71,22 @@ export function ensureSupportIncidentDirectory(stateDir: string): string {
   return directory;
 }
 
-function regularFileSize(path: string): number | undefined {
+interface RegularFileState {
+  readonly sizeBytes: number;
+  readonly modifiedAtMs: number;
+}
+
+function regularFileState(path: string): RegularFileState | undefined {
   try {
     const stat = lstatSync(path);
-    return stat.isFile() ? stat.size : undefined;
+    return stat.isFile() ? { sizeBytes: stat.size, modifiedAtMs: stat.mtimeMs } : undefined;
   } catch {
     return undefined;
   }
+}
+
+function regularFileSize(path: string): number | undefined {
+  return regularFileState(path)?.sizeBytes;
 }
 
 function readDirectoryNames(directory: string): readonly string[] {
@@ -136,9 +148,9 @@ export function listSupportIncidentEntries(stateDir: string): readonly SupportIn
     const incidentId = parseSupportIncidentFileName(name);
     if (incidentId === undefined || !isSupportIncidentId(incidentId)) continue;
     const path = join(directory, name);
-    const sizeBytes = regularFileSize(path);
-    if (sizeBytes === undefined) continue;
-    entries.push({ incidentId, sizeBytes, record: readRecord(path, directory, incidentId) });
+    const state = regularFileState(path);
+    if (state === undefined) continue;
+    entries.push({ incidentId, ...state, record: readRecord(path, directory, incidentId) });
   }
   return entries.sort(
     (left, right) =>
@@ -220,8 +232,18 @@ export function removeSupportIncidentRecord(stateDir: string, incidentId: string
 // removal after this check) is a genuine anomaly and propagates: support-incident-store.ts never
 // imports the evidence sink (server-log.ts also reaches this module, and reporting from here would
 // cycle back through it), so every caller that can legitimately hit that anomaly reports it itself.
-function readClaimIncidentId(path: string, directory: string): string | undefined {
-  if (regularFileSize(path) === undefined) return undefined;
+/** A claim as read: the occurrence holding it, and when it was claimed. */
+export interface SupportIncidentClaim {
+  // `undefined` when the claim is unreadable or torn. A claim is exclusive-created before its id is
+  // written, so a torn claim this young may still be mid-write by its holder.
+  readonly incidentId: string | undefined;
+  // The claim file's mtime: when its holder claimed it.
+  readonly claimedAtMs: number;
+}
+
+function readClaim(path: string, directory: string): SupportIncidentClaim | undefined {
+  const state = regularFileState(path);
+  if (state === undefined) return undefined;
   const descriptor = openSafeArtifactFile(path, {
     artifactClass: ARTIFACT_CLASS,
     mode: "read",
@@ -229,7 +251,10 @@ function readClaimIncidentId(path: string, directory: string): string | undefine
   });
   try {
     const text = readBoundedText(descriptor);
-    return text !== undefined && isSupportIncidentId(text) ? text : undefined;
+    return {
+      incidentId: text !== undefined && isSupportIncidentId(text) ? text : undefined,
+      claimedAtMs: state.modifiedAtMs,
+    };
   } finally {
     closeSync(descriptor);
   }
@@ -286,13 +311,13 @@ export function claimSupportIncidentFingerprint(
   );
 }
 
-/** The incidentId currently holding `defectFingerprint`'s claim, or `undefined`. */
+/** The claim currently held on `defectFingerprint`, or `undefined` when it is free. */
 export function readSupportIncidentFingerprintClaim(
   stateDir: string,
   defectFingerprint: string,
-): string | undefined {
+): SupportIncidentClaim | undefined {
   const directory = supportIncidentDirectory(stateDir);
-  return readClaimIncidentId(
+  return readClaim(
     join(directory, supportIncidentFingerprintClaimFileName(defectFingerprint)),
     directory,
   );
@@ -329,10 +354,8 @@ export function releaseSupportIncidentSlot(stateDir: string, slotIndex: number):
   );
 }
 
-export interface SupportIncidentClaimEntry {
+export interface SupportIncidentClaimEntry extends SupportIncidentClaim {
   readonly fileName: string;
-  // `undefined` when the claim is unreadable or torn -- an orphan by construction.
-  readonly incidentId: string | undefined;
 }
 
 /** Every fingerprint- and slot-claim file in the store, for the orphan sweep. */
@@ -344,10 +367,9 @@ export function listSupportIncidentClaims(stateDir: string): readonly SupportInc
       parseSupportIncidentFingerprintClaimFileName(name) !== undefined ||
       parseSupportIncidentSlotClaimFileName(name) !== undefined;
     if (!isClaim) continue;
-    entries.push({
-      fileName: name,
-      incidentId: readClaimIncidentId(join(directory, name), directory),
-    });
+    // A claim removed between the listing and this read is already gone: nothing to sweep.
+    const claim = readClaim(join(directory, name), directory);
+    if (claim !== undefined) entries.push({ fileName: name, ...claim });
   }
   return entries;
 }

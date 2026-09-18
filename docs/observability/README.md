@@ -681,9 +681,11 @@ or window not resolvable, `2` usage error.
 - **Cross-process dedup and quotas.** The store also holds `fingerprint-<64 hex>.claim` and
   `slot-<NN>.claim` files: exclusive-create claims that make "one open automatic candidate per
   defectFingerprint" and the count quotas hold even when two processes hit the identical failure at
-  once, not just within one process. Both are released when their incident is dismissed or expires,
-  and a claim orphaned by a crash between claiming and writing its record is swept the same way a
-  torn record is.
+  once, not just within one process. Both are released when their incident is dismissed or expires.
+  A claim whose record is not written yet, or a record whose bytes are not, belongs to a process
+  still publishing it until it is a minute old: a second occurrence of the defect deduplicates onto
+  the id the claim names, and nothing removes the file. Only an older one, left by a crash in that
+  gap, is swept the way a torn record is.
 
 ## Querying the log and selective export
 

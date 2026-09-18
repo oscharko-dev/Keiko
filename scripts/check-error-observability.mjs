@@ -339,7 +339,7 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   ],
   // #3533 SupportIncident store: the same fail-closed probes as the Activity Log pin records.
   [
-    "packages/keiko-server/src/observability/support-incident-store.ts:regularFileSize",
+    "packages/keiko-server/src/observability/support-incident-store.ts:regularFileState",
     "A vanished or unreadable entry is classified as absent from the incident store listing.",
   ],
   [

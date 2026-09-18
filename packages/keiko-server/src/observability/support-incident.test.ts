@@ -9,6 +9,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,6 +54,10 @@ const dedupRace = vi.hoisted(() => ({
   onStaleSnapshot: undefined as (() => void) | undefined,
 }));
 
+// Simulates a claim the orphan sweep cannot remove (permissions, a vanished directory): armed for
+// one test, every claim removal fails and the sweep reports it instead of clearing the claim.
+const claimRemoval = vi.hoisted(() => ({ blocked: false }));
+
 vi.mock("./support-incident-store.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./support-incident-store.js")>();
   return {
@@ -65,6 +70,10 @@ vi.mock("./support-incident-store.js", async (importOriginal) => {
       dedupRace.onStaleSnapshot = undefined;
       hook?.();
       return staleSnapshot;
+    },
+    removeSupportIncidentClaimFile: (stateDir: string, fileName: string): void => {
+      if (claimRemoval.blocked) throw new Error("claim removal blocked by the test");
+      original.removeSupportIncidentClaimFile(stateDir, fileName);
     },
   };
 });
@@ -80,6 +89,7 @@ import {
   parseSupportIncidentFileName,
   parseSupportIncidentRecord,
   supportIncidentFileName,
+  supportIncidentFingerprintClaimFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
@@ -106,6 +116,7 @@ import {
 } from "./support-incident-store.js";
 import {
   MAX_REGISTERED_FAILURE_INCIDENTS,
+  SUPPORT_INCIDENT_IN_FLIGHT_GRACE_MS,
   SUPPORT_INCIDENT_TTL_MS,
   SUPPORT_INCIDENT_WINDOW_AFTER_MS,
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
@@ -180,8 +191,16 @@ describe("SupportIncident candidates", () => {
     retentionRace.targetPath = undefined;
     retentionRace.armed = false;
     dedupRace.onStaleSnapshot = undefined;
+    claimRemoval.blocked = false;
     rmSync(stateDir, { recursive: true, force: true });
   });
+
+  // Backdates a store file past the in-flight grace: a file whose writer crashed long ago, as
+  // opposed to one another process may still be writing.
+  function abandon(name: string): void {
+    const pastSeconds = (Date.now() - SUPPORT_INCIDENT_IN_FLIGHT_GRACE_MS - 1_000) / 1_000;
+    utimesSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME, name), pastSeconds, pastSeconds);
+  }
 
   function lines(op: string): readonly string[] {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
@@ -322,7 +341,11 @@ describe("SupportIncident candidates", () => {
         ...evidence,
         correlationId: "later-occurrence",
       });
-      expect(again).toEqual({ status: "deduplicated", record: first });
+      expect(again).toEqual({
+        status: "deduplicated",
+        incidentId: first.incidentId,
+        record: first,
+      });
       expect(storeNames()).toHaveLength(1);
       expect(lines("activity-log.pin.created")).toHaveLength(1);
       const line = expectActivityLogProof(
@@ -378,7 +401,12 @@ describe("SupportIncident candidates", () => {
       });
       expect(dedupRace.onStaleSnapshot).toBeUndefined(); // the hook fired exactly once
       expect(concurrent?.status).toBe("created");
-      expect(result).toEqual({ status: "deduplicated", record: created(concurrent).record });
+      const winner = created(concurrent).record;
+      expect(result).toEqual({
+        status: "deduplicated",
+        incidentId: winner.incidentId,
+        record: winner,
+      });
       expect(storeNames()).toHaveLength(1);
       expect(lines("support.incident.created")).toHaveLength(1);
       expect(lines("support.incident.deduplicated")).toHaveLength(1);
@@ -392,6 +420,7 @@ describe("SupportIncident candidates", () => {
       );
       expect(claimSupportIncidentSlot(stateDir, 9, orphanId)).toBe(true);
       expect(claimNames()).toHaveLength(2);
+      for (const name of claimNames()) abandon(name);
 
       expect(listSupportIncidents(stateDir)).toEqual([]); // runs the expiry/orphan sweep
 
@@ -401,6 +430,88 @@ describe("SupportIncident candidates", () => {
         claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, "d".repeat(32)),
       ).toBe(true);
       expect(claimSupportIncidentSlot(stateDir, 9, "d".repeat(32))).toBe(true);
+    });
+
+    it("leaves the claims of an occurrence another process is still publishing alone (#3533 review 4050606506)", () => {
+      ensureSupportIncidentDirectory(stateDir);
+      const inFlightId = "c".repeat(32);
+      claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, inFlightId);
+      claimSupportIncidentSlot(stateDir, 9, inFlightId);
+
+      expect(listSupportIncidents(stateDir)).toEqual([]); // runs the expiry/orphan sweep
+
+      expect(claimNames()).toHaveLength(2);
+      expect(
+        claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, "d".repeat(32)),
+      ).toBe(false);
+      expect(claimSupportIncidentSlot(stateDir, 9, "d".repeat(32))).toBe(false);
+    });
+
+    it("deduplicates onto an occurrence another process is still publishing instead of taking over its claim (#3533 review 4050606506)", () => {
+      ensureSupportIncidentDirectory(stateDir);
+      const inFlightId = "c".repeat(32);
+      claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, inFlightId);
+
+      const result = recordRegisteredFailureIncident(stateDir, {
+        op: FAILURE_OP,
+        errorKind: "unavailable",
+        frames: FRAMES,
+        correlationId: "second-process",
+      });
+
+      expect(result).toEqual({ status: "deduplicated", incidentId: inFlightId, record: undefined });
+      expect(storeNames()).toEqual([]);
+      expect(claimNames()).toEqual([
+        supportIncidentFingerprintClaimFileName(GOLDEN_FAILURE_FINGERPRINT),
+      ]);
+      expect(lines("support.incident.created")).toHaveLength(0);
+      const line = expectActivityLogProof(
+        "support.incident.deduplicated.emitted-line",
+        lines("support.incident.deduplicated")[0] ?? "",
+      );
+      expect(line).toMatchObject({
+        incidentId: inFlightId,
+        defectFingerprint: GOLDEN_FAILURE_FINGERPRINT,
+        trigger: "registered-failure",
+        correlationId: "second-process",
+      });
+    });
+
+    it("gives up rather than publish a second record while the holder has not written its claim yet", () => {
+      ensureSupportIncidentDirectory(stateDir);
+      const claimPath = join(
+        stateDir,
+        SUPPORT_INCIDENT_DIRECTORY_NAME,
+        supportIncidentFingerprintClaimFileName(GOLDEN_FAILURE_FINGERPRINT),
+      );
+      writeFileSync(claimPath, "", { mode: 0o600 }); // exclusive-created, id not written yet
+
+      const result = recordRegisteredFailureIncident(stateDir, {
+        op: FAILURE_OP,
+        errorKind: "unavailable",
+        frames: FRAMES,
+      });
+
+      expect(result).toEqual({ status: "rejected", reason: "store-unavailable" });
+      expect(storeNames()).toEqual([]);
+      expect(claimNames()).toHaveLength(1);
+    });
+
+    it("gives up rather than publish a second record when an abandoned claim cannot be cleared", () => {
+      ensureSupportIncidentDirectory(stateDir);
+      claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, "c".repeat(32));
+      for (const name of claimNames()) abandon(name);
+      claimRemoval.blocked = true;
+
+      const result = recordRegisteredFailureIncident(stateDir, {
+        op: FAILURE_OP,
+        errorKind: "unavailable",
+        frames: FRAMES,
+      });
+
+      expect(result).toEqual({ status: "rejected", reason: "store-unavailable" });
+      expect(storeNames()).toEqual([]);
+      expect(claimNames()).toHaveLength(1);
     });
   });
 
@@ -530,6 +641,7 @@ describe("SupportIncident candidates", () => {
         mode: 0o600,
       });
       writeFileSync(join(directory, "notes.txt"), "not a Keiko record", { mode: 0o600 });
+      abandon(supportIncidentFileName(tornId));
       expect(listSupportIncidents(stateDir)).toEqual([]);
       expect(allStoreNames()).toEqual(["notes.txt"]);
       expect(
@@ -542,6 +654,19 @@ describe("SupportIncident candidates", () => {
       });
     });
 
+    it("leaves an unreadable record another process may still be writing alone", () => {
+      const directory = join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME);
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const inFlightId = "f".repeat(32);
+      // Exclusive-created by its writer, which has not written the record's bytes yet.
+      writeFileSync(join(directory, supportIncidentFileName(inFlightId)), "", { mode: 0o600 });
+
+      expect(listSupportIncidents(stateDir)).toEqual([]);
+
+      expect(allStoreNames()).toEqual([supportIncidentFileName(inFlightId)]);
+      expect(lines("support.incident.expired")).toHaveLength(0);
+    });
+
     it("never interprets a record of another schema version (a newer Keiko) and sweeps it", () => {
       const { record } = created(recordUserReportedIncident(stateDir));
       const directory = join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME);
@@ -551,6 +676,7 @@ describe("SupportIncident candidates", () => {
         JSON.stringify({ ...record, schemaVersion: 2, incidentId: futureId }),
         { mode: 0o600 },
       );
+      abandon(supportIncidentFileName(futureId));
       expect(readSupportIncident(stateDir, futureId)).toBeUndefined();
       expect(listSupportIncidents(stateDir)).toEqual([record]);
       expect(JSON.parse(lines("support.incident.expired")[0] ?? "{}")).toMatchObject({
