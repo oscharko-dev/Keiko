@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "3dcce1c6c17766992245589cfccd92a7a97bc592b4d8c4c7006c64969ee9d797" as const;
+  "8732228b572564a8e195cea73443c7e2333ee23d46a008115c1c36dda39e4df3" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -227,7 +227,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["expired", "invalid-record"],
+        values: ["expired", "invalid-record", "released"],
       },
       removalStatus: {
         type: "string",
@@ -10075,6 +10075,58 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["gateway-spend-ceiling"],
     proofIds: ["gateway.spend.ceiling.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.spend.rejected",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-spend-budget.reject",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "spend-budget-invalid",
+          "spend-pricing-unavailable",
+          "spend-bound-unavailable",
+          "spend-budget-exceeded",
+          "spend-ledger-unavailable",
+        ],
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["gateway-spend-policy"],
+    proofIds: ["gateway.spend.rejected.line"],
     releaseImpact: "patch",
   },
   {
@@ -22836,6 +22888,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["candidate", "acknowledged", "reported"],
       },
+      pinRelease: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["released", "not-pinned", "rejected"],
+      },
       openIncidentCount: {
         type: "integer",
         dataClass: "count",
@@ -25031,8 +25089,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
   supportedClassCount: 308,
-  completeClassCount: 307,
-  completeness: "incomplete",
+  completeClassCount: 308,
+  completeness: "complete",
   classes: [
     {
       failureClass: "activity-log-contract",
@@ -38562,30 +38620,70 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "gateway-spend-policy",
       requirementContract: "gateway-spend-policy",
-      productSurfaces: [],
-      lifecycleTransitions: [],
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["failure"],
       lifecycleOperations: {
         start: [],
         state: [],
         end: [],
-        failure: [],
+        failure: ["gateway.spend.rejected"],
         loss: [],
       },
-      causalEdges: [],
+      causalEdges: [
+        {
+          op: "gateway.spend.rejected",
+          mode: "correlation",
+        },
+      ],
       lossSignals: [],
       resourceSignals: [],
       replayReferences: [],
-      operations: [],
-      missingObligations: [
-        "causal-edges",
-        "cause-evidence",
-        "evidence-classes",
-        "executable-proof",
-        "frame-evidence",
-        "lifecycle-failure",
-        "product-surfaces",
+      operations: [
+        {
+          op: "gateway.spend.rejected",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["gateway.spend.rejected.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
       ],
-      completeness: "incomplete",
+      missingObligations: [],
+      completeness: "complete",
     },
     {
       failureClass: "gateway-spend-reservation",
@@ -51828,6 +51926,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "pinRelease",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "trigger",
               type: "string",
               dataClass: "closed-enum",
@@ -56026,6 +56130,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.retry.scheduled": "model-gateway",
     "gateway.route.rejected": "model-gateway",
     "gateway.spend.ceiling": "model-gateway",
+    "gateway.spend.rejected": "model-gateway",
     "gateway.spend.reserved": "model-gateway",
     "gateway.spend.settled": "model-gateway",
     "gateway.stream.abandoned": "model-gateway",
