@@ -84,6 +84,21 @@ import {
 import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
 import { runSupportIncidentCli } from "./support-incident.js";
 import {
+  parseSupportManifestArgs,
+  parseSupportQueryArgs,
+  runSupportManifestCli,
+  runSupportQueryCli,
+  SUPPORT_QUERY_USAGE,
+  type SupportManifestArgs,
+  type SupportQueryArgs,
+  type SupportSelectorArgs,
+} from "./support-query-cli.js";
+import {
+  collectSelectedLogContent,
+  parseSupportExportSelector,
+  type SupportBundleSelection,
+} from "./support-selective-export.js";
+import {
   buildConfigSnapshotSection,
   buildEvidenceManifestSection,
   buildSupportBundleManifest,
@@ -107,9 +122,11 @@ import {
 const USAGE = `Usage:
   keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N]
                         [--include-evidence RUNID[,RUNID...]]
+                        [--incident ID | --correlation-id ID | --defect-fingerprint SHA256]
   keiko support analyze FILE [--correlation-id ID] [--json] [--clusters]
                         [--seed] [--emit-fixture PATH]
   keiko support incident list|show|preview|report|dismiss [ID] [--state-dir PATH] [--json]
+  keiko support query ... and keiko support manifest rebuild|verify (keiko support query --help)
 
 export writes a redacted .jsonl support bundle: a manifest line (local-state audit summary,
 evidence-index count, exactly which log files were copied, and a redacted schema/integrity
@@ -125,6 +142,10 @@ always named in the manifest's truncatedLogFiles. The newest log file is never d
 alone still exceeds the cap, only its tail is exported instead, named in the manifest's
 currentFileTailTruncated. sourceLogFileLines records each copied file's line count and whether it
 ended in a torn line, so analyze reports such a tail as truncated rather than corrupt.
+With --incident, --correlation-id or --defect-fingerprint the report is selective: it carries only
+that selection's registered causal closure plus a narrow process context, copied verbatim, and the
+manifest's selection member states its versioned diagnostic sufficiency. A selection that does not
+fit --max-bytes or cannot be found is never cut: nothing is written and the command exits 1.
 A <output>.sha256 sidecar carries a SHA-256 digest of the bundle's bytes.
 Publication exclusively creates the report and sidecar and never replaces an existing destination.
 If a process stops mid-publication, rerun the same explicit --out command; for the default output,
@@ -343,6 +364,8 @@ interface ExportArgs {
   readonly stateDir: string | undefined;
   readonly maxBytes: number | undefined;
   readonly includeEvidenceRunIds: readonly string[];
+  // #3531: a closure selector makes the report selective; `undefined` exports the whole log.
+  readonly selector?: SupportSelectorArgs | undefined;
 }
 
 // The flags that once attached the raw `ui.log` (#3532). They are refused explicitly rather than
@@ -371,7 +394,11 @@ export type ParsedSupportArgs =
   | { readonly kind: "export"; readonly value: ExportArgs }
   | { readonly kind: "analyze"; readonly value: AnalyzeArgs }
   // #3533: local incident candidates; the incident module parses its own arguments.
-  | { readonly kind: "incident"; readonly args: readonly string[] };
+  | { readonly kind: "incident"; readonly args: readonly string[] }
+  // #3531: streaming machine queries and the rebuildable segment manifests.
+  | { readonly kind: "query-help" }
+  | { readonly kind: "query"; readonly value: SupportQueryArgs }
+  | { readonly kind: "manifest"; readonly value: SupportManifestArgs };
 
 type ParseResult<T> =
   | { readonly kind: "help" }
@@ -427,6 +454,10 @@ function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
       message: `keiko support export: --max-bytes must be a positive integer.\n${USAGE}`,
     };
   }
+  const selection = parseSupportExportSelector(args);
+  if (selection.kind === "usage") {
+    return { kind: "usage", message: `keiko support export: ${selection.message}\n${USAGE}` };
+  }
   return {
     kind: "ok",
     value: {
@@ -434,6 +465,7 @@ function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
       stateDir,
       maxBytes,
       includeEvidenceRunIds: parseIncludeEvidenceIds(includeEvidenceRaw),
+      selector: selection.selector,
     },
   };
 }
@@ -496,6 +528,20 @@ export function parseSupportArgs(args: readonly string[]): ParsedSupportArgs {
     return parsed.kind === "ok" ? { kind: "analyze", value: parsed.value } : parsed;
   }
   if (subcommand === "incident") return { kind: "incident", args: rest };
+  return parseQuerySubcommand(subcommand, rest);
+}
+
+function parseQuerySubcommand(subcommand: string, rest: readonly string[]): ParsedSupportArgs {
+  if (subcommand === "query") {
+    const parsed = parseSupportQueryArgs(rest);
+    if (parsed.kind === "help") return { kind: "query-help" };
+    return parsed.kind === "ok" ? { kind: "query", value: parsed.value } : parsed;
+  }
+  if (subcommand === "manifest") {
+    const parsed = parseSupportManifestArgs(rest);
+    if (parsed.kind === "help") return { kind: "query-help" };
+    return parsed.kind === "ok" ? { kind: "manifest", value: parsed.value } : parsed;
+  }
   return { kind: "usage", message: `keiko support: unknown subcommand: ${subcommand}\n${USAGE}` };
 }
 
@@ -565,6 +611,8 @@ function resolveExportInstallMode(server: Awaited<ReturnType<typeof loadServer>>
 }
 
 interface LogContent {
+  // #3531: set for a selective export; named in the bundle manifest's `selection` member.
+  readonly selection?: SupportBundleSelection | undefined;
   readonly contentLines: readonly string[];
   readonly terminalFragment: boolean;
   readonly sourceLogFiles: readonly string[];
@@ -1468,6 +1516,19 @@ interface FreshSupportData {
   readonly generatedAtDate: Date;
 }
 
+// The whole log (oldest files dropped first to fit --max-bytes), or, with a selector, only the
+// selection's causal closure, which is never cut to fit (#3531).
+async function collectExportLogContent(
+  args: ExportArgs,
+  stateDir: string,
+  io: CliIo,
+  server: LoadedServer,
+): Promise<LogContent | number> {
+  const maxBytes = args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES;
+  if (args.selector === undefined) return collectLogContent(join(stateDir, "logs"), maxBytes);
+  return collectSelectedLogContent(args.selector, stateDir, maxBytes, io, server);
+}
+
 async function collectFreshSupportData(
   args: ExportArgs,
   io: CliIo,
@@ -1475,13 +1536,11 @@ async function collectFreshSupportData(
   deps: SupportCliDeps,
   context: FreshSupportExportContext,
 ): Promise<FreshSupportData | number> {
-  const logContent = collectLogContent(
-    join(context.stateDir, "logs"),
-    args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
-  );
+  const server = await loadServer();
+  const logContent = await collectExportLogContent(args, context.stateDir, io, server);
+  if (typeof logContent === "number") return logContent;
   const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? join(context.stateDir, "evidence");
   const evidenceIndexCount = await resolveEvidenceIndexCount(evidenceDir, deps);
-  const server = await loadServer();
   try {
     const activityLog = server.createFileServerLogSink(context.stateDir);
     activityLog.close?.();
@@ -1524,7 +1583,7 @@ async function publishFreshSupportExport(
 ): Promise<number> {
   const data = await collectFreshSupportData(args, io, env, deps, context);
   if (typeof data === "number") return data;
-  const manifest = buildSupportBundleManifest({
+  const baseManifest = buildSupportBundleManifest({
     ...processProvenance(data.server, data.generatedAtDate, context.stateDirSource),
     ...logContentManifestFields(data.logContent),
     auditSummary: data.auditSummary,
@@ -1534,6 +1593,8 @@ async function publishFreshSupportExport(
     // A legacy raw `ui.log` is never read into a report; the manifest keeps naming it as excluded.
     sectionsExcluded: [UI_LOG_SECTION],
   });
+  const selection = data.logContent.selection;
+  const manifest = selection === undefined ? baseManifest : { ...baseManifest, selection };
   const sections = assembleWave6Sections(env, data.server, data.evidenceSections);
   const lines = serializeBundleLines(manifest, sections, data.logContent.contentLines);
   const outPath = resolveOutPath(context.cwd, args.out, data.generatedAtDate);
@@ -2083,6 +2144,14 @@ export async function runSupportCli(
   }
   if (parsed.kind === "incident") {
     return runSupportIncidentCli(parsed.args, io, env, { cwd: deps.cwd });
+  }
+  if (parsed.kind === "query-help") {
+    io.out(SUPPORT_QUERY_USAGE);
+    return 0;
+  }
+  if (parsed.kind === "query") return runSupportQueryCli(parsed.value, io, env, { cwd: deps.cwd });
+  if (parsed.kind === "manifest") {
+    return runSupportManifestCli(parsed.value, io, env, { cwd: deps.cwd });
   }
   return runSupportAnalyze(parsed.value, io, env, deps);
 }
