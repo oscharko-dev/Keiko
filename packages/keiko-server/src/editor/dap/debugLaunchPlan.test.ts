@@ -41,6 +41,8 @@ import {
   type DebugLaunchRuntimeContext,
   validateDebugLaunchContext,
 } from "./debugLaunchPlan.js";
+import { readPersistedActivityLog } from "../../../../../tests/support/activity-log-proof.js";
+import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "../../observability/server-log.js";
 
 describe("opaque debug target parser security boundary", () => {
   it("accepts only plain or null-prototype records", () => {
@@ -641,11 +643,11 @@ describe("stateless debug launch Layer-2 planning", () => {
       ]),
     );
     expect(filePlan.provisioningDigest).not.toBe(catalogPlan.provisioningDigest);
-    const persisted = readFileSync(join(logRoot, "logs", "server.log"), "utf8")
+    const persisted = readPersistedActivityLog(logRoot)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((line) => line.op !== "server-log.safe-open");
+      .filter((line) => !ACTIVITY_LOG_STORAGE_OPERATIONS.has(String(line.op)));
     expect(persisted).toEqual([
       expect.objectContaining({
         op: "dap.debug-runtime.selected",

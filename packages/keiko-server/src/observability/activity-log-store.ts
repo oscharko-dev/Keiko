@@ -521,17 +521,18 @@ function unprotectedUsage(
   return usage;
 }
 
-// A legacy `server.log` written moments ago may still belong to an older Keiko process running
-// beside this one; it stays counted but is not deleted until it has been quiet for a segment window.
+// Active segments belong to a live writer (orphans are sealed before retention runs), protected
+// segments to the pin quota, and names this process failed to delete are not retried.
 function deletable(
   entry: ActivityLogFileEntry,
   input: ActivityLogRetentionInput,
   protectedNames: ReadonlySet<string>,
 ): boolean {
-  if (entry.file.kind === "active" || protectedNames.has(entry.file.name)) return false;
-  if (input.skipNames.has(entry.file.name)) return false;
-  if (entry.file.kind !== "legacy-current") return true;
-  return input.nowMs - entry.mtimeMs >= input.config.segmentSeconds * 1000;
+  return (
+    entry.file.kind !== "active" &&
+    !protectedNames.has(entry.file.name) &&
+    !input.skipNames.has(entry.file.name)
+  );
 }
 
 function retentionReason(

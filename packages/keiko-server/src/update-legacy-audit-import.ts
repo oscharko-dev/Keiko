@@ -1,15 +1,8 @@
 import { createHash } from "node:crypto";
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  fsyncSync,
-  lstatSync,
-  openSync,
-  opendirSync,
-  readSync,
-} from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
+import { parseActivityLogFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   appendDurableServerLogBatch,
   redactLogFields,
@@ -28,12 +21,12 @@ const SOURCE_FILE = "update-audit.jsonl";
 const MAX_SOURCE_BYTES = 1024 * 1024;
 const MAX_SOURCE_EVENTS = 2_048;
 const MAX_LINE_BYTES = 8_192;
+// The scan reads only the files an earlier import can live in — the read-only legacy files and the
+// segments pinned for durable batches (`appendDurableServerLogBatch` supplies that scope) — and is
+// bounded in file count and bytes on top of that.
 const MAX_LOG_FILES = 16;
-const MAX_LOG_DIRECTORY_ENTRIES = 256;
 const MAX_LOG_SCAN_BYTES = 32 * 1024 * 1024;
 const MAX_RELEVANT_LOG_RECORDS = MAX_SOURCE_EVENTS + 1;
-const CURRENT_LOG_FILE = "server.log";
-const ROTATED_LOG_FILE = /^server-\d{4}-\d{2}-\d{2}\.log$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const SHA256_PREFIX = /^[0-9a-f]{12}$/u;
 const SAFE_TEXT = /^[\x20-\x7e]+$/u;
@@ -785,36 +778,29 @@ function completionLog(prepared: PreparedImport): ServerLogEvent {
   });
 }
 
-function logFileNames(directory: string): readonly string[] | undefined {
-  const names: string[] = [];
-  let entries = 0;
-  const stream = opendirSync(directory);
-  try {
-    for (;;) {
-      const entry = stream.readSync();
-      if (entry === null) break;
-      entries += 1;
-      if (entries > MAX_LOG_DIRECTORY_ENTRIES) return undefined;
-      if (entry.name !== CURRENT_LOG_FILE && !ROTATED_LOG_FILE.test(entry.name)) continue;
-      names.push(entry.name);
-      if (names.length > MAX_LOG_FILES) return undefined;
-    }
-  } finally {
-    stream.closeSync();
-  }
-  return names.sort((left, right) => left.localeCompare(right, "en-US"));
-}
-
-function readStableLogFile(path: string, remainingBytes: number): Buffer | "too-large" | undefined {
+// Read-only: a sealed segment is mode 0400 and is never opened for writing again, and the legacy
+// files are never rewritten. The shared primitive refuses a symlink, a hard link, or a non-regular
+// entry before one byte is read; the identity is rechecked after the read so a file that changed
+// underneath is deferred rather than credited. Durability of what is read here is the writer's job:
+// every durable batch is fsynced before its append is reported.
+function readStableLogFile(
+  directory: string,
+  name: string,
+  remainingBytes: number,
+): Buffer | "too-large" | undefined {
+  const path = join(directory, name);
   let descriptor: number | undefined;
   try {
-    descriptor = openSync(path, constants.O_RDWR | constants.O_NONBLOCK | noFollowFlag());
+    descriptor = openSafeArtifactFile(path, {
+      artifactClass: "activity-log",
+      mode: "read",
+      trustedRoot: directory,
+    });
     const before = fstatSync(descriptor);
     if (!safeFileStat(before)) return undefined;
     if (before.size > remainingBytes) return "too-large";
     const identity = fileIdentity(before);
     const bytes = readExact(descriptor, before.size);
-    fsyncSync(descriptor);
     const after = fstatSync(descriptor);
     const pathname = lstatSync(path);
     return bytes !== undefined &&
@@ -971,6 +957,13 @@ function inspectScannedLine(
   return inspectLogRecord(parsed, prepared, represented);
 }
 
+// Only newline-terminated lines are records. A crashed writer's torn final fragment stays in the
+// file (valid evidence is never rewritten) but is never credited as import evidence.
+function terminatedLines(text: string): readonly string[] {
+  const end = text.lastIndexOf("\n");
+  return end < 0 ? [] : text.slice(0, end).split("\n");
+}
+
 function scanLogBytes(
   bytes: Buffer,
   prepared: PreparedImport,
@@ -979,9 +972,9 @@ function scanLogBytes(
 ): "complete" | "ready" | "invalid" {
   if (bytes.length === 0) return "ready";
   const text = decodeUtf8(bytes);
-  if (!text?.endsWith("\n")) return "invalid";
+  if (text === undefined) return "invalid";
   let complete = false;
-  for (const line of text.slice(0, -1).split("\n")) {
+  for (const line of terminatedLines(text)) {
     const result = inspectScannedLine(line, prepared, represented, relevantCount);
     if (result === "invalid") return "invalid";
     if (result === "complete") complete = true;
@@ -989,36 +982,50 @@ function scanLogBytes(
   return complete ? "complete" : "ready";
 }
 
+// A completion counts only where retention can never remove it: in a segment pinned for durable
+// batches. One found only in a legacy file (written before segments existed) still credits the
+// events it represents, but the import appends a fresh completion into a pinned batch so the record
+// outlives the legacy file's retention.
+function isSegmentFile(name: string): boolean {
+  const kind = parseActivityLogFileName(name)?.kind;
+  return kind === "sealed" || kind === "active";
+}
+
 function scanDestinationFiles(
   directory: string,
-  names: readonly string[],
+  files: readonly string[],
   prepared: PreparedImport,
 ): DestinationScan {
   const represented = new Map<string, string>();
   const relevantCount = { value: 0 };
   let totalBytes = 0;
   let complete = false;
-  for (const name of names) {
-    const bytes = readStableLogFile(join(directory, name), MAX_LOG_SCAN_BYTES - totalBytes);
+  for (const name of files) {
+    const bytes = readStableLogFile(directory, name, MAX_LOG_SCAN_BYTES - totalBytes);
     if (bytes === "too-large") return { status: "deferred", reason: "destination-too-large" };
     if (bytes === undefined) return { status: "deferred", reason: "destination-unsafe" };
     totalBytes += bytes.length;
     const result = scanLogBytes(bytes, prepared, represented, relevantCount);
-    if (result === "complete") complete = true;
     if (result === "invalid") return { status: "deferred", reason: "destination-invalid" };
+    if (result === "complete" && isSegmentFile(name)) complete = true;
   }
   return complete
     ? { status: "complete" }
     : { status: "ready", representedIds: new Set(represented.keys()) };
 }
 
-function scanDestination(directory: string, prepared: PreparedImport): DestinationScan {
+function scanDestination(
+  directory: string,
+  files: readonly string[],
+  prepared: PreparedImport,
+): DestinationScan {
+  if (files.length > MAX_LOG_FILES) {
+    return { status: "deferred", reason: "destination-too-large" };
+  }
   const guard = openDirectoryGuard(directory);
   if (guard === undefined) return { status: "deferred", reason: "destination-unsafe" };
   try {
-    const names = logFileNames(directory);
-    if (names === undefined) return { status: "deferred", reason: "destination-too-large" };
-    const result = scanDestinationFiles(directory, names, prepared);
+    const result = scanDestinationFiles(directory, files, prepared);
     if (!directoryStillSame(guard)) {
       return { status: "deferred", reason: "destination-mutated" };
     }
@@ -1045,8 +1052,10 @@ function importPrepared(
   let scanReason: LegacyUpdateAuditImportDeferredReason = "destination-invalid";
   const result = appendDurableServerLogBatch(options.stateDir, {
     level: options.level,
-    inspect: (directory) => {
-      const scan = scanDestination(directory, prepared);
+    // The completion must outlive retention, or a later launch would import the snapshot again.
+    retention: "pinned",
+    inspect: (directory, files) => {
+      const scan = scanDestination(directory, files, prepared);
       if (!sourceStillSame(snapshot)) {
         scanReason = "source-mutated";
         return { status: "deferred" };
