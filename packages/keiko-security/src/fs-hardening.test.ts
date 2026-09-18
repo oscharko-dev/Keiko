@@ -2691,8 +2691,8 @@ describe("bounded Activity Log mutations", () => {
     expect(existsSync(target)).toBe(false);
   });
 
-  it("rejects a group-readable trusted artifact directory before archive or removal", () => {
-    if (process.platform === "win32") return;
+  it("rejects a group-readable trusted artifact directory before archive or removal", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const base = freshDir();
     const source = join(base, "server.log");
     const archive = join(base, "server-2026-09-17.log");
