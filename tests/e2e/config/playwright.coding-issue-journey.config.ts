@@ -59,9 +59,9 @@ const receiptsDir =
   resolve(root, "docs", "qa", "evidence", "coding-issue-journey", "3390", "receipts");
 process.env.KEIKO_QUALIFICATION_RECEIPTS_DIR = receiptsDir;
 // The live worker checks body-free production activity evidence for a useful repository-search
-// result on the exact run. Pass the production log location explicitly instead of restating the
-// state-directory formula in the worker.
-process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH = join(stateDir, "state", "logs", "server.log");
+// result on the exact run. Pass the production Activity Log directory explicitly instead of
+// restating the state-directory formula in the worker; its segments are read in logical order.
+process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_DIR = join(stateDir, "state", "logs");
 const serverEntry = join(
   "tests",
   "e2e",

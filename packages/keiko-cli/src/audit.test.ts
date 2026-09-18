@@ -361,7 +361,8 @@ describe("runAuditCli", () => {
       const deps = {
         cwd: root,
         activityStateDir,
-        activityLogSinkFactory: (stateDir: string) => createActivityLogSink(stateDir),
+        activityLogSinkFactory: (stateDir: string): ReturnType<typeof createActivityLogSink> =>
+          createActivityLogSink(stateDir),
       };
       await runAuditCli(["local-state"], makeIo().io, env, {
         ...deps,

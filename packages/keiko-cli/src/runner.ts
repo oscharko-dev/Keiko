@@ -131,6 +131,32 @@ function pendingSecurityLogEvent(
   };
 }
 
+// One sink per state directory, built on first use.
+function cachedSecuritySink(
+  sinks: Map<string, SecurityLogSink>,
+  stateDir: string,
+  factory: CliSecurityLogSinkFactory,
+): SecurityLogSink {
+  let sink = sinks.get(stateDir);
+  if (sink === undefined) {
+    sink = factory(stateDir);
+    sinks.set(stateDir, sink);
+  }
+  return sink;
+}
+
+// #3532: the events an unavailable sink drops, including the one in flight, are counted in the
+// process loss ledger and named on the warning, so evidence is never lost without saying how much.
+function recordDroppedSecurityEvents(
+  pending: PendingSecurityLogEvent[],
+  inFlight: number,
+  cause: unknown,
+): void {
+  const dropped = pending.splice(0).length + inFlight;
+  recordActivityLogLoss("collector-dropped", dropped);
+  warnSecurityLogSinkUnavailable(cause, dropped);
+}
+
 function deferredSecurityLogCollector(
   invocationCorrelationId?: string,
 ): DeferredSecurityLogCollector {
@@ -149,21 +175,12 @@ function deferredSecurityLogCollector(
         const next = pending.shift();
         if (next === undefined) continue;
         inFlight = 1;
-        let sink = sinks.get(next.stateDir);
-        if (sink === undefined) {
-          sink = fileSinkFactory(next.stateDir);
-          sinks.set(next.stateDir, sink);
-        }
-        sink.write(next.event);
+        cachedSecuritySink(sinks, next.stateDir, fileSinkFactory).write(next.event);
         inFlight = 0;
       }
     } catch (cause) {
       unavailable = true;
-      // #3532: the dropped events are counted in the process loss ledger and named on the
-      // warning, so an unavailable sink never loses evidence without saying how much.
-      const dropped = pending.splice(0).length + inFlight;
-      recordActivityLogLoss("collector-dropped", dropped);
-      warnSecurityLogSinkUnavailable(cause, dropped);
+      recordDroppedSecurityEvents(pending, inFlight, cause);
     }
   };
 

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f0df6df1051c6a0e2a76febd464f36b87bf8a299a1f7634e768a0483282615a1"
+    "catalogDigest": "a319067460b946d18308ed52d63b34715b1a7c72c7f3eed03f3b4219f1562dff"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -53,7 +53,7 @@
   "summary": {
     "operationCount": 415,
     "proofCount": 423,
-    "resolvedProofCount": 231,
+    "resolvedProofCount": 239,
     "failureClassCount": 307,
     "scenarioCount": 29,
     "resolvedScenarioCount": 0
@@ -1520,7 +1520,7 @@
     ],
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
-    "memory.audit.state-cache.seeded.count": [],
+    "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
     "memory.capture.novelty-gate.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidated.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidation-failed.line": [
@@ -1600,10 +1600,12 @@
     "security.vault.entries-delete-failed.count": [],
     "security.vault.entries-deleted.count": [],
     "security.vault.entries-merge-failed.count": [],
-    "security.vault.entries-merged.count": [],
+    "security.vault.entries-merged.count": ["packages/keiko-security/src/secret-vault.test.ts"],
     "security.vault.entries-rollback-failed.count": [],
-    "security.vault.key-resolution-failed.evidence": [],
-    "security.vault.key-resolved.source": [],
+    "security.vault.key-resolution-failed.evidence": [
+      "packages/keiko-security/src/secret-vault.test.ts"
+    ],
+    "security.vault.key-resolved.source": ["packages/keiko-security/src/secret-vault.test.ts"],
     "security.vault.shard-unreadable.count": [],
     "security.windows-launcher.system-binary-missing.emitted-line": [],
     "security.windows-launcher.system-root-refused.emitted-line": [],
@@ -1619,13 +1621,15 @@
     "security.windows-shortcut.system-binary-missing.mode": [
       "packages/keiko-security/src/windows-shortcuts.test.ts"
     ],
-    "security.windows-shortcut.system-root-refused.mode": [],
+    "security.windows-shortcut.system-root-refused.mode": [
+      "packages/keiko-security/src/windows-shortcuts.test.ts"
+    ],
     "server-log.line-dropped.registered-line": [],
     "server-log.safe-open.emitted-line": [],
     "server-log.target-mutated.registered-line": [],
     "server-log.write-failed.stderr-line": [],
     "server.diagnostic.failure.activity-log-line": [],
-    "server.runtime.shutdown.lifecycle": [],
+    "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "speech.stt.language.normalized.emitted-line": [
       "packages/keiko-model-gateway/src/speech-to-text-adapter.test.ts"
     ],
@@ -1654,8 +1658,12 @@
     "task-workspace.lifecycle.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
     ],
-    "task-workspace.repository.registered.restricted": [],
-    "task-workspace.repository.registration-refused.reason": [],
+    "task-workspace.repository.registered.restricted": [
+      "packages/keiko-server/src/deps-activity.test.ts"
+    ],
+    "task-workspace.repository.registration-refused.reason": [
+      "packages/keiko-server/src/deps-activity.test.ts"
+    ],
     "tool-catalog.bind-ready.emitted-line": [
       "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
     ],

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { analyzeLogText, findTimeline } from "../packages/keiko-cli/src/support-analyze.js";
 import { createCodingSafeActivityProjection } from "../packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.js";
 import { createFileServerLogSink } from "../packages/keiko-server/src/observability/server-log.js";
+import { readPersistedActivityLog } from "./support/activity-log-proof.js";
 
 describe("safe activity purge support reconstruction", () => {
   it("retains the body-free run identity and purge reason in the support timeline", () => {
@@ -38,7 +39,7 @@ describe("safe activity purge support reconstruction", () => {
       projection.purge(runId, "stop");
       activityLog.close?.();
 
-      const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+      const serialized = readPersistedActivityLog(stateDir);
       const timeline = findTimeline(analyzeLogText(serialized), runId);
       expect(timeline?.lines).toContainEqual(
         expect.objectContaining({

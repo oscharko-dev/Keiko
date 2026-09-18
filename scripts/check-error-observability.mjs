@@ -165,8 +165,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
   ],
   [
-    "packages/keiko-cli/src/ui.ts:warnShutdownHookFailed",
-    "The process warning is the last independent channel; its own failure has no channel left.",
+    "packages/keiko-cli/src/ui.ts:runShutdownHook",
+    "The caught hook failure returns as its closed kind, which the process.exiting line records.",
   ],
   [
     "packages/keiko-server/src/observability/activity-log-readiness.ts:activityLogCatalogCoherent",

@@ -88,9 +88,9 @@ export type ClientDiagnosticLossCountKey = (typeof CLIENT_DIAGNOSTIC_LOSS_COUNT_
 // cannot inflate the server's loss ledger with an arbitrary number.
 export const CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX = 1_000_000;
 
-export type ClientDiagnosticLossCounts = {
-  readonly [Key in ClientDiagnosticLossCountKey]?: number | undefined;
-};
+export type ClientDiagnosticLossCounts = Readonly<
+  Partial<Record<ClientDiagnosticLossCountKey, number | undefined>>
+>;
 
 export const CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_ACTIONS = [
   "review",
