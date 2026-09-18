@@ -47,6 +47,7 @@ import {
   serverLogInstanceId,
   serverLogLineBytes,
   serverLogLineWithinCap,
+  serverLogProcessIdentity,
 } from "./server-log.js";
 import type {
   DurableServerLogBatchOptions,
@@ -58,26 +59,10 @@ import type {
 } from "./server-log.js";
 import { getServerLogger, resetServerLogger, shutdownServerLogging } from "./server-logger.js";
 
+// Derived from the producer (AGENTS.md section 7): a restated release or platform rule would stay
+// green if production's rule moved and the copy did not.
 function testServerLogIdentity(seq = 1): ServerLogIdentity {
-  const platform = new Set(["darwin", "linux", "win32"]).has(process.platform)
-    ? process.platform
-    : "other";
-  const architecture = new Set(["arm64", "x64"]).has(process.arch) ? process.arch : "other";
-  return {
-    schemaVersion: SERVER_LOG_SCHEMA_VERSION,
-    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
-    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
-    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
-    buildClass: "node-esm",
-    releaseClass: KEIKO_PRODUCT_VERSION.includes("-") ? "prerelease" : "stable",
-    platformClass: `${platform}-${architecture}`,
-    productVersion: KEIKO_PRODUCT_VERSION,
-    compatibilityState: "supported",
-    writerCapability: "active",
-    pid: process.pid,
-    instanceId: serverLogInstanceId(),
-    seq,
-  };
+  return { ...serverLogProcessIdentity(), seq };
 }
 
 function invalidServerLogIdentity(
@@ -887,7 +872,7 @@ describe("server activity log", () => {
       schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
       catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
       buildClass: "node-esm",
-      releaseClass: KEIKO_PRODUCT_VERSION.includes("-") ? "prerelease" : "stable",
+      releaseClass: serverLogProcessIdentity().releaseClass,
       productVersion: KEIKO_PRODUCT_VERSION,
       compatibilityState: "supported",
       writerCapability: "active",

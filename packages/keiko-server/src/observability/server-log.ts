@@ -929,9 +929,13 @@ function allocateServerLogSeq(): number {
   return seq;
 }
 
-function allocateServerLogIdentity(
+/**
+ * The identity every line of this process carries, without the per-line `seq`. Exported so a test
+ * fixture derives the release and platform classes from here instead of restating their rules.
+ */
+export function serverLogProcessIdentity(
   writerCapability: Extract<ActivityLogWriterCapabilityState, "active" | "degraded"> = "active",
-): ServerLogIdentity {
+): Omit<ServerLogIdentity, "seq"> {
   return {
     schemaVersion: SERVER_LOG_SCHEMA_VERSION,
     registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
@@ -945,8 +949,13 @@ function allocateServerLogIdentity(
     writerCapability,
     pid: process.pid,
     instanceId: INSTANCE_ID,
-    seq: allocateServerLogSeq(),
   };
+}
+
+function allocateServerLogIdentity(
+  writerCapability: Extract<ActivityLogWriterCapabilityState, "active" | "degraded"> = "active",
+): ServerLogIdentity {
+  return { ...serverLogProcessIdentity(writerCapability), seq: allocateServerLogSeq() };
 }
 
 function todayUtc(now: Date = new Date()): string {
