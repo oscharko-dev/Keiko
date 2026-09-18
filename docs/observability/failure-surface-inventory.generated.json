@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "236b74e9ecda7f63f87b013732b5f077e3b8d55d0be85f1b926e817b1c11954b"
+    "catalogDigest": "0d7d4c953c47db459d3e7e5fefba9888e1ac38ea392ba53bed07ecdd55220b69"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 415,
-    "proofCount": 423,
+    "operationCount": 420,
+    "proofCount": 428,
     "resolvedProofCount": 348,
-    "failureClassCount": 307,
+    "failureClassCount": 308,
     "scenarioCount": 29,
     "resolvedScenarioCount": 1
   },
@@ -512,7 +512,12 @@
         "server-log.safe-open",
         "server-log.target-mutated",
         "server-log.write-failed",
-        "server.runtime.shutdown"
+        "server.runtime.shutdown",
+        "support.incident.created",
+        "support.incident.deduplicated",
+        "support.incident.dismissed",
+        "support.incident.expired",
+        "support.incident.rejected"
       ],
       "scenarios": [
         "lifecycle-crash.crash",
@@ -848,6 +853,7 @@
     "store-encryption-checkpoint": ["memory-knowledge.dependency-failure"],
     "store-encryption-migration": ["memory-knowledge.dependency-failure"],
     "support-analysis": ["runtime-packages.dependency-failure"],
+    "support-incident": ["lifecycle-crash.loss"],
     "support-publication": ["runtime-packages.dependency-failure"],
     "support-publication-acknowledgement": ["runtime-packages.dependency-failure"],
     "task-workspace-lifecycle": ["tools-workflows.dependency-failure"],
@@ -1830,6 +1836,11 @@
     "support.export.publication.commit-last": [
       "packages/keiko-cli/src/support.activity-log-proof.test.ts"
     ],
+    "support.incident.created.emitted-line": [],
+    "support.incident.deduplicated.emitted-line": [],
+    "support.incident.dismissed.emitted-line": [],
+    "support.incident.expired.emitted-line": [],
+    "support.incident.rejected.emitted-line": [],
     "task-workspace.identity.creation-time-probe.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
     ],
