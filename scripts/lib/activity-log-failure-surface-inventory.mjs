@@ -16,7 +16,7 @@ import {
   surfaceRuleFor,
 } from "./activity-log-failure-surfaces.mjs";
 
-export const FAILURE_SURFACE_INVENTORY_SCHEMA = "keiko-activity-log-failure-surface-inventory/1";
+const FAILURE_SURFACE_INVENTORY_SCHEMA = "keiko-activity-log-failure-surface-inventory/1";
 
 // Transitional: the retrofit of every registered proof and scenario lands across several commits
 // of #3532. Until it is complete an unresolved proof or scenario is reported with status
