@@ -1,4 +1,8 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { resolveHostExecutable } from "./host-executable.mjs";
 
 // One command moves the product version everywhere it lives mechanically: the root manifest, every
 // workspace manifest, every dependency pin between workspace packages, the exported
@@ -139,6 +143,25 @@ export function applySetVersion({
     "scripts/check-version-consistency.mjs",
   ]);
   return changed;
+}
+
+/**
+ * The real Node.js/host seams applySetVersion needs, minus `root` and `version`: every CLI that
+ * moves the product version (scripts/set-version.mjs, the release button's version-bump fallback)
+ * wires the same file system and host executables, so this is the one place that does it.
+ */
+export function nodeSetVersionHost() {
+  return {
+    listWorkspaceDirs: (packagesDir) =>
+      readdirSync(packagesDir)
+        .map((name) => join(packagesDir, name))
+        .filter((dir) => statSync(dir).isDirectory() && existsSync(join(dir, "package.json"))),
+    readOptionalText: (path) => (existsSync(path) ? readFileSync(path, "utf8") : undefined),
+    readText: (path) => readFileSync(path, "utf8"),
+    spawn: (executable, args, cwd) =>
+      spawnSync(resolveHostExecutable(executable), args, { cwd, encoding: "utf8" }),
+    writeText: (path, text) => writeFileSync(path, text, "utf8"),
+  };
 }
 
 /**
