@@ -20,7 +20,8 @@ only by importing it — see D9.
 Amended by #3528 on 2026-09-18: daily rotation and retention remain the active disk bound until
 immutable segments replace them. Their mutation boundary is hardened to the operating-system user:
 owner-private non-redirected directories, held handle/path identity checks, a non-replacing hard-link
-winner across processes, rename fallback only when hard links are unsupported, and verified
+winner across processes, a rename fallback only when hard links are unsupported and only after an
+exclusive claim of the dated name, and verified
 single-link archive handles before retention unlink. The residual same-user pathname race is explicit
 and does not authorize unbounded growth.
 
@@ -454,9 +455,11 @@ coherent noun groups the artifact producer and its own consumer under one verb s
 - `keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N] [--include-ui-log
   --i-understand-this-is-unredacted] [--include-evidence RUNID[,RUNID...]]` composes existing,
   already-hardened pieces — the evidence index listing, the local-state audit summary, a redacted
-  config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a plain
-  read-and-concatenate of the current log plus retained daily archives and compatible legacy
-  rotation files — into one manifest-led
+  config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a concatenation of
+  the current log plus retained daily archives and compatible legacy rotation files, each read
+  through a no-follow, private, single-link regular-file descriptor (a symlink, hard link, or
+  non-regular entry at a log name is skipped by name with its closed refusal kind, never read
+  through) — into one manifest-led
   `.jsonl` bundle, plus a
   `<output>.sha256` integrity sidecar (D12). No new redaction logic is written for the bulk of the
   file — every log line copied in is a line that was already redacted at write time. `ui.log` (a
@@ -733,11 +736,16 @@ retained counts. Mutation failures are partial `durability-failed` evidence and 
 the product operation that triggered the write.
 
 **Residual same-user race.** Node exposes no portable descriptor-relative link/rename/unlink API,
-and a rename fallback on a filesystem without hard links cannot provide a portable no-replace
-primitive. A process already executing as the same OS user can therefore act in the narrow interval
-between pathname checks. Owner-private directories, held descriptors, pre/post identity checks, the
-hard-link winner, closed names, and target-handle verification narrow and detect that interval; they
-do not claim to eliminate it. This residual is part of the stated OS-user threat model and is never
+and a filesystem without hard links offers no portable no-replace rename. The rename fallback
+therefore first claims the dated name with an exclusive no-follow create: a concurrent rotation that
+loses the claim preserves the winner's archive, and the winner's rename can replace only its own
+empty claim. Every unlink carries the device/inode its caller verified, and the mutation helper
+removes the name only while it still has that identity: a process that finalizes a peer's hard-link
+winner can therefore never delete the `server.log` a concurrent writer has just recreated. A process
+already executing as the same OS user can still act in the narrow interval between pathname checks.
+Owner-private directories, held descriptors, pre/post identity checks, the hard-link winner, closed
+names, and target-handle verification narrow and detect that interval; they do not claim to
+eliminate it. This residual is part of the stated OS-user threat model and is never
 a reason to disable or defer bounded retention.
 
 ### D12 — Relation to prior decisions

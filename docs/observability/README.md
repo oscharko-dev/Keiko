@@ -51,20 +51,25 @@ The filesystem boundary is the operating-system user. The selected state and log
 be owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected owner's inherited
 ACL on Windows). Keiko rechecks their device/inode identity around every link, rename, and unlink.
 Before retention removes an archive, an opened handle must prove that the target is a regular,
-owner-matched, private, single-link file and still names the checked pathname.
+owner-matched, private, single-link file and still names the checked pathname. Every unlink also
+carries that file's device/inode: the mutation helper removes the name only while it still has
+that identity, so a process can never delete a `server.log` that a concurrent writer recreated.
 
 Cross-process rotation uses a hard link to publish the dated destination without replacement:
 `EEXIST` means another process won, and the loser preserves that archive. Only errors that state the
-filesystem does not support hard links permit the guarded rename fallback. A failed, unsafe, or
-ambiguous mutation leaves evidence in place and never escapes into the caller.
+filesystem does not support hard links permit the guarded rename fallback. That fallback first claims
+the dated name with an exclusive no-follow create, so a concurrent rotation that loses the claim
+preserves the winner's archive, and the winner's rename can replace only its own empty claim. A
+failed, unsafe, or ambiguous mutation leaves evidence in place and never escapes into the caller.
 
 `server-log.rotation` records the closed `persistenceStatus`, `rotationReason`, `archivedCount`,
 `retentionStatus`, `prunedCount`, and `retainedCount`. A mutation failure is a body-free
 `durability-failed` event with partial completeness; paths and filenames never enter the event.
 
 There is a documented residual same-user race: Node has no portable descriptor-relative
-link/rename/unlink API, and the rename fallback cannot make a no-replace promise on filesystems that
-lack hard links. A process already running as the same OS user can act between pathname checks. The
+link/rename/unlink API, and filesystems that lack hard links offer no no-replace rename, so the
+fallback relies on its exclusive name claim. A process already running as the same OS user can act
+between pathname checks. The
 implementation narrows that window with owner-private directories, held directory/file handles,
 pre/post identity checks, and the non-replacing hard-link winner. This residual risk does not justify
 removing or postponing bounded retention.
