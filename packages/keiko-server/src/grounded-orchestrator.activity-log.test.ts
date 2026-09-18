@@ -1,7 +1,7 @@
 // Activity-log contract for connected-context retrieval (#3347). Every invocation emits one start
 // and exactly one body-free terminal line, including failure and cancellation paths.
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -42,6 +42,8 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "./observability/index.js";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
+import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "./observability/server-log.js";
 
 const FIXTURE_NOW_MS = 1_700_000_000_000;
 const FIXTURE_ROOT = "/private/customer/connected-context-log-fixture";
@@ -152,7 +154,9 @@ function parsePersistedLogLines(raw: string): readonly Readonly<Record<string, u
 }
 
 function producerLogLines(raw: string): readonly Readonly<Record<string, unknown>>[] {
-  return parsePersistedLogLines(raw).filter((line) => line.op !== "server-log.safe-open");
+  return parsePersistedLogLines(raw).filter(
+    (line) => !ACTIVITY_LOG_STORAGE_OPERATIONS.has(String(line.op)),
+  );
 }
 
 function advancingClock(): () => number {
@@ -498,7 +502,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       );
       activityLog.close?.();
 
-      const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+      const raw = readPersistedActivityLog(stateDir);
       const persisted = producerLogLines(raw);
       expect(persisted).toHaveLength(3);
       const [started, details, completed] = persisted;
@@ -620,7 +624,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       });
       activityLog.close?.();
 
-      const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+      const raw = readPersistedActivityLog(stateDir);
       const completedDetails = parsePersistedLogLines(raw).filter(
         (entry) => entry.op === "search.connected-context.completion-details",
       );
@@ -684,7 +688,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       expect(output.pack.files.length).toBeGreaterThan(0);
       activityLog.close?.();
 
-      const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+      const raw = readPersistedActivityLog(stateDir);
       const completedDetails = parsePersistedLogLines(raw).find(
         (entry) => entry.op === "search.connected-context.completion-details",
       );
@@ -728,7 +732,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       ).rejects.toBe(failure);
       activityLog.close?.();
 
-      const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+      const raw = readPersistedActivityLog(stateDir);
       const persisted = producerLogLines(raw);
       expect(persisted).toHaveLength(2);
       expect(persisted[1]).toMatchObject({

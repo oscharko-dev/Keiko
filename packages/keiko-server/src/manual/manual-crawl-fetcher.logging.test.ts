@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,8 @@ import {
   type ServerLogEvent,
 } from "../observability/index.js";
 import { createGatewayManualFetcher } from "./manual-crawl-fetcher.js";
+import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
+import { ACTIVITY_LOG_STORAGE_OPERATIONS } from "../observability/server-log.js";
 
 const CORRELATION_ID = "8d5f2d77-e1c2-4d5d-aec8-2ac77a248dbe";
 const stateDirs: string[] = [];
@@ -22,10 +24,11 @@ afterEach(() => {
 });
 
 function persistedEvents(stateDir: string): readonly ServerLogEvent[] {
-  return readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+  return readPersistedActivityLog(stateDir)
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as ServerLogEvent);
+    .map((line) => JSON.parse(line) as ServerLogEvent)
+    .filter((event) => !ACTIVITY_LOG_STORAGE_OPERATIONS.has(event.op));
 }
 
 describe("manual crawl gateway policy activity logging", () => {

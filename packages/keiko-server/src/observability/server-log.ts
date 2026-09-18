@@ -1367,6 +1367,22 @@ const ACTIVITY_LOG_PIN_QUOTA_EXHAUSTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/**
+ * The operations the Activity Log store writes about itself (opening, sealing, recovering, pruning,
+ * pressure, pins), derived from their registrations. A reader that wants only the producers'
+ * evidence filters these out instead of restating the list.
+ */
+export const ACTIVITY_LOG_STORAGE_OPERATIONS: ReadonlySet<string> = new Set([
+  SERVER_LOG_SAFE_OPEN_OPERATION.op,
+  ACTIVITY_LOG_SEGMENT_SEALED_OPERATION.op,
+  ACTIVITY_LOG_SEGMENT_RECOVERED_OPERATION.op,
+  ACTIVITY_LOG_RETENTION_PRUNED_OPERATION.op,
+  ACTIVITY_LOG_PRESSURE_OPERATION.op,
+  ACTIVITY_LOG_PIN_CREATED_OPERATION.op,
+  ACTIVITY_LOG_PIN_EXPIRED_OPERATION.op,
+  ACTIVITY_LOG_PIN_QUOTA_EXHAUSTED_OPERATION.op,
+]);
+
 // ─── The one writer per Activity Log directory ─────────────────────────────────────────────────
 
 type PersistedWriterCapability = Extract<ActivityLogWriterCapabilityState, "active" | "degraded">;

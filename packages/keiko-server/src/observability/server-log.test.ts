@@ -37,6 +37,7 @@ import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/ver
 
 import { MAX_LOG_FIELD_COUNT, REDACTED_KEY, REDACTED_SHAPE } from "./log-redaction.js";
 import {
+  ACTIVITY_LOG_STORAGE_OPERATIONS,
   MAX_LOG_LINE_BYTES,
   SERVER_LOG_LEVEL_ENV,
   SERVER_LOG_SCHEMA_VERSION,
@@ -370,18 +371,9 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const BURST_EVENT_COUNT = 2_000;
 
-// Storage evidence the writer adds on its own. Caller-facing assertions filter these out; the
-// storage tests assert them explicitly.
-const STORAGE_EVIDENCE_OPS: ReadonlySet<unknown> = new Set([
-  "server-log.safe-open",
-  "activity-log.segment.sealed",
-  "activity-log.segment.recovered",
-  "activity-log.retention.pruned",
-  "activity-log.pressure",
-  "activity-log.pin.created",
-  "activity-log.pin.expired",
-  "activity-log.pin.quota-exhausted",
-]);
+// Storage evidence the writer adds on its own, taken from the producer. Caller-facing assertions
+// filter these out; the storage tests assert them explicitly.
+const STORAGE_EVIDENCE_OPS: ReadonlySet<unknown> = ACTIVITY_LOG_STORAGE_OPERATIONS;
 
 function readCallerLines(stateDir: string): Record<string, unknown>[] {
   return readLines(stateDir).filter((line) => !STORAGE_EVIDENCE_OPS.has(line.op));
