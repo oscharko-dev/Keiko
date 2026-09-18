@@ -245,12 +245,18 @@ export type ActivityLogWriterCapabilityState =
 export const DIAGNOSTIC_SUFFICIENCY_STATUSES = ["complete", "degraded", "insufficient"] as const;
 export type DiagnosticSufficiencyStatus = (typeof DIAGNOSTIC_SUFFICIENCY_STATUSES)[number];
 
+// The last three are selection reasons (#3531): a causal closure that does not fit the report
+// budget, a selection whose evidence retention already removed (or never held), and a candidate
+// segment that could not be read. None is ever answered by truncating the selection.
 export const DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_REASONS = [
   "no-registered-evidence",
   "no-registered-failure",
   "corrupt-evidence",
   "parent-correlation-missing",
   "lifecycle-start-missing",
+  "report-budget-exceeded",
+  "evidence-not-retained",
+  "segment-unreadable",
 ] as const;
 
 export const DIAGNOSTIC_SUFFICIENCY_DEGRADED_REASONS = [
@@ -262,6 +268,8 @@ export const DIAGNOSTIC_SUFFICIENCY_DEGRADED_REASONS = [
   "events-dropped",
   "correlation-unknown",
   "evidence-partial",
+  // #3531: optional pre/post context was dropped so the complete causal closure fits the budget.
+  "context-truncated",
 ] as const;
 
 export const DIAGNOSTIC_SUFFICIENCY_REASONS = [
