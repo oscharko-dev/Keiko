@@ -25,6 +25,7 @@ import {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
   ActivityLogEventValidationError,
   activityLogEvent,
   activityLogLossCounters,
@@ -2679,6 +2680,145 @@ describe("activity log retention pins", () => {
       remaining.every((name) => name !== undefined && "pid" in name && name.pid === process.pid),
     ).toBe(true);
   }, 120_000);
+});
+
+// #3554 (PR #3554 review comment 4050604711): several cooperating processes writing the same
+// directory must share ONE governing retention/pin-quota policy — not each enforce its own env —
+// and a disagreement must be detected and reported, never silently mask a budget overrun.
+describe("activity log store policy", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-store-policy-"));
+    resetFsKnobs();
+  });
+
+  afterEach(async () => {
+    // First: a writer still running would recreate files while the directory is removed.
+    await killLiveWriterWorkers();
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function policyRecord(): Record<string, unknown> | undefined {
+    const path = join(logsDirectory(stateDir), ACTIVITY_LOG_STORE_POLICY_FILE_NAME);
+    return existsSync(path)
+      ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)
+      : undefined;
+  }
+
+  it("keeps total disk use within the FIRST writer's stored budget when cooperating processes disagree on retention", async () => {
+    const smallBudget = 256 * 1024;
+    const bigBudget = 8 * 1024 * 1024;
+    const quota = 64 * 1024;
+    const establishingEnv = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(smallBudget),
+      KEIKO_LOG_PIN_QUOTA_BYTES: String(quota),
+    });
+    const disagreeingEnv = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(bigBudget),
+      KEIKO_LOG_PIN_QUOTA_BYTES: String(quota),
+    });
+    const logs = logsDirectory(stateDir);
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    // A forever writer establishes the SMALL budget and holds a continuously active segment for
+    // the whole test — a stand-in for the review's own example (a long-running server plus one-off
+    // CLI invocations) — so every writer below unambiguously sees a live peer, never a startup race
+    // against other equally-fresh processes, and must adopt rather than replace.
+    const establisher = startWriterWorker(stateDir, 1, {
+      count: 0,
+      mode: "forever",
+      env: establishingEnv,
+    });
+    const establisherPid = establisher.child.pid ?? 0;
+    await waitFor(() =>
+      segmentFiles(stateDir, "active").find((file) =>
+        file.name.includes(`-${String(establisherPid)}-`),
+      ),
+    );
+    expect(policyRecord()).toMatchObject({ retentionBytes: smallBudget });
+
+    let peak = directoryBytes(logs);
+    const sampler = setInterval(() => {
+      peak = Math.max(peak, directoryBytes(logs));
+    }, 5);
+    try {
+      // Three writers all believe the budget is the LARGER one: without one shared governing
+      // policy each would only cap itself at its own bigger view, and the total could grow toward
+      // bigBudget + quota instead of staying at the smaller stored budget.
+      const writers = [2, 3, 4].map((id) =>
+        startWriterWorker(stateDir, id, { count: 700, mode: "count", env: disagreeingEnv }),
+      );
+      const codes = await Promise.all(writers.map((writer) => writer.exit));
+      expect(codes).toStrictEqual([0, 0, 0]);
+      establisher.child.kill("SIGKILL");
+      await establisher.exit;
+    } finally {
+      clearInterval(sampler);
+    }
+    peak = Math.max(peak, directoryBytes(logs));
+    // The bound is the STORED (small) budget plus quota — never the disagreeing processes' own
+    // (larger) view — proving the governing policy, not each process's own env, is what is enforced.
+    expect(peak).toBeLessThanOrEqual(smallBudget + quota);
+    expect(policyRecord()).toMatchObject({ retentionBytes: smallBudget });
+    // The conflict-evidence SHAPE (one "adopted" line per disagreeing process) is proven by the
+    // lighter-weight "refuses to replace" case below; a first segment holding that evidence is
+    // itself subject to the same governed retention bound under this test's volume and is
+    // correctly pruned like any other aged content, so it is not re-asserted here.
+  }, 120_000);
+
+  it("replaces the stored policy once this process is the sole live writer (a clean restart with a changed budget)", async () => {
+    const firstBudget = 4 * 1024 * 1024;
+    const secondBudget = 512 * 1024;
+    const firstEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(firstBudget) });
+    const secondEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(secondBudget) });
+    const first = startWriterWorker(stateDir, 1, { count: 5, mode: "count", env: firstEnv });
+    expect(await first.exit).toBe(0);
+    expect(policyRecord()).toMatchObject({ retentionBytes: firstBudget });
+
+    // The first writer has fully exited: the second is the sole live writer and may replace it.
+    const second = startWriterWorker(stateDir, 2, { count: 5, mode: "count", env: secondEnv });
+    expect(await second.exit).toBe(0);
+    expect(policyRecord()).toMatchObject({ retentionBytes: secondBudget });
+    expect(linesWithOp(stateDir, "activity-log.policy.conflict")).toContainEqual(
+      expect.objectContaining({
+        policyResolution: "replaced",
+        storedRetentionBytes: firstBudget,
+        requestedRetentionBytes: secondBudget,
+      }),
+    );
+  });
+
+  it("refuses to replace the stored policy while a live peer still holds an active segment", async () => {
+    const firstBudget = 4 * 1024 * 1024;
+    const secondBudget = 512 * 1024;
+    const firstEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(firstBudget) });
+    const secondEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(secondBudget) });
+    const forever = startWriterWorker(stateDir, 1, { count: 0, mode: "forever", env: firstEnv });
+    try {
+      await waitFor(() => segmentFiles(stateDir, "active")[0]);
+      expect(policyRecord()).toMatchObject({ retentionBytes: firstBudget });
+
+      // A second, different process — this test process itself — disagrees but must adopt, not
+      // replace, since the forever writer is still alive.
+      createFileServerLogSink(stateDir, { env: secondEnv }).write({
+        category: "http",
+        op: "disagreeing.write",
+      });
+      expect(policyRecord()).toMatchObject({ retentionBytes: firstBudget });
+      expect(linesWithOp(stateDir, "activity-log.policy.conflict")).toContainEqual(
+        expect.objectContaining({
+          policyResolution: "adopted",
+          storedRetentionBytes: firstBudget,
+          requestedRetentionBytes: secondBudget,
+        }),
+      );
+    } finally {
+      forever.child.kill("SIGKILL");
+      await forever.exit;
+    }
+  });
 });
 
 describe("activity log pins never throw and can be released", () => {
