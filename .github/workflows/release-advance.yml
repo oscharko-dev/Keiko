@@ -28,9 +28,11 @@ on:
 permissions: {}
 
 # One evaluation at a time. GitHub keeps only the newest pending run of a group, which is the one that
-# reads the newest facts, and a running evaluation is never cancelled while it may dispatch.
+# reads the newest facts, and a running evaluation is never cancelled while it may dispatch. The group
+# applies to every run, including one whose job the condition below skips, so a pull-request completion
+# gets a group of its own: it must never displace the pending evaluation of the last prerequisite.
 concurrency:
-  group: release-advance
+  group: ${{ (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') && 'release-advance' || format('release-advance-ignored-{0}', github.run_id) }}
   cancel-in-progress: false
 
 env:

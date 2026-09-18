@@ -9,13 +9,7 @@ const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 // A release.yml run is open from its dispatch until it completes. A publish and its portable inputs
 // are bound to the commit the run was dispatched for, so the tag must not move under it, and an owner
 // request that is still running holds its tag the same way.
-export const OPEN_RUN_STATUSES = new Set([
-  "requested",
-  "waiting",
-  "pending",
-  "queued",
-  "in_progress",
-]);
+const OPEN_RUN_STATUSES = new Set(["requested", "waiting", "pending", "queued", "in_progress"]);
 const WRITING_ACTIONS = new Set(["create", "move"]);
 export const PORTABLE_BUILD_OWNERS = Object.freeze({
   DEV_REHEARSAL: "dev-rehearsal",

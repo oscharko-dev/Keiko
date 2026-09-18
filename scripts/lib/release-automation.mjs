@@ -25,7 +25,6 @@ import {
 } from "./release-candidate.mjs";
 
 export const AUTOMATION_ACTOR = "github-actions[bot]";
-export const PORTABLE_ASSETS_ARTIFACT_NAME = "portable-release-assets";
 const PORTABLE_ASSETS_WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const STABLE_TAG = /^v\d+\.\d+\.\d+$/u;
@@ -35,7 +34,7 @@ const PAGE_SIZE = 100;
 // read instead of deciding on a partial listing.
 const PAGE_LIMIT = 10;
 
-export class ReleaseAutomationError extends Error {}
+class ReleaseAutomationError extends Error {}
 
 function fail(message) {
   throw new ReleaseAutomationError(message);
@@ -71,7 +70,7 @@ export function releaseOwners(value) {
 }
 
 /** True when `login` is an allowlisted human release owner. */
-export function isReleaseOwner(login, owners) {
+function isReleaseOwner(login, owners) {
   return typeof login === "string" && !login.endsWith("[bot]") && owners.has(login.toLowerCase());
 }
 

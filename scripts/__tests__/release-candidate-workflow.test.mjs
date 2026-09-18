@@ -156,10 +156,17 @@ describe("event-driven publish start", () => {
       },
     });
     expect(advance.permissions).toStrictEqual({});
+    // Workflow-level concurrency binds every run, a skipped one included. A pull-request completion
+    // sharing the group would cancel the pending evaluation of the last prerequisite and leave a
+    // built, green request waiting for an unrelated event, so only push and dispatch completions
+    // share it; the evaluator's own condition admits exactly the same events.
+    const relevant =
+      "(github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')";
     expect(advance.concurrency).toStrictEqual({
       "cancel-in-progress": false,
-      group: "release-advance",
+      group: `\${{ ${relevant} && 'release-advance' || format('release-advance-ignored-{0}', github.run_id) }}`,
     });
+    expect(`(${advance.jobs.advance.if})`).toBe(relevant);
   });
 
   it("skips pull-request runs, runs trusted default-branch code, and holds no credential", () => {
