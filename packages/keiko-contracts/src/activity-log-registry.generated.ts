@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8754c47766a21226d07f02675a689088adfbe937de6635b8351e5eea955ce3ca" as const;
+  "238c13889a7c51572fe8f20b43ded2c281bb9509921f62d672dd88026e0d1a9f" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -23050,7 +23050,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["quota-exhausted", "store-unavailable", "record-too-large"],
+        values: [
+          "quota-exhausted",
+          "store-unavailable",
+          "record-too-large",
+          "evaluation-rate-limited",
+        ],
       },
       defectFingerprint: {
         type: "string",
