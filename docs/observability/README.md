@@ -356,6 +356,11 @@ and asserts four things:
 Every failure class maps to the scenario of its surface and mode. There is no separate journey per
 class.
 
+**One command runs the whole gate.** `npm run check:activity-log` builds the packages and then
+runs `check:op-catalog`, the scenario matrix, `check:error-observability`, `arch:check`,
+`arch:check:negative` and `check:release-impact`. The catalog, proof and scenario checks cover the
+full registered inventory on every run. Required CI runs the gate on every pull request.
+
 ## Redaction scope, stated honestly
 
 Every field this log can carry passes through `redactLogFields` before it reaches disk. That
