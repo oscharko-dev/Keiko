@@ -282,20 +282,31 @@ describe("segment manifests (#3531)", () => {
     expect(existsSync(join(directory, "notes.txt"))).toBe(true);
   });
 
-  it("verifies stored manifests without writing and reports every missing one", () => {
+  it("verifies stored manifests without writing, separating missing from corrupt ones", () => {
     writeHistory();
     ensure();
     const directory = segmentManifestDirectory(stateDir);
-    const [name = ""] = readdirSync(directory).sort();
-    rmSync(join(directory, name));
-    const stats = verifySegmentManifests(
-      stateDir,
-      listActivityLogStoreFiles(stateDir),
-      new ActivityLogScanner(stateDir),
-    );
+    const [missing = "", corrupt = ""] = readdirSync(directory).sort();
+    rmSync(join(directory, missing));
+    chmodSync(join(directory, corrupt), 0o600);
+    writeFileSync(join(directory, corrupt), "{}\n");
+    const verify = (): ReturnType<typeof verifySegmentManifests> =>
+      verifySegmentManifests(
+        stateDir,
+        listActivityLogStoreFiles(stateDir),
+        new ActivityLogScanner(stateDir),
+      );
 
-    expect(stats).toMatchObject({ segmentCount: 2, verifiedCount: 1, mismatchCount: 1 });
-    expect(existsSync(join(directory, name))).toBe(false);
+    expect(verify()).toMatchObject({
+      segmentCount: 2,
+      verifiedCount: 0,
+      missingCount: 1,
+      mismatchCount: 1,
+    });
+    expect(existsSync(join(directory, missing))).toBe(false);
+    expect(readFileSync(join(directory, corrupt), "utf8")).toBe("{}\n");
+    ensure();
+    expect(verify()).toMatchObject({ verifiedCount: 2, missingCount: 0, mismatchCount: 0 });
   });
 
   it("serializes canonically so parse and serialize round-trip", () => {

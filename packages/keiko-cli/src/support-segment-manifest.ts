@@ -860,6 +860,11 @@ export function writeStoredSegmentManifest(directory: string, manifest: SegmentM
   return payload.length;
 }
 
+/** True when a manifest name exists for `segmentId`, valid or not (lstat; absence is false). */
+export function storedSegmentManifestExists(directory: string, segmentId: string): boolean {
+  return manifestNameExists(directory, segmentManifestFileName(segmentId));
+}
+
 /** Every closed-grammar manifest name in the store, with the segment id it names. */
 export function listStoredSegmentManifests(
   directory: string,

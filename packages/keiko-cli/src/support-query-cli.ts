@@ -579,7 +579,8 @@ function renderManifestStats(stats: SegmentManifestPassStats): string {
   return (
     `Manifests (${stats.trigger}): ${String(stats.segmentCount)} sealed segment(s), ` +
     `${String(stats.builtCount + stats.replacedCount)} written, ${String(stats.reusedCount)} reused, ` +
-    `${String(stats.verifiedCount)} verified, ${String(stats.mismatchCount)} missing or different, ` +
+    `${String(stats.verifiedCount)} verified, ${String(stats.mismatchCount)} different, ` +
+    `${String(stats.missingCount)} not yet built, ` +
     `${String(stats.removedOrphanCount)} orphan(s) removed, ${String(stats.unreadableCount)} unreadable, ` +
     `${String(stats.writeFailedCount)} write failure(s).\n`
   );

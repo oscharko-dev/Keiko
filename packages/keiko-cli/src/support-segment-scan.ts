@@ -30,6 +30,7 @@ import {
   manifestMatchesCatalog,
   readStoredSegmentManifest,
   removeStoredSegmentManifest,
+  storedSegmentManifestExists,
   writeStoredSegmentManifest,
   type LoadedSegmentManifest,
   type SegmentManifest,
@@ -174,6 +175,8 @@ export interface SegmentManifestPassStats {
   writeFailedCount: number;
   verifiedCount: number;
   mismatchCount: number;
+  // Sealed segments with no stored manifest yet: built on demand by the next query, not an error.
+  missingCount: number;
   manifestBytes: number;
   persisted: boolean;
 }
@@ -196,6 +199,7 @@ function emptyStats(trigger: SegmentManifestTrigger, persisted: boolean): Segmen
     writeFailedCount: 0,
     verifiedCount: 0,
     mismatchCount: 0,
+    missingCount: 0,
     manifestBytes: 0,
     persisted,
   };
@@ -314,7 +318,8 @@ export function ensureSegmentManifests(
 
 /**
  * Re-derives the manifest of every sealed segment and compares it byte for byte with the stored
- * one, without writing anything: `verifiedCount` match, `mismatchCount` are absent or differ.
+ * one, without writing anything: `verifiedCount` match, `mismatchCount` differ (corrupt or
+ * stale), and `missingCount` have no stored manifest yet (the next query derives them).
  */
 export function verifySegmentManifests(
   stateDir: string,
@@ -331,9 +336,13 @@ export function verifySegmentManifests(
       stats.unreadableCount += 1;
       continue;
     }
-    const stored =
-      directory === undefined ? undefined : readStoredSegmentManifest(directory, file.segmentId);
-    if (stored !== undefined && stored.digest === derived.digest) stats.verifiedCount += 1;
+    if (directory === undefined || !storedSegmentManifestExists(directory, file.segmentId)) {
+      stats.missingCount += 1;
+      continue;
+    }
+    // A stored name that does not parse, or parses to another digest, is corrupt or stale.
+    const stored = readStoredSegmentManifest(directory, file.segmentId);
+    if (stored?.digest === derived.digest) stats.verifiedCount += 1;
     else stats.mismatchCount += 1;
   }
   return stats;
