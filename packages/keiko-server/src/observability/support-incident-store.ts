@@ -33,6 +33,7 @@ import {
 import {
   MAX_SUPPORT_INCIDENT_RECORD_BYTES,
   SUPPORT_INCIDENT_DIRECTORY_NAME,
+  isSupportIncidentId,
   parseSupportIncidentFileName,
   parseSupportIncidentRecord,
   supportIncidentFileName,
@@ -134,6 +135,17 @@ export function listSupportIncidentEntries(stateDir: string): readonly SupportIn
       (left.record?.createdAtMs ?? 0) - (right.record?.createdAtMs ?? 0) ||
       left.incidentId.localeCompare(right.incidentId, "en-US"),
   );
+}
+
+/** One record by id through the same hardened read, or `undefined` when absent or unreadable. */
+export function readSupportIncidentRecord(
+  stateDir: string,
+  incidentId: string,
+): SupportIncidentRecord | undefined {
+  if (!isSupportIncidentId(incidentId)) return undefined;
+  const directory = supportIncidentDirectory(stateDir);
+  const path = join(directory, supportIncidentFileName(incidentId));
+  return regularFileSize(path) === undefined ? undefined : readRecord(path, directory, incidentId);
 }
 
 function writeAllBytes(descriptor: number, payload: Buffer): void {
