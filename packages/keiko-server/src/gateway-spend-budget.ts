@@ -53,6 +53,9 @@ const GATEWAY_SPEND_OPERATION_OWNERSHIP = {
   owner: "keiko-server",
 } as const satisfies GatewaySpendOperationOwnership;
 
+// Both guarded arrays are optional: log redaction omits a `frames` or `causeChain` array that is empty
+// after redaction, and a rejection thrown directly (no `.cause`) has an empty cause chain, so a required
+// declaration made every such persisted line fail its own registration.
 const REJECTION_FRAMES_FIELD_CONTRACT = {
   type: "string-array",
   dataClass: "safe-platform-class",

@@ -18,11 +18,6 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import {
-  ACTIVITY_LOG_OPERATION_REGISTRY,
-  validateActivityLogOperationFields,
-  type ActivityLogOperationRegistration,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const capability: ModelCapability = {
   id: "spend-fixture",
@@ -367,28 +362,4 @@ describe("shared persistent model spend admission", () => {
       budget().reserve(capability, { ...request, maxOutputTokens: 21 }, "output"),
     ).toThrow("spend-bound-unavailable");
   });
-});
-
-it.only("DEBUG probe", () => {
-  expect(() =>
-    budget().reserve({ ...capability, pricing: undefined }, request, "pricing-rejection"),
-  ).toThrow("spend-pricing-unavailable");
-  const event = events.at(-1);
-  const line = formatActivityLogProofLine(event ?? {});
-  const record = JSON.parse(line.trimEnd()) as Record<string, unknown>;
-  const registration = (
-    ACTIVITY_LOG_OPERATION_REGISTRY as readonly ActivityLogOperationRegistration[]
-  ).find((candidate) => candidate.proofIds.includes("gateway.spend.rejected.line"));
-  if (registration === undefined) throw new Error("no registration");
-  const fields: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
-    if (registration.fields[key] !== undefined) fields[key] = value;
-  }
-  try {
-    validateActivityLogOperationFields(registration.op, registration.category, fields);
-  } catch (error) {
-    throw new Error(
-      `KIND=${JSON.stringify((error as { kind?: unknown }).kind)} FIELDS=${JSON.stringify(fields)}`,
-    );
-  }
 });
