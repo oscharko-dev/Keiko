@@ -76,7 +76,9 @@ const CODING_RUNTIME_SKILL_DISCOVERY_OPERATION = defineActivityLogOperation({
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     catalogRevision: { type: "integer", dataClass: "count", required: true },
-    catalogDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    // Not `catalogDigest`: that name is the sink-stamped Activity Log catalog digest, and redaction
+    // dropped this producer value under it, so every line carried the log format's digest instead.
+    skillCatalogDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     approvedCount: { type: "integer", dataClass: "count", required: true },
     listedCount: { type: "integer", dataClass: "count", required: true },
     disabledCount: { type: "integer", dataClass: "count", required: true },
@@ -253,7 +255,7 @@ function skillDiscoveryPort(
           {
             runId: input.runId,
             catalogRevision: input.catalog.revision(),
-            catalogDigest: skills.catalogDigest,
+            skillCatalogDigest: skills.catalogDigest,
             approvedCount: projection.skills.length,
             listedCount: skills.skills.length,
             disabledCount: unavailable.disabled ?? 0,

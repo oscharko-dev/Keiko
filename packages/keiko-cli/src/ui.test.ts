@@ -1272,7 +1272,8 @@ describe("runUiCli", () => {
       expect(extra.nodeVersion).toBe(process.version);
       expect(extra.platform).toBe(process.platform);
       expect(extra.arch).toBe(process.arch);
-      expect(typeof extra.productVersion).toBe("string");
+      // The sink stamps productVersion on every line; the event itself no longer claims the name.
+      expect(extra).not.toHaveProperty("productVersion");
       expect(extra.host).toBe(UI_HOST);
       expect(extra.port).toBe(DEFAULT_UI_PORT);
       expect(extra.stateDirSource).toBe("default");

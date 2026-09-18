@@ -452,18 +452,6 @@ const SERVER_LOG_FAILURE_OPERATION = defineActivityLogOperation({
         "invalid-field-vocabulary",
       ],
     },
-    writerCapability: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["unavailable"],
-    },
-    compatibilityState: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["incomplete"],
-    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
     reason: {
@@ -691,8 +679,6 @@ function failureNoticeEvent(
         ? { failedOp: redactLogLabel(context.op) }
         : {}),
       ...(rejectionKind === undefined ? {} : { rejectionKind }),
-      writerCapability: "unavailable",
-      compatibilityState: "incomplete",
       completeness: "unknown",
       loss: context.loss ?? "event-dropped",
       ...(suppressed > 0 ? { suppressedNotices: suppressed } : {}),
@@ -708,6 +694,10 @@ function stderrEventRecord(
   return {
     ts: new Date(now).toISOString(),
     ...failureNoticeIdentity(identity),
+    // The emergency line is written beside the log, never through it: the sink that would stamp these
+    // envelope states is the one that failed, so the notice states them itself.
+    compatibilityState: "incomplete",
+    writerCapability: "unavailable",
     level: event.level,
     category: event.category,
     ["op"]: event.op,
@@ -763,8 +753,6 @@ function emitShutdownFlushNotice(suppressed: number, now: number): void {
         errorKind: "unknown",
       },
       {
-        writerCapability: "unavailable",
-        compatibilityState: "incomplete",
         completeness: "unknown",
         loss: "event-dropped",
         reason: "shutdown-flush",

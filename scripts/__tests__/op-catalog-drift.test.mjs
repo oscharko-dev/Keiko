@@ -805,6 +805,43 @@ describe("op catalog drift", () => {
     );
   });
 
+  // #3532: the sink stamps these envelope names and redaction drops a producer value for them, so a
+  // skill catalog digest once persisted as the log format's own and a PR-description schema version
+  // as the envelope's.
+  it.each(["catalogDigest", "schemaVersion", "productVersion", "writerCapability"])(
+    "rejects a registration that declares the reserved envelope field %s",
+    (fieldName) => {
+      withTypedRegistryFixture(
+        "zzz-fixture-reserved-field",
+        [
+          'import { activityLogEvent, defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+          "const operation = defineActivityLogOperation({",
+          '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+          '  op: "fixture.registry.reserved-field", category: "diagnostic",',
+          '  owner: "zzz-fixture-reserved-field", emitter: "fixture",',
+          `  fields: { ${fieldName}: { type: "string", dataClass: "opaque-id", required: true, maxLength: 64 } },`,
+          '  causal: "correlation", lifecycle: "state", analyzerProjection: "timeline",',
+          '  failureClasses: ["fixture-failure"], proofIds: ["fixture.registry.reserved-field.line"],',
+          '  releaseImpact: "patch",',
+          "});",
+          "activityLogEvent(operation, {}, {});",
+          "",
+        ].join("\n"),
+        (root) => {
+          const registry = generateTypedActivityLogRegistry(root, []);
+          expect(registry.operations).toEqual([]);
+          expect(registry.violations).toContainEqual(
+            expect.objectContaining({
+              code: "registration-reserved-field",
+              site: "packages/zzz-fixture-reserved-field/src/fixture.ts:2",
+              detail: `fields.${fieldName}`,
+            }),
+          );
+        },
+      );
+    },
+  );
+
   // #3532: persisted-line redaction omits an empty frames/causeChain array, so a required one
   // rejected every failure line without Keiko frames or a cause (found twice in production).
   it.each(["frames", "causeChain"])("rejects a registration that requires %s", (fieldName) => {

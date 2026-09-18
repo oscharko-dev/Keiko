@@ -9,6 +9,8 @@ import {
   PR_DESCRIPTION_LANGUAGES,
   PR_DESCRIPTION_REASONS,
   prDescriptionArtifactEvidence,
+  type PrDescriptionArtifact,
+  type PrDescriptionArtifactEvidence,
   type PrDescriptionCandidate,
   type PrDescriptionCoverage,
   type PrDescriptionReason,
@@ -179,6 +181,17 @@ const PR_DESCRIPTION_AUTHORITY_REVALIDATION_FAILED_OPERATION = defineActivityLog
   releaseImpact: "patch",
 });
 
+type PrDescriptionLogEvidence = Omit<PrDescriptionArtifactEvidence, "schemaVersion"> & {
+  readonly descriptionSchemaVersion: PrDescriptionArtifactEvidence["schemaVersion"];
+};
+
+// The artifact's evidence projection, with its schema version renamed for the log: `schemaVersion`
+// is the sink-stamped envelope field, and redaction drops a producer value under that name.
+function prDescriptionLogEvidence(artifact: PrDescriptionArtifact): PrDescriptionLogEvidence {
+  const { schemaVersion, ...evidence } = prDescriptionArtifactEvidence(artifact);
+  return { ...evidence, descriptionSchemaVersion: schemaVersion };
+}
+
 const PR_DESCRIPTION_GENERATION_COMPLETED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -187,7 +200,14 @@ const PR_DESCRIPTION_GENERATION_COMPLETED_OPERATION = defineActivityLogOperation
   owner: "keiko-model-gateway",
   emitter: "prDescription.generate.completeGeneration",
   fields: {
-    schemaVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 32 },
+    // Not `schemaVersion`: the sink stamps the envelope's own schema version under that name and
+    // redaction dropped this value, so the line carried the envelope version instead.
+    descriptionSchemaVersion: {
+      type: "string",
+      dataClass: "safe-version",
+      required: true,
+      maxLength: 32,
+    },
     renderingVersion: {
       type: "string",
       dataClass: "safe-version",
@@ -668,7 +688,7 @@ function completeGeneration(generation: Generation): PrDescriptionGenerationResu
         durationMs: generation.elapsed(),
       },
       {
-        ...prDescriptionArtifactEvidence(artifact),
+        ...prDescriptionLogEvidence(artifact),
         callCount: generation.calls,
         inputBytes: generation.inputBytes,
         outputBytes: generation.outputBytes,
