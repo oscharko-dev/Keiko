@@ -222,7 +222,7 @@
       }
     },
     "keiko-security": {
-      "files": 31,
+      "files": 32,
       "uncoveredFiles": 0,
       "uncoveredLines": 18,
       "totalLines": 887,
