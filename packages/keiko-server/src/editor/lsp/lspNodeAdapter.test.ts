@@ -47,6 +47,11 @@ import {
 
 const cleanups: (() => void)[] = [];
 
+// A language server that never answers. Its lifetime is bounded so that a test failing before its
+// kill cannot leave it running (#3554 found test children that outlived their runs for hours).
+const HUNG_LSP_FIXTURE_SOURCE =
+  "setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), 120_000);\n";
+
 afterEach(() => {
   while (cleanups.length > 0) {
     cleanups.pop()?.();
@@ -738,11 +743,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
   it("keeps HOME owned after root exit until the manager explicitly releases proven tree resources", async () => {
     const events = captureLog();
     const binDir = makeTempDir("keiko-lsp-post-spawn-error-");
-    const executable = writeNodeExecutableFixture(
-      binDir,
-      "hanglsp",
-      "setInterval(() => {}, 1000);\n",
-    );
+    const executable = writeNodeExecutableFixture(binDir, "hanglsp", HUNG_LSP_FIXTURE_SOURCE);
     let nativeChild: ChildProcessWithoutNullStreams | undefined;
     let homePath = "";
     const spawnLsp = createDefaultLspSpawnFn(
@@ -834,11 +835,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
   it("logs lsp.process.terminated with signal and the VERIFIED tree-kill disposition on kill()", async () => {
     const events = captureLog();
     const binDir = makeTempDir("keiko-lsp-kill-");
-    const executable = writeNodeExecutableFixture(
-      binDir,
-      "hanglsp",
-      "setInterval(() => {}, 1000);\n",
-    );
+    const executable = writeNodeExecutableFixture(binDir, "hanglsp", HUNG_LSP_FIXTURE_SOURCE);
 
     const handle = defaultLspSpawnFn(executable, [], { PATH: "/usr/bin" }, binDir);
     const exited = new Promise<void>((resolve) => {
