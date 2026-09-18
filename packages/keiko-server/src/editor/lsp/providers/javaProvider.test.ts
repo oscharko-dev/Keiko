@@ -37,6 +37,10 @@ import {
   resetServerLogger,
   setServerLogger,
 } from "../../../observability/server-logger.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../../tests/support/activity-log-proof.js";
 
 const NATIVE: BackendAvailability = {
   bubblewrap: true,
@@ -216,6 +220,11 @@ function expectGovernedProbeEvidence(input: GovernedProbeExpectation): void {
   expect(redactLogFields(validation.extra ?? {})).toEqual(validation.extra);
   expect(JSON.stringify(validation)).not.toContain(javaPath);
   expect(JSON.stringify(validation)).not.toContain("must-not-reach-probe");
+  const proven = expectActivityLogProof(
+    "lsp.java.version-probe.completed.emitted-line",
+    formatActivityLogProofLine(validation),
+  );
+  expect(proven).toMatchObject({ executionBoundary: "governed-pre-spawn", outcome: "supported" });
 }
 
 describe("managed Eclipse JDT LS provider", () => {

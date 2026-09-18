@@ -74,6 +74,10 @@ import {
   type GitDeliveryMergeSeams,
 } from "./mergeExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const PREVIEW = "/api/git-delivery/merge/preview";
 const APPROVE = "/api/git-delivery/merge/approve";
@@ -1112,6 +1116,11 @@ describe("readMergeProviderReadiness — default merge-adapter termination wirin
       extra: { state: "unknown", providerError: true },
     });
     expect(JSON.stringify(events)).not.toContain("private provider body");
+    const persisted = expectActivityLogProof(
+      "git.delivery.readiness.observed.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "unknown", providerError: true });
   });
 
   it("classifies a returned provider error as a structured failure", async () => {

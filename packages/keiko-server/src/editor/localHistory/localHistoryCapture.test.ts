@@ -16,6 +16,10 @@ import {
   createEditorLocalHistoryStore,
   type EditorLocalHistoryStore,
 } from "./localHistoryStore.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../tests/support/activity-log-proof.js";
 
 const VAULT_KEY = Buffer.alloc(32, 0x71).toString("base64");
 let root: string;
@@ -195,6 +199,11 @@ describe("reKeyEditorLocalHistorySafely", () => {
       correlationId: "req-rekey-ok",
       extra: { outcome: "succeeded", rewrittenCount: 1 },
     });
+    const proven = expectActivityLogProof(
+      "editor.local-history.rekey.completed.emitted-line",
+      formatActivityLogProofLine(activity[0] ?? {}),
+    );
+    expect(proven).toMatchObject({ outcome: "succeeded", rewrittenCount: 1 });
   });
 
   it("emits a failed activity-log line and a dedicated diagnostic origin, never the 'user-save' capture origin", () => {
@@ -225,6 +234,11 @@ describe("reKeyEditorLocalHistorySafely", () => {
       extra: { outcome: "failed", rewrittenCount: 0 },
     });
     expect(typeof activity[0]?.errorKind).toBe("string");
+    const proven = expectActivityLogProof(
+      "editor.local-history.rekey.failed.emitted-line",
+      formatActivityLogProofLine(activity[0] ?? {}),
+    );
+    expect(proven).toMatchObject({ outcome: "failed", rewrittenCount: 0 });
   });
 
   // #2906 review (comment 3865159301): with NO caller-supplied correlationId, the failure path

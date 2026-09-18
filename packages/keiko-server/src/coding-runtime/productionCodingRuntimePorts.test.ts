@@ -33,6 +33,10 @@ import {
   type ProductionWorkbenchArtifactRetention,
   type ProductionWorkbenchDescriptionDeps,
 } from "./productionCodingRuntimePorts.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // #3401: `createProductionWorkbenchDescriptionDispatcher` composes #3398's real
 // `PrDescription.generatePrDescription` core. Every other describe block in this file exercises
@@ -209,6 +213,16 @@ describe("production coding runtime turn ports", () => {
         frames: expect.any(Array) as unknown,
         causeChain: expect.any(Array) as unknown,
       },
+    });
+    const persistedReplacement = expectActivityLogProof(
+      "coding-runtime.task-replacement.emitted-line",
+      formatActivityLogProofLine(replacementEvents[1] ?? {}),
+    );
+    expect(persistedReplacement).toMatchObject({
+      state: "rejected",
+      reason: "interrupt-exception",
+      requestId: "follow-up-1",
+      expectedRevision: 2,
     });
     expect(diagnostics).toMatchObject([
       { correlationId: request.correlationId, code: "stage=dispatch:reason=interrupt-exception" },
@@ -1150,6 +1164,14 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
           },
         }),
       );
+      const deniedLine = sink.events.find(
+        (event) => event.op === "pr-description.workbench.egress.denied",
+      );
+      const persisted = expectActivityLogProof(
+        "pr-description.workbench.egress.denied.emitted-line",
+        formatActivityLogProofLine(deniedLine ?? {}),
+      );
+      expect(persisted).toMatchObject({ reason: "authority-expired" });
     } finally {
       resetServerLogger();
     }

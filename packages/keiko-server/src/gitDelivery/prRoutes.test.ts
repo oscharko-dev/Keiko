@@ -94,6 +94,10 @@ import {
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 import { createDraftRun } from "./ciObservationTest/_support.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const PREVIEW = "/api/git-delivery/pr/preview";
 const EXECUTE = "/api/git-delivery/pr/execute";
@@ -1700,6 +1704,20 @@ describe("pr mark-ready routes (#3389)", () => {
         correlationId: "corr-post-ready",
         extra: { recorded: true, reason: "observed" },
       });
+      const refreshedPersisted = expectActivityLogProof(
+        "git.delivery.pr-mark-ready.readiness-refreshed.emitted-line",
+        formatActivityLogProofLine(refreshed ?? {}),
+      );
+      expect(refreshedPersisted).toMatchObject({ recorded: true, reason: "observed" });
+
+      const executed = activity.find(
+        (event) => event.op === "git.delivery.pr-mark-ready.executed",
+      );
+      const executedPersisted = expectActivityLogProof(
+        "git.delivery.pr-mark-ready.executed.emitted-line",
+        formatActivityLogProofLine(executed ?? {}),
+      );
+      expect(executedPersisted).toMatchObject({ outcome: "succeeded" });
     } finally {
       db.close();
     }
@@ -1777,14 +1795,22 @@ describe("pr mark-ready routes (#3389)", () => {
       errorCode: "precondition-failed",
     };
     const adapter = recordingMarkReadyAdapter(drifted);
+    const activity: ServerLogEvent[] = [];
     const res = await createHandlePrMarkReadyExecute({
       approvalStore,
       now: () => 1_700_000_000_001,
       adapterFactory: () => adapter.adapter,
       ciReaderFactory: cleanCiReaderFactory,
+      activityLog: { write: (event): void => void activity.push(event) },
     })(ctxFor(MARK_READY_EXECUTE, markReadyBody({ approval })), deps());
     const body = res.body as GitDeliveryPrMarkReadyExecuteResponseBody;
     expect(body).toMatchObject({ status: "failed", executionErrorCode: "precondition-failed" });
+    const drift = activity.find((event) => event.op === "git.delivery.pr-mark-ready.drift");
+    const driftPersisted = expectActivityLogProof(
+      "git.delivery.pr-mark-ready.drift.emitted-line",
+      formatActivityLogProofLine(drift ?? {}),
+    );
+    expect(driftPersisted).toMatchObject({ outcome: "failed", errorCode: "precondition-failed" });
     // The claim is one-use: a second execute against the identical binding no longer redeems it
     // (the store already consumed it on the first attempt above) — a bad request, not a retry.
     const secondRes = await createHandlePrMarkReadyExecute({

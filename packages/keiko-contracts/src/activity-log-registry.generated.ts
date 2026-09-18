@@ -13294,14 +13294,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },

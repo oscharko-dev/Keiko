@@ -18,6 +18,10 @@ import { DraftDeliveryController } from "./draftDeliveryService.js";
 import { CiObservationController, type CiObservationOptions } from "./ciObservationService.js";
 import { CHECK, failureFacts } from "./ciObservationTest/_providerFacts.js";
 import type { GitCiFailureContextResult } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 let fixture: DraftDeliveryFixture;
 beforeEach(async () => {
@@ -350,6 +354,11 @@ describe("run-bound CI observations through existing draft authority", () => {
       entryCount: 1,
       contextComplete: true,
     });
+    const persisted = expectActivityLogProof(
+      "git.ci-observation.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(persisted).toMatchObject({ phase: "observed" });
   });
   it("quarantines diagnostics that arrive after the authority is revoked", async () => {
     const test = configured(() => Promise.resolve(failedFacts()));

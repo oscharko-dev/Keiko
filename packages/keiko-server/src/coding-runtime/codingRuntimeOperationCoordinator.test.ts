@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { CodingRuntimeOperationCoordinator } from "./codingRuntimeOperationCoordinator.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeOrchestratorResult } from "./codingRuntimeOrchestratorTypes.js";
@@ -451,6 +455,16 @@ describe("CodingRuntimeOperationCoordinator", () => {
         currentRevision: 23,
       },
     });
+    const rebound = activityLog.events.find(
+      (event) => event.op === "coding-runtime.question.list-revision-rebound",
+    );
+    if (rebound === undefined) throw new Error("expected question.list-revision-rebound line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.question.list-revision-rebound.emitted-line",
+        formatActivityLogProofLine(rebound),
+      ),
+    ).toMatchObject({ runId: "run-1", expectedRevision: 22, currentRevision: 23 });
     expect(JSON.stringify(activityLog.events)).not.toContain("private-question-sentinel");
     await expect(
       subject.listQuestions("run-1", { requestId: "question-list-future", expectedRevision: 24 }),
@@ -620,6 +634,13 @@ describe("CodingRuntimeOperationCoordinator", () => {
     ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
     expect(activityLog.events).toHaveLength(1);
     const [event] = activityLog.events;
+    if (event === undefined) throw new Error("expected authority-resolution-failed line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.question.authority-resolution-failed.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ runId: "run-1", operation: "answer" });
     expect(event).toMatchObject({
       level: "warn",
       op: "coding-runtime.question.authority-resolution-failed",
@@ -632,9 +653,9 @@ describe("CodingRuntimeOperationCoordinator", () => {
       // Transport failures use the registry's closed, content-free failure vocabulary.
       errorKind: "internal",
     });
-    expect(event?.extra).toMatchObject({ runId: "run-1", operation: "answer" });
-    expect(Array.isArray(event?.extra?.frames)).toBe(true);
-    expect(Array.isArray(event?.extra?.causeChain)).toBe(true);
+    expect(event.extra).toMatchObject({ runId: "run-1", operation: "answer" });
+    expect(Array.isArray(event.extra?.frames)).toBe(true);
+    expect(Array.isArray(event.extra?.causeChain)).toBe(true);
     // Body-free: the underlying message text never reaches the log.
     expect(JSON.stringify(event)).not.toContain("protocol failure");
   });
@@ -701,6 +722,14 @@ describe("CodingRuntimeOperationCoordinator", () => {
         extra: { runId: "run-1", operation: "follow-up" },
       },
     ]);
+    const [followUpFailure] = activityLog.events;
+    if (followUpFailure === undefined) throw new Error("expected follow-up.dispatch-failed line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.follow-up.dispatch-failed.emitted-line",
+        formatActivityLogProofLine(followUpFailure),
+      ),
+    ).toMatchObject({ runId: "run-1", operation: "follow-up" });
     expect(JSON.stringify(activityLog.events)).not.toContain("dispatch backend offline");
   });
 
@@ -717,6 +746,14 @@ describe("CodingRuntimeOperationCoordinator", () => {
         extra: { runId: "run-1", operation: "list" },
       },
     ]);
+    const [listFailure] = activityLog.events;
+    if (listFailure === undefined) throw new Error("expected question.list-failed line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.question.list-failed.emitted-line",
+        formatActivityLogProofLine(listFailure),
+      ),
+    ).toMatchObject({ runId: "run-1", operation: "list" });
   });
 
   it("logs structured evidence when the initial turn's own dispatch throws", async () => {
@@ -742,6 +779,16 @@ describe("CodingRuntimeOperationCoordinator", () => {
         extra: { runId: "run-1", operation: "initial-turn-dispatch" },
       },
     ]);
+    const [initialTurnDispatchFailure] = activityLog.events;
+    if (initialTurnDispatchFailure === undefined) {
+      throw new Error("expected initial-turn.dispatch-failed line");
+    }
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.initial-turn.dispatch-failed.emitted-line",
+        formatActivityLogProofLine(initialTurnDispatchFailure),
+      ),
+    ).toMatchObject({ runId: "run-1", operation: "initial-turn-dispatch" });
   });
 
   it("logs structured evidence when the initial turn cannot even be stopped after a failed dispatch", async () => {
@@ -766,6 +813,14 @@ describe("CodingRuntimeOperationCoordinator", () => {
         extra: { runId: "run-1", operation: "initial-turn-stop" },
       },
     ]);
+    const stopFailure = activityLog.events[1];
+    if (stopFailure === undefined) throw new Error("expected initial-turn.stop-failed line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.initial-turn.stop-failed.emitted-line",
+        formatActivityLogProofLine(stopFailure),
+      ),
+    ).toMatchObject({ runId: "run-1", operation: "initial-turn-stop" });
   });
 
   // Review 3941746512: no per-request correlationId reached this coordinator at all -- every line

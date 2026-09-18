@@ -17,6 +17,10 @@ import {
   type GitHubIssueResolutionDeps,
   type GitHubIssueResolver,
 } from "./githubIssueResolution.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // KEIKO-#3384 B5-14: `readGitDefaultBranch` is real production I/O; every other test in this file
 // bypasses it with a custom `readDefaultBranch` port. The test below exercises the real,
@@ -158,6 +162,16 @@ describe("server-resolved issue intake", () => {
     for (const content of [f.root, f.object.title, f.object.body, f.object.url]) {
       expect(JSON.stringify(f.events)).not.toContain(content);
     }
+    const resolvedLine = f.events.find((event) => event.op === "coding-workbench.issue.resolved");
+    const persisted = expectActivityLogProof(
+      "coding-workbench.issue.resolved.line",
+      formatActivityLogProofLine(resolvedLine ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      outcome: "resolved",
+      issueNumber: 42,
+      repositoryId: deriveRepositoryId(f.root),
+    });
   });
 
   it("resolves the default branch through the single shared content-free workspace builder (B5-14)", async () => {

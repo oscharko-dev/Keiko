@@ -28,6 +28,10 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // Spies on the two staged-content readers the F1 audit fix wires into a runCommand
 // termination-evidence callback (readStagedPathsFor / readStagedConflictMarkerFileCountFor,
@@ -133,6 +137,11 @@ function expectWorktreeReadFailureEvent(
   });
   expect(typeof activity.events[0]?.extra?.failureKind).toBe("string");
   expect(JSON.stringify(activity.events)).not.toContain(bare);
+  const persisted = expectActivityLogProof(
+    "git.delivery.mutation.failed.emitted-line",
+    formatActivityLogProofLine(activity.events[0] ?? {}),
+  );
+  expect(persisted).toMatchObject({ actionKind: "branch-switch", phaseReached: "snapshot" });
 }
 
 function expectRestampFailure(
@@ -251,6 +260,11 @@ function expectCompletedMutationEvent(event: ServerLogEvent | undefined): void {
   expect(extra.preflightFindingCount).toBe(0);
   expect(extra.preflightBlockingCount).toBe(0);
   expect(extra.requiredApproverCount).toBe(0);
+  const persisted = expectActivityLogProof(
+    "git.delivery.mutation.completed.emitted-line",
+    formatActivityLogProofLine(event),
+  );
+  expect(persisted).toMatchObject({ actionKind: "branch-create", status: "succeeded" });
 }
 
 // Real adapter + real snapshot reader: only the trusted policy pack is supplied (no adapter/reader/now
@@ -436,6 +450,11 @@ describe("logGitDeliveryUpstreamTrackingFailed — content-free diagnostic for t
     expect(activity.events[0]?.level).toBe("warn");
     expect(activity.events[0]?.errorKind).toBe("unavailable");
     expect(activity.events[0]?.correlationId).toBe("request-correlation-9");
+    const persisted = expectActivityLogProof(
+      "git.delivery.push.upstream-tracking-failed.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ op: "git.delivery.push.upstream-tracking-failed" });
   });
 
   it("falls back to UNKNOWN_CORRELATION_ID only when the caller genuinely has none in scope", () => {
@@ -901,6 +920,11 @@ describe("executeGovernedMutation — managed-root re-proof at the spawn boundar
       expect(noSpawn?.correlationId).toBe("request-correlation-revoked");
       expect(noSpawn?.errorKind).toBe("authority-denied");
       expect(noSpawn?.extra?.operation).toBe("branch-create");
+      const noSpawnPersisted = expectActivityLogProof(
+        "git.delivery.dispatch.no-spawn.emitted-line",
+        formatActivityLogProofLine(noSpawn ?? {}),
+      );
+      expect(noSpawnPersisted).toMatchObject({ operation: "branch-create" });
       expect(
         activity.events.some(
           (e) => e.op === "workspace.root.denied" && e.extra?.reason === "managed-root-lifecycle",

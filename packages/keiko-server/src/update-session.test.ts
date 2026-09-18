@@ -35,6 +35,10 @@ import {
   type UpdateSessionLockRecord,
   updateSessionLockPath,
 } from "./update-session-lock.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const ROOT = "/usr/local/lib/node_modules/@oscharko-dev/keiko";
 const CONFIRMATION_DIGEST = "a".repeat(64);
@@ -1591,6 +1595,18 @@ describe("UpdateSessionManager", () => {
         completeness: "complete",
         loss: "none",
       },
+    });
+    const persisted = expectActivityLogProof(
+      "update.session.lifecycle.transition",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      correlationId: "request-3405-0123456789abcdef",
+      sessionId: "session-3405-0123456789abcdef",
+      candidateId: "candidate-0.2.12",
+      targetVersion: "0.2.12",
+      phase: "preparing",
+      eventKind: "started",
     });
   });
 

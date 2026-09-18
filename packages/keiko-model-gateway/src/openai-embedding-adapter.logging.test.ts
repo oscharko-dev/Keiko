@@ -6,7 +6,7 @@
 // and no proxy is consulted. The two module-level memos are process-global, so each case uses a
 // UNIQUE endpoint host and `resetStrictGatewayMemoForTests` runs in afterEach.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
@@ -17,6 +17,10 @@ import {
   type ModelGatewayLogEvent,
   type ModelGatewayLogSink,
 } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
@@ -174,6 +178,18 @@ describe("scalar embedding — activity log", () => {
     expect(retry.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(retry)).not.toContain(new URL(endpoint).host);
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
+    const persistedRetry = expectActivityLogProof(
+      "embedding.request.minimal-shape-retry.emitted-line",
+      formatActivityLogProofLine(retry),
+    );
+    expect(persistedRetry).toMatchObject({ reason: "strict-gateway-rejection" });
+
+    const memoized = eventFor(log.events, "embedding.endpoint.strict-shape-memoized");
+    const persistedMemoized = expectActivityLogProof(
+      "embedding.endpoint.strict-shape-memoized.emitted-line",
+      formatActivityLogProofLine(memoized),
+    );
+    expect(persistedMemoized.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("labels an answered HTTP failure with its status and classified kind", async () => {
@@ -191,6 +207,15 @@ describe("scalar embedding — activity log", () => {
     expect(failed.status).toBe(401);
     expect(failed.errorKind).toBe("validation-failed");
     expect(failed.extra).toMatchObject({ minimalShape: false });
+    const persisted = expectActivityLogProof(
+      "embedding.request.failed.emitted-line",
+      formatActivityLogProofLine(failed),
+    );
+    expect(persisted).toMatchObject({
+      minimalShape: false,
+      status: 401,
+      errorKind: "validation-failed",
+    });
   });
 
   // THE INCIDENT, at scalar scale. Before the attempt line, a clean success wrote nothing and a
@@ -222,6 +247,16 @@ describe("scalar embedding — activity log", () => {
     expect(dispatch.extra).not.toHaveProperty("endpoint");
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
+    const persisted = expectActivityLogProof(
+      "embedding.request.dispatch.emitted-line",
+      formatActivityLogProofLine(dispatch),
+    );
+    expect(persisted).toMatchObject({
+      modelId: "embed-1",
+      inputCount: 1,
+      timeoutMs: 12_000,
+      minimalShape: false,
+    });
   });
 
   it("sanitizes a body-bearing model id without blocking the provider call", async () => {
@@ -286,6 +321,31 @@ describe("scalar embedding — activity log", () => {
     wedge.answer(jsonResponse(scalarBody()));
     await expect(pending).resolves.toMatchObject({ ok: true });
   });
+
+  it("names the minimal-shape retry failure when the retry itself is rejected", async () => {
+    const log = recorder();
+    const transport = scriptedFetch([
+      (): Response => jsonResponse("{}", 400),
+      (): Response => jsonResponse("{}", 503),
+    ]);
+    const outcome = await requestOpenAIEmbedding({
+      ...BASE,
+      endpoint: uniqueEndpoint(),
+      input: "x",
+      fetchImpl: transport.fetchImpl,
+      log: log.sink,
+    });
+    expect(outcome.ok).toBe(false);
+    const failed = eventFor(log.events, "embedding.request.minimal-shape-failed");
+    expect(failed.level).toBe("warn");
+    expect(failed.status).toBe(503);
+    expect(failed.errorKind).toBe("unavailable");
+    const persisted = expectActivityLogProof(
+      "embedding.request.minimal-shape-failed.emitted-line",
+      formatActivityLogProofLine(failed),
+    );
+    expect(persisted.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
 });
 
 describe("batch embedding — activity log", () => {
@@ -316,9 +376,26 @@ describe("batch embedding — activity log", () => {
     expect(degrading.status).toBe(500);
     expect(degrading.errorKind).toBe("unavailable");
     expect(degrading.extra).toMatchObject({ inputCount: 2 });
+    const persistedDegrading = expectActivityLogProof(
+      "embedding.batch.degrading-to-scalar.emitted-line",
+      formatActivityLogProofLine(degrading),
+    );
+    expect(persistedDegrading).toMatchObject({ inputCount: 2 });
 
     const degraded = eventFor(log.events, "embedding.batch.degraded-to-scalar");
     expect(degraded.extra).toMatchObject({ inputCount: 2, memoized: true, embedded: 2 });
+    const persistedDegraded = expectActivityLogProof(
+      "embedding.batch.degraded-to-scalar.emitted-line",
+      formatActivityLogProofLine(degraded),
+    );
+    expect(persistedDegraded).toMatchObject({ inputCount: 2, memoized: true, embedded: 2 });
+
+    const completedLadder = eventFor(log.events, "embedding.scalar-ladder.completed");
+    const persistedCompleted = expectActivityLogProof(
+      "embedding.scalar-ladder.completed.emitted-line",
+      formatActivityLogProofLine(completedLadder),
+    );
+    expect(persistedCompleted).toMatchObject({ total: 2, completed: 2 });
     expect(JSON.stringify(log.events)).not.toContain("chunk one text");
   });
 
@@ -353,6 +430,11 @@ describe("batch embedding — activity log", () => {
     expect(memo.level).toBe("info");
     expect(memo.extra).toMatchObject({ inputCount: 2 });
     expect(embeddingOps(second.events)).not.toContain("embedding.batch.dispatch");
+    const persisted = expectActivityLogProof(
+      "embedding.batch.scalar-memo-hit.emitted-line",
+      formatActivityLogProofLine(memo),
+    );
+    expect(persisted).toMatchObject({ inputCount: 2 });
   });
 
   it("does NOT memoize a throttled batch and says so on the line", async () => {
@@ -390,6 +472,11 @@ describe("batch embedding — activity log", () => {
     expect(skipped.status).toBe(500);
     expect(skipped.extra).toMatchObject({ reason: "single-item-batch", inputCount: 1 });
     expect(embeddingOps(log.events)).not.toContain("embedding.batch.degrading-to-scalar");
+    const persisted = expectActivityLogProof(
+      "embedding.batch.degrade-skipped.emitted-line",
+      formatActivityLogProofLine(skipped),
+    );
+    expect(persisted).toMatchObject({ reason: "single-item-batch", inputCount: 1 });
   });
 
   it("reports a caller-aborted batch as such rather than probing N more times", async () => {
@@ -433,6 +520,11 @@ describe("batch embedding — activity log", () => {
     const inconclusive = eventFor(log.events, "embedding.batch.degrade-inconclusive");
     expect(inconclusive.extra).toMatchObject({ reason: "scalar-probe-also-failed" });
     expect(embeddingOps(log.events)).not.toContain("embedding.batch.degraded-to-scalar");
+    const persisted = expectActivityLogProof(
+      "embedding.batch.degrade-inconclusive.emitted-line",
+      formatActivityLogProofLine(inconclusive),
+    );
+    expect(persisted).toMatchObject({ reason: "scalar-probe-also-failed" });
   });
 
   // BOTH strict-rejection rungs reach the same decision — "this endpoint rejects the ARRAY shape
@@ -489,6 +581,26 @@ describe("batch embedding — activity log", () => {
       memoized: true,
       reason: "minimal-array-rejected",
     });
+    const persistedUnsupported = expectActivityLogProof(
+      "embedding.batch.array-unsupported.emitted-line",
+      formatActivityLogProofLine(fromRetry),
+    );
+    expect(persistedUnsupported).toMatchObject({
+      inputCount: 1,
+      memoized: true,
+      reason: "minimal-array-rejected",
+    });
+
+    const minimalRetry = eventFor(viaMinimalRetry.events, "embedding.batch.minimal-shape-retry");
+    const persistedMinimalRetry = expectActivityLogProof(
+      "embedding.batch.minimal-shape-retry.emitted-line",
+      formatActivityLogProofLine(minimalRetry),
+    );
+    expect(persistedMinimalRetry).toMatchObject({
+      inputCount: 1,
+      reason: "strict-gateway-rejection",
+    });
+
     expect(fromMemo.level).toBe(fromRetry.level);
     expect(fromMemo.status).toBe(fromRetry.status);
     expect(Object.keys(fromMemo.extra ?? {}).sort()).toEqual(
@@ -514,10 +626,16 @@ describe("batch embedding — activity log", () => {
       log: log.sink,
     });
     expect(outcome.ok).toBe(false);
-    expect(eventFor(log.events, "embedding.batch.invalid-response").extra).toMatchObject({
+    const invalid = eventFor(log.events, "embedding.batch.invalid-response");
+    expect(invalid.extra).toMatchObject({
       reason: "item-count-mismatch",
       inputCount: 2,
     });
+    const persisted = expectActivityLogProof(
+      "embedding.batch.invalid-response.emitted-line",
+      formatActivityLogProofLine(invalid),
+    );
+    expect(persisted).toMatchObject({ reason: "item-count-mismatch", inputCount: 2 });
   });
 
   it("carries the completed prefix on a mid-ladder item failure", async () => {
@@ -539,6 +657,11 @@ describe("batch embedding — activity log", () => {
     const stop = eventFor(log.events, "embedding.scalar-ladder.item-failed");
     expect(stop.level).toBe("warn");
     expect(stop.extra).toMatchObject({ completed: 1, total: 2 });
+    const persisted = expectActivityLogProof(
+      "embedding.scalar-ladder.item-failed.emitted-line",
+      formatActivityLogProofLine(stop),
+    );
+    expect(persisted).toMatchObject({ completed: 1, total: 2 });
   });
 
   it("writes only the attempt line on a clean batch — no degradation noise", async () => {
@@ -565,6 +688,16 @@ describe("batch embedding — activity log", () => {
       timeoutMs: 9_000,
     });
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
+    const persisted = expectActivityLogProof(
+      "embedding.batch.dispatch.emitted-line",
+      formatActivityLogProofLine(dispatch),
+    );
+    expect(persisted).toMatchObject({
+      inputCount: 2,
+      minimalShape: false,
+      modelId: "embed-1",
+      timeoutMs: 9_000,
+    });
   });
 
   it("sanitizes a body-bearing batch model id without blocking the provider call", async () => {
@@ -644,6 +777,12 @@ describe("batch embedding — activity log", () => {
       expect(item.durationMs).toBeGreaterThanOrEqual(0);
     }
     expect(JSON.stringify(log.events)).not.toContain("bbbbbb");
+    const first = eventFor(log.events, "embedding.scalar-ladder.item-completed");
+    const persisted = expectActivityLogProof(
+      "embedding.scalar-ladder.item-completed.emitted-line",
+      formatActivityLogProofLine(first),
+    );
+    expect(persisted).toMatchObject({ index: 0, total: 3, inputChars: 3 });
   });
 
   // The stall case the progress lines exist for: the ladder is mid-flight on item 2 and has
@@ -789,6 +928,48 @@ describe("batch embedding — activity log", () => {
     expect(eventFor(log.events, "embedding.batch.dispatch").extra).toMatchObject({
       bodyBytes: bytes,
     });
+  });
+
+  it("stops the scalar ladder at its deadline and reports how far it got", async () => {
+    const log = recorder();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const transport = scriptedFetch([
+        (): Response => jsonResponse("{}", 500),
+        (): Response => {
+          vi.setSystemTime(Date.now() + 100);
+          return jsonResponse(scalarBody());
+        },
+        (): Response => {
+          vi.setSystemTime(Date.now() + 100);
+          return jsonResponse(scalarBody());
+        },
+      ]);
+      const outcome = await requestOpenAIEmbeddingBatch({
+        ...BASE,
+        endpoint: uniqueEndpoint(),
+        inputs: ["one", "two", "three"],
+        timeoutMs: 50,
+        fetchImpl: transport.fetchImpl,
+        log: log.sink,
+      });
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.kind).toBe("timeout");
+        expect(outcome.partial).toHaveLength(2);
+      }
+      const deadline = eventFor(log.events, "embedding.scalar-ladder.deadline-expired");
+      expect(deadline.level).toBe("warn");
+      expect(deadline.errorKind).toBe("timeout");
+      expect(deadline.extra).toMatchObject({ completed: 2, total: 3 });
+      const persisted = expectActivityLogProof(
+        "embedding.scalar-ladder.deadline-expired.emitted-line",
+        formatActivityLogProofLine(deadline),
+      );
+      expect(persisted).toMatchObject({ completed: 2, total: 3 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stays silent — and behaviourally identical — when no sink is wired", async () => {

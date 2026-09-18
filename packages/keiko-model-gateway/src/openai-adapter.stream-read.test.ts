@@ -27,6 +27,10 @@ import type {
   NormalizedResponse,
   StreamReadBounds,
 } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const CONFIG: ModelProviderConfig = {
   modelId: "example-chat-model",
@@ -291,6 +295,15 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     );
     expect(streamedLine(log.events)?.extra?.modelId).toBe(loggedModelId);
     expect(JSON.stringify(log.events)).not.toContain(modelId);
+
+    // Activity Log proof (#3532): the settled stream-outcome line as the production file sink
+    // would persist it, carrying the sanctioned unknown-correlation fallback (adapterWith() wires
+    // no logContext here).
+    const persisted = expectActivityLogProof(
+      "chat.response.streamed.emitted-line",
+      formatActivityLogProofLine(streamedLine(log.events) ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "completed", modelId: loggedModelId });
   });
 });
 

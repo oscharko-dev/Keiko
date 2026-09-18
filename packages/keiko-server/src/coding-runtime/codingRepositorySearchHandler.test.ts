@@ -7,6 +7,10 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { formatServerLogLine } from "../observability/server-log.js";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandlerOptions,
 } from "./codingRepositorySearchHandler.js";

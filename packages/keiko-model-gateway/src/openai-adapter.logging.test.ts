@@ -15,6 +15,10 @@ import {
   type ModelGatewayLogSink,
 } from "./observability.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
@@ -112,6 +116,19 @@ describe("OpenAiAdapter.call — activity log", () => {
     // Never the prompt content, and never the api key.
     expect(JSON.stringify(log.events)).not.toContain("some private prompt text");
     expect(JSON.stringify(log.events)).not.toContain(CONFIG.apiKey);
+
+    // Activity Log proof (#3532): the dispatch line as the production file sink would persist it,
+    // carrying the sanctioned unknown-correlation fallback since no logContext was supplied.
+    const persisted = expectActivityLogProof(
+      "chat.request.dispatch.emitted-line",
+      formatActivityLogProofLine(dispatch),
+    );
+    expect(persisted).toMatchObject({
+      modelId: "example-chat-model",
+      messageCount: 2,
+      timeoutMs: 12_000,
+      stream: false,
+    });
   });
 
   it("records only a digest of the dispatch endpoint", async () => {

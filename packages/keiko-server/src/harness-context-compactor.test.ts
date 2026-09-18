@@ -12,6 +12,10 @@ import {
   logHarnessContextCompactionEvents,
   serverHarnessContextCompactor,
 } from "./harness-context-compactor.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const SYSTEM: ChatMessage = { role: "system", content: "you are a helpful agent" };
 const USER: ChatMessage = { role: "user", content: "goal: investigate the failure" };
@@ -319,6 +323,12 @@ describe("logHarnessContextCompactionEvents", () => {
     ).toMatchObject({ op: "harness.context.compacted" });
     // Body-free: no message content anywhere in the line.
     expect(JSON.stringify(line)).not.toContain("call ");
+
+    const proven = expectActivityLogProof(
+      "harness.context.compacted.line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({ messagesDropped: 4, bytesBefore: 9000, bytesAfter: 3000 });
   });
 
   it("threads a supplied parentCorrelationId onto the emitted line (Codex, #3348)", () => {

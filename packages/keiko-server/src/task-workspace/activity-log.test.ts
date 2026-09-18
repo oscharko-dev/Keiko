@@ -16,11 +16,16 @@ import {
 } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
+  logWorkspaceIdentityProbe,
   logWorkspaceLifecycle,
   runWithWorkspaceLifecycleFailureLogging,
   type WorkspaceLifecycleLogInput,
 } from "./activity-log.js";
 import { TaskWorkspaceError } from "./errors.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 afterEach(() => {
   resetServerLogger();
@@ -57,6 +62,11 @@ describe("logWorkspaceLifecycle", () => {
       completeness: "complete",
       loss: "none",
     });
+    const proven = expectActivityLogProof(
+      "task-workspace.lifecycle.line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({ operation: "provision", outcome: "provisioned" });
   });
 
   it.each([
@@ -208,5 +218,44 @@ describe("logWorkspaceLifecycle", () => {
     // Confirms the fallback used the SAME resolver production composes with (process-log-sink.ts),
     // not a private default this test happens to also construct correctly.
     expect(processServerLogSink()).toBeDefined();
+  });
+});
+
+describe("logWorkspaceIdentityProbe", () => {
+  it("writes one task-workspace.identity.creation-time-probe line at info when every volume proves durable", () => {
+    const activityLog = createBufferedServerLogSink();
+    logWorkspaceIdentityProbe(
+      { activityLog },
+      {
+        correlationId: "req-identity-probe-1",
+        support: { managedRoot: "durable", repository: "durable" },
+      },
+    );
+    expect(activityLog.events).toHaveLength(1);
+    const [line] = activityLog.events;
+    expect(line?.category).toBe("diagnostic");
+    expect(line?.op).toBe("task-workspace.identity.creation-time-probe");
+    expect(line?.level).toBe("info");
+    expect(line?.correlationId).toBe("req-identity-probe-1");
+    expect(line?.extra).toEqual({ managedRoot: "durable", repository: "durable" });
+    const proven = expectActivityLogProof(
+      "task-workspace.identity.creation-time-probe.line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({ managedRoot: "durable", repository: "durable" });
+  });
+
+  it("logs at warn when a volume cannot prove durability", () => {
+    const activityLog = createBufferedServerLogSink();
+    logWorkspaceIdentityProbe(
+      { activityLog },
+      {
+        correlationId: "req-identity-probe-2",
+        support: { managedRoot: "inconclusive", repository: "same-volume" },
+      },
+    );
+    const [line] = activityLog.events;
+    expect(line?.level).toBe("warn");
+    expect(line?.extra).toEqual({ managedRoot: "inconclusive", repository: "same-volume" });
   });
 });
