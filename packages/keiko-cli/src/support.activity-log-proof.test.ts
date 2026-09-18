@@ -40,6 +40,7 @@ import {
 } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 import { resolveOutPath, runSupportCli, type SupportCliDeps } from "./support.js";
+import { analyzeLogText } from "./support-analyze.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 const tempRoots: string[] = [];
@@ -223,5 +224,14 @@ describe("support activity log proofs", () => {
       completeness: "complete",
       loss: "none",
     });
+    // #3532: the classified line carries the analyzer's own sufficiency projection of the input.
+    const { sufficiency } = analyzeLogText(`${supportedV2InputLine()}\n`);
+    expect(record).toMatchObject({
+      sufficiency: sufficiency.status,
+      completeClassCount: sufficiency.coverage.completeClassCount,
+      degradedClassCount: sufficiency.coverage.degradedClassCount,
+      insufficientClassCount: sufficiency.coverage.insufficientClassCount,
+    });
+    expect(sufficiency.coverage.observedClassCount).toBeGreaterThan(0);
   });
 });
