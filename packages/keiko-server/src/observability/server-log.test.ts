@@ -1573,8 +1573,10 @@ describe("server activity log burst cost", () => {
     expect(guardedOpenCount).toBeGreaterThan(1);
     expect(fsCalls.open).toBe(guardedOpenCount);
     expect(fsCalls.close).toBe(closedGuardCount);
-    // One `write(2)` per line: one separate safe-open record, then one per caller event.
-    expect(fsCalls.write).toBe(BURST_EVENT_COUNT + 1);
+    // One `write(2)` per line: one exclusive-create for this process's first-ever store-policy
+    // record (#3554, resolved lazily on this first passing-threshold write), one separate
+    // safe-open record, then one per caller event.
+    expect(fsCalls.write).toBe(BURST_EVENT_COUNT + 2);
 
     // Linear output, not quadratic, measured on the still-active segment: the SUM of each line's own
     // width, derived through the production formatter itself so a change to the identity envelope

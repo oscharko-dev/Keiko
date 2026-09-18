@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
   activityLogPinFileName,
   activityLogSegmentFileName,
   formatActivityLogSegmentId,
@@ -192,7 +193,29 @@ describe("Activity Log file-name grammar", () => {
     expect(isActivityLogOwnedFileName("server-2026-09-17.log")).toBe(true);
     expect(isActivityLogOwnedFileName(activityLogSegmentFileName(SEGMENT, "active"))).toBe(true);
     expect(isActivityLogOwnedFileName("pin-0123456789abcdef01234567.json")).toBe(true);
+    expect(isActivityLogOwnedFileName(ACTIVITY_LOG_STORE_POLICY_FILE_NAME)).toBe(true);
     expect(isActivityLogOwnedFileName("operator-notes.txt")).toBe(false);
     expect(isActivityLogOwnedFileName("server-2026-09-17.log.bak")).toBe(false);
+  });
+
+  it("keeps the store policy record out of the log-content grammar every reader walks (#3554)", () => {
+    // The policy record is owned (repair/uninstall must claim it) but it is never log content: a
+    // reader that only sees parseActivityLogFileName / orderActivityLogFileNames /
+    // readableActivityLogFileNames must never observe it, so a disagreement between two
+    // processes' resolved config can only be settled by the dedicated policy reader, never by a
+    // reader that walks the ordered log lines.
+    expect(parseActivityLogFileName(ACTIVITY_LOG_STORE_POLICY_FILE_NAME)).toBeUndefined();
+    const sealed = activityLogSegmentFileName(SEGMENT, "sealed");
+    const ordered = orderActivityLogFileNames([
+      ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
+      sealed,
+      "server.log",
+    ]);
+    expect(ordered.map((file) => file.name)).toStrictEqual(["server.log", sealed]);
+    expect(
+      readableActivityLogFileNames(ordered).some(
+        (file) => file.name === ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
+      ),
+    ).toBe(false);
   });
 });

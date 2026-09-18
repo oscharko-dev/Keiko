@@ -19,12 +19,19 @@
 // envelope already carries, and `<index>` counts that process's segments from 000001. Sealing only
 // drops `.active`, so a segment keeps one stable id — `<start>-<pid>-<instance>-<index>` — for its
 // whole life, and a crash-recovering reader derives the sealed name without reading any content.
-// Retention pins are Keiko-owned records in the same directory, named `pin-<24 hex>.json`.
+// Retention pins are Keiko-owned records in the same directory, named `pin-<24 hex>.json`. The
+// store's own governing policy (retention bytes/days, pin quota bytes — #3554) is one further
+// Keiko-owned record at the fixed name `store-policy.json`: unlike segments and pins it is never
+// log content, so it is deliberately NOT part of the `ActivityLogFileName` grammar below and
+// `orderActivityLogFileNames` / `readableActivityLogFileNames` never see it. It IS owned
+// (`isActivityLogOwnedFileName`), so ownership scans, repair and uninstall still claim it.
 //
 // Pure functions only: this module performs no filesystem access.
 
 export const ACTIVITY_LOG_DIRECTORY_NAME = "logs";
 export const ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME = "server.log";
+/** The store's one governing policy record (retention/pin-quota bounds), never log content. */
+export const ACTIVITY_LOG_STORE_POLICY_FILE_NAME = "store-policy.json";
 
 export type ActivityLogSegmentState = "active" | "sealed";
 
@@ -263,6 +270,8 @@ export function parseActivityLogPinFileName(name: string): string | undefined {
 /** True for every name the Activity Log store may create, rename, or delete in its directory. */
 export function isActivityLogOwnedFileName(name: string): boolean {
   return (
-    parseActivityLogFileName(name) !== undefined || parseActivityLogPinFileName(name) !== undefined
+    parseActivityLogFileName(name) !== undefined ||
+    parseActivityLogPinFileName(name) !== undefined ||
+    name === ACTIVITY_LOG_STORE_POLICY_FILE_NAME
   );
 }

@@ -35,6 +35,7 @@ import {
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   ACTIVITY_LOG_PIN_ID_PATTERN,
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
   activityLogPinFileName,
   orderActivityLogFileNames,
   parseActivityLogPinFileName,
@@ -93,6 +94,19 @@ function boundedSetting(
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
 }
 
+/**
+ * A segment never exceeds a quarter of the (possibly store-governed, #3554) byte budget, so a
+ * small budget still holds history instead of one segment filling it. Exported so the store-policy
+ * merge in `server-log.ts` re-clamps against the GOVERNING `retentionBytes` with the exact same
+ * invariant, instead of restating it.
+ */
+export function clampActivityLogSegmentBytes(segmentBytes: number, retentionBytes: number): number {
+  return Math.max(
+    MIN_ACTIVITY_LOG_SEGMENT_BYTES,
+    Math.min(segmentBytes, Math.floor(retentionBytes / 4)),
+  );
+}
+
 /** Resolves the Activity Log storage bounds from the one configuration surface every sink sees. */
 export function resolveActivityLogStorageConfig(env: ServerLogEnv): ActivityLogStorageConfig {
   const retentionBytes = boundedSetting(
@@ -108,12 +122,7 @@ export function resolveActivityLogStorageConfig(env: ServerLogEnv): ActivityLogS
     Number.MAX_SAFE_INTEGER,
   );
   return {
-    // A segment never exceeds a quarter of the byte budget, so a small budget still holds history
-    // instead of one segment filling it.
-    segmentBytes: Math.max(
-      MIN_ACTIVITY_LOG_SEGMENT_BYTES,
-      Math.min(segmentBytes, Math.floor(retentionBytes / 4)),
-    ),
+    segmentBytes: clampActivityLogSegmentBytes(segmentBytes, retentionBytes),
     segmentSeconds: boundedSetting(
       env[ACTIVITY_LOG_SEGMENT_SECONDS_ENV],
       DEFAULT_ACTIVITY_LOG_SEGMENT_SECONDS,
@@ -414,6 +423,289 @@ export function activityLogPinCovers(
 ): boolean {
   if (pin.scope.kind === "segments") return pin.scope.segmentIds.includes(entry.file.segmentId);
   return entry.file.startMs <= pin.scope.toMs && entry.mtimeMs >= pin.scope.fromMs;
+}
+
+// ─── Store policy (#3554) ──────────────────────────────────────────────────────────────────────
+//
+// `resolveActivityLogStorageConfig` reads bounds from the CALLING process's own env; nothing
+// previously recorded which configuration a shared `<stateDir>/logs/` directory is actually
+// governed by. Several cooperating processes (a long-running server plus a one-off CLI, or two
+// server instances across a restart) can therefore each run `applyActivityLogRetention` under a
+// different view of the budget: a smaller one prunes segments a larger one relies on to keep, and
+// a larger one is never capped by a stricter peer's limit — the #3530 bound (total disk use never
+// exceeds the configured budget plus the pin quota) does not hold once processes disagree.
+//
+// The fix: exactly one closed-grammar record (`ACTIVITY_LOG_STORE_POLICY_FILE_NAME`, never log
+// content — see `activity-log-files.ts`) holds the store-level bounds every cooperating process
+// enforces. The first process that finds no valid record publishes its own, race-safe through the
+// same exclusive-create primitive the pin records use. Every later process applies the STORED
+// bounds, whatever its own env says, and — the one case an operator needs to see — records ONE
+// body-free evidence line per process lifetime when its own env disagreed (`server-log.ts` turns
+// the outcome below into that registered event). A process may replace a stale or corrupt record
+// only while it is the store's SOLE live writer (every other active segment belongs to a
+// confirmed-exited instance): that is what lets an operator's changed `KEIKO_LOG_RETENTION_BYTES`
+// take effect on the next clean restart, without letting a stray concurrent process silently
+// override a running server's governance.
+
+export const ACTIVITY_LOG_POLICY_SETTINGS = [
+  "retentionBytes",
+  "retentionDays",
+  "pinQuotaBytes",
+] as const;
+export type ActivityLogPolicySetting = (typeof ACTIVITY_LOG_POLICY_SETTINGS)[number];
+
+export interface ActivityLogPolicyValues {
+  readonly retentionBytes: number;
+  readonly retentionDays: number;
+  readonly pinQuotaBytes: number;
+}
+
+export interface ActivityLogPolicyRecord extends ActivityLogPolicyValues {
+  readonly schemaVersion: 1;
+}
+
+const POLICY_RECORD_KEYS = ["schemaVersion", "retentionBytes", "retentionDays", "pinQuotaBytes"];
+
+function validPolicyBound(value: unknown, minimum: number, maximum: number): boolean {
+  return (
+    typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum
+  );
+}
+
+function isActivityLogPolicyRecord(value: unknown): value is ActivityLogPolicyRecord {
+  return (
+    isPlainObject(value) &&
+    hasExactKeys(value, POLICY_RECORD_KEYS) &&
+    value.schemaVersion === 1 &&
+    validPolicyBound(
+      value.retentionBytes,
+      MIN_ACTIVITY_LOG_RETENTION_BYTES,
+      Number.MAX_SAFE_INTEGER,
+    ) &&
+    validPolicyBound(value.retentionDays, 1, MAX_ACTIVITY_LOG_RETENTION_DAYS) &&
+    validPolicyBound(value.pinQuotaBytes, 1, Number.MAX_SAFE_INTEGER)
+  );
+}
+
+function policyRecordPath(directory: string): string {
+  return join(directory, ACTIVITY_LOG_STORE_POLICY_FILE_NAME);
+}
+
+/** Reads the store's governing policy record, or `undefined` when absent, unreadable, or corrupt. */
+export function readActivityLogPolicyRecord(
+  directory: string,
+  trustedRoot: string,
+): ActivityLogPolicyRecord | undefined {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSafeArtifactFile(policyRecordPath(directory), {
+      artifactClass: "activity-log",
+      mode: "read",
+      trustedRoot,
+    });
+    const text = readBoundedText(descriptor, fstatSync(descriptor).size);
+    if (text === undefined) return undefined;
+    const value: unknown = JSON.parse(text);
+    return isActivityLogPolicyRecord(value) ? value : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+/** Publishes the store's governing policy record exclusively; an existing name is never replaced. */
+export function writeActivityLogPolicyRecord(
+  directory: string,
+  trustedRoot: string,
+  record: ActivityLogPolicyRecord,
+): void {
+  const descriptor = openSafeArtifactFile(policyRecordPath(directory), {
+    artifactClass: "activity-log",
+    mode: "exclusive-create",
+    trustedRoot,
+  });
+  try {
+    writeAllBytes(descriptor, Buffer.from(`${JSON.stringify(record)}\n`, "utf8"));
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export interface ActivityLogWriterIdentity {
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly isAlive: (pid: number) => boolean;
+}
+
+/**
+ * True when every active segment already in the directory belongs to this process or one
+ * `isAlive` reports gone: no confirmed-live peer is writing, so this process may replace the
+ * store's governing policy. A segment whose owner cannot be confirmed dead does NOT count as
+ * gone — replacing shared governance deserves a stricter bar than sealing an abandoned segment
+ * (`activityLogOrphanOwner`'s "stale" branch is a time-based guess, not a confirmed exit).
+ */
+export function isSoleActivityLogWriter(
+  files: readonly ActivityLogFileEntry[],
+  identity: ActivityLogWriterIdentity,
+): boolean {
+  return files.every((entry) => {
+    if (entry.file.kind !== "active") return true;
+    if (entry.file.instanceId === identity.instanceId || entry.file.pid === identity.pid) {
+      return true;
+    }
+    return !identity.isAlive(entry.file.pid);
+  });
+}
+
+export interface ActivityLogPolicyConflict {
+  readonly resolution: "adopted" | "replaced";
+  readonly conflictingSettings: readonly ActivityLogPolicySetting[];
+  readonly stored: ActivityLogPolicyValues;
+  readonly requested: ActivityLogPolicyValues;
+}
+
+export interface ActivityLogPolicyOutcome extends ActivityLogPolicyValues {
+  // `undefined` when the governing values need no evidence: nothing existed yet, a corrupt record
+  // was silently repaired, or this process's own requested values already matched the record.
+  readonly conflict: ActivityLogPolicyConflict | undefined;
+}
+
+function differingPolicySettings(
+  left: ActivityLogPolicyValues,
+  right: ActivityLogPolicyValues,
+): readonly ActivityLogPolicySetting[] {
+  return ACTIVITY_LOG_POLICY_SETTINGS.filter((setting) => left[setting] !== right[setting]);
+}
+
+// A record read from disk carries `schemaVersion`; every outcome and conflict field below is
+// documented as the three governed values alone, so a read is always narrowed back down before it
+// is spread into one.
+function policyValuesOnly(values: ActivityLogPolicyValues): ActivityLogPolicyValues {
+  return {
+    retentionBytes: values.retentionBytes,
+    retentionDays: values.retentionDays,
+    pinQuotaBytes: values.pinQuotaBytes,
+  };
+}
+
+function matchingOutcome(values: ActivityLogPolicyValues): ActivityLogPolicyOutcome {
+  return { ...values, conflict: undefined };
+}
+
+function adoptedOutcome(
+  stored: ActivityLogPolicyValues,
+  requested: ActivityLogPolicyValues,
+): ActivityLogPolicyOutcome {
+  const conflictingSettings = differingPolicySettings(stored, requested);
+  if (conflictingSettings.length === 0) return matchingOutcome(stored);
+  return { ...stored, conflict: { resolution: "adopted", conflictingSettings, stored, requested } };
+}
+
+function publishPolicy(
+  directory: string,
+  trustedRoot: string,
+  requested: ActivityLogPolicyValues,
+): boolean {
+  try {
+    writeActivityLogPolicyRecord(directory, trustedRoot, { schemaVersion: 1, ...requested });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A corrupt or unreadable record is treated as absent and repaired: whatever occupies the name
+// cannot be a live peer's governing record (a valid one would have been read above), so it is
+// removed and republished. Losing the exclusive-create race here to a peer publishing between
+// this repair and that create is the same documented residual as the store's other lock-free
+// admissions (ADR-0173 D14): the next resolution converges on whichever record won.
+function repairPolicy(
+  directory: string,
+  trustedRoot: string,
+  requested: ActivityLogPolicyValues,
+): void {
+  try {
+    removeActivityLogFile(policyRecordPath(directory), trustedRoot);
+  } catch {
+    // Nothing there to remove, or this process cannot safely remove it; the create below still
+    // decides who actually governs.
+  }
+  publishPolicy(directory, trustedRoot, requested);
+}
+
+function establishPolicy(
+  directory: string,
+  trustedRoot: string,
+  requested: ActivityLogPolicyValues,
+): ActivityLogPolicyOutcome {
+  if (publishPolicy(directory, trustedRoot, requested)) return matchingOutcome(requested);
+  const winner = readActivityLogPolicyRecord(directory, trustedRoot);
+  if (winner !== undefined) return adoptedOutcome(policyValuesOnly(winner), requested);
+  repairPolicy(directory, trustedRoot, requested);
+  return matchingOutcome(requested);
+}
+
+function replacePolicy(
+  directory: string,
+  trustedRoot: string,
+  requested: ActivityLogPolicyValues,
+  stored: ActivityLogPolicyValues,
+  conflictingSettings: readonly ActivityLogPolicySetting[],
+): ActivityLogPolicyOutcome {
+  try {
+    removeActivityLogFile(policyRecordPath(directory), trustedRoot);
+  } catch {
+    // The create below still decides who actually governs.
+  }
+  if (publishPolicy(directory, trustedRoot, requested)) {
+    return {
+      ...requested,
+      conflict: { resolution: "replaced", conflictingSettings, stored, requested },
+    };
+  }
+  // Lost the race to a peer's own publish between the removal and this create.
+  const winner = readActivityLogPolicyRecord(directory, trustedRoot);
+  return winner === undefined
+    ? matchingOutcome(requested)
+    : adoptedOutcome(policyValuesOnly(winner), requested);
+}
+
+function resolveStorePolicyUnsafe(
+  directory: string,
+  trustedRoot: string,
+  requested: ActivityLogPolicyValues,
+  identity: ActivityLogWriterIdentity,
+): ActivityLogPolicyOutcome {
+  const existingRecord = readActivityLogPolicyRecord(directory, trustedRoot);
+  if (existingRecord === undefined) return establishPolicy(directory, trustedRoot, requested);
+  const existing = policyValuesOnly(existingRecord);
+  const conflictingSettings = differingPolicySettings(existing, requested);
+  if (conflictingSettings.length === 0) return matchingOutcome(existing);
+  if (!isSoleActivityLogWriter(listActivityLogDirectory(directory).files, identity)) {
+    return adoptedOutcome(existing, requested);
+  }
+  return replacePolicy(directory, trustedRoot, requested, existing, conflictingSettings);
+}
+
+/**
+ * Establishes or adopts the ONE store-level policy every cooperating process must enforce
+ * (retention bytes/days, pin quota bytes): see the section header above for the full design. Never
+ * throws — any filesystem failure falls back to `requested`, unpersisted, exactly how an
+ * ungoverned store behaved before this policy existed, never worse.
+ */
+export function resolveActivityLogStorePolicy(
+  directory: string,
+  trustedRoot: string,
+  requested: ActivityLogPolicyValues,
+  identity: ActivityLogWriterIdentity,
+): ActivityLogPolicyOutcome {
+  try {
+    return resolveStorePolicyUnsafe(directory, trustedRoot, requested, identity);
+  } catch {
+    return matchingOutcome(requested);
+  }
 }
 
 // ─── Pin protection within the quota ───────────────────────────────────────────────────────────
