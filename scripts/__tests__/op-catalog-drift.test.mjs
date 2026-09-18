@@ -26,12 +26,12 @@ import {
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(repoRoot, "docs", "observability", "op-catalog.generated.json");
-// Coverage instrumentation makes a complete repository scan take about 90 seconds in CI. This is
-// a harness deadline, not a product latency budget; cache the immutable result and keep the two
-// unavoidable first scans bounded without letting the global 15-second test limit abort them.
-const REPOSITORY_SCAN_TEST_TIMEOUT_MS = 2 * 60_000;
+// Coverage instrumentation makes a complete repository scan take more than two minutes on the
+// smallest CI workers. This is a harness deadline, not a product latency budget; cache the one
+// immutable result and keep that unavoidable scan bounded without letting the global 15-second
+// test limit abort it.
+const REPOSITORY_SCAN_TEST_TIMEOUT_MS = 4 * 60_000;
 let currentCatalog;
-let currentTypedRegistry;
 
 const ACTIVITY_FIELD_TYPES_BY_DATA_CLASS = {
   "closed-enum": new Set(["boolean", "string", "string-array"]),
@@ -52,8 +52,7 @@ function generateCurrentOpCatalog() {
 }
 
 function generateCurrentTypedRegistry() {
-  currentTypedRegistry ??= generateTypedActivityLogRegistry(repoRoot);
-  return currentTypedRegistry;
+  return generateCurrentOpCatalog().typedRegistry;
 }
 
 function readCheckedInCatalog() {
