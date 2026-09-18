@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f0df6df1051c6a0e2a76febd464f36b87bf8a299a1f7634e768a0483282615a1"
+    "catalogDigest": "a319067460b946d18308ed52d63b34715b1a7c72c7f3eed03f3b4219f1562dff"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -53,7 +53,7 @@
   "summary": {
     "operationCount": 415,
     "proofCount": 423,
-    "resolvedProofCount": 16,
+    "resolvedProofCount": 14,
     "failureClassCount": 307,
     "scenarioCount": 29,
     "resolvedScenarioCount": 0
@@ -1102,12 +1102,8 @@
     "git-change.chat.stale.scope": [],
     "git.ci-observation.emitted-line": [],
     "git.ci-repair.budget.emitted-line": [],
-    "git.commit.draft.completed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts"
-    ],
-    "git.commit.preview.completed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts"
-    ],
+    "git.commit.draft.completed.emitted-line": [],
+    "git.commit.preview.completed.emitted-line": [],
     "git.delivery.authority.admitted.emitted-line": [],
     "git.delivery.authority.denied.emitted-line": [],
     "git.delivery.buffers.checked.emitted-line": [],
