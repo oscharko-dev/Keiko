@@ -129,11 +129,17 @@ const MANDATORY_OPERATIONS: ReadonlySet<string> = new Set([
  * readiness, and every loss signal. Unregistered events are never mandatory.
  */
 export function isMandatoryActivityLogEvent(event: object): boolean {
-  const registration = activityLogEventRegistration(event);
-  return (
-    registration !== undefined &&
-    (registration.lifecycle === "loss" || MANDATORY_OPERATIONS.has(registration.op))
-  );
+  // Reading the registration marker is a property read on an object this layer did not build; a
+  // hostile accessor that throws makes the event ordinary, never a new failure of the caller.
+  try {
+    const registration = activityLogEventRegistration(event);
+    return (
+      registration !== undefined &&
+      (registration.lifecycle === "loss" || MANDATORY_OPERATIONS.has(registration.op))
+    );
+  } catch {
+    return false;
+  }
 }
 
 function sourcePassesGate(
@@ -335,8 +341,8 @@ export function createActivityLogSink(
   const threshold = options.level ?? resolveServerLogThreshold(options.env ?? process.env);
   return {
     write(event: ServerLogEvent): void {
-      if (!sourcePassesGate(event.level ?? DEFAULT_SERVER_LOG_LEVEL, threshold, event)) return;
       try {
+        if (!sourcePassesGate(event.level ?? DEFAULT_SERVER_LOG_LEVEL, threshold, event)) return;
         writeCounted(file, event);
       } catch (error) {
         recordActivityLogLoss("logger-write-failed");

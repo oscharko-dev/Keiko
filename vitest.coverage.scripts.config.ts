@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./scripts/lib/package-coverage-gate-scripts.mjs";
@@ -18,6 +19,10 @@ export default defineConfig({
     environment: "node",
     include: ["scripts/__tests__/**/*.test.mjs"],
     exclude: ["**/node_modules/**", "**/dist/**"],
+    // #3532: explicit Activity Log test-writer injection, identical to the root suite.
+    setupFiles: [
+      fileURLToPath(new URL("./tests/support/activity-log-test-writer.ts", import.meta.url)),
+    ],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
     maxWorkers: 2,
     testTimeout: 15_000,

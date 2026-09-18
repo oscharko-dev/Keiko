@@ -318,10 +318,28 @@ export interface ActivityLogReadinessOptions {
   readonly env?: ServerLogEnv | undefined;
   readonly storageHealth?: ActivityLogStorageHealthProvider | undefined;
   readonly persist?: ActivityLogEventPersister | undefined;
-  // False for a one-shot command that inspects a state directory it does not serve (`keiko support
-  // export --state-dir`): its own logger legitimately writes elsewhere, so port wiring is not a
-  // property of that directory. Defaults to true.
-  readonly validatePortWiring?: boolean | undefined;
+  // `process` (the default) evaluates the writer this process logs through. `directory` evaluates
+  // the Activity Log of `stateDir` itself, for a one-shot command that inspects a state directory
+  // it does not serve (`keiko support export --state-dir`): the probe writes through the production
+  // append path into that directory, port wiring is not a property of it, and the process's own
+  // readiness — the one `/api/health` reports — is left untouched.
+  readonly scope?: ActivityLogReadinessScope | undefined;
+}
+
+export type ActivityLogReadinessScope = "process" | "directory";
+
+function directoryScope(
+  options: ActivityLogReadinessOptions,
+): options is ActivityLogReadinessOptions & {
+  readonly stateDir: string;
+} {
+  return options.scope === "directory" && options.stateDir !== undefined;
+}
+
+function writerStateFor(options: ActivityLogReadinessOptions): ActivityLogWriterState {
+  return directoryScope(options)
+    ? { writer: "production-file", stateDir: options.stateDir }
+    : activityLogWriterState();
 }
 
 function portsWired(
@@ -338,12 +356,12 @@ function portWiringFact(
   state: ActivityLogWriterState,
   options: ActivityLogReadinessOptions,
 ): boolean {
-  if (options.validatePortWiring === false) return true;
+  if (directoryScope(options)) return true;
   return portsWired(state.writer, state.stateDir, options.stateDir ?? memory.expectedStateDir);
 }
 
 function collectFacts(options: ActivityLogReadinessOptions, sink: SinkCondition): ReadinessFacts {
-  const state = activityLogWriterState();
+  const state = writerStateFor(options);
   const stateDir = options.stateDir ?? state.stateDir;
   const production = state.writer !== "test-injected" && stateDir !== undefined;
   const storage = production
@@ -376,16 +394,20 @@ function remember(snapshot: ActivityLogReadinessSnapshot): ActivityLogReadinessS
 export function checkActivityLogReadiness(
   options: ActivityLogReadinessOptions = {},
 ): ActivityLogReadinessSnapshot {
-  memory.expectedStateDir = options.stateDir ?? memory.expectedStateDir;
+  const inspectOnly = directoryScope(options);
+  if (!inspectOnly) memory.expectedStateDir = options.stateDir ?? memory.expectedStateDir;
+  const record = inspectOnly
+    ? (snapshot: ActivityLogReadinessSnapshot): ActivityLogReadinessSnapshot => snapshot
+    : remember;
   const tentative = snapshotFrom(collectFacts(options, "writable"));
-  const stateDir = options.stateDir ?? activityLogWriterState().stateDir;
-  if (tentative.writer === "test-injected" || stateDir === undefined) return remember(tentative);
+  const stateDir = writerStateFor(options).stateDir;
+  if (tentative.writer === "test-injected" || stateDir === undefined) return record(tentative);
   const persisted = (options.persist ?? persistActivityLogEvents)(stateDir, [
     readinessEvent(tentative, "startup"),
   ]);
-  if (persisted) return remember(tentative);
+  if (persisted) return record(tentative);
   reportServerLogFailure(undefined, { op: "activity-log.readiness", loss: "event-dropped" });
-  return remember(snapshotFrom(collectFacts(options, "unwritable")));
+  return record(snapshotFrom(collectFacts(options, "unwritable")));
 }
 
 function sameReadiness(

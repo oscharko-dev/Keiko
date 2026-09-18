@@ -36,6 +36,10 @@ import {
   SERVER_LOG_SCHEMA_VERSION,
   UI_DB_FILENAME,
 } from "@oscharko-dev/keiko-server";
+import {
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
 import { analyzeLogText } from "./support-analyze.js";
@@ -255,8 +259,6 @@ describe("parseSupportArgs", () => {
         out: undefined,
         stateDir: undefined,
         maxBytes: undefined,
-        includeUiLog: false,
-        iUnderstandUnredacted: false,
         includeEvidenceRunIds: [],
       },
     });
@@ -269,8 +271,6 @@ describe("parseSupportArgs", () => {
         "/tmp/.keiko",
         "--max-bytes",
         "100",
-        "--include-ui-log",
-        "--i-understand-this-is-unredacted",
         "--include-evidence",
         "run-a, run-b,,run-c",
       ]),
@@ -280,18 +280,23 @@ describe("parseSupportArgs", () => {
         out: "/tmp/x.jsonl",
         stateDir: "/tmp/.keiko",
         maxBytes: 100,
-        includeUiLog: true,
-        iUnderstandUnredacted: true,
         includeEvidenceRunIds: ["run-a", "run-b", "run-c"],
       },
     });
   });
 
-  it("parses --include-ui-log alone as consent NOT given (the confirmation flag is separate)", () => {
-    const parsed = parseSupportArgs(["export", "--include-ui-log"]);
-    expect(parsed.kind).toBe("export");
-    expect(parsed.kind === "export" && parsed.value.includeUiLog).toBe(true);
-    expect(parsed.kind === "export" && parsed.value.iUnderstandUnredacted).toBe(false);
+  // #3532: raw UI output can never be part of a report. The retired consent flags are refused
+  // explicitly instead of being silently ignored, alone or together.
+  it.each([
+    [["--include-ui-log"]],
+    [["--i-understand-this-is-unredacted"]],
+    [["--include-ui-log", "--i-understand-this-is-unredacted"]],
+  ])("refuses the retired ui.log flags %j as a usage error", (flags) => {
+    const parsed = parseSupportArgs(["export", ...flags]);
+    expect(parsed.kind).toBe("usage");
+    expect(parsed.kind === "usage" && parsed.message).toContain(
+      "--include-ui-log is no longer supported",
+    );
   });
 
   it("rejects a --max-bytes that is not a positive integer", () => {
@@ -497,8 +502,7 @@ describe("runSupportCli export", () => {
     expect(manifest.sourceLogFiles).toEqual(["server-2026-08-19.log", "server.log"]);
     expect(manifest.truncatedLogFiles).toEqual([]);
     expect(manifest.skippedLogFiles).toEqual([]);
-    // Wave 6: "ui-log" is always named here unless BOTH --include-ui-log AND
-    // --i-understand-this-is-unredacted were passed — neither was, here.
+    // #3532: a legacy ui.log is never part of a report, so the manifest always names it excluded.
     expect(manifest.sectionsExcluded).toEqual(["ui-log"]);
     expect(manifest.evidenceIndexCount).toBe(2);
     // The manifest's auditSummary must carry the audit result MINUS the raw stateDir path (which
@@ -1111,15 +1115,7 @@ describe("runSupportCli export", () => {
     const c = makeIo();
 
     const code = await runSupportCli(
-      [
-        "export",
-        "--state-dir",
-        stateDir,
-        "--out",
-        outPath,
-        "--include-ui-log",
-        "--i-understand-this-is-unredacted",
-      ],
+      ["export", "--state-dir", stateDir, "--out", outPath],
       c.io,
       AUDIT_ENV,
       { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
@@ -1499,8 +1495,8 @@ describe("runSupportCli export", () => {
     );
   });
 
-  // Wave 6, design doc §6.3: ui.log carries the UI/BFF process's raw, unredacted stdout+stderr, so
-  // it is excluded by default — RED before this wave existed (there was no ui.log logic at all).
+  // #3532: a legacy ui.log carries raw, unredacted UI process output, so it is never read into a
+  // report — there is no flag that attaches it any more.
   function bundleLines(outPath: string): readonly Record<string, unknown>[] {
     return readFileSync(outPath, "utf8")
       .trimEnd()
@@ -1508,7 +1504,7 @@ describe("runSupportCli export", () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>);
   }
 
-  it("excludes ui.log by default: no ui-log section, and sectionsExcluded names it", async () => {
+  it("never reads a legacy ui.log into the report, and names it excluded", async () => {
     writePrivateFile(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
     const c = makeIo();
     const outPath = join(outDir, "default-no-ui-log.jsonl");
@@ -1520,35 +1516,17 @@ describe("runSupportCli export", () => {
     );
 
     expect(code).toBe(0);
+    const bundle = readFileSync(outPath, "utf8");
+    expect(bundle).not.toContain("TypeError: boom");
     const lines = bundleLines(outPath);
     expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
     expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
   });
 
-  // THE key regression-shaped assertion: one flag alone is NOT sufficient consent. Without this
-  // gate, an operator (or a script) passing only --include-ui-log would leak unredacted free text.
-  it("still excludes ui.log with ONLY --include-ui-log — the confirmation flag is not optional", async () => {
+  it("refuses the retired ui.log flags before exporting anything", async () => {
     writePrivateFile(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
     const c = makeIo();
-    const outPath = join(outDir, "half-consent.jsonl");
-    const code = await runSupportCli(
-      ["export", "--state-dir", stateDir, "--out", outPath, "--include-ui-log"],
-      c.io,
-      AUDIT_ENV,
-      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
-    );
-
-    expect(code).toBe(0);
-    const lines = bundleLines(outPath);
-    expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
-    expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
-  });
-
-  it("attaches ui.log verbatim, and clears sectionsExcluded, when BOTH flags are passed", async () => {
-    const uiLogContent = "TypeError: boom at /Users/jsmith/app\n";
-    writePrivateFile(join(stateDir, "ui.log"), uiLogContent);
-    const c = makeIo();
-    const outPath = join(outDir, "full-consent.jsonl");
+    const outPath = join(outDir, "refused-ui-log.jsonl");
     const code = await runSupportCli(
       [
         "export",
@@ -1564,13 +1542,31 @@ describe("runSupportCli export", () => {
       { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
     );
 
+    expect(code).toBe(2);
+    expect(existsSync(outPath)).toBe(false);
+    expect(c.err()).toContain("--include-ui-log is no longer supported");
+  });
+
+  it("reports the exported directory's diagnostic readiness after a successful export", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "with-readiness.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
     expect(code).toBe(0);
-    const lines = bundleLines(outPath);
-    expect(lines.find((line) => line.$section === "ui-log")).toEqual({
-      $section: "ui-log",
-      content: uiLogContent,
-    });
-    expect(lines[0]?.sectionsExcluded).toEqual([]);
+    expect(c.out()).toMatch(/Diagnostic evidence: (ready|degraded|unavailable)/u);
+    // The readiness line is persisted AFTER the report, so the report stays exactly the evidence
+    // that existed when it was taken.
+    expect(readFileSync(outPath, "utf8")).not.toContain("activity-log.readiness");
+    const readiness = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "activity-log.readiness",
+    );
+    expect(readiness).toHaveLength(1);
   });
 
   it("attaches a full evidence manifest per --include-evidence runId, beyond the index count", async () => {
@@ -1733,34 +1729,6 @@ describe("runSupportCli export", () => {
     });
     expect(String(records[0]?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
     expect(JSON.stringify(records[0])).not.toContain(outPath);
-  });
-
-  // `readUiLogContentOrUndefined`'s catch path: BOTH consent flags are given, but no ui.log file
-  // was ever written for this state dir (no `keiko start` has run against it) — `readFileSync`
-  // throws ENOENT, and the section must be excluded exactly like the no-consent cases above,
-  // never a thrown error out of the export.
-  it("excludes ui.log via the catch path when both flags are passed but no ui.log file exists", async () => {
-    const c = makeIo();
-    const outPath = join(outDir, "consent-no-file.jsonl");
-    const code = await runSupportCli(
-      [
-        "export",
-        "--state-dir",
-        stateDir,
-        "--out",
-        outPath,
-        "--include-ui-log",
-        "--i-understand-this-is-unredacted",
-      ],
-      c.io,
-      AUDIT_ENV,
-      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
-    );
-
-    expect(code).toBe(0);
-    const lines = bundleLines(outPath);
-    expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
-    expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
   });
 
   // `resolveIncludedEvidenceSections`'s `deps.evidenceStore ?? evidence.createNodeEvidenceStore(...)`
