@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c2e6801cbaa8340804e8074ac489b05fea2c6038e451d819e65a2dfc3ac3599b" as const;
+  "1d45aaddc47c76597bfa6fa1fbe71636e225e7b0574e7c10dc4c23b1c8fefd82" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -5180,7 +5180,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
-      catalogDigest: {
+      skillCatalogDigest: {
         type: "string",
         dataClass: "digest",
         required: true,
@@ -17306,7 +17306,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxItems: 5,
       },
     },
-    causal: "correlation",
+    causal: "none",
     lifecycle: "failure",
     analyzerProjection: "failure-cluster",
     failureClasses: ["lsp-process-runtime"],
@@ -17481,7 +17481,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxItems: 5,
       },
     },
-    causal: "correlation",
+    causal: "none",
     lifecycle: "failure",
     analyzerProjection: "failure-cluster",
     failureClasses: ["lsp-process-spawn"],
@@ -18554,7 +18554,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      schemaVersion: {
+      descriptionSchemaVersion: {
         type: "string",
         dataClass: "safe-version",
         required: true,
@@ -19269,12 +19269,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "s390x",
           "x64",
         ],
-      },
-      productVersion: {
-        type: "string",
-        dataClass: "safe-version",
-        required: true,
-        maxLength: 64,
       },
       host: {
         type: "string",
@@ -21705,18 +21699,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "invalid-field-bound",
           "invalid-field-vocabulary",
         ],
-      },
-      writerCapability: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["unavailable"],
-      },
-      compatibilityState: {
-        type: "string",
-        dataClass: "closed-enum",
-        required: true,
-        values: ["incomplete"],
       },
       reason: {
         type: "string",
@@ -25161,12 +25143,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
-              name: "compatibilityState",
-              type: "string",
-              dataClass: "closed-enum",
-              required: true,
-            },
-            {
               name: "failedOp",
               type: "string",
               dataClass: "opaque-id",
@@ -25189,12 +25165,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: false,
-            },
-            {
-              name: "writerCapability",
-              type: "string",
-              dataClass: "closed-enum",
-              required: true,
             },
           ],
           evidenceClasses: [
@@ -25485,12 +25455,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
-              name: "compatibilityState",
-              type: "string",
-              dataClass: "closed-enum",
-              required: true,
-            },
-            {
               name: "failedOp",
               type: "string",
               dataClass: "opaque-id",
@@ -25513,12 +25477,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: false,
-            },
-            {
-              name: "writerCapability",
-              type: "string",
-              dataClass: "closed-enum",
-              required: true,
             },
           ],
           evidenceClasses: [
@@ -30894,12 +30852,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
-              name: "catalogDigest",
-              type: "string",
-              dataClass: "digest",
-              required: true,
-            },
-            {
               name: "catalogRevision",
               type: "integer",
               dataClass: "count",
@@ -30933,6 +30885,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "runId",
               type: "string",
               dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "skillCatalogDigest",
+              type: "string",
+              dataClass: "digest",
               required: true,
             },
           ],
@@ -45902,12 +45860,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
-              name: "productVersion",
-              type: "string",
-              dataClass: "safe-version",
-              required: true,
-            },
-            {
               name: "stateDirSource",
               type: "string",
               dataClass: "closed-enum",
@@ -46303,7 +46255,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "lsp.process.runtime-error",
-          mode: "correlation",
+          mode: "none",
         },
       ],
       lossSignals: [],
@@ -46315,7 +46267,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "diagnostic",
           lifecycle: "failure",
-          causal: "correlation",
+          causal: "none",
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
@@ -46369,7 +46321,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "lsp.spawn.failed",
-          mode: "correlation",
+          mode: "none",
         },
       ],
       lossSignals: [],
@@ -46423,7 +46375,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "diagnostic",
           lifecycle: "failure",
-          causal: "correlation",
+          causal: "none",
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
@@ -48424,6 +48376,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "descriptionSchemaVersion",
+              type: "string",
+              dataClass: "safe-version",
+              required: true,
+            },
+            {
               name: "inputBytes",
               type: "integer",
               dataClass: "count",
@@ -48461,12 +48419,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "renderingVersion",
-              type: "string",
-              dataClass: "safe-version",
-              required: true,
-            },
-            {
-              name: "schemaVersion",
               type: "string",
               dataClass: "safe-version",
               required: true,
@@ -49219,12 +49171,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "port",
               type: "integer",
               dataClass: "count",
-              required: true,
-            },
-            {
-              name: "productVersion",
-              type: "string",
-              dataClass: "safe-version",
               required: true,
             },
             {

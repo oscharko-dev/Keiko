@@ -17,7 +17,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
-import { createDefaultLspSpawnFn } from "../../packages/keiko-server/src/editor/lsp/lspNodeAdapter.js";
+import {
+  createDefaultLspSpawnFn,
+  defaultLspSpawnFn,
+  LspProcessError,
+} from "../../packages/keiko-server/src/editor/lsp/lspNodeAdapter.js";
 import { writeNodeExecutableFixture } from "../../packages/keiko-server/src/editor/lsp/testing/executableFixture.js";
 import { observedGitRunner } from "../../packages/keiko-server/src/gitProcessActivity.js";
 import { LINE_DIFF_MAX_EDIT_DISTANCE } from "../../packages/keiko-server/src/gitDelivery/lineDiff.js";
@@ -209,6 +213,31 @@ describe("Activity Log scenario: editor-delivery", () => {
   });
 
   describe("editor-delivery.dependency-failure", () => {
+    // Regression (#3532): lsp.spawn.failed was registered as correlation-causal although the spawn
+    // boundary never has a request correlation, so every LSP spawn failure projected `degraded`
+    // (correlation-unknown). It is a process-scoped event now and reconstructs to complete.
+    it("reconstructs an LSP spawn failure to a complete dependency-failure trace", () => {
+      const startedAtMs = Date.now();
+
+      expect(() => defaultLspSpawnFn("relative-language-server", [], {}, stateDir)).toThrow(
+        LspProcessError,
+      );
+
+      const trace = expectActivityLogScenario("editor-delivery.dependency-failure", {
+        stateDir,
+        startedAtMs,
+        expectedOps: ["lsp.spawn.failed"],
+      });
+      expect(trace.failureClasses).toEqual(expect.arrayContaining(["lsp-process-spawn"]));
+      const [line] = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "lsp.spawn.failed",
+      );
+      expect(expectActivityLogProof("lsp.spawn.failed.emitted-line", line ?? "")).toMatchObject({
+        errorKind: "unavailable",
+      });
+    });
+
     it("reconstructs a failed git process to a complete dependency-failure trace", async () => {
       const startedAtMs = Date.now();
       const runner: GitProcessRunner = () => Promise.resolve(failedGitResult());

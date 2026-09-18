@@ -605,7 +605,7 @@ describe("approved skill discovery through the production ports (#3417)", () => 
           loss: "none",
           runId: "run-2387",
           catalogRevision: 1,
-          catalogDigest: catalog.digest(),
+          skillCatalogDigest: catalog.digest(),
           approvedCount: 3,
           listedCount: 1,
           disabledCount: 0,
@@ -624,7 +624,7 @@ describe("approved skill discovery through the production ports (#3417)", () => 
     expect(persisted).toMatchObject({
       runId: "run-2387",
       catalogRevision: 1,
-      catalogDigest: catalog.digest(),
+      skillCatalogDigest: catalog.digest(),
       approvedCount: 3,
       listedCount: 1,
     });
