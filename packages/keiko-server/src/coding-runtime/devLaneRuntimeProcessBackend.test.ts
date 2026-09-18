@@ -11,6 +11,10 @@ import {
   currentPlatform,
   probeBackends,
 } from "@oscharko-dev/keiko-sandbox";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { createBufferedServerLogSink } from "../observability/index.js";
 
 import {
@@ -188,6 +192,19 @@ describe("dev-lane runtime process backend", () => {
           errorKind: "conflict",
         }),
       );
+      const confinementFailedLine = activityLog.events.find(
+        (event) => event.op === "runtime.confinement.failed",
+      );
+      if (confinementFailedLine === undefined) throw new Error("expected confinement.failed line");
+      const persistedConfinementFailure = expectActivityLogProof(
+        "runtime.confinement.failed.emitted-line",
+        formatActivityLogProofLine(confinementFailedLine),
+      );
+      expect(persistedConfinementFailure).toMatchObject({
+        op: "runtime.confinement.failed",
+        correlationId: request.runId,
+        errorKind: "conflict",
+      });
       expect(JSON.stringify(activityLog.events)).not.toContain(fixture.runtimeRoot);
     },
   );
@@ -276,6 +293,19 @@ describe("dev-lane runtime process backend", () => {
         }) as unknown,
       }),
     );
+    const spawnedLine = activityLog.events.find(
+      (event) => event.op === "runtime.confinement.spawned",
+    );
+    if (spawnedLine === undefined) throw new Error("expected confinement.spawned line");
+    expect(
+      expectActivityLogProof(
+        "runtime.confinement.spawned.emitted-line",
+        formatActivityLogProofLine(spawnedLine),
+      ),
+    ).toMatchObject({
+      profile: "keiko-gateway",
+      childExecutablePolicy: "runtime-and-attested-git-only",
+    });
   });
 
   it("routes Linux production launches through the namespace gateway without resolving macOS Git", () => {
@@ -368,6 +398,16 @@ describe("dev-lane runtime process backend", () => {
       correlationId: "run-2475",
       extra: { ...LINUX_IDENTITY, completeness: "complete", loss: "none" },
     });
+    const unavailableLine = activityLog.events.find(
+      (event) => event.op === "runtime.confinement.unavailable",
+    );
+    if (unavailableLine === undefined) throw new Error("expected confinement.unavailable line");
+    expect(
+      expectActivityLogProof(
+        "runtime.confinement.unavailable.emitted-line",
+        formatActivityLogProofLine(unavailableLine),
+      ),
+    ).toMatchObject({ ...LINUX_IDENTITY });
   });
 
   it("refuses when the injected platform drifts from the backend identity", () => {

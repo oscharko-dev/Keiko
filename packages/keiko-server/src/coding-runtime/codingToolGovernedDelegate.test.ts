@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 import {
   createCodingToolGovernedDelegate,
@@ -242,6 +246,14 @@ describe("CodingToolGovernedDelegate", () => {
         },
       ]);
       expect(redactLogFields(events[0]?.extra ?? {})).toEqual(events[0]?.extra);
+      const [discardedLine] = events;
+      if (discardedLine === undefined) throw new Error("expected tool-result discarded line");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.tool-result.emitted-line",
+          formatActivityLogProofLine(discardedLine),
+        ),
+      ).toMatchObject({ actionKind: "read", state: "discarded", reason: "authority-denied" });
     },
   );
   it("dispatches every action to exactly one named existing authority port", async () => {

@@ -23,6 +23,10 @@ import {
 } from "./codingRuntimeCiRepairBudgetTypes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 import { chargeCiRepairAttempt, newCiRepairAttempt } from "./codingRuntimeCiRepairBudgetPolicy.js";
 import { CodingRuntimeCiRepairController } from "./codingRuntimeCiRepairController.js";
@@ -247,6 +251,13 @@ describe("cumulative Code-task CI repair accounting", () => {
     expect(event?.correlationId).toBe(context.correlationId);
     expect(event?.extra).toMatchObject({ revision: 0, attemptCount: 1, failedAttemptCount: 0 });
     expect(redactLogFields(event?.extra ?? {})).toEqual(event?.extra);
+    if (event === undefined) throw new Error("expected git.ci-repair.budget begin line");
+    expect(
+      expectActivityLogProof(
+        "git.ci-repair.budget.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ phase: "begin", revision: 0, attemptCount: 1 });
     expect(JSON.stringify(events)).not.toContain("feat: bounded change");
   });
   // #3384 B3-16: this is the last line of defense before the write -- server-log.ts never
