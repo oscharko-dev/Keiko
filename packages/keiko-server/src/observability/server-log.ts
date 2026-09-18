@@ -81,6 +81,7 @@ import {
   isActivityLogProcessId,
   isActivityLogProductVersion,
   isActivityLogSequence,
+  recordActivityLogLoss,
   type ActivityLogCompatibilityState,
   type ActivityLogErrorKind,
   type ActivityLogEventFailureKind,
@@ -1510,6 +1511,7 @@ function queueEvidence(
   capability: PersistedWriterCapability = "active",
 ): void {
   if (active.pendingEvidence.length >= MAX_QUEUED_EVIDENCE) {
+    recordActivityLogLoss("persistence-failed");
     reportServerLogFailure(new SafeArtifactFileError("activity-log", "write-failed"), {
       op: event.op,
       correlationId: event.correlationId,
@@ -2541,7 +2543,7 @@ function descriptorAtPath(handle: number, path: string): boolean {
   }
 }
 
-function writeSealAndPublish(
+function writeSealLine(
   active: ActiveLog,
   segment: ActiveSegment,
   handle: number,
@@ -2560,6 +2562,9 @@ function writeSealAndPublish(
   const event = segmentSealedEvidence(segment, facts, active.config);
   writeRecord(active, handle, formatRegisteredServerLogLine(event, new Date(), identity));
   noteSegmentLine(segment, identity.seq);
+}
+
+function publishSealedSegment(active: ActiveLog, segment: ActiveSegment, handle: number): void {
   fsyncSync(handle);
   archiveSafeArtifactFile(segment.activePath, segment.sealedPath, archiveOptions(active));
   if (!descriptorAtPath(handle, segment.sealedPath)) {
@@ -2579,14 +2584,19 @@ function sealSegment(active: ActiveLog, cursor: WriteCursor, reason: SealReason)
   active.segment = undefined;
   stopSealTimer(active);
   const handle = segment.handle;
+  let sealLineWritten = false;
   try {
     if (handle === null) throw new SafeArtifactFileError("activity-log", "target-mutated");
-    writeSealAndPublish(active, segment, handle, cursor, reason);
+    writeSealLine(active, segment, handle, cursor, reason);
+    sealLineWritten = true;
+    publishSealedSegment(active, segment, handle);
   } catch (error) {
+    // A seal line already on disk is not lost: recovery completes the interrupted seal later.
+    if (!sealLineWritten) recordPersistenceLoss(error);
     reportServerLogFailure(error, {
       op: ACTIVITY_LOG_SEGMENT_SEALED_OPERATION.op,
       correlationId: cursor.correlationId,
-      loss: "event-dropped",
+      loss: sealLineWritten ? "event-location-unknown" : "event-dropped",
     });
   } finally {
     segment.handle = null;
@@ -2723,6 +2733,7 @@ function placeRecord(
     // A storage-evidence record the registry rejects is dropped and reported; it must never block
     // every later write behind it.
     consumeRecord(active, source);
+    recordActivityLogLoss("schema-rejected");
     reportServerLogFailure(error, { op: source.record.event.op, loss: "event-dropped" });
     return { status: "skipped" };
   }
@@ -2771,7 +2782,17 @@ function blockingPressure(error: unknown): BlockingPressure | undefined {
   return error instanceof ActivityLogBudgetError ? "budget-exceeded" : undefined;
 }
 
+// Counts lost events in the process-wide loss ledger (#3532) that the loss summary and readiness
+// read: a registry rejection as schema-rejected, every other failure as persistence-failed.
+function recordPersistenceLoss(error: unknown, count = 1): void {
+  recordActivityLogLoss(
+    error instanceof ActivityLogEventValidationError ? "schema-rejected" : "persistence-failed",
+    count,
+  );
+}
+
 function noteDroppedEvent(active: ActiveLog, error: unknown): void {
+  recordPersistenceLoss(error);
   if (active.segment !== undefined) active.segment.droppedEvents += 1;
   const state = blockingPressure(error);
   if (state === undefined) return;
@@ -2790,7 +2811,8 @@ function closeActiveLog(active: ActiveLog): void {
       writeQueued(active, cursor, undefined);
     } catch (error) {
       // Nothing can be persisted for this directory now; the loss is reported once, not retried at
-      // every later close.
+      // every later close. Each queued record and each blocked-loss line is one lost event.
+      recordPersistenceLoss(error, active.pendingEvidence.length + active.blocked.size);
       active.pendingEvidence.length = 0;
       active.blocked.clear();
       reportServerLogFailure(error, {
@@ -3025,11 +3047,16 @@ function storeForStateDir(stateDir: string, env: ServerLogEnv): ActiveLog {
 }
 
 function persistPinEvidence(active: ActiveLog, cursor: WriteCursor, facts: PinEvidenceFacts): void {
+  let queued = false;
   try {
     queueEvidence(active, pinCreatedEvidence(facts, cursor.correlationId));
+    queued = true;
     writeQueued(active, cursor, undefined);
   } catch (error) {
-    noteDroppedEvent(active, error);
+    // Queued evidence survives a failed write: the next write persists it, and a close that still
+    // cannot write counts and reports it as lost. Only evidence that never reached the queue is lost.
+    if (queued) return;
+    recordPersistenceLoss(error);
     reportServerLogFailure(error, {
       op: ACTIVITY_LOG_PIN_CREATED_OPERATION.op,
       correlationId: cursor.correlationId,
@@ -3054,6 +3081,7 @@ export function pinActivityLogWindow(
   try {
     active = storeForStateDir(stateDir, env);
   } catch (error) {
+    recordActivityLogLoss("persistence-failed");
     reportServerLogFailure(error, {
       op: ACTIVITY_LOG_PIN_CREATED_OPERATION.op,
       correlationId: request.correlationId,

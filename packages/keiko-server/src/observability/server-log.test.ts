@@ -27,10 +27,12 @@ import {
   ACTIVITY_LOG_SCHEMA_DIGEST,
   ActivityLogEventValidationError,
   activityLogEvent,
+  activityLogLossCounters,
   activityLogSegmentFileName,
   defineActivityLogOperation,
   formatActivityLogSegmentId,
   parseActivityLogFileName,
+  resetActivityLogLossCountersForTests,
   type ActivityLogSegmentIdentity,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
@@ -2798,5 +2800,89 @@ describe("activity log segment identity", () => {
     const id = formatActivityLogSegmentId(identity);
     expect(activityLogSegmentFileName(identity, "active")).toBe(`activity-${id}.active.jsonl`);
     expect(activityLogSegmentFileName(identity, "sealed")).toBe(`activity-${id}.jsonl`);
+  });
+});
+
+// #3532 reads the process-wide loss ledger for its loss summary and readiness, so every line this
+// writer loses is counted there too, under the closed reason that lost it, and only once it is
+// really lost: evidence still queued for the next write, or a seal line already on disk, is not.
+describe("activity log loss ledger", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-loss-"));
+    vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
+    resetFsKnobs();
+    resetServerLogFailureNotices();
+    resetActivityLogLossCountersForTests();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    resetActivityLogLossCountersForTests();
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("counts a dropped write as persistence-failed and a registry rejection as schema-rejected", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "before-full" });
+    fsCalls.failWriteCode = "ENOSPC";
+    for (let index = 0; index < 3; index += 1) sink.write({ category: "http", op: "while-full" });
+    fsCalls.failWriteCode = null;
+    createStrictFileServerLogSink(stateDir).write({
+      category: "diagnostic",
+      op: "unregistered.loss-ledger",
+    });
+
+    expect(activityLogLossCounters()).toMatchObject({
+      "persistence-failed": 3,
+      "schema-rejected": 1,
+    });
+  });
+
+  it("counts the lines a close cannot persist: the blocked-loss line and the seal line", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "before-full" });
+    fsCalls.failWriteCode = "ENOSPC";
+    for (let index = 0; index < 3; index += 1) sink.write({ category: "http", op: "while-full" });
+    sink.close?.();
+    fsCalls.failWriteCode = null;
+
+    // Three dropped writes, the disk-full pressure line that never landed, and the seal line.
+    expect(activityLogLossCounters()["persistence-failed"]).toBe(5);
+  });
+
+  it("does not count a seal line that reached the disk before publication failed", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "sealed-late" });
+    fsCalls.failFsync = true;
+    sink.close?.();
+    fsCalls.failFsync = false;
+
+    expect(activityLogLossCounters()["persistence-failed"]).toBe(0);
+    expect(linesWithOp(stateDir, "activity-log.segment.sealed")).toHaveLength(1);
+  });
+
+  it("keeps pin evidence queued through a failed write instead of counting it lost", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "before-pin" });
+    const now = Date.now();
+    fsCalls.failWriteOpOnce = "activity-log.pin.created";
+
+    const result = pinActivityLogWindow(stateDir, {
+      scope: { kind: "window", fromMs: now - 60_000, toMs: now },
+      expiresAtMs: now + 60_000,
+    });
+
+    expect(result.status).toBe("pinned");
+    expect(fsCalls.failWriteOpOnce).toBeNull();
+    expect(linesWithOp(stateDir, "activity-log.pin.created")).toHaveLength(0);
+    sink.write({ category: "http", op: "after-pin" });
+    expect(linesWithOp(stateDir, "activity-log.pin.created")).toHaveLength(1);
+    expect(activityLogLossCounters()["persistence-failed"]).toBe(0);
   });
 });
