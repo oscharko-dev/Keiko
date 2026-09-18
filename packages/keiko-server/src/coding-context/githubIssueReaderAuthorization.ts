@@ -2,11 +2,9 @@ import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogLevel, ServerLogSink } from "../observability/index.js";
-import { errorKindOf } from "../observability/server-log.js";
 import { realpathSync } from "node:fs";
 import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
 import {
-  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
@@ -77,10 +75,6 @@ const GITHUB_REMOTE_EVALUATED_OPERATION = defineActivityLogOperation({
   proofIds: ["coding-context.github-remote.evaluated.line"],
   releaseImpact: "patch",
 });
-
-function closedErrorKind(value: string): ActivityLogErrorKind {
-  return activityLogErrorKindOr(value, "unknown");
-}
 
 /**
  * Why the GitHub issue reader was admitted or refused for one repository. A closed vocabulary, so a
@@ -326,10 +320,9 @@ function levelForOutcome(outcome: GitHubRemoteResolutionOutcome): ServerLogLevel
 function recordRemoteResolution(
   outcome: GitHubRemoteResolutionOutcome,
   observation: GitHubIssueReaderAuthorizationObservation,
-  errorKind?: string,
+  failureKind?: ActivityLogErrorKind,
 ): void {
   const sink = observation.activityLog ?? processServerLogSink();
-  const failureKind = errorKind === undefined ? undefined : closedErrorKind(errorKind);
   sink.write(
     activityLogEvent(
       GITHUB_REMOTE_EVALUATED_OPERATION,
@@ -370,10 +363,25 @@ async function resolveThroughInjectedResolver(
     const resolved = await resolver(repositoryRoot);
     recordRemoteResolution(resolved === undefined ? "remote-not-github" : "resolved", observation);
     return resolved;
-  } catch (error) {
-    recordRemoteResolution("resolver-failed", observation, errorKindOf(error));
+  } catch {
+    recordRemoteResolution(
+      "resolver-failed",
+      observation,
+      remoteResolutionErrorKind("resolver-failed", observation),
+    );
     return undefined;
   }
+}
+
+// A fault's closed kind comes from what failed, not from the thrown error's class name, which the
+// closed vocabulary cannot represent: a failed remote read is a read failure, a failed resolver an
+// unavailable dependency, and either one after the request was cancelled is a cancellation.
+function remoteResolutionErrorKind(
+  outcome: Extract<GitHubRemoteResolutionOutcome, "resolver-failed" | "remote-unreadable">,
+  observation: GitHubIssueReaderAuthorizationObservation,
+): ActivityLogErrorKind {
+  if (observation.signal?.aborted === true) return "cancelled";
+  return outcome === "remote-unreadable" ? "read-failed" : "unavailable";
 }
 
 /**
@@ -413,10 +421,14 @@ export async function githubRemoteOwnerAndRepoFor(
       },
       "origin",
     );
-  } catch (error) {
+  } catch {
     // The read itself failed: no repository, no `origin`, or `git` could not run. That is an
     // operational fault and is reported as one, separately from a remote that is merely not GitHub.
-    recordRemoteResolution("remote-unreadable", observation, errorKindOf(error));
+    recordRemoteResolution(
+      "remote-unreadable",
+      observation,
+      remoteResolutionErrorKind("remote-unreadable", observation),
+    );
     return undefined;
   }
   const ownerAndRepo = githubOwnerAndRepoFromRemoteUrl(remoteUrl);
