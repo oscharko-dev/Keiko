@@ -71,18 +71,22 @@ export const ACTIVITY_LOG_GATE_STEPS = Object.freeze([
   ...ACTIVITY_LOG_GATE_CHECKS,
 ]);
 
-function runNpmScript(script) {
-  const result = spawnSync(resolveHostExecutable("npm"), ["run", script], {
-    shell: false,
-    stdio: "inherit",
-  });
-  return result.error === undefined && result.signal === null && result.status === 0;
+/** Runs one root npm script with inherited output; true only for a clean zero exit. */
+export function npmScriptRunner(
+  spawn = spawnSync,
+  npmExecutable = () => resolveHostExecutable("npm"),
+) {
+  return (script) => {
+    const result = spawn(npmExecutable(), ["run", script], { shell: false, stdio: "inherit" });
+    return result.error === undefined && result.signal === null && result.status === 0;
+  };
 }
 
 const DEFAULT_DEPENDENCIES = Object.freeze({
-  runScript: runNpmScript,
+  runScript: npmScriptRunner(),
   now: () => performance.now(),
   write: (line) => console.log(line),
+  writeError: (line) => console.error(line),
 });
 
 function seconds(durationMs) {
@@ -134,13 +138,20 @@ export function runActivityLogGate(dependencies = {}) {
   return { passed, durationMs, results };
 }
 
-if (isMainModule(import.meta.url)) {
-  if (process.argv.length > 2) {
-    console.error(
+/**
+ * The command line: 0 when every check passed, 1 when one failed, 2 for any argument. An argument
+ * is refused rather than ignored, so no base ref, changed-file list or path filter can ever be
+ * mistaken for a narrower proof.
+ */
+export function main(args = process.argv.slice(2), dependencies = {}) {
+  const deps = { ...DEFAULT_DEPENDENCIES, ...dependencies };
+  if (args.length > 0) {
+    deps.writeError(
       "check:activity-log takes no arguments: it always evaluates the full registered inventory.",
     );
-    process.exitCode = 2;
-  } else if (!runActivityLogGate().passed) {
-    process.exitCode = 1;
+    return 2;
   }
+  return runActivityLogGate(deps).passed ? 0 : 1;
 }
+
+if (isMainModule(import.meta.url)) process.exitCode = main();

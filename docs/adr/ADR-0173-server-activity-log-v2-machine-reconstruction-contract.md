@@ -404,6 +404,15 @@ rejects broad or unknown scope, duplicates, stale/expired records, and any extra
 to authorize prohibited fields, silent loss, or incomplete evidence. Exemptions cannot modify an
 operation schema or reduce a supported class's sufficiency requirement.
 
+**One command enforces the contract permanently.** `npm run check:activity-log` builds the packages
+and then evaluates the complete registered inventory on every run by composing the checks that own
+each rule: `check:op-catalog` (registry, exemptions, failure-class coverage, failure-surface
+inventory, proof and scenario resolution), `check:error-observability`, `arch:check` with
+`arch:check:negative`, and `check:release-impact`. Required CI runs that exact command. It takes no
+changed-file input, so diff awareness can never narrow what it proves. The exemption validator also
+requires the record's owner to be the operation's owning package and its expiry to lie at most 180
+days ahead, so no record is unowned or permanent.
+
 **Every production process has a writer, and a missing one is visible (#3532).** The registry is
 authoritative only when every production emitter reaches the sink that enforces it. The
 process-wide logger therefore resolves the runtime state directory exactly as the CLI does: a

@@ -21,6 +21,8 @@ import {
   ACTIVITY_LOG_GATE_CHECKS,
   ACTIVITY_LOG_GATE_PREREQUISITE,
   ACTIVITY_LOG_GATE_STEPS,
+  main,
+  npmScriptRunner,
   runActivityLogGate,
 } from "../check-activity-log.mjs";
 import { unregisteredFailurePathViolations } from "../check-error-observability.mjs";
@@ -136,6 +138,44 @@ describe("the Activity Log gate command", () => {
     );
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("always evaluates the full registered inventory");
+  });
+
+  it("exits 0 only when every check passed and 1 when one failed", () => {
+    const quiet = { now: () => 0, write: () => undefined, writeError: () => undefined };
+    expect(main([], { ...quiet, runScript: () => true })).toBe(0);
+    expect(main([], { ...quiet, runScript: (script) => script !== "arch:check" })).toBe(1);
+    const refused = [];
+    expect(
+      main(["origin/dev"], {
+        ...quiet,
+        writeError: (line) => refused.push(line),
+        runScript: () => true,
+      }),
+    ).toBe(2);
+    expect(refused).toHaveLength(1);
+  });
+
+  it("runs each check as a root npm script without a shell and accepts only a clean exit", () => {
+    const calls = [];
+    const outcome = (result) =>
+      npmScriptRunner(
+        (command, args, options) => {
+          calls.push({ command, args, options });
+          return result;
+        },
+        () => "/trusted/npm",
+      )("check:op-catalog");
+    expect(outcome({ status: 0, signal: null })).toBe(true);
+    expect(calls[0]).toEqual({
+      command: "/trusted/npm",
+      args: ["run", "check:op-catalog"],
+      options: { shell: false, stdio: "inherit" },
+    });
+    expect(outcome({ status: 1, signal: null })).toBe(false);
+    expect(outcome({ status: null, signal: "SIGTERM" })).toBe(false);
+    expect(outcome({ status: null, signal: null, error: new Error("spawn npm ENOENT") })).toBe(
+      false,
+    );
   });
 });
 
