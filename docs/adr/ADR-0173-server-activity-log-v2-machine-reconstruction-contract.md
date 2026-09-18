@@ -851,9 +851,7 @@ A segment is sealed:
 - at shutdown;
 - on a pin request.
 
-Sealing writes a final `activity-log.segment.sealed` line and fsyncs. The line carries the seal
-reason, the seq range, the line count, the byte size, the duration, the dropped-event count and the
-configured limits. Sealing then publishes the sealed name with the guarded primitive described under
+Sealing writes a final `activity-log.segment.sealed` line and fsyncs. The line carries the seal reason, the seq range (which ends with the seal line's own seq), the line count and byte size of the lines before it, the duration, the dropped-event count and the configured limits. Sealing then publishes the sealed name with the guarded primitive described under
 **Trust boundary** and makes the file read-only. A seal that fails leaves the file under its active
 name; the writer never appends to it again, and the next maintenance pass recovers it. Lines over
 8 KiB are still replaced by `server-log.line-dropped`.
