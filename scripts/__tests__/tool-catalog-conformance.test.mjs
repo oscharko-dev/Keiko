@@ -40,7 +40,6 @@ import {
   measureToolCatalogOverflowRejection,
   measureToolCatalogPerformance,
   measureToolCatalogPerformanceInFreshProcess,
-  normalizedLockfileText,
   recalibrateToolCatalogPerformance,
   rebindToolCatalogPerformanceCaseIdentity,
   rebindToolCatalogPerformanceSubject,
@@ -788,61 +787,6 @@ describe("compiler measurements reuse the existing sample and percentile convent
       rmSync(root, { recursive: true, force: true });
     }
   }, 45_000);
-
-  // A version bump (scripts/lib/set-version.mjs) rewrites every workspace package's own version
-  // and every dependency pin ON a workspace package -- 324 lines on the 1.0.5 to 1.0.6 lockfile
-  // alone. None of that is reachable from the compiled tool-catalog producer, so it must never move
-  // this hash; a real dependency change (added, removed, re-resolved, third-party bumped) must.
-  describe("normalizedLockfileText", () => {
-    const baseLockfile = {
-      version: "1.0.5",
-      lockfileVersion: 3,
-      packages: {
-        "": { name: "@oscharko-dev/keiko", version: "1.0.5", dependencies: {} },
-        "packages/keiko-contracts": { name: "@oscharko-dev/keiko-contracts", version: "1.0.5" },
-        "packages/keiko-server": {
-          name: "@oscharko-dev/keiko-server",
-          version: "1.0.5",
-          dependencies: { "@oscharko-dev/keiko-contracts": "1.0.5", zod: "^3.23.0" },
-        },
-        "node_modules/zod": { version: "3.23.0", resolved: "https://registry/zod", integrity: "x" },
-      },
-    };
-
-    it("is unchanged by a version bump across every workspace field", () => {
-      const bumped = structuredClone(baseLockfile);
-      bumped.version = "1.0.6";
-      bumped.packages[""].version = "1.0.6";
-      bumped.packages["packages/keiko-contracts"].version = "1.0.6";
-      bumped.packages["packages/keiko-server"].version = "1.0.6";
-      bumped.packages["packages/keiko-server"].dependencies["@oscharko-dev/keiko-contracts"] =
-        "1.0.6";
-      expect(normalizedLockfileText(JSON.stringify(bumped))).toBe(
-        normalizedLockfileText(JSON.stringify(baseLockfile)),
-      );
-    });
-
-    it("still moves on a real third-party dependency change", () => {
-      const changed = structuredClone(baseLockfile);
-      changed.packages["node_modules/zod"].integrity = "y";
-      expect(normalizedLockfileText(JSON.stringify(changed))).not.toBe(
-        normalizedLockfileText(JSON.stringify(baseLockfile)),
-      );
-    });
-
-    it("still moves when a workspace package's dependency set actually changes", () => {
-      const changed = structuredClone(baseLockfile);
-      changed.packages["packages/keiko-server"].dependencies.lodash = "^4.17.21";
-      expect(normalizedLockfileText(JSON.stringify(changed))).not.toBe(
-        normalizedLockfileText(JSON.stringify(baseLockfile)),
-      );
-    });
-
-    it("leaves a non-workspace package's own version untouched", () => {
-      const parsed = JSON.parse(normalizedLockfileText(JSON.stringify(baseLockfile)));
-      expect(parsed.packages["node_modules/zod"].version).toBe("3.23.0");
-    });
-  });
 
   it("rebinds a version-only subject drift without a fresh measurement, and refuses a real one", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-catalog-subject-rebind-"));

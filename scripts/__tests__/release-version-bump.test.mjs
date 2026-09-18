@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +11,7 @@ import {
   VERSION_BUMP_BRANCH_PREFIX,
   versionBumpBranch,
 } from "../lib/release-version-bump.mjs";
+import { versionedManifest } from "../lib/set-version.mjs";
 
 // ADR-0177 D9 follow-up. The button used to fail outright once dev's current version was already
 // published (#3551's own known gap). release-impact.catalog.json entries are written ahead of time
@@ -127,6 +130,12 @@ function fakeGithub(routes) {
   return { calls, runGh };
 }
 
+// #3555 review: isVersionBumpAuthorizationPr checks only PR metadata (opener, base, head prefix,
+// commit count) -- fields that all survive unchanged when a collaborator with ordinary repo write
+// access force-pushes a same-commit-count REPLACEMENT onto release/bump-<version> before it merges.
+// readVersionBumpAuthorization must also verify the merge commit's own content, so a same-count
+// substitution -- extra file, extra property, or a value that doesn't match a clean mechanical bump
+// -- is refused even though every metadata field still reads exactly as an honest App-opened PR.
 describe("readVersionBumpAuthorization", () => {
   const authorizationPr = {
     base: { ref: "dev" },
@@ -138,15 +147,152 @@ describe("readVersionBumpAuthorization", () => {
     user: { login: VERSION_BUMP_APP_LOGIN },
   };
 
-  it("finds the PR associated with the commit through GitHub's own index", () => {
-    const { runGh } = fakeGithub({
+  const PARENT_SHA = "b".repeat(40);
+  const WORKSPACE = "@oscharko-dev/keiko-a";
+  const parentRoot = { name: ROOT_PACKAGE.name, version: "1.0.5" };
+  const parentWorkspace = { name: WORKSPACE, version: "1.0.5" };
+  const parentLockfile = {
+    version: "1.0.5",
+    lockfileVersion: 3,
+    packages: {
+      "": { name: ROOT_PACKAGE.name, version: "1.0.5" },
+      "packages/keiko-a": { name: WORKSPACE, version: "1.0.5" },
+    },
+  };
+  const headRoot = versionedManifest(JSON.stringify(parentRoot), new Set([WORKSPACE]), "1.0.6");
+  const headWorkspace = versionedManifest(
+    JSON.stringify(parentWorkspace),
+    new Set([WORKSPACE]),
+    "1.0.6",
+  );
+  const headLockfile = {
+    ...parentLockfile,
+    version: "1.0.6",
+    packages: {
+      "": { name: ROOT_PACKAGE.name, version: "1.0.6" },
+      "packages/keiko-a": { name: WORKSPACE, version: "1.0.6" },
+    },
+  };
+
+  function base64File(text) {
+    return ok({ content: Buffer.from(text, "utf8").toString("base64"), encoding: "base64" });
+  }
+
+  function jsonFile(value) {
+    return base64File(JSON.stringify(value));
+  }
+
+  /** A genuinely clean bump: root + one workspace manifest + the lockfile, nothing else. */
+  function cleanBumpRoutes(overrides = {}) {
+    return {
+      [`repos/${REPO}/commits/${SHA}`]: ok({
+        files: [
+          { filename: "package.json", status: "modified" },
+          { filename: "packages/keiko-a/package.json", status: "modified" },
+          { filename: "package-lock.json", status: "modified" },
+        ],
+        parents: [{ sha: PARENT_SHA }],
+      }),
       [`repos/${REPO}/commits/${SHA}/pulls`]: ok([authorizationPr]),
+      [`repos/${REPO}/contents/package.json?ref=${PARENT_SHA}`]: jsonFile(parentRoot),
+      [`repos/${REPO}/contents/package.json?ref=${SHA}`]: base64File(headRoot),
+      [`repos/${REPO}/contents/package-lock.json?ref=${PARENT_SHA}`]: jsonFile(parentLockfile),
+      [`repos/${REPO}/contents/package-lock.json?ref=${SHA}`]: jsonFile(headLockfile),
+      [`repos/${REPO}/contents/packages?ref=${PARENT_SHA}`]: ok([
+        { path: "packages/keiko-a", type: "dir" },
+      ]),
+      [`repos/${REPO}/contents/packages/keiko-a/package.json?ref=${PARENT_SHA}`]:
+        jsonFile(parentWorkspace),
+      [`repos/${REPO}/contents/packages/keiko-a/package.json?ref=${SHA}`]:
+        base64File(headWorkspace),
       [`repos/${REPO}/pulls/7`]: ok(authorizationPr),
-    });
+      ...overrides,
+    };
+  }
+
+  it("finds the PR associated with the commit through GitHub's own index", () => {
+    const { runGh } = fakeGithub(cleanBumpRoutes());
     expect(readVersionBumpAuthorization(runGh, REPO, SHA)).toStrictEqual(authorizationPr);
   });
 
-  it("returns undefined when no associated PR was opened by the release App", () => {
+  it("refuses a same-count commit that touches a file outside the mechanical bump set", () => {
+    const { runGh } = fakeGithub(
+      cleanBumpRoutes({
+        [`repos/${REPO}/commits/${SHA}`]: ok({
+          files: [
+            { filename: "package.json", status: "modified" },
+            { filename: "packages/keiko-a/src/index.ts", status: "modified" },
+          ],
+          parents: [{ sha: PARENT_SHA }],
+        }),
+        [`repos/${REPO}/contents/packages/keiko-a/src/index.ts?ref=${PARENT_SHA}`]:
+          base64File("export const a = 1;\n"),
+        [`repos/${REPO}/contents/packages/keiko-a/src/index.ts?ref=${SHA}`]: base64File(
+          "export const a = 2; /* smuggled */\n",
+        ),
+      }),
+    );
+    expect(readVersionBumpAuthorization(runGh, REPO, SHA)).toBeUndefined();
+  });
+
+  it("refuses a same-count commit whose manifest content was replaced, not mechanically bumped", () => {
+    // Formatted exactly like the real transform's own output (JSON.stringify(_, null, 2) + "\n"),
+    // so this isolates the one property a force-push tampering could add -- not a formatting
+    // difference the byte-exact comparison would also have caught on its own.
+    const tamperedRoot = `${JSON.stringify({ ...JSON.parse(headRoot), extraField: "smuggled" }, null, 2)}\n`;
+    const { runGh } = fakeGithub(
+      cleanBumpRoutes({
+        [`repos/${REPO}/contents/package.json?ref=${SHA}`]: base64File(tamperedRoot),
+      }),
+    );
+    expect(readVersionBumpAuthorization(runGh, REPO, SHA)).toBeUndefined();
+  });
+
+  it("refuses a lockfile that changed beyond a version bump", () => {
+    const tamperedLockfile = {
+      ...headLockfile,
+      packages: {
+        ...headLockfile.packages,
+        "node_modules/left-pad": {
+          version: "1.0.0",
+          resolved: "https://registry.npmjs.org/left-pad/-/left-pad-1.0.0.tgz",
+          integrity: "sha512-abc",
+        },
+      },
+    };
+    const { runGh } = fakeGithub(
+      cleanBumpRoutes({
+        [`repos/${REPO}/contents/package-lock.json?ref=${SHA}`]: jsonFile(tamperedLockfile),
+      }),
+    );
+    expect(readVersionBumpAuthorization(runGh, REPO, SHA)).toBeUndefined();
+  });
+
+  it("refuses a commit that added a file instead of only modifying existing ones", () => {
+    const { runGh } = fakeGithub(
+      cleanBumpRoutes({
+        [`repos/${REPO}/commits/${SHA}`]: ok({
+          files: [
+            { filename: "package.json", status: "modified" },
+            { filename: "packages/keiko-a/package.json", status: "modified" },
+            { filename: "package-lock.json", status: "modified" },
+            { filename: "packages/keiko-b/package.json", status: "added" },
+          ],
+          parents: [{ sha: PARENT_SHA }],
+        }),
+      }),
+    );
+    expect(readVersionBumpAuthorization(runGh, REPO, SHA)).toBeUndefined();
+  });
+
+  it("refuses a merge commit with no single parent", () => {
+    const { runGh } = fakeGithub(
+      cleanBumpRoutes({ [`repos/${REPO}/commits/${SHA}`]: ok({ files: [], parents: [] }) }),
+    );
+    expect(readVersionBumpAuthorization(runGh, REPO, SHA)).toBeUndefined();
+  });
+
+  it("refuses when no associated PR was opened by the release App", () => {
     const { runGh } = fakeGithub({
       [`repos/${REPO}/commits/${SHA}/pulls`]: ok([
         { ...authorizationPr, user: { login: "someone-else" } },

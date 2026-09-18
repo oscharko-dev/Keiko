@@ -18,6 +18,7 @@ import {
 } from "../lib/release-automation.mjs";
 import { isOwnerReleaseRequest, releaseOwners } from "../lib/release-candidate.mjs";
 import { VERSION_BUMP_APP_LOGIN } from "../lib/release-version-bump.mjs";
+import { versionedManifest } from "../lib/set-version.mjs";
 
 // ADR-0177 D9. Until 1.0.5 the stable build ended in a handoff that printed a long
 // `gh workflow run release.yml ... -f portable_assets_run_id=...` command, and the owner had to wait
@@ -456,6 +457,7 @@ describe("gatherAdvanceFacts", () => {
 
   describe("the version-bump path (dev already published)", () => {
     const BUMP_SHA = "c".repeat(40);
+    const BUMP_PARENT_SHA = "d".repeat(40);
     const BUMP_TAG = "v1.0.6";
     const authorizationPr = (overrides = {}) => ({
       base: { ref: "dev" },
@@ -467,17 +469,49 @@ describe("gatherAdvanceFacts", () => {
       user: { login: VERSION_BUMP_APP_LOGIN },
       ...overrides,
     });
+    const parentManifest = { name: "@oscharko-dev/keiko", version: "1.0.5" };
+    const headManifest = versionedManifest(JSON.stringify(parentManifest), new Set(), "1.0.6");
+    const lockfile = (version) =>
+      ok({
+        content: Buffer.from(
+          JSON.stringify({
+            version,
+            lockfileVersion: 3,
+            packages: { "": { name: "@oscharko-dev/keiko", version } },
+          }),
+        ).toString("base64"),
+        encoding: "base64",
+      });
 
+    // A genuine, verifiable mechanical bump for readVersionBumpAuthorization's content check
+    // (#3555 review): no workspace packages, so `packages` at the parent is an empty listing.
     function bumpGithub(overrides = {}) {
       return fakeGithub({
         [`repos/${REPO}/actions/workflows/portable-assets.yml/runs?event=push&head_sha=${BUMP_SHA}&per_page=100`]:
           ok({ workflow_runs: [build({ head_branch: BUMP_TAG, head_sha: BUMP_SHA })] }),
+        [`repos/${REPO}/commits/${BUMP_SHA}`]: ok({
+          files: [
+            { filename: "package.json", status: "modified" },
+            { filename: "package-lock.json", status: "modified" },
+          ],
+          parents: [{ sha: BUMP_PARENT_SHA }],
+        }),
         [`repos/${REPO}/commits/${BUMP_SHA}/check-runs?filter=latest&per_page=100&page=1`]: ok({
           check_runs: [checkRun("ci"), checkRun("ui")],
         }),
         [`repos/${REPO}/commits/${BUMP_SHA}/pulls`]: ok([authorizationPr()]),
         [`repos/${REPO}/commits/${BUMP_SHA}/status`]: ok({ statuses: [] }),
-        [`repos/${REPO}/contents/package.json?ref=${BUMP_SHA}`]: packageFile("1.0.6"),
+        [`repos/${REPO}/contents/package-lock.json?ref=${BUMP_PARENT_SHA}`]: lockfile("1.0.5"),
+        [`repos/${REPO}/contents/package-lock.json?ref=${BUMP_SHA}`]: lockfile("1.0.6"),
+        [`repos/${REPO}/contents/package.json?ref=${BUMP_PARENT_SHA}`]: ok({
+          content: Buffer.from(JSON.stringify(parentManifest)).toString("base64"),
+          encoding: "base64",
+        }),
+        [`repos/${REPO}/contents/package.json?ref=${BUMP_SHA}`]: ok({
+          content: Buffer.from(headManifest).toString("base64"),
+          encoding: "base64",
+        }),
+        [`repos/${REPO}/contents/packages?ref=${BUMP_PARENT_SHA}`]: ok([]),
         [`repos/${REPO}/git/ref/heads/dev`]: ok({ object: { sha: BUMP_SHA, type: "commit" } }),
         [`repos/${REPO}/git/ref/tags/${BUMP_TAG}`]: ok({
           object: { sha: BUMP_SHA, type: "commit" },

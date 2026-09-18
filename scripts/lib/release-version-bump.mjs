@@ -9,17 +9,27 @@
 // across the merge boundary a direct-to-dev push can never cross (AGENTS.md's human-control
 // invariant forbids pushing the bump straight to dev).
 //
-// The authorization is the PR's own identity, nothing else: it can only have been opened by the
-// release App from the owner+dev-gated request job (scripts/release-candidate.mjs --request calls
-// applyVersionBumpRequest only after that job's `if:` already verified an allowlisted human), it
-// targets dev from the reserved branch prefix, and it carries exactly the one mechanical commit
-// set-version.mjs produces -- never a PR a collaborator could open, or add a commit to, and have
-// auto-released with no further check. Losing any one of those checks is a safe failure: the bump
-// just does not auto-release, not a release it should not have made.
+// The authorization is the PR's own identity and its content, not its metadata alone (#3555 review:
+// a collaborator with ordinary repo write access -- this repository has two -- can force-push a
+// same-commit-count replacement onto release/bump-<version>, since that branch carries no ruleset,
+// and every PR-metadata field isVersionBumpAuthorizationPr checks -- opener, base, head prefix,
+// commit count -- survives a same-count replace unchanged). readVersionBumpAuthorization therefore
+// also verifies the merge commit's own content against its parent, file by file, reusing
+// set-version.mjs's own pure transforms: every touched file must be exactly what a clean mechanical
+// bump would have produced from the parent, nothing added or removed, and nothing else touched. This
+// closes the same gap a signature would, without a new App permission or a repository ruleset: content
+// a forger cannot reproduce without literally performing the same harmless mechanical bump.
+
+import { Buffer } from "node:buffer";
 
 import { compareStableVersions, parseStableVersion } from "../check-release-impact.mjs";
 import { readFound } from "./github-api.mjs";
-import { requireVersion } from "./set-version.mjs";
+import {
+  normalizedLockfileText,
+  requireVersion,
+  versionedManifest,
+  versionedSource,
+} from "./set-version.mjs";
 
 export const VERSION_BUMP_APP_LOGIN = "keiko-release-tags[bot]";
 export const VERSION_BUMP_BRANCH_PREFIX = "release/bump-";
@@ -109,6 +119,112 @@ export function isVersionBumpAuthorizationPr(pr) {
   );
 }
 
+const ROOT_MANIFEST_PATH = "package.json";
+const LOCKFILE_PATH = "package-lock.json";
+const WORKSPACE_MANIFEST_PATH = /^packages\/[^/]+\/package\.json$/u;
+const WORKSPACE_VERSION_SOURCE_PATH = /^packages\/[^/]+\/src\/version\.ts$/u;
+const MAX_BUMP_FILES = 300;
+
+function isVersionBumpPath(path) {
+  return (
+    path === ROOT_MANIFEST_PATH ||
+    path === LOCKFILE_PATH ||
+    WORKSPACE_MANIFEST_PATH.test(path) ||
+    WORKSPACE_VERSION_SOURCE_PATH.test(path)
+  );
+}
+
+function fileContentAt(runGh, repository, path, sha) {
+  const file = readFound(
+    runGh,
+    `repos/${repository}/contents/${path}?ref=${sha}`,
+    `${path} at ${sha}`,
+  );
+  if (file?.encoding !== "base64" || typeof file?.content !== "string") {
+    fail(`${path} at ${sha} is not a base64 file.`);
+  }
+  return Buffer.from(file.content, "base64").toString("utf8");
+}
+
+/** The `name` of every `packages/*` workspace at `sha`, read the same way set-version.mjs finds them. */
+function workspaceNamesAt(runGh, repository, sha) {
+  const listing = readFound(
+    runGh,
+    `repos/${repository}/contents/packages?ref=${sha}`,
+    `packages at ${sha}`,
+  );
+  if (!Array.isArray(listing)) fail(`packages at ${sha} is not a directory listing.`);
+  const names = listing
+    .filter((entry) => entry?.type === "dir")
+    .map(
+      (entry) =>
+        JSON.parse(fileContentAt(runGh, repository, `${entry.path}/package.json`, sha)).name,
+    );
+  return new Set(names);
+}
+
+function expectedFileContent(path, parentText, version, workspaceNames) {
+  if (path === LOCKFILE_PATH) return undefined; // compared normalized, not verbatim
+  if (path === ROOT_MANIFEST_PATH || WORKSPACE_MANIFEST_PATH.test(path)) {
+    return versionedManifest(parentText, workspaceNames, version);
+  }
+  return versionedSource(parentText, version);
+}
+
+function verifyBumpFile(runGh, repository, file, parentSha, headSha, version, workspaceNames) {
+  if (file.status !== "modified") fail(`${file.filename} was ${file.status}, not modified.`);
+  if (!isVersionBumpPath(file.filename)) fail(`${file.filename} is not a version-bump file.`);
+  const parentText = fileContentAt(runGh, repository, file.filename, parentSha);
+  const headText = fileContentAt(runGh, repository, file.filename, headSha);
+  if (file.filename === LOCKFILE_PATH) {
+    if (normalizedLockfileText(headText) !== normalizedLockfileText(parentText)) {
+      fail(`${file.filename} changed beyond a version bump.`);
+    }
+    return;
+  }
+  if (headText !== expectedFileContent(file.filename, parentText, version, workspaceNames)) {
+    fail(`${file.filename} does not match a clean mechanical version bump.`);
+  }
+}
+
+function bumpCommitParentAndFiles(commit, sha) {
+  const parentSha = commit?.parents?.[0]?.sha;
+  if (typeof parentSha !== "string") fail(`commit ${sha} has no single parent.`);
+  const files = commit?.files;
+  if (!Array.isArray(files) || files.length === 0) fail(`commit ${sha} touches no files.`);
+  if (files.length >= MAX_BUMP_FILES) {
+    fail(`commit ${sha} touches too many files to verify safely.`);
+  }
+  return { files, parentSha };
+}
+
+function bumpTargetVersion(runGh, repository, sha) {
+  const rootManifest = JSON.parse(fileContentAt(runGh, repository, ROOT_MANIFEST_PATH, sha));
+  if (typeof rootManifest.version !== "string") {
+    fail(`${ROOT_MANIFEST_PATH} at ${sha} has no version.`);
+  }
+  return rootManifest.version;
+}
+
+/**
+ * Refuses (throws) unless the merge commit `sha` on `dev` changed nothing but a clean, complete
+ * mechanical version bump relative to its own parent: every changed file is one set-version.mjs
+ * moves, none were added or removed, and every one of them holds exactly the content that function
+ * would have produced from the parent -- the lockfile compared normalized (normalizedLockfileText),
+ * every other file compared verbatim (versionedManifest/versionedSource). The target version is
+ * read from the root manifest's own new content, not asserted by the caller: this proves the
+ * *relationship* between parent and head, not a claim about which version was intended.
+ */
+function verifyMechanicalVersionBump(runGh, repository, sha) {
+  const commit = readFound(runGh, `repos/${repository}/commits/${sha}`, `commit ${sha}`);
+  const { files, parentSha } = bumpCommitParentAndFiles(commit, sha);
+  const version = bumpTargetVersion(runGh, repository, sha);
+  const workspaceNames = workspaceNamesAt(runGh, repository, parentSha);
+  for (const file of files) {
+    verifyBumpFile(runGh, repository, file, parentSha, sha, version, workspaceNames);
+  }
+}
+
 /**
  * The version-bump authorization whose merge commit is `sha`, or undefined. A commit is associated
  * with the pull request that merged it through GitHub's own commit-to-PR index, so this never has to
@@ -130,7 +246,16 @@ export function readVersionBumpAuthorization(runGh, repository, sha) {
     `repos/${repository}/pulls/${String(candidate.number)}`,
     `pull request ${String(candidate.number)}`,
   );
-  return isVersionBumpAuthorizationPr(pr) ? pr : undefined;
+  if (!isVersionBumpAuthorizationPr(pr)) return undefined;
+  try {
+    verifyMechanicalVersionBump(runGh, repository, sha);
+  } catch {
+    // A content mismatch, or any failure verifying it, means this cannot be proven to be a clean
+    // mechanical bump -- the same fail-closed direction as every other check here, never a crash of
+    // the caller (release-candidate.mjs's tag hold, release-automation.mjs's request derivation).
+    return undefined;
+  }
+  return pr;
 }
 
 function runStep(runner, label, args) {

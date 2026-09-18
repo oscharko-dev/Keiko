@@ -54,7 +54,7 @@ import {
   CODING_PERFORMANCE_PROCEDURE,
 } from "./coding-runtime-performance-evidence.mjs";
 import { loadToolCatalogProducer } from "./check-tool-catalog-conformance.mjs";
-import { DEPENDENCY_FIELDS } from "./lib/set-version.mjs";
+import { normalizedLockfileText } from "./lib/set-version.mjs";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 export const TOOL_CATALOG_PERFORMANCE_PROCEDURE = Object.freeze({
@@ -355,45 +355,6 @@ export function producerShippedSourceSha256(root = process.cwd()) {
       .update("\0");
   }
   return hash.digest("hex");
-}
-
-const LOCKFILE_VERSION_PLACEHOLDER = "0.0.0-version-normalized";
-
-/**
- * `text` with every workspace package's own `version` field, and every dependency pin ON a
- * workspace package, replaced by a fixed placeholder. A workspace-local `packages/*` entry (and
- * the root `""` entry) is identified the same way npm itself distinguishes it from an installed
- * dependency: it carries no `resolved` field. scripts/lib/set-version.mjs moves exactly these
- * fields on a version bump and nothing else a lockfile refresh can reach, so the normalized text
- * is unchanged across a version-only bump while any other lockfile change -- a real dependency
- * added, removed or re-resolved, third-party version bumped -- still moves it.
- */
-function workspaceLockfileEntries(packages) {
-  return Object.values(packages).filter(
-    (entry) => entry !== null && typeof entry === "object" && entry.resolved === undefined,
-  );
-}
-
-function normalizeWorkspaceLockfileEntry(entry, workspaceNames) {
-  if (typeof entry.version === "string") entry.version = LOCKFILE_VERSION_PLACEHOLDER;
-  for (const field of DEPENDENCY_FIELDS) {
-    const dependencies = entry[field];
-    if (dependencies === null || typeof dependencies !== "object") continue;
-    for (const name of Object.keys(dependencies)) {
-      if (workspaceNames.has(name)) dependencies[name] = LOCKFILE_VERSION_PLACEHOLDER;
-    }
-  }
-}
-
-export function normalizedLockfileText(text) {
-  const lockfile = JSON.parse(text);
-  if (typeof lockfile.version === "string") lockfile.version = LOCKFILE_VERSION_PLACEHOLDER;
-  const packages = lockfile.packages;
-  if (packages === null || typeof packages !== "object") return text;
-  const entries = workspaceLockfileEntries(packages);
-  const workspaceNames = new Set(entries.map((entry) => entry.name).filter(Boolean));
-  for (const entry of entries) normalizeWorkspaceLockfileEntry(entry, workspaceNames);
-  return JSON.stringify(lockfile);
 }
 
 export function toolCatalogPerformanceSubject(root = process.cwd()) {
