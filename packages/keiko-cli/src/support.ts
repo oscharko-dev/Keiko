@@ -46,7 +46,6 @@ import {
 import {
   installLayoutOverrideEvidence,
   writeInstallLayoutOverrideEvidenceWithFactory,
-  type InstallLayoutOverrideEvidence,
 } from "./install-layout.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
 // and only for `export`; tool-lifecycle analysis lazily loads its narrow validator subpath. Store-fingerprint collection (ui,
@@ -185,31 +184,6 @@ interface Assessment<T> {
   readonly warning?: string | undefined;
 }
 
-const CLI_INSTALL_LAYOUT_NORMALIZED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "cli.install-layout.normalized",
-  category: "diagnostic",
-  owner: "keiko-cli",
-  emitter: "support.writeTypedInstallLayoutOverrideEvidence",
-  fields: {
-    overriddenCount: { type: "integer", dataClass: "count", required: true },
-    overriddenKinds: {
-      type: "string-array",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["cli-bin", "ui-static-root", "local-state-auditor"],
-      maxItems: 3,
-    },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["cli-install-layout-normalization"],
-  proofIds: ["cli.install-layout.normalized-before-support-snapshot"],
-  releaseImpact: "patch",
-});
-
 const CLI_SUPPORT_EXPORT_FAILED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -287,37 +261,6 @@ function refuseSupportInstallLayout(
   return "refused";
 }
 
-function writeTypedInstallLayoutOverrideEvidence(
-  stateDir: string,
-  env: EnvSource,
-  deps: SupportCliDeps,
-  evidence: InstallLayoutOverrideEvidence,
-): boolean {
-  const factory = deps.activityLogSinkFactory;
-  if (factory === undefined) return false;
-  return writeInstallLayoutOverrideEvidenceWithFactory(
-    (selectedStateDir) => {
-      const sink = factory(selectedStateDir);
-      return {
-        write: (): void => {
-          sink.write(
-            activityLogEvent(
-              CLI_INSTALL_LAYOUT_NORMALIZED_OPERATION,
-              { correlationId: evidence.correlationId },
-              {
-                overriddenCount: evidence.overriddenKinds.length,
-                overriddenKinds: evidence.overriddenKinds,
-              },
-            ),
-          );
-        },
-      };
-    },
-    stateDir,
-    env,
-  );
-}
-
 function writeSupportInstallLayoutEvidence(
   stateDir: string,
   env: EnvSource,
@@ -353,7 +296,7 @@ function writeSupportInstallLayoutEvidence(
         "unsafe-state-root",
       );
     }
-    return writeTypedInstallLayoutOverrideEvidence(stateDir, env, deps, evidence)
+    return writeInstallLayoutOverrideEvidenceWithFactory(deps.activityLogSinkFactory, stateDir, env)
       ? "ready"
       : refuseSupportInstallLayout(
           context,

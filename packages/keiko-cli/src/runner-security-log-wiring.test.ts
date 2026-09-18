@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { runDetachedWindowsAlert } from "./portable-launch-notifier.js";
@@ -192,6 +193,9 @@ describe("Windows CLI security-log production wiring", () => {
     expect(createFileServerLogSink).toHaveBeenCalledTimes(7);
     expect(written).toHaveLength(7);
     expect(written.every(({ op }) => op === "cli.install-layout.normalized")).toBe(true);
+    expect(written.map((event) => validateRegisteredActivityLogEvent(event).op)).toEqual(
+      Array.from({ length: 7 }, () => "cli.install-layout.normalized"),
+    );
   });
 
   it("supplies a deferred sink to every Windows security command without loading the server graph", async () => {

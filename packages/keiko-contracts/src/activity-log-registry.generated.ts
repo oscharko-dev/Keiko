@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a5e8ff46f3523c7556fd7ac5b6d2634a5a301421417bc801fd4d4f30b3bc839a" as const;
+  "8e9fa6ef78097aa67c646a836a626532ef1f553fe202ea682b37e643ddd88c48" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -392,7 +392,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "cli.install-layout.normalized",
     category: "diagnostic",
     owner: "keiko-cli",
-    emitter: "support.writeTypedInstallLayoutOverrideEvidence",
+    emitter: "install-layout.installLayoutOverrideActivityLogEvent",
     fields: {
       completeness: {
         type: "string",

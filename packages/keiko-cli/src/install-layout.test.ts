@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   applyAuthoritativeInstallLayout,
+  installLayoutOverrideActivityLogEvent,
   installLayoutOverrideEvidence,
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
   writeInstallLayoutOverrideEvidence,
   writeInstallLayoutOverrideEvidenceWithFactory,
   type AuthoritativeInstallLayout,
+  type InstallLayoutNormalizedActivityLogEvent,
 } from "./install-layout.js";
 
 const LAYOUT: AuthoritativeInstallLayout = {
@@ -59,7 +62,7 @@ describe("authoritative install layout", () => {
 
   it("writes one correlated, body-free normalization event", () => {
     const env: NodeJS.ProcessEnv = { KEIKO_CLI_BIN_PATH: "/stale/cli.js" };
-    const events: unknown[] = [];
+    const events: InstallLayoutNormalizedActivityLogEvent[] = [];
     applyAuthoritativeInstallLayout(env, LAYOUT);
     const evidence = installLayoutOverrideEvidence(env);
 
@@ -74,6 +77,10 @@ describe("authoritative install layout", () => {
       correlationId: evidence?.correlationId,
       extra: { overriddenCount: 1, overriddenKinds: ["cli-bin"] },
     });
+    expect(validateRegisteredActivityLogEvent(events[0] ?? {})).toMatchObject({
+      op: "cli.install-layout.normalized",
+      emitter: "install-layout.installLayoutOverrideActivityLogEvent",
+    });
     expect(installLayoutOverrideEvidence(env)).toBeUndefined();
     expect(writeInstallLayoutOverrideEvidence({ write: (event) => events.push(event) }, env)).toBe(
       false,
@@ -82,6 +89,21 @@ describe("authoritative install layout", () => {
       false,
     );
     expect(events).toHaveLength(1);
+  });
+
+  it("builds the same registered event for direct install-layout callers", () => {
+    const event = installLayoutOverrideActivityLogEvent({
+      correlationId: "00000000-0000-4000-8000-000000000001",
+      overriddenKinds: ["ui-static-root"],
+    });
+
+    expect(validateRegisteredActivityLogEvent(event).op).toBe("cli.install-layout.normalized");
+    expect(event.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      overriddenCount: 1,
+      overriddenKinds: ["ui-static-root"],
+    });
   });
 
   it("does not open a state-dir sink until validated evidence exists", () => {
