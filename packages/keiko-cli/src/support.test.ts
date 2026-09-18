@@ -2239,7 +2239,10 @@ describe("runSupportCli analyze", () => {
     expect(bareOut.trimEnd().startsWith("[")).toBe(true);
 
     // The one-line stderr deprecation notice, naming the versioned replacement.
-    const errLines = bareRun.err().split("\n").filter((line) => line.length > 0);
+    const errLines = bareRun
+      .err()
+      .split("\n")
+      .filter((line) => line.length > 0);
     expect(errLines).toHaveLength(1);
     expect(errLines[0]).toContain("--clusters --json");
     expect(errLines[0]).toContain("deprecated");
@@ -2293,7 +2296,10 @@ describe("runSupportCli analyze", () => {
 
     const timelineRun = makeIo();
     expect(
-      await runSupportCli(["analyze", filePath, "--correlation-id", "req-1", "--json"], timelineRun.io),
+      await runSupportCli(
+        ["analyze", filePath, "--correlation-id", "req-1", "--json"],
+        timelineRun.io,
+      ),
     ).toBe(0);
     const timeline = JSON.parse(timelineRun.out()) as {
       readonly kind: string;

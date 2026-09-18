@@ -129,7 +129,16 @@ describe("support query activity log proofs (#3531)", () => {
     const { io, out } = makeIo();
 
     const code = await runSupportCli(
-      ["query", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--max-bytes", "50", "--json"],
+      [
+        "query",
+        "--state-dir",
+        stateDir,
+        "--correlation-id",
+        ROOT_ID,
+        "--max-bytes",
+        "50",
+        "--json",
+      ],
       io,
       {},
     );
