@@ -125,7 +125,7 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["server-diagnostic"],
-  proofIds: ["server-diagnostic.activity-log-line"],
+  proofIds: ["server.diagnostic.failure.activity-log-line"],
   releaseImpact: "patch",
 });
 

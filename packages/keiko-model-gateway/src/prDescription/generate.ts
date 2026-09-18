@@ -111,7 +111,7 @@ const PR_DESCRIPTION_MODEL_STARTED_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["pr-description-model-call"],
-  proofIds: ["pr-description.model-started.emitted-line"],
+  proofIds: ["pr-description.model.started.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -131,7 +131,7 @@ const PR_DESCRIPTION_MODEL_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["pr-description-model-call"],
-  proofIds: ["pr-description.model-failed.emitted-line"],
+  proofIds: ["pr-description.model.failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -156,7 +156,7 @@ const PR_DESCRIPTION_MODEL_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["pr-description-model-call"],
-  proofIds: ["pr-description.model-completed.emitted-line"],
+  proofIds: ["pr-description.model.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -175,7 +175,7 @@ const PR_DESCRIPTION_AUTHORITY_REVALIDATION_FAILED_OPERATION = defineActivityLog
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["pr-description-authority"],
-  proofIds: ["pr-description.authority-revalidation-failed.emitted-line"],
+  proofIds: ["pr-description.authority.revalidation.failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -213,7 +213,7 @@ const PR_DESCRIPTION_GENERATION_COMPLETED_OPERATION = defineActivityLogOperation
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["pr-description-generation"],
-  proofIds: ["pr-description.generation-completed.emitted-line"],
+  proofIds: ["pr-description.generation.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -233,7 +233,7 @@ const PR_DESCRIPTION_GENERATION_STARTED_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["pr-description-generation"],
-  proofIds: ["pr-description.generation-started.emitted-line"],
+  proofIds: ["pr-description.generation.started.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -251,7 +251,7 @@ const PR_DESCRIPTION_GENERATION_UNAVAILABLE_OPERATION = defineActivityLogOperati
   lifecycle: "failure",
   analyzerProjection: "capability",
   failureClasses: ["pr-description-generation"],
-  proofIds: ["pr-description.generation-unavailable.emitted-line"],
+  proofIds: ["pr-description.generation.unavailable.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -299,7 +299,7 @@ const PR_DESCRIPTION_GENERATION_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["pr-description-generation"],
-  proofIds: ["pr-description.generation-failed.emitted-line"],
+  proofIds: ["pr-description.generation.failed.emitted-line"],
   releaseImpact: "patch",
 });
 

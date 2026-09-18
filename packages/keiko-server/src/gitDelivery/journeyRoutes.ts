@@ -240,7 +240,7 @@ const JOURNEY_READINESS_REFRESHED_OPERATION = defineActivityLogOperation({
   },
   lifecycle: "state",
   failureClasses: ["git-journey-readiness"],
-  proofIds: ["git.journey-readiness.refreshed"],
+  proofIds: ["git.journey-readiness.refreshed.emitted-line"],
 });
 
 const JOURNEY_OUTCOME_RECORDED_OPERATION = defineActivityLogOperation({
@@ -265,7 +265,7 @@ const JOURNEY_OUTCOME_RECORDED_OPERATION = defineActivityLogOperation({
   },
   lifecycle: "end",
   failureClasses: ["git-journey-outcome-persistence"],
-  proofIds: ["git.journey-outcome.recorded"],
+  proofIds: ["git.journey-outcome.recorded.emitted-line"],
 });
 
 // ─── Error envelope ─────────────────────────────────────────────────────────────────────────────

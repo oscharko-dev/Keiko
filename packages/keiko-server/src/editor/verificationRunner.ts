@@ -174,7 +174,7 @@ const EDITOR_VERIFICATION_EXECUTE_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["verification-runner-refusal", "verification-runner-failure"],
-  proofIds: ["editor.verification-execute.emitted-line"],
+  proofIds: ["editor.verification.execute.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -207,7 +207,7 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["verification-dependency-bootstrap"],
-  proofIds: ["editor.verification-dependencies.emitted-line"],
+  proofIds: ["editor.verification.dependencies.emitted-line"],
   releaseImpact: "patch",
 });
 

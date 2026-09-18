@@ -53,7 +53,7 @@ const EDITOR_LOCAL_HISTORY_REKEY_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["editor-local-history-rekey"],
-  proofIds: ["editor.local-history-rekey-failed.emitted-line"],
+  proofIds: ["editor.local-history.rekey.failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -77,7 +77,7 @@ const EDITOR_LOCAL_HISTORY_REKEY_COMPLETED_OPERATION = defineActivityLogOperatio
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["editor-local-history-rekey"],
-  proofIds: ["editor.local-history-rekey-completed.emitted-line"],
+  proofIds: ["editor.local-history.rekey.completed.emitted-line"],
   releaseImpact: "patch",
 });
 

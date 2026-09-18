@@ -55,7 +55,7 @@ const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-retry"],
-  proofIds: ["gateway.retry-budget-exhausted.emitted-line"],
+  proofIds: ["gateway.retry.budget-exhausted.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -85,7 +85,7 @@ const GATEWAY_RETRY_EXHAUSTED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-retry"],
-  proofIds: ["gateway.retry-exhausted.emitted-line"],
+  proofIds: ["gateway.retry.exhausted.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -108,7 +108,7 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-retry"],
-  proofIds: ["gateway.retry-scheduled.emitted-line"],
+  proofIds: ["gateway.retry.scheduled.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -140,7 +140,7 @@ const GATEWAY_CIRCUIT_REJECTED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-circuit-breaker"],
-  proofIds: ["gateway.circuit-rejected.emitted-line"],
+  proofIds: ["gateway.circuit.rejected.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -160,7 +160,7 @@ const GATEWAY_CIRCUIT_HALF_OPEN_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-circuit-breaker"],
-  proofIds: ["gateway.circuit-half-open.emitted-line"],
+  proofIds: ["gateway.circuit.half-open.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -187,7 +187,7 @@ const GATEWAY_CIRCUIT_OPENED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-circuit-breaker"],
-  proofIds: ["gateway.circuit-opened.emitted-line"],
+  proofIds: ["gateway.circuit.opened.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -212,7 +212,7 @@ const GATEWAY_CIRCUIT_CLOSED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-circuit-breaker"],
-  proofIds: ["gateway.circuit-closed.emitted-line"],
+  proofIds: ["gateway.circuit.closed.emitted-line"],
   releaseImpact: "patch",
 });
 

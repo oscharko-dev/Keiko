@@ -99,56 +99,56 @@ const WINDOWS_LAUNCHER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
   ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
   op: "security.windows-launcher.system-root-refused",
   fields: WINDOWS_LAUNCHER_FIELDS,
-  proofIds: ["windows.launcher.system-root-refused"],
+  proofIds: ["security.windows-launcher.system-root-refused.emitted-line"],
 });
 
 const WINDOWS_LEGACY_LAUNCHER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
   ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
   op: "security.windows-portable-legacy-launcher.system-root-refused",
   fields: WINDOWS_LEGACY_LAUNCHER_FIELDS,
-  proofIds: ["windows.legacy-launcher.system-root-refused"],
+  proofIds: ["security.windows-portable-legacy-launcher.system-root-refused.emitted-line"],
 });
 
 const WINDOWS_PORTABLE_ALERT_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
   ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
   op: "security.windows-portable-alert.system-root-refused",
   fields: WINDOWS_PORTABLE_ALERT_FIELDS,
-  proofIds: ["windows.portable-alert.system-root-refused"],
+  proofIds: ["security.windows-portable-alert.system-root-refused.emitted-line"],
 });
 
 const WINDOWS_LIFECYCLE_OPENER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
   ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
   op: "security.windows-lifecycle-opener.system-root-refused",
   fields: WINDOWS_LIFECYCLE_OPENER_FIELDS,
-  proofIds: ["windows.lifecycle-opener.system-root-refused"],
+  proofIds: ["security.windows-lifecycle-opener.system-root-refused.emitted-line"],
 });
 
 const WINDOWS_LAUNCHER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
   ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
   op: "security.windows-launcher.system-binary-missing",
   fields: WINDOWS_LAUNCHER_FIELDS,
-  proofIds: ["windows.launcher.system-binary-missing"],
+  proofIds: ["security.windows-launcher.system-binary-missing.emitted-line"],
 });
 
 const WINDOWS_LEGACY_LAUNCHER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
   ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
   op: "security.windows-portable-legacy-launcher.system-binary-missing",
   fields: WINDOWS_LEGACY_LAUNCHER_FIELDS,
-  proofIds: ["windows.legacy-launcher.system-binary-missing"],
+  proofIds: ["security.windows-portable-legacy-launcher.system-binary-missing.emitted-line"],
 });
 
 const WINDOWS_PORTABLE_ALERT_BINARY_MISSING_OPERATION = defineActivityLogOperation({
   ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
   fields: WINDOWS_PORTABLE_ALERT_FIELDS,
   op: "security.windows-portable-alert.system-binary-missing",
-  proofIds: ["windows.portable-alert.system-binary-missing"],
+  proofIds: ["security.windows-portable-alert.system-binary-missing.emitted-line"],
 });
 
 const WINDOWS_LIFECYCLE_OPENER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
   ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
   op: "security.windows-lifecycle-opener.system-binary-missing",
   fields: WINDOWS_LIFECYCLE_OPENER_FIELDS,
-  proofIds: ["windows.lifecycle-opener.system-binary-missing"],
+  proofIds: ["security.windows-lifecycle-opener.system-binary-missing.emitted-line"],
 });
 
 function emitWindowsSystemRootRefusal(
