@@ -1695,11 +1695,12 @@ describe("activity log writer workers never outlive their test", () => {
     // Windows keeps a dead parent's pid, so there only the lifetime bounds a writer.
     if (process.platform === "win32") ctx.skip();
     const pid = await startOrphanedForeverWriter(stateDir);
-    try {
-      await waitFor(() => (processIsRunning(pid) ? undefined : true), 10_000);
-    } finally {
-      if (processIsRunning(pid)) process.kill(pid, "SIGKILL");
-    }
+    const stopped = await waitFor(() => (processIsRunning(pid) ? undefined : true), 10_000).catch(
+      () => false,
+    );
+    // Whatever the outcome, this test itself must not leave the writer running.
+    if (processIsRunning(pid)) process.kill(pid, "SIGKILL");
+    expect(stopped).toBe(true);
   }, 30_000);
 });
 
