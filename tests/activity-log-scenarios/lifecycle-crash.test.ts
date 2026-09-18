@@ -100,7 +100,7 @@ describe("Activity Log scenario: lifecycle/crash", () => {
       );
       const lines = readPersistedActivityLog(stateDir).split("\n").filter(Boolean);
       const withoutFatal = lines.filter((line) => !line.includes('"op":"process.fatal"'));
-      expect(withoutFatal.length).toBe(lines.length - 1);
+      expect(withoutFatal).toHaveLength(lines.length - 1);
       expect(() =>
         expectActivityLogScenario("lifecycle-crash.crash", {
           stateDir: legacyLogCopy(withoutFatal),

@@ -974,9 +974,9 @@ describe("op catalog drift", () => {
       const generated = await formatGeneratedJson(
         generateActivityLogFailureSurfaceInventory(repoRoot, generateCurrentTypedRegistry()),
       );
-      expect(failureSurfaceInventoryDrift(generated, readFileSync(INVENTORY_PATH, "utf8"))).toBe(
-        undefined,
-      );
+      expect(
+        failureSurfaceInventoryDrift(generated, readFileSync(INVENTORY_PATH, "utf8")),
+      ).toBeUndefined();
     },
     REPOSITORY_SCAN_TEST_TIMEOUT_MS,
   );

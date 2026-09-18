@@ -60,6 +60,7 @@ import {
 } from "./support-analyze-sufficiency.js";
 import {
   SEGMENT_MANIFEST_SCHEMA_VERSION,
+  compareText,
   correlationKey,
   filterKeyHashes,
   manifestMayContainAnyKey,
@@ -833,7 +834,7 @@ function closureSummary(
   const roles = [...closure.members.values()];
   const count = (role: ClosureRole): number => roles.filter((entry) => entry === role).length;
   const observed = events?.observed ?? new Set<string>();
-  const edges = [...(events?.edges ?? new Set<string>())].sort().map((edge) => {
+  const edges = [...(events?.edges ?? new Set<string>())].sort(compareText).map((edge) => {
     const [parentCorrelationId = "", correlationId = ""] = edge.split("\u0000");
     return { parentCorrelationId, correlationId };
   });

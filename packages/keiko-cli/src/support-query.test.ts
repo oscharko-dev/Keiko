@@ -373,7 +373,7 @@ describe("support query event filters (#3531)", () => {
       filter: { op: SIGNAL },
     });
 
-    expect(result.events.length).toBe(10);
+    expect(result.events).toHaveLength(10);
     expect(result.events.every((event) => event.parsed.view.op === SIGNAL)).toBe(true);
     expect(result.events.every((event) => event.role === "match")).toBe(true);
   });

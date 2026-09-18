@@ -242,7 +242,8 @@ export function manifestMayContainAnyKey(
 
 // ─── Building one manifest from a segment's lines ──────────────────────────────────────────────
 
-function compareText(left: string, right: string): number {
+// Code-unit order: the same on every host and locale, which `localeCompare` is not.
+export function compareText(left: string, right: string): number {
   if (left === right) return 0;
   return left < right ? -1 : 1;
 }
