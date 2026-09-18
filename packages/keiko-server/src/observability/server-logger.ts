@@ -276,11 +276,16 @@ let processLogger: ServerLogger | null = null;
 function buildProcessLogger(): ServerLogger {
   const stateDir = process.env.KEIKO_STATE_DIR;
   if (stateDir === undefined || stateDir === "") {
-    return createServerLogger({ sink: nullServerLogSink() });
+    return nullServerLogger();
   }
   // `createFileServerLogSink` is a per-file singleton, so this shares the CLI's descriptor and
   // rotation state rather than opening a second one over the same file.
-  return createServerLogger({ sink: createFileServerLogSink(stateDir) });
+  try {
+    return createServerLogger({ sink: createFileServerLogSink(stateDir) });
+  } catch (error) {
+    reportServerLogFailure(error, { op: "server-log.initialize", loss: "event-dropped" });
+    return nullServerLogger();
+  }
 }
 
 export function getServerLogger(): ServerLogger {

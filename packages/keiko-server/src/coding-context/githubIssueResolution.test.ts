@@ -256,7 +256,7 @@ describe("server-resolved issue intake", () => {
       op: "coding-workbench.issue.resolved",
       correlationId: "issue-test",
       errorKind: "read-failed",
-      extra: { reason: "read-failed", failureKind: "Error" },
+      extra: { reason: "read-failed", failureKind: "read-failed" },
     });
   });
 
@@ -278,11 +278,17 @@ describe("server-resolved issue intake", () => {
 
   it("distinguishes default-branch read failure from an unavailable default", async () => {
     const f = fixture();
-    f.readDefaultBranch.mockRejectedValue(new Error("private default failure"));
+    f.readDefaultBranch.mockRejectedValue(
+      Object.assign(new Error("private default failure"), { code: `E${"X".repeat(90)}` }),
+    );
     expect(await f.resolve(f.deps, f.input)).toEqual({
       ok: false,
       failure: "clone-failed",
       failureReason: "default-branch-read-failed",
+    });
+    expect(f.events.at(-1)).toMatchObject({
+      errorKind: "read-failed",
+      extra: { failureKind: "read-failed" },
     });
   });
 

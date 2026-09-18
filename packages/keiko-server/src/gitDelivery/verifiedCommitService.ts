@@ -32,7 +32,9 @@ import {
 } from "./approvalStore.js";
 import {
   executeGovernedMutation,
+  gitDeliveryActivityCode,
   gitDeliveryActivityErrorKind,
+  gitDeliveryActivityFailureKind,
   readStagedConflictMarkerFileCountFor,
 } from "./execution.js";
 import {
@@ -244,12 +246,13 @@ function verifiedCommitErrorFields(
   VerifiedCommitActivityFields,
   "failureKind" | "errorClass" | "code" | "frames" | "causeChain"
 > {
-  const failureKind = errorKindOf(error);
+  const failureKind = gitDeliveryActivityFailureKind(errorKindOf(error));
   const detail = describeError(error);
+  const code = gitDeliveryActivityCode(detail.code);
   return {
     failureKind,
     errorClass: detail.errorClass,
-    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(code === undefined ? {} : { code }),
     ...(detail.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
   };

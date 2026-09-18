@@ -359,11 +359,12 @@ function recordManagedRootResolutionFailure(
 ): void {
   const frames = keikoStackFrames(error);
   const causes = causeChain(error);
+  const errorKind = managedRootResolutionErrorKind(error);
   recordWorkspaceRootDenied(
     {
       reason,
-      failureKind: errorKindOf(error),
-      errorKind: managedRootResolutionErrorKind(error),
+      failureKind: errorKind,
+      errorKind,
       ...(frames.length === 0 ? {} : { frames }),
       ...(causes.length === 0 ? {} : { causeChain: causes }),
     },

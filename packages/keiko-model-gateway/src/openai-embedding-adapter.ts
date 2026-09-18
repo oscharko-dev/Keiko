@@ -20,6 +20,7 @@ import {
   logCorrelationId,
   logEndpointHost,
   logLevelEnabled,
+  logModelId,
   logTimer,
   resolveLogSink,
   withCorrelationId,
@@ -701,7 +702,7 @@ function logScalarDispatch(
   if (!logLevelEnabled(log, "info")) return;
   const fields: EmbeddingDispatchFields = {
     endpointDigest: embeddingEndpointDigest(request.endpoint),
-    modelId: request.modelId,
+    modelId: logModelId(request.modelId),
     inputCount: 1,
     bodyBytes: Buffer.byteLength(built.body, "utf8"),
     timeoutMs: request.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS,
@@ -906,7 +907,7 @@ function logBatchDispatch(
   if (!logLevelEnabled(log, "info")) return;
   const fields: EmbeddingDispatchFields = {
     endpointDigest: embeddingEndpointDigest(request.endpoint),
-    modelId: request.modelId,
+    modelId: logModelId(request.modelId),
     inputCount: request.inputs.length,
     bodyBytes: Buffer.byteLength(built.body, "utf8"),
     timeoutMs: request.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS,

@@ -336,6 +336,34 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
     expect(JSON.stringify(events)).not.toContain(Buffer.alloc(16, 3).toString("base64"));
   });
 
+  it("classifies a symlinked key path as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-key-sub");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-key-sub");
+    symlinkSync(realSub, linkSub);
+    const { sink, events } = recordingSink();
+
+    expect(() =>
+      resolveLocalVaultKey({
+        env: {},
+        vaultDir: linkSub,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+        sink,
+      }),
+    ).toThrow("symlinked path");
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolution-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
+  });
+
   it("lets the real correlation-binding sink replace the sanctioned fallback", () => {
     const { sink, events } = recordingSink();
     const bound = bindSecurityLogCorrelation(sink, "vault-request-001");
@@ -825,6 +853,55 @@ describe("createLocalSecretVault — symlink guard", () => {
     expect(() => {
       vault.set("cred:a", "value");
     }).toThrow("symlinked path");
+  });
+
+  it("classifies a blocked setMany through a symlink as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-merge-log-sub");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-merge-log-sub");
+    symlinkSync(realSub, linkSub);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(linkSub, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(() => {
+      vault.setMany(new Map([["cred:a", "value"]]));
+    }).toThrow("symlinked path");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.entries-merge-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
+  });
+
+  it("classifies a blocked deleteMany through a symlink as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-delete-log-sub");
+    mkdirSync(realSub);
+    vaultAt(join(realSub, "vault.enc.json")).set("cred:a", "value");
+    const linkSub = join(dir, "link-delete-log-sub");
+    symlinkSync(realSub, linkSub);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(linkSub, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(() => {
+      vault.deleteMany(["cred:a"]);
+    }).toThrow("symlinked path");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.entries-delete-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
   });
 
   it("throws on read paths through a symlinked directory segment", (ctx) => {

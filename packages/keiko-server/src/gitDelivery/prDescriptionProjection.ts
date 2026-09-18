@@ -14,7 +14,11 @@ import {
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { errorKindOf } from "../observability/server-log.js";
-import { gitDeliveryActivityErrorKind } from "./execution.js";
+import {
+  gitDeliveryActivityCode,
+  gitDeliveryActivityErrorKind,
+  gitDeliveryActivityFailureKind,
+} from "./execution.js";
 import {
   PrDescriptionFailure,
   type PrDescriptionContext,
@@ -153,9 +157,10 @@ function failureDetail(error: unknown): { readonly detail?: PrDescriptionFailure
 
 function descriptionFailureFields(error: unknown): Record<string, unknown> {
   const description = describeError(error);
+  const code = gitDeliveryActivityCode(description.code);
   return {
     errorClass: description.errorClass,
-    ...(description.code === undefined ? {} : { code: description.code }),
+    ...(code === undefined ? {} : { code }),
     ...(description.frames === undefined ? {} : { frames: description.frames }),
     ...(description.causeChain === undefined ? {} : { causeChain: description.causeChain }),
   };
@@ -178,7 +183,8 @@ export function logDescription(
   status?: PrDescriptionApplicationStatus,
   error?: unknown,
 ): void {
-  const failureKind = error === undefined ? undefined : errorKindOf(error);
+  const failureKind =
+    error === undefined ? undefined : gitDeliveryActivityFailureKind(errorKindOf(error));
   (options.execution.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       PR_DESCRIPTION_OPERATION,

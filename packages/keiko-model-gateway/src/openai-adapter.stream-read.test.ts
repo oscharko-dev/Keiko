@@ -16,6 +16,7 @@ import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import {
   activityLogErrorKind,
+  logModelId,
   type ModelGatewayLogEvent,
   type ModelGatewayLogSink,
 } from "./observability.js";
@@ -270,6 +271,26 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     expect(log.events.find((event) => event.op === "chat.request.dispatch")).toMatchObject({
       extra: { stream: true, timeoutMs: 1_000, readBudgetMs: 10_000 },
     });
+  });
+
+  it("sanitizes the model id on both dispatch and stream outcome lines", async () => {
+    const log = recorder();
+    const modelId = "streaming customer alias";
+    await expect(
+      answerOf(
+        adapterWith(
+          () => Promise.resolve(sse([delta("ok"), finish("stop"), DONE])),
+          log.sink,
+        ).callStream({ ...REQUEST, modelId }, { ...CONFIG, modelId }, BOUNDS),
+      ),
+    ).resolves.toMatchObject({ content: "ok" });
+
+    const loggedModelId = logModelId(modelId);
+    expect(log.events.find((event) => event.op === "chat.request.dispatch")?.extra?.modelId).toBe(
+      loggedModelId,
+    );
+    expect(streamedLine(log.events)?.extra?.modelId).toBe(loggedModelId);
+    expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 });
 

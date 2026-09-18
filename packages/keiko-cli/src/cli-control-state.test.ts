@@ -53,6 +53,30 @@ describe("cliControlStateConflictsWithTarget", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("fails closed on casing aliases for case-insensitive platforms", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-control-case-overlap-"));
+    const control = join(root, "Keiko", "control");
+    mkdirSync(control, { recursive: true });
+    try {
+      expect(
+        cliControlStateConflictsWithTarget(
+          control,
+          join(root, "keiko", "CONTROL", "logs"),
+          "darwin",
+        ),
+      ).toBe(true);
+      expect(
+        cliControlStateConflictsWithTarget(
+          control,
+          join(root, "keiko", "CONTROL", "logs"),
+          "win32",
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("cliTargetIdentitySha256", () => {

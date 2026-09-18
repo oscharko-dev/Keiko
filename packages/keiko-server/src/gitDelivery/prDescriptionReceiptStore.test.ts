@@ -60,6 +60,11 @@ describe.each(["memory", "file"] as const)(
         ok: false,
         reason: "receipt-conflict",
       });
+      expect(fixture.events.at(-1)).toMatchObject({
+        op: "git.pr-description.receipt",
+        errorKind: "conflict",
+        extra: { reason: "receipt-conflict", failureKind: "conflict" },
+      });
       const next = store.recordStatus(fixture.context, journal, version(first));
       expect(version(next)).not.toBe(version(first));
       expect(store.recordStatus(fixture.context, journal, version(first))).toEqual({

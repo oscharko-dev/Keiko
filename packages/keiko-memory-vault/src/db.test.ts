@@ -197,7 +197,7 @@ describe("openMemoryDatabase corruption path", () => {
       level: "error",
       category: "diagnostic",
       op: "memory-vault.store.quarantined",
-      errorKind: "internal",
+      errorKind: "read-failed",
       extra: { reopened: true },
     });
     expect(typeof events[0]?.extra?.failureKind).toBe("string");

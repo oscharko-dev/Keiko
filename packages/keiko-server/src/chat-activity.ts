@@ -218,7 +218,8 @@ const GIT_CHANGE_CHAT_APPLY_OPERATION = defineActivityLogOperation({
 });
 
 function rejectionErrorKind(reason: ChatRejectionReason): ActivityLogErrorKind {
-  return reason === "readiness" ? "unavailable" : "conflict";
+  if (reason === "readiness") return "unavailable";
+  return reason === "generation" ? "internal" : "invalid-request";
 }
 
 export function logChatCreationRejectionEvent(input: {
@@ -308,7 +309,11 @@ export function logGitChangeTurnAuthorityEvent(
   getServerLogger().warn(
     activityLogEvent(
       PR_DESCRIPTION_CHAT_TURN_DENIED_OPERATION,
-      { correlationId: resolvedCorrelationId, errorKind: "authority-denied" },
+      {
+        correlationId: resolvedCorrelationId,
+        errorKind:
+          admission.reason === "authority-expired" ? "validation-failed" : "authority-denied",
+      },
       {
         relationshipId,
         reason: admission.reason,

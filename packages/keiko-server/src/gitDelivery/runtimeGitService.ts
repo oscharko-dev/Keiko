@@ -28,7 +28,11 @@ import {
   type GitDeliveryApprovalBinding,
   type GitDeliveryIssuedApproval,
 } from "./approvalStore.js";
-import { executeGovernedMutation, gitDeliveryActivityErrorKind } from "./execution.js";
+import {
+  executeGovernedMutation,
+  gitDeliveryActivityErrorKind,
+  gitDeliveryActivityFailureKind,
+} from "./execution.js";
 import {
   admitStageSelection,
   reviewStageSelection,
@@ -403,7 +407,7 @@ export class RuntimeGitService {
       return REFUSED_AUTHORITY;
     }
     const cause = error instanceof StageEffectFailure ? error.cause : error;
-    const failureKind = errorKindOf(cause);
+    const failureKind = gitDeliveryActivityFailureKind(errorKindOf(cause));
     const detail = describeError(cause);
     this.log(
       context,

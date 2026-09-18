@@ -768,6 +768,26 @@ describe("rerankSelection activity log", () => {
     });
   }
 
+  it("keeps a non-positive topN degradation non-throwing and logs a valid count", async () => {
+    const deps = depsWith(gatewayConfig(), () => Promise.reject(new Error("must not be called")));
+    const sink = capture("debug");
+
+    await expect(
+      rerankSelection({
+        deps,
+        query: "alpha",
+        candidates: CANDIDATES,
+        documentFor: (candidate) => candidate,
+        topN: -1,
+        fallbackMode: "slice-topN",
+      }),
+    ).resolves.toMatchObject({ selected: [] });
+
+    expect(sink.events.find((event) => event.op === "search.rerank.completed")?.extra?.topN).toBe(
+      0,
+    );
+  });
+
   it("warns when policy denies external reranking and reports what the caller kept instead", async () => {
     const deps = depsWith(gatewayConfig(), () => Promise.reject(new Error("never called")));
     const sink = capture("info");

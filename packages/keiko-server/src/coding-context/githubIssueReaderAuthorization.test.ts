@@ -403,13 +403,17 @@ describe("githubRemoteOwnerAndRepoFor — emitted evidence (#3385)", () => {
       "/workspace/project",
       hermeticEnv(home),
       () => {
-        throw new Error("resolver exploded");
+        throw Object.assign(new Error("resolver exploded"), { code: `E${"X".repeat(90)}` });
       },
       { activityLog: sink },
     );
 
     expect(resolved).toBeUndefined();
-    expect(events[0]).toMatchObject({ level: "warn", extra: { outcome: "resolver-failed" } });
+    expect(events[0]).toMatchObject({
+      level: "warn",
+      errorKind: "unknown",
+      extra: { outcome: "resolver-failed", failureKind: "unknown" },
+    });
     expect(typeof events[0]?.errorKind).toBe("string");
   });
 

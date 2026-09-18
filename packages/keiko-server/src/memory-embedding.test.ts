@@ -819,6 +819,20 @@ describe("memory embedding activity log", () => {
     expect(sink.lines().join("\n")).not.toContain(failureKind);
   });
 
+  it("hashes a non-machine model id without breaking never-throw degradation", async () => {
+    const modelId = "Llama Embedding 3.1 8B Instruct";
+    const deps = makeDeps({
+      modelId,
+      embeddingRequest: () => Promise.reject(new Error("provider unavailable")),
+    });
+    const sink = capture("info");
+
+    await expect(embedMemoryText(deps, "a durable preference")).resolves.toBeNull();
+
+    expect(sink.events[0]?.extra?.modelId).toMatch(/^model-[a-f0-9]{64}$/u);
+    expect(sink.lines().join("\n")).not.toContain(modelId);
+  });
+
   it("keeps an unconfigured install at debug and reports the dimensions of a success there too", async () => {
     const unconfigured = makeDeps({ modelId: CHAT_MODEL });
     const configured = makeDeps({ embeddingRequest: okAdapter(8) });

@@ -23,6 +23,7 @@ import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contract
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  isErrorKind,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
@@ -1159,6 +1160,7 @@ const EXECUTION_ACTIVITY_ERROR_KIND: Readonly<
 };
 
 const ACTIVITY_ERROR_PATTERNS: readonly (readonly [RegExp, ActivityLogErrorKind])[] = [
+  [/rate[-_ ]?limit/u, "rate-limited"],
   [/timeout/u, "timeout"],
   [/cancel|abort/u, "cancelled"],
   [/authority/u, "authority-denied"],
@@ -1173,6 +1175,14 @@ export function gitDeliveryActivityErrorKind(kind: string): ActivityLogErrorKind
   const match = ACTIVITY_ERROR_PATTERNS.find(([pattern]) => pattern.test(lower));
   if (match !== undefined) return match[1];
   return kind === "unknown" ? "unknown" : "internal";
+}
+
+export function gitDeliveryActivityFailureKind(kind: string): string {
+  return isErrorKind(kind) ? kind : gitDeliveryActivityErrorKind(kind);
+}
+
+export function gitDeliveryActivityCode(code: string | undefined): string | undefined {
+  return isErrorKind(code) ? code : undefined;
 }
 
 function policyBlockReasonOf(

@@ -868,6 +868,18 @@ function pushInvalidRegistration(context, site, detail, correctiveAction) {
   });
 }
 
+function rejectInvalidRegistrationField(context, site, value) {
+  const invalidField = invalidRegistrationField(value);
+  if (invalidField === undefined) return false;
+  pushInvalidRegistration(
+    context,
+    site,
+    invalidField,
+    "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
+  );
+  return true;
+}
+
 function registrationLiteral(context, node, site) {
   const argument = node.arguments[0];
   const value =
@@ -888,16 +900,7 @@ function collectTypedRegistration(context, sourceFile, node) {
   const site = registrySite(context.repoRoot, sourceFile, node);
   const value = registrationLiteral(context, node, site);
   if (value === undefined) return;
-  const declaredInvalidField = invalidRegistrationField(value);
-  if (declaredInvalidField !== undefined) {
-    pushInvalidRegistration(
-      context,
-      site,
-      declaredInvalidField,
-      "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
-    );
-    return;
-  }
+  if (rejectInvalidRegistrationField(context, site, value)) return;
   const invalidGlobalField = invalidGlobalFieldOverride(value.fields);
   if (invalidGlobalField !== undefined) {
     pushInvalidRegistration(
@@ -912,16 +915,7 @@ function collectTypedRegistration(context, sourceFile, node) {
     ...value,
     fields: { ...ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS, ...value.fields },
   };
-  const invalidField = invalidRegistrationField(valueWithGlobalFields);
-  if (invalidField !== undefined) {
-    pushInvalidRegistration(
-      context,
-      site,
-      invalidField,
-      "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
-    );
-    return;
-  }
+  if (rejectInvalidRegistrationField(context, site, valueWithGlobalFields)) return;
   const operation = { ...valueWithGlobalFields, registrationSite: site, emitterSites: [] };
   context.operations.push(operation);
   const symbol = registrationSymbol(context.checker, node);
@@ -1003,10 +997,18 @@ function operationEvidenceClasses(operation) {
 
 function operationCoverageMissing(operation) {
   const missing = [];
-  if (operation.fields.completeness?.required !== true) missing.push("lifecycle-evidence");
-  if (operation.fields.loss?.required !== true) missing.push("loss-evidence");
+  if (operation.emitterSites.length === 0) missing.push("failure-evidence");
   if (operation.proofIds.length === 0) missing.push("executable-proof");
   return missing;
+}
+
+function lifecycleOperations(members) {
+  return Object.fromEntries(
+    ACTIVITY_LOG_LIFECYCLE_PHASES.map((phase) => [
+      phase,
+      members.filter((operation) => operation.lifecycle === phase).map((operation) => operation.op),
+    ]),
+  );
 }
 
 function failureClassOperation(operation) {
@@ -1045,11 +1047,10 @@ function failureClassEntry(failureClass, operations) {
     lifecycleTransitions: [...new Set(members.map((operation) => operation.lifecycle))].toSorted(
       compareCodepoints,
     ),
+    lifecycleOperations: lifecycleOperations(members),
     causalEdges: members.map((operation) => ({ op: operation.op, mode: operation.causal })),
     lossSignals: members
-      .filter(
-        (operation) => operation.lifecycle === "loss" || operation.fields.loss?.required === true,
-      )
+      .filter((operation) => operation.lifecycle === "loss")
       .map((operation) => operation.op),
     operations: coveredOperations,
     missingObligations,

@@ -6,8 +6,10 @@ import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-cont
 import type { CodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { parseCodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
@@ -25,7 +27,11 @@ import type {
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import {
+  errorKindOf,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
 
@@ -861,11 +867,23 @@ interface RuntimeOperationTransportFailure {
   readonly error: unknown;
 }
 
+function runtimeTransportErrorKind(error: unknown): ActivityLogErrorKind {
+  const classified = errorKindOf(error);
+  const registered = activityLogErrorKindOr(classified, "internal");
+  if (registered !== "internal" || classified === "internal") return registered;
+  const normalized = classified.toLowerCase();
+  if (/timeout|timedout/u.test(normalized)) return "timeout";
+  if (/abort|cancel/u.test(normalized)) return "cancelled";
+  if (/permission|denied|eacces|eperm/u.test(normalized)) return "permission-denied";
+  if (/unavailable|network|connection|econn|enotfound/u.test(normalized)) return "unavailable";
+  return "internal";
+}
+
 function runtimeOperationTransportEvent(input: RuntimeOperationTransportFailure): ServerLogEvent {
   const envelope = {
     level: "warn" as const,
     correlationId: correlationIdOrUnknown(input.correlationId ?? input.runId),
-    errorKind: "unavailable" as const,
+    errorKind: runtimeTransportErrorKind(input.error),
   };
   const details = {
     runId: input.runId,

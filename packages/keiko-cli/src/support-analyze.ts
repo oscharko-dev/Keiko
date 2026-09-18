@@ -47,11 +47,19 @@ import {
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
   ActivityLogEventValidationError,
   activityLogOperationSchema,
+  isActivityLogIdentityDigest,
+  isActivityLogInstanceId,
   isActivityLogErrorKind,
+  isActivityLogPlatformClass,
+  isActivityLogProcessId,
+  isActivityLogProductVersion,
+  isActivityLogSequence,
   validateActivityLogOperationRecord,
   type ActivityLogEventEnvelope,
   type ActivityLogOperationRegistration,
@@ -151,7 +159,7 @@ export interface ProcessSummary {
 export type ActivityLogEvidenceClassification =
   "supported" | "legacy" | "unsupported" | "corrupt" | "truncated" | "incomplete";
 
-export type ProcessSequenceAnomalyKind = "gap" | "duplicate" | "decreasing" | "reset" | "reorder";
+export type ProcessSequenceAnomalyKind = "gap" | "duplicate" | "decreasing" | "reset";
 
 export interface ProcessSequenceAnomaly {
   readonly kind: ProcessSequenceAnomalyKind;
@@ -398,12 +406,6 @@ type LineClassification =
       readonly evidence: "unsupported" | "corrupt" | "truncated" | "incomplete";
     };
 
-const MAX_PROCESS_ID = 2_147_483_647;
-const MAX_INSTANCE_ID_LENGTH = 64;
-const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]+$/u;
-const ACTIVITY_LOG_DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
-const ACTIVITY_LOG_PLATFORM_PATTERN = /^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$/u;
-const ACTIVITY_LOG_PRODUCT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 const ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS = [
   "registryVersion",
   "schemaDigest",
@@ -417,22 +419,15 @@ const ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS = [
 ] as const;
 
 function validProcessId(value: unknown): value is number {
-  return (
-    typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= MAX_PROCESS_ID
-  );
+  return isActivityLogProcessId(value);
 }
 
 function validSequence(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+  return isActivityLogSequence(value);
 }
 
 function validInstanceId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= MAX_INSTANCE_ID_LENGTH &&
-    INSTANCE_ID_PATTERN.test(value)
-  );
+  return isActivityLogInstanceId(value);
 }
 
 function hasValidProcessIdentity(record: Record<string, unknown>): boolean {
@@ -449,26 +444,17 @@ function hasInvalidPresentProcessIdentity(record: Record<string, unknown>): bool
   );
 }
 
-const ACTIVITY_LOG_COMPATIBILITY_STATES: ReadonlySet<string> = new Set([
-  "supported",
-  "legacy-supported",
-  "unsupported-version",
-  "corrupt",
-  "truncated",
-  "incomplete",
-]);
-const ACTIVITY_LOG_WRITER_CAPABILITIES: ReadonlySet<string> = new Set([
-  "active",
-  "degraded",
-  "unavailable",
-]);
+const ACTIVITY_LOG_COMPATIBILITY_STATE_SET: ReadonlySet<string> = new Set(
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
+);
+const ACTIVITY_LOG_WRITER_CAPABILITY_SET: ReadonlySet<string> = new Set(
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+);
 
 function validRegistryDigests(record: Record<string, unknown>): boolean {
   return (
-    typeof record.schemaDigest === "string" &&
-    ACTIVITY_LOG_DIGEST_PATTERN.test(record.schemaDigest) &&
-    typeof record.catalogDigest === "string" &&
-    ACTIVITY_LOG_DIGEST_PATTERN.test(record.catalogDigest)
+    isActivityLogIdentityDigest(record.schemaDigest) &&
+    isActivityLogIdentityDigest(record.catalogDigest)
   );
 }
 
@@ -476,10 +462,8 @@ function validRuntimeIdentity(record: Record<string, unknown>): boolean {
   return (
     record.buildClass === "node-esm" &&
     (record.releaseClass === "stable" || record.releaseClass === "prerelease") &&
-    typeof record.platformClass === "string" &&
-    ACTIVITY_LOG_PLATFORM_PATTERN.test(record.platformClass) &&
-    typeof record.productVersion === "string" &&
-    ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(record.productVersion)
+    isActivityLogPlatformClass(record.platformClass) &&
+    isActivityLogProductVersion(record.productVersion)
   );
 }
 
@@ -490,8 +474,10 @@ function validRegistryIdentityShape(record: Record<string, unknown>): boolean {
     record.registryVersion > 0 &&
     validRegistryDigests(record) &&
     validRuntimeIdentity(record) &&
-    ACTIVITY_LOG_COMPATIBILITY_STATES.has(String(record.compatibilityState)) &&
-    ACTIVITY_LOG_WRITER_CAPABILITIES.has(String(record.writerCapability))
+    typeof record.compatibilityState === "string" &&
+    ACTIVITY_LOG_COMPATIBILITY_STATE_SET.has(record.compatibilityState) &&
+    typeof record.writerCapability === "string" &&
+    ACTIVITY_LOG_WRITER_CAPABILITY_SET.has(record.writerCapability)
   );
 }
 
@@ -1274,12 +1260,7 @@ function lineSequenceAnomalies(line: ParsedLine, state: SequenceState): ProcessS
   if (state.seen.has(seq)) anomalies.push(sequenceAnomaly("duplicate", line, state.previous));
   if (seq === 1 && state.previous > 1)
     anomalies.push(sequenceAnomaly("reset", line, state.previous));
-  if (seq < state.previous) {
-    anomalies.push(
-      sequenceAnomaly("decreasing", line, state.previous),
-      sequenceAnomaly("reorder", line, state.previous),
-    );
-  }
+  if (seq < state.previous) anomalies.push(sequenceAnomaly("decreasing", line, state.previous));
   state.seen.add(seq);
   state.previous = seq;
   return anomalies;

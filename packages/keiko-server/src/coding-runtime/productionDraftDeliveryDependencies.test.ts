@@ -600,6 +600,8 @@ describe("production draft delivery dependencies", () => {
     });
     expect(JSON.stringify(f.events)).not.toContain("private push failure");
     expect(JSON.stringify(f.events)).not.toContain("https://secret.example");
+    args?.onPreparationFailure?.(new Error("git-publish-private-root-overlap"));
+    expect(f.events.at(-1)?.extra?.reason).toBe("git-publish-private-root-overlap");
   });
   it("preserves liveness at the gateway and adapter's actual spawn boundary", async () => {
     const f = await fixture();

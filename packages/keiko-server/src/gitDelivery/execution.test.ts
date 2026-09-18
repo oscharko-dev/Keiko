@@ -58,6 +58,9 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
 
 import {
   executeGovernedMutation,
+  gitDeliveryActivityCode,
+  gitDeliveryActivityErrorKind,
+  gitDeliveryActivityFailureKind,
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
   GitDeliveryRootAuthorityRevokedError,
@@ -70,6 +73,14 @@ import {
   executionFailureDetail,
   logGitDeliveryMutation,
 } from "./execution.js";
+
+describe("git delivery activity failure classification", () => {
+  it("keeps rate limits distinct and bounds native failure fields", () => {
+    expect(gitDeliveryActivityErrorKind("rate-limited")).toBe("rate-limited");
+    expect(gitDeliveryActivityFailureKind(`E${"X".repeat(90)}`)).toBe("internal");
+    expect(gitDeliveryActivityCode(`E${"X".repeat(90)}`)).toBeUndefined();
+  });
+});
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,

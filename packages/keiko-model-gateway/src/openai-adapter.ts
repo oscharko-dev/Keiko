@@ -56,6 +56,7 @@ import {
   logCorrelationId,
   logEndpointHost,
   logLevelEnabled,
+  logModelId,
   logTimer,
   resolveLogSink,
   withCorrelationId,
@@ -904,7 +905,7 @@ function streamReadFields(
   readonly readBudgetMs?: number;
 } {
   return {
-    modelId: read.config.modelId,
+    modelId: logModelId(read.config.modelId),
     outcome,
     dataEvents: report.dataEvents,
     ...(report.firstDataMs === undefined ? {} : { firstDataMs: report.firstDataMs }),
@@ -1253,7 +1254,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     };
     logChatDispatch(this.log, {
       endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
-      modelId: config.modelId,
+      modelId: logModelId(config.modelId),
       messageCount: request.messages.length,
       bodyBytes: Buffer.byteLength(body, "utf8"),
       timeoutMs: bounds?.silenceMs ?? config.timeoutMs,

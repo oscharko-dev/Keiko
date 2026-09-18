@@ -304,10 +304,24 @@ function recordDevLaneDiscovery(
   activityLog.write(
     activityLogEvent(
       CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION,
-      { level: "warn", correlationId: UNKNOWN_CORRELATION_ID, errorKind: "unavailable" },
+      {
+        level: "warn",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: devLaneRefusalErrorKind(discovery.reason),
+      },
       { lane: "dev-checkout", reason: discovery.reason },
     ),
   );
+}
+
+function devLaneRefusalErrorKind(
+  reason: DevLaneOpenCodeRefusalReason,
+): "unavailable" | "validation-failed" | "unsafe-target" {
+  if (reason === "payload-tampered") return "validation-failed";
+  if (reason === "native-helper-directory-untrusted" || reason === "payload-unapproved") {
+    return "unsafe-target";
+  }
+  return "unavailable";
 }
 
 function devLaneRuntime(discovery: DevLaneOpenCodeDiscovery): ResolvedRuntime {

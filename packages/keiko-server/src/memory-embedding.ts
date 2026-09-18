@@ -26,9 +26,9 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
@@ -345,7 +345,12 @@ function logEmbeddingUnavailable(
 }
 
 function closedEmbeddingErrorKind(errorKind: string): ActivityLogErrorKind {
-  return isActivityLogErrorKind(errorKind) ? errorKind : "unknown";
+  return activityLogErrorKindOr(errorKind, "unknown");
+}
+
+function activityEmbeddingModelId(modelId: string): string {
+  if (/^[\u0021-\u007e]{1,240}$/u.test(modelId)) return modelId;
+  return `model-${createHash("sha256").update(modelId).digest("hex")}`;
 }
 
 function logEmbeddingFailed(
@@ -363,7 +368,7 @@ function logEmbeddingFailed(
         ...(status === undefined ? {} : { status }),
       },
       {
-        modelId: provider.modelId,
+        modelId: activityEmbeddingModelId(provider.modelId),
         providerIdentity: memoryEmbeddingProviderIdentityDigest(provider),
         failureKind: boundedEmbeddingFailureKind(errorKind),
       },
@@ -401,7 +406,7 @@ function logEmbeddingSucceeded(
       EMBEDDING_MEMORY_SUCCEEDED_OPERATION,
       { durationMs },
       {
-        modelId: provider.modelId,
+        modelId: activityEmbeddingModelId(provider.modelId),
         providerIdentity: memoryEmbeddingProviderIdentityDigest(provider),
         embeddingKind: kind,
         dimensions,

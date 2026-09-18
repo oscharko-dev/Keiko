@@ -31,10 +31,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   classifyErrorKind,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
   type ActivityLogErrorKind,
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -5482,7 +5482,7 @@ function failureActivityExtra(
 function safeConnectedContextErrorKind(error: unknown): ActivityLogErrorKind {
   const value = connectedContextFailureKind(error);
   if (value === ERROR_CODES.CANCELLED) return "cancelled";
-  return isActivityLogErrorKind(value) ? value : "internal";
+  return activityLogErrorKindOr(value, "internal");
 }
 
 function connectedContextFailureKind(error: unknown): string {

@@ -41,6 +41,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isSealed, openString, sealString } from "./secretbox.js";
 import { atomicPublishRename } from "./fs-atomic-rename.js";
@@ -78,6 +79,23 @@ interface VaultFailureEvidence {
   readonly failureKind: string;
   readonly frames?: readonly string[];
   readonly causeChain?: readonly string[];
+}
+
+class SecretVaultUnsafeTargetError extends Error {
+  public override readonly name = "SecretVaultUnsafeTargetError";
+  public readonly code = "unsafe-target";
+}
+
+function vaultEnvelopeErrorKind(
+  error: unknown,
+  fallback: ActivityLogErrorKind,
+): ActivityLogErrorKind {
+  const failureKind = securityErrorKind(error);
+  if (failureKind === "unsafe-target") return "unsafe-target";
+  if (failureKind === "EACCES" || failureKind === "EPERM" || failureKind === "EROFS") {
+    return "permission-denied";
+  }
+  return fallback;
 }
 
 function safeErrorProperty(error: unknown, property: string): unknown {
@@ -522,7 +540,7 @@ function emitKeyResolutionFailed(sink: SecurityLogSink | undefined, error: unkno
     sink,
     activityLogEvent(
       SECURITY_VAULT_KEY_RESOLUTION_FAILED_OPERATION,
-      { level: "error", errorKind: "unavailable" },
+      { level: "error", errorKind: vaultEnvelopeErrorKind(error, "unavailable") },
       vaultFailureEvidence(error),
     ),
   );
@@ -562,7 +580,9 @@ function assertNoSymlinkedPathSegments(resolvedPath: string): void {
   let current = resolvedPath;
   while (current !== dirname(current)) {
     if (isSymlink(current)) {
-      throw new Error("refusing to write secret vault through a symlinked path");
+      throw new SecretVaultUnsafeTargetError(
+        "refusing to write secret vault through a symlinked path",
+      );
     }
     current = dirname(current);
   }
@@ -869,7 +889,11 @@ function deleteManyWithLog(
       sink,
       activityLogEvent(
         SECURITY_VAULT_ENTRIES_DELETE_FAILED_OPERATION,
-        { level: "error", errorKind: "write-failed", durationMs: elapsedMs() },
+        {
+          level: "error",
+          errorKind: vaultEnvelopeErrorKind(error, "write-failed"),
+          durationMs: elapsedMs(),
+        },
         { count: references.length, ...vaultFailureEvidence(error) },
       ),
     );
@@ -892,7 +916,11 @@ function setManyWithLog(
       sink,
       activityLogEvent(
         SECURITY_VAULT_ENTRIES_MERGE_FAILED_OPERATION,
-        { level: "error", errorKind: "write-failed", durationMs: elapsedMs() },
+        {
+          level: "error",
+          errorKind: vaultEnvelopeErrorKind(error, "write-failed"),
+          durationMs: elapsedMs(),
+        },
         { count: next.size, ...vaultFailureEvidence(error) },
       ),
     );

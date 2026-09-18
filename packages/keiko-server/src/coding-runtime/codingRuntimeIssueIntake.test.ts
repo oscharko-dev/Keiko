@@ -165,6 +165,10 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
       failureCode: "issue-context-unavailable",
       issueBindingFailure: "issue-unavailable",
     });
+    expect(captured.records.at(-1)).toMatchObject({
+      errorKind: "unavailable",
+      extra: { stage: "reattach", issueBindingFailure: "issue-unavailable" },
+    });
   });
 
   it("refuses closed when no intake port is wired at all (no attempt, no silent start)", async () => {

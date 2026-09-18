@@ -145,11 +145,16 @@ function logStoreQuarantined(
   cause: unknown,
   reopened: boolean,
 ): void {
+  // A recovered quarantine still records the data-loss-triggering read failure. If opening the
+  // replacement also failed, promote the envelope to unavailable so failure clusters distinguish
+  // a usable fresh vault from one that remained offline. The exact SQLite class stays body-free in
+  // failureKind for incident reconstruction.
+  const errorKind = reopened ? "read-failed" : "unavailable";
   emitMemoryVaultLogEvent(
     sink,
     activityLogEvent(
       MEMORY_VAULT_STORE_QUARANTINED_OPERATION,
-      { level: "error", errorKind: "internal" },
+      { level: "error", errorKind },
       { failureKind: memoryVaultErrorKind(cause), reopened },
     ),
   );

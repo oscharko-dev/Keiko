@@ -202,7 +202,7 @@ describe("retained verified HEAD authority", () => {
     expect(diagnostic).toMatchObject({
       op: "git.verified-commit.authority",
       correlationId: UNKNOWN_CORRELATION_ID,
-      errorKind: "internal",
+      errorKind: "validation-failed",
       extra: { phase: "read", runId: "run-1" },
     });
     expect(Array.isArray(diagnostic?.extra?.frames)).toBe(true);

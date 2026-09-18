@@ -148,12 +148,12 @@ function issueBindingErrorKind(
   failure: CodingWorkbenchIssueBindingFailure | undefined,
   error: unknown,
 ): ActivityLogErrorKind {
-  if (error !== undefined) return "internal";
   if (failure === "auth-required" || failure === "authority-denied") return "authority-denied";
   if (failure === "cancelled") return "cancelled";
   if (failure === "issue-unavailable" || failure === "clone-failed" || stage === "reattach") {
     return "unavailable";
   }
+  if (error !== undefined) return "internal";
   return failure === "repository-mismatch" || stage === "base-branch"
     ? "conflict"
     : "invalid-request";

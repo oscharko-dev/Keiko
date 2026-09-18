@@ -11,6 +11,7 @@ import type { ReleaseImpactRemediation } from "@oscharko-dev/keiko-contracts/rel
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 
@@ -271,7 +272,7 @@ export function updateRuntimeActivityEvent(
     {
       level: failed ? "warn" : "info",
       correlationId: correlationIdOrUnknown(correlationId),
-      ...(failed ? { errorKind: "internal" as const } : {}),
+      ...(failed ? { errorKind: updateRuntimeErrorKind(fields) } : {}),
     },
     {
       ...fields,
@@ -286,6 +287,30 @@ export function updateRuntimeActivityEvent(
       loss: "none",
     },
   );
+}
+
+function updateRuntimeErrorKind(fields: UpdateRuntimeActivityFields): ActivityLogErrorKind {
+  const failure = fields.portableSidecarFailureCode;
+  if (failure !== undefined) {
+    if (failure === "sidecar-payload-outside-root") return "unsafe-target";
+    if (failure === "sidecar-payload-missing") return "unavailable";
+    return "validation-failed";
+  }
+  switch (fields.warningCode) {
+    case "audit-persistence-failed":
+      return "durability-failed";
+    case "state-snapshot-unavailable":
+      return "unavailable";
+    case "manual-review-required":
+    case "remediation-outcome-uncertain":
+      return "conflict";
+    case "remediation-execution-failed":
+    case undefined:
+      break;
+  }
+  if (fields.type === "portable-download-result") return "unavailable";
+  if (fields.type === "portable-staging-result") return "write-failed";
+  return "internal";
 }
 
 export function updateLegacySnapshotImportedEvent(input: {

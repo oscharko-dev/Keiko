@@ -548,8 +548,10 @@ function captureErrorFields(error: unknown): {
 } {
   const described = describeError(error);
   return {
-    ...(described.errorClass.length === 0 ? {} : { errorClass: described.errorClass }),
-    ...(described.code === undefined ? {} : { code: described.code }),
+    ...(described.errorClass.length === 0 || described.errorClass.length > 64
+      ? {}
+      : { errorClass: described.errorClass }),
+    ...(described.code === undefined || described.code.length > 64 ? {} : { code: described.code }),
     ...(described.frames === undefined ? {} : { frames: described.frames }),
     ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
   };

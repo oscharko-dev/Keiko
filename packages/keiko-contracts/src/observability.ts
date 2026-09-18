@@ -21,6 +21,7 @@
 // between a provider's rejected-input message and a log line an operator will grep in the clear.
 
 import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-registry.generated.js";
+import { containsAbsolutePath } from "./text-safety.js";
 
 export {
   ACTIVITY_LOG_CATALOG_DIGEST,
@@ -155,6 +156,50 @@ export function isActivityLogErrorKind(value: unknown): value is ActivityLogErro
   return (
     typeof value === "string" && (ACTIVITY_LOG_ERROR_KINDS as readonly string[]).includes(value)
   );
+}
+
+export function activityLogErrorKindOr(
+  value: unknown,
+  fallback: ActivityLogErrorKind,
+): ActivityLogErrorKind {
+  return isActivityLogErrorKind(value) ? value : fallback;
+}
+
+// One canonical identity shape is shared by the v2 writer and every compatibility reader. Keep
+// these guards in the contracts leaf: accepting a wider identity in a reader than the writer can
+// produce makes forged lines look supported, while a narrower writer-side check can make valid
+// persisted evidence unreadable. The pid ceiling is the cross-platform signed 32-bit process-id
+// contract; seq remains process-wide and is bounded only by JavaScript's safe integer range.
+export const ACTIVITY_LOG_IDENTITY_DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
+export const ACTIVITY_LOG_INSTANCE_ID_PATTERN = /^[a-f0-9]{8}$/u;
+export const ACTIVITY_LOG_PLATFORM_CLASS_PATTERN =
+  /^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$/u;
+export const ACTIVITY_LOG_PRODUCT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
+
+export function isActivityLogIdentityDigest(value: unknown): value is string {
+  return typeof value === "string" && ACTIVITY_LOG_IDENTITY_DIGEST_PATTERN.test(value);
+}
+
+export function isActivityLogInstanceId(value: unknown): value is string {
+  return typeof value === "string" && ACTIVITY_LOG_INSTANCE_ID_PATTERN.test(value);
+}
+
+export function isActivityLogPlatformClass(value: unknown): value is string {
+  return typeof value === "string" && ACTIVITY_LOG_PLATFORM_CLASS_PATTERN.test(value);
+}
+
+export function isActivityLogProductVersion(value: unknown): value is string {
+  return typeof value === "string" && ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(value);
+}
+
+export function isActivityLogProcessId(value: unknown): value is number {
+  return (
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 2_147_483_647
+  );
+}
+
+export function isActivityLogSequence(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 interface ActivityLogFieldContractBase {
@@ -385,10 +430,21 @@ export type ActivityLogEventFields<Registration extends ActivityLogOperationRegi
 
 const ACTIVITY_LOG_DIGEST_VALUE = /^[a-f0-9]{8,128}$/u;
 const ACTIVITY_LOG_REDACTION_MARKER = /^\[(?:dropped|redacted):[a-z-]+\]$/u;
+const ACTIVITY_LOG_EMAIL_SHAPE =
+  /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u;
+const ACTIVITY_LOG_CREDENTIAL_SHAPES = [
+  /^sk-(?:proj-|live-|test-)?[A-Za-z0-9_-]{8,}$/u,
+  /^gh[pousr]_[A-Za-z0-9]{20,}$/u,
+  /^AKIA[A-Z0-9]{16}$/u,
+  /^(?:bearer|basic|password|secret|token|api[-_]?key)[-_:][A-Za-z0-9._~+/-]{8,}$/iu,
+] as const;
 const ACTIVITY_LOG_REDUCER_OWNED_FIELDS: ReadonlySet<string> = new Set([
   "clientNote",
   "diagnosticSummary",
+  "path",
+  "routeTemplate",
 ]);
+export const ACTIVITY_LOG_FRAME_FIELD_NAME = "frames";
 
 function isBodyFreeMachineValue(value: string): boolean {
   if (value.length === 0 || value.startsWith("{") || value.startsWith("<")) return false;
@@ -404,9 +460,20 @@ function vocabularyFailure(valid: boolean): ActivityLogEventFailureKind | undefi
 }
 
 function bodyFreeStringFailure(value: string): ActivityLogEventFailureKind | undefined {
-  return vocabularyFailure(
-    ACTIVITY_LOG_REDACTION_MARKER.test(value) || isBodyFreeMachineValue(value),
-  );
+  if (ACTIVITY_LOG_REDACTION_MARKER.test(value)) return undefined;
+  if (!isBodyFreeMachineValue(value)) return "invalid-field-vocabulary";
+  // These deliberately narrow shape guards are defense in depth for values whose declared class
+  // is an opaque machine token. They prove rejection of representative credential, identity and
+  // path forms without claiming universal secret/PII detection or authorizing open-ended content.
+  if (
+    ACTIVITY_LOG_EMAIL_SHAPE.test(value) ||
+    containsAbsolutePath(value) ||
+    value.startsWith("~/") ||
+    value.startsWith("~\\")
+  ) {
+    return "invalid-field-vocabulary";
+  }
+  return vocabularyFailure(!ACTIVITY_LOG_CREDENTIAL_SHAPES.some((pattern) => pattern.test(value)));
 }
 
 function semanticStringFailure(
@@ -424,7 +491,9 @@ function semanticStringFailure(
     case "digest":
       return vocabularyFailure(ACTIVITY_LOG_DIGEST_VALUE.test(value));
     case "error-kind":
-      return name === "frames"
+      // ADR-0173 D4 gives this named field a dedicated structural redaction hatch downstream.
+      // The shared name keeps the contract and redaction boundary from drifting independently.
+      return name === ACTIVITY_LOG_FRAME_FIELD_NAME
         ? bodyFreeStringFailure(value)
         : vocabularyFailure(ERROR_KIND_PATTERN.test(value));
     case "closed-enum":

@@ -6,9 +6,9 @@ import { errorKindOf } from "../observability/server-log.js";
 import { realpathSync } from "node:fs";
 import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -79,7 +79,7 @@ const GITHUB_REMOTE_EVALUATED_OPERATION = defineActivityLogOperation({
 });
 
 function closedErrorKind(value: string): ActivityLogErrorKind {
-  return isActivityLogErrorKind(value) ? value : "unknown";
+  return activityLogErrorKindOr(value, "unknown");
 }
 
 /**
@@ -329,15 +329,16 @@ function recordRemoteResolution(
   errorKind?: string,
 ): void {
   const sink = observation.activityLog ?? processServerLogSink();
+  const failureKind = errorKind === undefined ? undefined : closedErrorKind(errorKind);
   sink.write(
     activityLogEvent(
       GITHUB_REMOTE_EVALUATED_OPERATION,
       {
         level: levelForOutcome(outcome),
         correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
-        ...(errorKind === undefined ? {} : { errorKind: closedErrorKind(errorKind) }),
+        ...(failureKind === undefined ? {} : { errorKind: failureKind }),
       },
-      { outcome, ...(errorKind === undefined ? {} : { failureKind: errorKind }) },
+      { outcome, ...(failureKind === undefined ? {} : { failureKind }) },
     ),
   );
 }

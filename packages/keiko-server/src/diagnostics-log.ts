@@ -1,8 +1,8 @@
 import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
   type ActivityLogFields,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -397,7 +397,8 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
 }
 
 function closedDiagnosticErrorKind(errorClass: string): ActivityLogErrorKind {
-  if (isActivityLogErrorKind(errorClass)) return errorClass;
+  const registered = activityLogErrorKindOr(errorClass, "internal");
+  if (registered !== "internal" || errorClass === "internal") return registered;
   if (/timeout/iu.test(errorClass)) return "timeout";
   if (/cancel/iu.test(errorClass)) return "cancelled";
   if (/rate.?limit/iu.test(errorClass)) return "rate-limited";

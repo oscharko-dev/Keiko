@@ -24,9 +24,9 @@ import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, isAbsolute, join } from "node:path";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -238,7 +238,8 @@ function lspActivityErrorKind(
   fallback?: LspProcessErrorCode,
 ): ActivityLogErrorKind {
   const raw = error === undefined ? fallback : errorKindOf(error);
-  if (isActivityLogErrorKind(raw)) return raw;
+  const registered = activityLogErrorKindOr(raw, "internal");
+  if (registered !== "internal" || raw === "internal") return registered;
   return raw === undefined ? "internal" : (LSP_ACTIVITY_ERROR_KINDS[raw] ?? "internal");
 }
 

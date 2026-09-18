@@ -159,6 +159,22 @@ function portableFetchErrorKind(reason: PortableFetchFailureReason): ActivityLog
   }
 }
 
+function redirectRefusalErrorKind(
+  reason: PortableAssetRedirectFailureReason,
+): ActivityLogErrorKind {
+  switch (reason) {
+    case "missing-location":
+    case "malformed-location":
+      return "validation-failed";
+    case "unsafe-target":
+    case "unsafe-origin":
+      return "unsafe-target";
+    case "loop":
+    case "limit":
+      return "conflict";
+  }
+}
+
 export function recordPortableRedirectRefusal(
   sink: ServerLogSink | undefined,
   target: UpdatePortableTarget,
@@ -172,7 +188,7 @@ export function recordPortableRedirectRefusal(
       {
         level: "warn",
         correlationId: correlationIdOrUnknown(correlationId),
-        errorKind: "unsafe-target",
+        errorKind: redirectRefusalErrorKind(reason),
       },
       { assetKind, reason, target, completeness: "complete", loss: "none" },
     ),

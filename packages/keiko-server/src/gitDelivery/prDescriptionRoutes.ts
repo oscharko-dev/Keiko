@@ -53,7 +53,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import type { GitChangeSnapshotService } from "../gitChangeSnapshotService.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
-import { resolveProjectWorkspace } from "./execution.js";
+import { gitDeliveryActivityErrorKind, resolveProjectWorkspace } from "./execution.js";
 import {
   hasOnlyAllowedKeys,
   isNonEmptyString,
@@ -992,15 +992,17 @@ function logApplyLifecycle(
     case "succeeded":
       activityLog.write(activityLogEvent(APPLY_SUCCEEDED_OPERATION, envelope, extra));
       return;
-    case "blocked":
+    case "blocked": {
+      const reason = extra.reason ?? "conflict";
       activityLog.write(
         activityLogEvent(
           APPLY_BLOCKED_OPERATION,
-          { ...envelope, level: "warn", errorKind: "conflict" },
+          { ...envelope, level: "warn", errorKind: gitDeliveryActivityErrorKind(reason) },
           extra,
         ),
       );
       return;
+    }
     case "failed":
       activityLog.write(
         activityLogEvent(

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -396,9 +396,29 @@ describe("process-wide server logger", () => {
     }).not.toThrow();
   });
 
+  it("degrades without crashing when the activity-log directory cannot be created", () => {
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    writeFileSync(join(stateDir, "logs"), "occupied");
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    stderr.mockClear();
+
+    expect(() => {
+      getServerLogger().error({ category: "indexing", op: "unreachable-after-init-failure" });
+    }).not.toThrow();
+    expect(getServerLogger().level).toBe("silent");
+    expect(stderrNotice(stderr.mock.calls[0]?.[0])).toMatchObject({
+      op: "server-log.write-failed",
+      failedOp: "server-log.initialize",
+      writerCapability: "unavailable",
+      completeness: "unknown",
+      loss: "event-dropped",
+    });
+  });
+
   it("persists registered initialization evidence and rejects an unregistered call", () => {
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    stderr.mockClear();
     getServerLogger().warn({ category: "indexing", op: "test.unregistered-operation" });
     const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
     expect(raw).toContain('"op":"server-log.safe-open"');

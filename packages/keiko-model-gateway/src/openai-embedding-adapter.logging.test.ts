@@ -12,7 +12,11 @@ import {
   requestOpenAIEmbeddingBatch,
   resetStrictGatewayMemoForTests,
 } from "./openai-embedding-adapter.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import {
+  logModelId,
+  type ModelGatewayLogEvent,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
@@ -218,6 +222,29 @@ describe("scalar embedding — activity log", () => {
     expect(dispatch.extra).not.toHaveProperty("endpoint");
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
+  });
+
+  it("sanitizes a body-bearing model id without blocking the provider call", async () => {
+    const log = recorder();
+    const modelId = "text embedding 3 / customer alias";
+    const transport = scriptedFetch([(): Response => jsonResponse(scalarBody())]);
+
+    await expect(
+      requestOpenAIEmbedding({
+        ...BASE,
+        modelId,
+        endpoint: uniqueEndpoint(),
+        input: "x",
+        fetchImpl: transport.fetchImpl,
+        log: log.sink,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(transport.calls()).toBe(1);
+    expect(eventFor(log.events, "embedding.request.dispatch").extra?.modelId).toBe(
+      logModelId(modelId),
+    );
+    expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
   // The ordering proof. A line written after the call returns cannot describe a call that never
@@ -538,6 +565,29 @@ describe("batch embedding — activity log", () => {
       timeoutMs: 9_000,
     });
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
+  });
+
+  it("sanitizes a body-bearing batch model id without blocking the provider call", async () => {
+    const log = recorder();
+    const modelId = "embedding batch alias";
+    const transport = scriptedFetch([(): Response => jsonResponse(batchBody(2))]);
+
+    await expect(
+      requestOpenAIEmbeddingBatch({
+        ...BASE,
+        modelId,
+        endpoint: uniqueEndpoint(),
+        inputs: ["a", "b"],
+        fetchImpl: transport.fetchImpl,
+        log: log.sink,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(transport.calls()).toBe(1);
+    expect(eventFor(log.events, "embedding.batch.dispatch").extra?.modelId).toBe(
+      logModelId(modelId),
+    );
+    expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
   // The 0.3.13 shape: one array request, 36 inputs, nineteen seconds, no answer yet. The attempt

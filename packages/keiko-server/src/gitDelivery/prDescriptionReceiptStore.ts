@@ -16,6 +16,7 @@ import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
+import { gitDeliveryActivityCode, gitDeliveryActivityErrorKind } from "./execution.js";
 import type {
   PrDescriptionReceiptRead,
   PrDescriptionReceiptStatusHooks,
@@ -248,16 +249,18 @@ function failure(
 ): PrDescriptionReceiptRead {
   const reason = error instanceof ReceiptFailure ? error.reason : "storage-unavailable";
   const detail = describeError(error);
+  const errorKind = gitDeliveryActivityErrorKind(reason);
+  const code = gitDeliveryActivityCode(detail.code);
   (options.log ?? processServerLogSink()).write(
     activityLogEvent(
       PR_DESCRIPTION_RECEIPT_OPERATION,
-      { correlationId: context.correlationId, level: "warn", errorKind: "internal" },
+      { correlationId: context.correlationId, level: "warn", errorKind },
       {
         phase,
         reason,
-        failureKind: detail.errorClass,
+        failureKind: errorKind,
         errorClass: detail.errorClass,
-        ...(detail.code === undefined ? {} : { code: detail.code }),
+        ...(code === undefined ? {} : { code }),
         ...(detail.frames === undefined ? {} : { frames: detail.frames }),
         ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
       },

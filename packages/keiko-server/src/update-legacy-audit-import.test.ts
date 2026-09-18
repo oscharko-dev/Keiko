@@ -438,6 +438,15 @@ describe("legacy update audit import", () => {
       reason: "source-invalid",
     });
 
+    writeFileSync(
+      join(updates, "update-audit.jsonl"),
+      `${JSON.stringify(legacyEvent({ targetVersion: `${"9".repeat(70)}.0.0` }))}\n`,
+    );
+    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
+      status: "deferred",
+      reason: "source-invalid",
+    });
+
     const lines = Array.from({ length: 2_049 }, (_unused, index) =>
       JSON.stringify(legacyEvent({ eventId: legacyEventId(index + 1) })),
     );

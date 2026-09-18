@@ -105,11 +105,11 @@ export type SafeArtifactFileFailureKind = (typeof SAFE_ARTIFACT_FILE_FAILURE_KIN
 const SAFE_ARTIFACT_CLASS_SET: ReadonlySet<string> = new Set(SAFE_ARTIFACT_CLASSES);
 const SAFE_ARTIFACT_FAILURE_SET: ReadonlySet<string> = new Set(SAFE_ARTIFACT_FILE_FAILURE_KINDS);
 
-function isSafeArtifactClass(value: unknown): value is SafeArtifactClass {
+export function isSafeArtifactClass(value: unknown): value is SafeArtifactClass {
   return typeof value === "string" && SAFE_ARTIFACT_CLASS_SET.has(value);
 }
 
-function isSafeArtifactFailureKind(value: unknown): value is SafeArtifactFileFailureKind {
+export function isSafeArtifactFailureKind(value: unknown): value is SafeArtifactFileFailureKind {
   return typeof value === "string" && SAFE_ARTIFACT_FAILURE_SET.has(value);
 }
 

@@ -421,8 +421,7 @@ function logRerankOutcome(
   correlationId: string | undefined,
   durationMs: number,
 ): void {
-  getServerLogger().log(
-    rerankLogLevel(diagnostics),
+  getServerLogger().log(rerankLogLevel(diagnostics), () =>
     activityLogEvent(
       SEARCH_RERANK_COMPLETED_OPERATION,
       {
@@ -444,7 +443,7 @@ function logRerankOutcome(
           ? {}
           : { transportLatencyMs: diagnostics.latencyMs }),
         fallbackMode,
-        topN,
+        topN: Number.isSafeInteger(topN) && topN >= 0 ? topN : 0,
         ...(diagnostics.failureKind === undefined ? {} : { failureKind: diagnostics.failureKind }),
         completeness: "complete",
         loss: "none",

@@ -606,7 +606,7 @@ function logOptionalToolAvailabilityFailure(
           ? input.authorityRef.runId
           : UNKNOWN_CORRELATION_ID,
         level: "warn",
-        errorKind: "internal",
+        errorKind: managedToolErrorKind(error),
       },
       {
         runId: input.authorityRef.runId,
@@ -618,6 +618,14 @@ function logOptionalToolAvailabilityFailure(
       },
     ),
   );
+}
+
+function managedToolErrorKind(error: unknown): ActivityLogErrorKind {
+  const errorClass = contentFreeErrorClass(error).toLowerCase();
+  if (/timeout|timedout/u.test(errorClass)) return "timeout";
+  if (/abort|cancel/u.test(errorClass)) return "cancelled";
+  if (/unavailable|network|connection|econn|enotfound/u.test(errorClass)) return "unavailable";
+  return "internal";
 }
 
 function resolvedChildModelPort(input: OptionalToolAvailabilityInput): ModelPort | undefined {
@@ -1320,7 +1328,7 @@ function recordRerankFailure(input: ProductionManagedWorktreeToolInput, error: u
   (input.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       CODING_RUNTIME_REPOSITORY_RERANK_OPERATION,
-      { correlationId, level: "warn", errorKind: "internal" },
+      { correlationId, level: "warn", errorKind: managedToolErrorKind(error) },
       {
         runId: input.authorityRef.runId,
         reason: "pod-query-failed",

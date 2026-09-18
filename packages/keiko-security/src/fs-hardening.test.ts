@@ -34,6 +34,8 @@ import {
   acknowledgeSafeArtifactFileSet,
   chmodIfPresent,
   ensureDirHardened,
+  isSafeArtifactClass,
+  isSafeArtifactFailureKind,
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
   recoverSafeArtifactFileSet,
@@ -288,6 +290,13 @@ describe("mode constants", () => {
     expect(error).toMatchObject({ artifactClass: "manifest", kind: "open-failed" });
     expect(String(error)).not.toContain("customer");
     expect(String(error)).not.toContain("syscall prose");
+  });
+
+  it("exports the canonical closed-vocabulary guards for artifact failure consumers", () => {
+    expect(isSafeArtifactClass("support-report")).toBe(true);
+    expect(isSafeArtifactClass("customer-report")).toBe(false);
+    expect(isSafeArtifactFailureKind("durability-failed")).toBe(true);
+    expect(isSafeArtifactFailureKind("disk exploded")).toBe(false);
   });
 });
 

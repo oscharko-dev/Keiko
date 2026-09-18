@@ -201,7 +201,7 @@ describe("production coding runtime turn ports", () => {
       true,
     );
     expect(replacementEvents[1]).toMatchObject({
-      errorKind: "unavailable",
+      errorKind: "internal",
       extra: {
         reason: "interrupt-exception",
         requestId: "follow-up-1",

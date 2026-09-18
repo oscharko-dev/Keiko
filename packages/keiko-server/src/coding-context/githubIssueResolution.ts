@@ -526,6 +526,13 @@ function record(
     readonly repositoryId?: string | undefined;
   },
 ): void {
+  const failureKind =
+    detail.errorKind === undefined
+      ? undefined
+      : githubIssueResolutionErrorKind(
+          outcome === "resolved" ? "issue-unavailable" : outcome,
+          detail.reason,
+        );
   ctx.activityLog.write(
     activityLogEvent(
       ISSUE_RESOLVED_OPERATION,
@@ -541,7 +548,7 @@ function record(
         ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
         ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
         ...(detail.reason === undefined ? {} : { reason: detail.reason }),
-        ...(detail.errorKind === undefined ? {} : { failureKind: detail.errorKind }),
+        ...(failureKind === undefined ? {} : { failureKind }),
         ...(detail.frames === undefined
           ? {}
           : {

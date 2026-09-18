@@ -693,6 +693,7 @@ describe("UpdateSessionManager", () => {
   });
 
   it("rejects portable success without exact target-version activation proof", async () => {
+    const events: SecurityLogEvent[] = [];
     const manager = createTestUpdateSessionManager({
       detector: portableMode,
       facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
@@ -703,6 +704,7 @@ describe("UpdateSessionManager", () => {
           versionVerified: false,
         }),
       },
+      activityLog: { write: (event): void => void events.push(event) },
     });
 
     manager.start(claim("0.2.12"));
@@ -710,6 +712,11 @@ describe("UpdateSessionManager", () => {
     expect(manager.getStatus().lastSession).toMatchObject({
       phase: "failed",
       failureReason: "portable-version-verification-failed",
+    });
+    expect(events.at(-1)).toMatchObject({
+      op: "update.session.lifecycle",
+      errorKind: "validation-failed",
+      extra: { phase: "failed", failureReason: "portable-version-verification-failed" },
     });
   });
 

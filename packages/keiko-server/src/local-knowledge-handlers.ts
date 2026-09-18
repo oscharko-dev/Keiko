@@ -63,9 +63,9 @@ import type {
   UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -3055,7 +3055,7 @@ function indexingLogWithCorrelation(
 }
 
 function closedIndexingErrorKind(errorKind: string): ActivityLogErrorKind {
-  return isActivityLogErrorKind(errorKind) ? errorKind : "internal";
+  return activityLogErrorKindOr(errorKind, "internal");
 }
 
 function indexingFailureKind(error: unknown): string {

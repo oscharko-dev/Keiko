@@ -1434,6 +1434,7 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
     ["oversized pid", { pid: 2_147_483_648 }, "corrupt"],
     ["empty instanceId", { instanceId: "" }, "corrupt"],
     ["unsafe instanceId", { instanceId: "contains space" }, "corrupt"],
+    ["noncanonical instanceId", { instanceId: "journey1" }, "corrupt"],
     ["zero seq", { seq: 0 }, "corrupt"],
     ["fractional seq", { seq: 1.5 }, "corrupt"],
     ["future schemaVersion", { schemaVersion: 3 }, "unsupported"],
@@ -1448,6 +1449,9 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
   it.each([
     ["catalog digest mismatch", { catalogDigest: "0".repeat(64) }, "unsupported"],
     ["partial registry identity", { writerCapability: undefined }, "incomplete"],
+    ["degraded writer", { writerCapability: "degraded" }, "incomplete"],
+    ["unknown writer capability", { writerCapability: "future" }, "corrupt"],
+    ["unknown compatibility state", { compatibilityState: "future" }, "corrupt"],
     ["unknown operation", { op: "gateway.instance.unknown" }, "corrupt"],
     ["missing registered field", { generation: undefined }, "incomplete"],
     ["unknown registered field", { unexpected: "value" }, "corrupt"],
@@ -1529,7 +1533,7 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
 });
 
 describe("analyzeLogText — process sequence integrity", () => {
-  it("reports gaps, duplicates, decreasing values, resets, and physical reorder deterministically", () => {
+  it("reports each gap, duplicate, decrease, and reset exactly once", () => {
     const event = (seq: number, op: string): string =>
       line({
         ts: T0,
@@ -1555,11 +1559,9 @@ describe("analyzeLogText — process sequence integrity", () => {
       }),
       expect.objectContaining({ kind: "duplicate", fileIndex: 2, previousSeq: 3, seq: 3 }),
       expect.objectContaining({ kind: "decreasing", fileIndex: 3, previousSeq: 3, seq: 2 }),
-      expect.objectContaining({ kind: "reorder", fileIndex: 3, previousSeq: 3, seq: 2 }),
       expect.objectContaining({ kind: "duplicate", fileIndex: 4, previousSeq: 2, seq: 1 }),
       expect.objectContaining({ kind: "reset", fileIndex: 4, previousSeq: 2, seq: 1 }),
       expect.objectContaining({ kind: "decreasing", fileIndex: 4, previousSeq: 2, seq: 1 }),
-      expect.objectContaining({ kind: "reorder", fileIndex: 4, previousSeq: 2, seq: 1 }),
     ]);
     expect(renderHumanAllTimelines(result)).toContain(
       "gap pid=5151 instanceId=abc12345 fileIndex=1 previousSeq=1 seq=3 missing=2-2",
@@ -1590,7 +1592,7 @@ describe("analyzeLogText — process sequence integrity", () => {
         category: "process",
         op: `state-a-${String(seq)}`,
         pid: 5151,
-        instanceId: "cross-directory",
+        instanceId: "c0c0d1a0",
         seq,
       });
 
@@ -2227,7 +2229,7 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
     correlationId: string,
     fields: Record<string, unknown>,
   ): string {
-    return line({ ts: T0, pid: 9001, instanceId: "journey1", seq, correlationId, ...fields });
+    return line({ ts: T0, pid: 9001, instanceId: "a0b0c0d0", seq, correlationId, ...fields });
   }
 
   describe("a successful journey across every phase", () => {

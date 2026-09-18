@@ -51,4 +51,24 @@ describe("prDescriptionProjection — logDescription failure classification", ()
     expect(line).toBeDefined();
     expect(line?.errorKind).toBeUndefined();
   });
+
+  it("bounds a native code before constructing the activity event", () => {
+    fixture = new DescriptionFixture();
+    const code = `E${"X".repeat(90)}`;
+
+    expect(() =>
+      logDescription(
+        fixture.options,
+        fixture.context,
+        "apply",
+        "provider-failed",
+        undefined,
+        Object.assign(new Error("provider failed"), { code }),
+      ),
+    ).not.toThrow();
+
+    const line = fixture.events.find((event) => event.op === "git.pr-description");
+    expect(line?.extra?.failureKind).toBe("internal");
+    expect(line?.extra?.code).toBeUndefined();
+  });
 });

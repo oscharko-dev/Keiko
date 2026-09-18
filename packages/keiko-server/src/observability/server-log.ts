@@ -53,10 +53,16 @@ import {
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
   ActivityLogEventValidationError,
+  activityLogErrorKindOr,
   activityLogEvent,
   classifyErrorKind,
   defineActivityLogOperation,
-  isActivityLogErrorKind,
+  isActivityLogIdentityDigest,
+  isActivityLogInstanceId,
+  isActivityLogPlatformClass,
+  isActivityLogProcessId,
+  isActivityLogProductVersion,
+  isActivityLogSequence,
   type ActivityLogCompatibilityState,
   type ActivityLogErrorKind,
   type ActivityLogEventFailureKind,
@@ -190,11 +196,10 @@ export interface ServerLogIdentity {
   readonly seq: number;
 }
 
-const ACTIVITY_LOG_DIGEST = /^[a-f0-9]{64}$/u;
-const ACTIVITY_LOG_INSTANCE_ID = /^[a-f0-9]{8}$/u;
-const ACTIVITY_LOG_PLATFORM_CLASS = /^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$/u;
-const ACTIVITY_LOG_PRODUCT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 const ACTIVITY_LOG_RELEASE_CLASSES: ReadonlySet<unknown> = new Set(["stable", "prerelease"]);
+const PERSISTED_WRITER_CAPABILITIES: ReadonlySet<unknown> = new Set(["active", "degraded"]);
+const SUPPORTED_PLATFORMS: ReadonlySet<string> = new Set(["darwin", "linux", "win32"]);
+const SUPPORTED_ARCHITECTURES: ReadonlySet<string> = new Set(["arm64", "x64"]);
 
 function validRegistryIdentity(identity: ServerLogIdentity): boolean {
   return (
@@ -205,9 +210,9 @@ function validRegistryIdentity(identity: ServerLogIdentity): boolean {
 
 function validDigestIdentity(identity: ServerLogIdentity): boolean {
   return (
-    ACTIVITY_LOG_DIGEST.test(identity.schemaDigest) &&
+    isActivityLogIdentityDigest(identity.schemaDigest) &&
     identity.schemaDigest === ACTIVITY_LOG_SCHEMA_DIGEST &&
-    ACTIVITY_LOG_DIGEST.test(identity.catalogDigest) &&
+    isActivityLogIdentityDigest(identity.catalogDigest) &&
     identity.catalogDigest === ACTIVITY_LOG_CATALOG_DIGEST
   );
 }
@@ -219,14 +224,13 @@ function validBuildIdentity(identity: ServerLogIdentity): boolean {
   return (
     buildClass === "node-esm" &&
     ACTIVITY_LOG_RELEASE_CLASSES.has(releaseClass) &&
-    typeof platformClass === "string" &&
-    ACTIVITY_LOG_PLATFORM_CLASS.test(platformClass)
+    isActivityLogPlatformClass(platformClass)
   );
 }
 
 function validProductIdentity(identity: ServerLogIdentity): boolean {
   return (
-    ACTIVITY_LOG_PRODUCT_VERSION.test(identity.productVersion) &&
+    isActivityLogProductVersion(identity.productVersion) &&
     identity.productVersion === KEIKO_PRODUCT_VERSION
   );
 }
@@ -234,11 +238,7 @@ function validProductIdentity(identity: ServerLogIdentity): boolean {
 function validWriterIdentity(identity: ServerLogIdentity): boolean {
   const compatibilityState: unknown = Reflect.get(identity, "compatibilityState");
   const writerCapability: unknown = Reflect.get(identity, "writerCapability");
-  return compatibilityState === "supported" && writerCapability === "active";
-}
-
-function validPositiveInteger(value: number): boolean {
-  return Number.isInteger(value) && value > 0;
+  return compatibilityState === "supported" && PERSISTED_WRITER_CAPABILITIES.has(writerCapability);
 }
 
 function validServerLogIdentity(identity: ServerLogIdentity): boolean {
@@ -248,9 +248,9 @@ function validServerLogIdentity(identity: ServerLogIdentity): boolean {
     validBuildIdentity(identity),
     validProductIdentity(identity),
     validWriterIdentity(identity),
-    validPositiveInteger(identity.pid),
-    ACTIVITY_LOG_INSTANCE_ID.test(identity.instanceId),
-    validPositiveInteger(identity.seq),
+    isActivityLogProcessId(identity.pid),
+    isActivityLogInstanceId(identity.instanceId),
+    isActivityLogSequence(identity.seq),
   ].every(Boolean);
 }
 
@@ -653,8 +653,7 @@ function activityLogValidationFailure(error: unknown): ActivityLogEventFailureKi
 
 function closedFailureNoticeErrorKind(error: unknown): ActivityLogErrorKind {
   if (error instanceof ActivityLogEventValidationError) return "validation-failed";
-  const candidate = errorKindOf(error);
-  return isActivityLogErrorKind(candidate) ? candidate : "internal";
+  return activityLogErrorKindOr(errorKindOf(error), "internal");
 }
 
 function failureNoticeIdentity(identity: ServerLogIdentity): Record<string, unknown> {
@@ -902,13 +901,13 @@ interface RotationOutcome {
 // reused.
 let nextProcessSeq = 1;
 
-function platformClass(): string {
-  const platform = new Set(["darwin", "linux", "win32"]).has(process.platform)
-    ? process.platform
-    : "other";
-  const architecture = new Set(["arm64", "x64"]).has(process.arch) ? process.arch : "other";
+function resolvePlatformClass(): string {
+  const platform = SUPPORTED_PLATFORMS.has(process.platform) ? process.platform : "other";
+  const architecture = SUPPORTED_ARCHITECTURES.has(process.arch) ? process.arch : "other";
   return `${platform}-${architecture}`;
 }
+
+const PLATFORM_CLASS = resolvePlatformClass();
 
 function allocateServerLogSeq(): number {
   const seq = nextProcessSeq;
@@ -916,7 +915,9 @@ function allocateServerLogSeq(): number {
   return seq;
 }
 
-function allocateServerLogIdentity(): ServerLogIdentity {
+function allocateServerLogIdentity(
+  writerCapability: Extract<ActivityLogWriterCapabilityState, "active" | "degraded"> = "active",
+): ServerLogIdentity {
   return {
     schemaVersion: SERVER_LOG_SCHEMA_VERSION,
     registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
@@ -924,10 +925,10 @@ function allocateServerLogIdentity(): ServerLogIdentity {
     catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
     buildClass: "node-esm",
     releaseClass: KEIKO_PRODUCT_VERSION.includes("-") ? "prerelease" : "stable",
-    platformClass: platformClass(),
+    platformClass: PLATFORM_CLASS,
     productVersion: KEIKO_PRODUCT_VERSION,
     compatibilityState: "supported",
-    writerCapability: "active",
+    writerCapability,
     pid: process.pid,
     instanceId: INSTANCE_ID,
     seq: allocateServerLogSeq(),
@@ -1346,7 +1347,7 @@ function persistCapacityWarning(
   const observedSizeBytes = observedCapacityWarningSize(active, warningThresholdBytes);
   if (observedSizeBytes === undefined) return;
   const event = capacityWarningEvidence(observedSizeBytes, warningThresholdBytes, correlationId);
-  const identity = allocateServerLogIdentity();
+  const identity = allocateServerLogIdentity("degraded");
   try {
     writeCurrentEvent(active, event, identity);
     active.warnedCapacityThresholds.add(warningThresholdBytes);
@@ -1581,6 +1582,10 @@ type DurableEvidencePersistenceResult =
       readonly reason: "append-failed" | "durability-uncertain" | "destination-mutated";
     };
 
+type VerifiedBatchWriteResult =
+  | { readonly status: "written"; readonly identity: LogFileIdentity }
+  | Extract<DurableEvidencePersistenceResult, { readonly status: "deferred" }>;
+
 function repairPendingRecord(active: ActiveLog): boolean {
   if (!active.pendingNewline) return true;
   const before = currentHandleIdentity(active);
@@ -1722,6 +1727,28 @@ function completedBatchIdentity(
   return completed;
 }
 
+function writeAndVerifyBatch(
+  active: ActiveLog,
+  lines: readonly string[],
+  before: LogFileIdentity,
+  guards: readonly LogDirectoryGuard[],
+): VerifiedBatchWriteResult {
+  const addedBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
+  if (!writeBatchRecords(active, lines)) return { status: "deferred", reason: "append-failed" };
+  if (!syncBatch(active)) return { status: "deferred", reason: "durability-uncertain" };
+  const identity = completedBatchIdentity(active, before, before.size + addedBytes);
+  if (
+    identity === undefined ||
+    !handleStillCurrent(active) ||
+    !guards.every(logDirectoryStillSame)
+  ) {
+    closeHandle(active);
+    return { status: "deferred", reason: "destination-mutated" };
+  }
+  clearPendingPersistenceEvents(active);
+  return { status: "written", identity };
+}
+
 function persistPendingDurableEvidence(
   active: ActiveLog,
   before: LogFileIdentity,
@@ -1731,20 +1758,8 @@ function persistPendingDurableEvidence(
   if (events.length === 0) return { status: "persisted", identity: before };
   const lines = batchLines(events);
   if (lines === undefined) return { status: "deferred", reason: "append-failed" };
-  const addedBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
-  if (!writeBatchRecords(active, lines)) return { status: "deferred", reason: "append-failed" };
-  if (!syncBatch(active)) return { status: "deferred", reason: "durability-uncertain" };
-  const completed = completedBatchIdentity(active, before, before.size + addedBytes);
-  if (
-    completed === undefined ||
-    !handleStillCurrent(active) ||
-    !guards.every(logDirectoryStillSame)
-  ) {
-    closeHandle(active);
-    return { status: "deferred", reason: "destination-mutated" };
-  }
-  clearPendingPersistenceEvents(active);
-  return { status: "persisted", identity: completed };
+  const result = writeAndVerifyBatch(active, lines, before, guards);
+  return result.status === "deferred" ? result : { status: "persisted", identity: result.identity };
 }
 
 function appendInspectedBatch(
@@ -1761,23 +1776,10 @@ function appendInspectedBatch(
   const persistenceEvents = pendingPersistenceEvents(prepared.active, correlationId);
   const lines = batchLines([...persistenceEvents, ...inspection.events]);
   if (lines === undefined) return { status: "deferred", reason: "append-failed" };
-  const addedBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
-  if (!writeBatchRecords(prepared.active, lines)) {
-    return { status: "deferred", reason: "append-failed" };
-  }
-  if (!syncBatch(prepared.active)) {
-    return { status: "deferred", reason: "durability-uncertain" };
-  }
-  if (
-    !completedBatchMatches(prepared.active, before, before.size + addedBytes) ||
-    !handleStillCurrent(prepared.active) ||
-    !guards.every(logDirectoryStillSame)
-  ) {
-    closeHandle(prepared.active);
-    return { status: "deferred", reason: "destination-mutated" };
-  }
-  clearPendingPersistenceEvents(prepared.active);
-  return { status: "appended", appendedCount: inspection.events.length };
+  const result = writeAndVerifyBatch(prepared.active, lines, before, guards);
+  return result.status === "deferred"
+    ? result
+    : { status: "appended", appendedCount: inspection.events.length };
 }
 
 function inspectAndAppendDurableBatch(

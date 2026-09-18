@@ -9,7 +9,11 @@
 
 import { describe, expect, it } from "vitest";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import {
+  logModelId,
+  type ModelGatewayLogEvent,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 interface Recorder {
@@ -123,6 +127,25 @@ describe("OpenAiAdapter.call — activity log", () => {
     const dispatch = eventFor(log.events, "chat.request.dispatch");
     expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(dispatch)).not.toContain("provider.example");
+  });
+
+  it("sanitizes a body-bearing model id without replacing a successful response", async () => {
+    const log = recorder();
+    const modelId = "gpt 4 customer alias";
+    const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
+    const adapter = new OpenAiAdapter({
+      fetchImpl,
+      requestId: "fixed-id",
+      costClass: "low",
+      log: log.sink,
+    });
+
+    await expect(
+      adapter.call({ ...REQUEST, modelId }, { ...CONFIG, modelId }),
+    ).resolves.toMatchObject({ content: "pong" });
+
+    expect(eventFor(log.events, "chat.request.dispatch").extra?.modelId).toBe(logModelId(modelId));
+    expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
   it("marks a streaming dispatch distinctly from a non-streaming one", async () => {

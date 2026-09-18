@@ -599,6 +599,12 @@ function canonicalLegacyValue(record: Readonly<Record<string, unknown>>): Record
 }
 
 function validLegacyTextFields(record: Readonly<Record<string, unknown>>): boolean {
+  if (
+    (typeof record.targetVersion === "string" && record.targetVersion.length > 64) ||
+    (typeof record.portableSidecarVersion === "string" && record.portableSidecarVersion.length > 64)
+  ) {
+    return false;
+  }
   const patterns: readonly [string, RegExp][] = [
     ["targetVersion", SEMVER],
     ["snapshotId", MACHINE_UUID],

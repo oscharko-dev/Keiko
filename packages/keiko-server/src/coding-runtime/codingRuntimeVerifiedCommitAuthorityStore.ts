@@ -9,6 +9,8 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION } from "./codingRuntimeActivityOperations.js";
 
+class VerifiedCommitRuntimeBindingError extends TypeError {}
+
 export function assertVerifiedCommitRuntimeBinding(
   snapshot: CodingRuntimeSnapshot,
   result: VerifiedCommitResult,
@@ -19,7 +21,9 @@ export function assertVerifiedCommitRuntimeBinding(
     result.runtimeAuthorityDigest === snapshot.authorityDigest,
     result.issueBindingDigest === snapshot.issueBinding?.bindingDigest,
   ];
-  if (!valid.every(Boolean)) throw new TypeError("verified commit runtime binding mismatch");
+  if (!valid.every(Boolean)) {
+    throw new VerifiedCommitRuntimeBindingError("verified commit runtime binding mismatch");
+  }
 }
 
 /** Internal durable HEAD provenance; proposals and recovery outcomes never replace success. */
@@ -34,7 +38,16 @@ export function readLastSuccessfulVerifiedCommit(
     processServerLogSink().write(
       activityLogEvent(
         GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION,
-        { level: "warn", correlationId: snapshot.runId, errorKind: "internal" },
+        {
+          level: "warn",
+          correlationId: snapshot.runId,
+          errorKind:
+            error instanceof VerifiedCommitRuntimeBindingError
+              ? "conflict"
+              : error instanceof TypeError || error instanceof SyntaxError
+                ? "validation-failed"
+                : "internal",
+        },
         {
           phase: "read",
           runId: snapshot.runId,

@@ -1496,7 +1496,7 @@ describe("desktop chat SSE streaming handler", () => {
         op: "chat.send.rejected",
         correlationId: "corr-buffered-readiness-race",
         status: 409,
-        errorKind: "conflict",
+        errorKind: "internal",
         extra: {
           reason: "generation",
           modelKind: "chat",
@@ -1691,7 +1691,7 @@ describe("desktop chat SSE streaming handler", () => {
         op: "chat.send.rejected",
         correlationId: "corr-streamed-readiness-race",
         status: 409,
-        errorKind: "conflict",
+        errorKind: "internal",
         extra: {
           reason: "generation",
           modelKind: "chat",
@@ -1973,7 +1973,7 @@ describe("desktop chat SSE streaming handler", () => {
         op: "chat.regeneration.rejected",
         correlationId: "corr-regeneration-readiness-race",
         status: 409,
-        errorKind: "conflict",
+        errorKind: "internal",
         extra: {
           reason: "generation",
           modelKind: "chat",

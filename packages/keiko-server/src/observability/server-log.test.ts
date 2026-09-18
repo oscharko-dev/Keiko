@@ -78,6 +78,15 @@ function testServerLogIdentity(seq = 1): ServerLogIdentity {
   };
 }
 
+function invalidServerLogIdentity(
+  field: keyof ServerLogIdentity,
+  value: unknown,
+): ServerLogIdentity {
+  const identity = { ...testServerLogIdentity() };
+  Reflect.set(identity, field, value);
+  return identity;
+}
+
 const TEST_EVENT_MARKER_PREFIX = "test-event:";
 const TEST_FILE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -395,6 +404,38 @@ describe("server activity log", () => {
       "batch-one",
       "batch-complete",
     ]);
+  });
+
+  it("keeps adversarial registered-field values out of the physical activity log", () => {
+    const sink = createStrictFileServerLogSink(stateDir);
+    const adversarialValues: readonly unknown[] = [
+      "the complete operator prompt",
+      "sk-proj-abcdefghijklmno",
+      "operator@example.test",
+      "/etc/passwd",
+      String.raw`C:\Users\operator\secret.txt`,
+      { nested: "sk-proj-abcdefghijklmno" },
+    ];
+
+    for (const value of adversarialValues) {
+      const event = registeredTestEvent({ category: "diagnostic", op: "adversarial.fixture" });
+      Reflect.set(event.extra ?? {}, "failedOp", value);
+      expect(() => {
+        sink.write(event);
+      }).not.toThrow();
+    }
+
+    const persisted = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    expect(readCallerLines(stateDir)).toHaveLength(0);
+    for (const fragment of [
+      "operator prompt",
+      "sk-proj-",
+      "operator@example",
+      "/etc/passwd",
+      "C:\\Users",
+    ]) {
+      expect(persisted).not.toContain(fragment);
+    }
   });
 
   it("emits separate safe-open and deferred-rotation evidence for a durable batch", () => {
@@ -1157,6 +1198,7 @@ describe("server activity log", () => {
         warningThresholdBytes: 1,
         operatorAction: "stop-export-replace",
         mutationStatus: "not-attempted",
+        writerCapability: "degraded",
         completeness: "complete",
         loss: "none",
       }),
@@ -1611,7 +1653,7 @@ describe("server activity log line format", () => {
     );
   });
 
-  it("requires the generated registry identity and closed writer capability for typed events", () => {
+  it("requires the generated registry identity for typed events", () => {
     const operation = defineActivityLogOperation({
       contractKind: "activity-log-operation",
       schemaVersion: 1,
@@ -1634,9 +1676,27 @@ describe("server activity log line format", () => {
     expect(() =>
       formatRegisteredServerLogLine(event, undefined, {
         ...testServerLogIdentity(),
-        writerCapability: "degraded",
+        writerCapability: "unavailable",
       }),
     ).toThrow(new ActivityLogEventValidationError("invalid-identity"));
+
+    const invalidIdentities: readonly (readonly [string, ServerLogIdentity])[] = [
+      ["registry", invalidServerLogIdentity("registryVersion", 0)],
+      ["digest", invalidServerLogIdentity("schemaDigest", "0".repeat(64))],
+      ["build", invalidServerLogIdentity("buildClass", "browser")],
+      ["product", invalidServerLogIdentity("productVersion", "0.0.0")],
+      ["writer", invalidServerLogIdentity("writerCapability", "unavailable")],
+      ["pid lower bound", invalidServerLogIdentity("pid", 0)],
+      ["pid upper bound", invalidServerLogIdentity("pid", 2_147_483_648)],
+      ["instance", invalidServerLogIdentity("instanceId", "not-hex")],
+      ["sequence lower bound", invalidServerLogIdentity("seq", 0)],
+      ["sequence safe-integer bound", invalidServerLogIdentity("seq", Number.MAX_SAFE_INTEGER + 1)],
+    ];
+    for (const [_predicate, identity] of invalidIdentities) {
+      expect(() => formatRegisteredServerLogLine(event, undefined, identity)).toThrow(
+        new ActivityLogEventValidationError("invalid-identity"),
+      );
+    }
   });
 
   it("redacts every field the caller supplies through extra", () => {

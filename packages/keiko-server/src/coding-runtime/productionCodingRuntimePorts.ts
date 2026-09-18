@@ -48,6 +48,7 @@ import type { PrDescriptionDraftPreview } from "../gitDelivery/prDescriptionType
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const CODING_RUNTIME_TASK_REPLACEMENT_REASON_FIELD = {
@@ -786,7 +787,7 @@ function recordRuntimeReplacementActivity(
     CODING_RUNTIME_TASK_REPLACEMENT_OPERATION,
     {
       correlationId: correlationIdOrUnknown(request.correlationId ?? request.runId),
-      ...(error === undefined ? {} : { errorKind: "unavailable" as const }),
+      ...(error === undefined ? {} : { errorKind: replacementErrorKind(error) }),
     },
     {
       runId: request.runId,
@@ -801,6 +802,14 @@ function recordRuntimeReplacementActivity(
   );
   if (state === "rejected") getServerLogger().warn(event);
   else getServerLogger().info(event);
+}
+
+function replacementErrorKind(error: unknown): ActivityLogErrorKind {
+  const errorClass = contentFreeErrorClass(error).toLowerCase();
+  if (/timeout|timedout/u.test(errorClass)) return "timeout";
+  if (/abort|cancel/u.test(errorClass)) return "cancelled";
+  if (/unavailable|network|connection|econn|enotfound/u.test(errorClass)) return "unavailable";
+  return "internal";
 }
 
 async function abortRuntimeTask(

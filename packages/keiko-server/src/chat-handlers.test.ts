@@ -266,7 +266,7 @@ describe("desktop chat production gateway reuse", () => {
           op: "chat.send.rejected",
           correlationId: "corr-grounding-changed",
           status: 409,
-          errorKind: "conflict",
+          errorKind: "invalid-request",
           extra: {
             reason: "grounding-scope",
             modelKind: "chat",
@@ -834,11 +834,8 @@ describe("git-change description-authority admission (#3400)", () => {
     }
   });
 
-  // #3400/#3401 final-audit F1: before this discriminant existed, an expired description
-  // authority record and no record at all were indistinguishable at the Chat admission — both
-  // logged the SAME generic `errorKind: "authority-denied"`. This is the failing-before case: a
-  // port that can tell a record for this exact scope existed and has passed its `expiresAt` must
-  // deny with `authority-expired`, never the generic absent reason.
+  // #3400/#3401 final-audit F1: an expired description-authority record remains distinct from a
+  // scope that was never authorized, both in its reason and in its failure cluster.
   it("denies with authority-expired when the description authority record has expired", async () => {
     const fixture = await createGatewayBreakerFixture();
     const sink = createBufferedServerLogSink();
@@ -886,7 +883,7 @@ describe("git-change description-authority admission (#3400)", () => {
           category: "security",
           op: "pr-description.chat.turn.denied",
           correlationId: "corr-git-change-expired",
-          errorKind: "authority-denied",
+          errorKind: "validation-failed",
           extra: {
             relationshipId: "rel-1",
             reason: "authority-expired",

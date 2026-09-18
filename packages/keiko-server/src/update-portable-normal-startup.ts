@@ -14,6 +14,7 @@ import type { UpdateRuntimeState, UpdateSession } from "@oscharko-dev/keiko-cont
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   bindSecurityLogCorrelation,
@@ -272,6 +273,18 @@ type RecoveryFailureReason =
 
 type RecoveryCompletion = "native-recovered" | "unaccepted-settled";
 
+const RECOVERY_ERROR_KIND: Readonly<Record<RecoveryFailureReason, ActivityLogErrorKind>> = {
+  "runtime-state-invalid": "validation-failed",
+  "authority-invalid": "authority-denied",
+  "managed-root-mismatch": "unsafe-target",
+  "ownership-live-or-mismatch": "conflict",
+  "ownership-claim-failed": "unavailable",
+  "prepared-settlement-failed": "durability-failed",
+  "coordinator-invalid": "validation-failed",
+  "native-recovery-failed": "unavailable",
+  "post-native-authority-invalid": "authority-denied",
+};
+
 function recordRecoveryCompleted(
   options: PortableNormalStartupRecoveryOptions,
   authority: RecoveryAuthority,
@@ -305,7 +318,7 @@ function recoveryRequired(
       {
         level: "error",
         correlationId: correlationIdOrUnknown(authority?.session.correlationId),
-        errorKind: "unavailable",
+        errorKind: RECOVERY_ERROR_KIND[reason],
       },
       { reason, completeness: "complete", loss: "none" },
     ),

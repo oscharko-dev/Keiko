@@ -1284,7 +1284,7 @@ describe("portable normal startup recovery", () => {
       expect.objectContaining({
         op: "portable.normal-startup-recovery.required",
         correlationId: fixture.session.correlationId,
-        errorKind: "unavailable",
+        errorKind: "conflict",
         extra: {
           reason: "ownership-live-or-mismatch",
           completeness: "complete",

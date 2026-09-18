@@ -630,7 +630,7 @@ describe("CodingRuntimeOperationCoordinator", () => {
       // used as-is; see the reject test below.
       correlationId: "unknown-correlation-id",
       // Transport failures use the registry's closed, content-free failure vocabulary.
-      errorKind: "unavailable",
+      errorKind: "internal",
     });
     expect(event?.extra).toMatchObject({ runId: "run-1", operation: "answer" });
     expect(Array.isArray(event?.extra?.frames)).toBe(true);
@@ -697,7 +697,7 @@ describe("CodingRuntimeOperationCoordinator", () => {
       {
         level: "warn",
         op: "coding-runtime.follow-up.dispatch-failed",
-        errorKind: "unavailable",
+        errorKind: "internal",
         extra: { runId: "run-1", operation: "follow-up" },
       },
     ]);

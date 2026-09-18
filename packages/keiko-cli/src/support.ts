@@ -25,12 +25,13 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { emitSecurityLogEvent, securityErrorKind } from "@oscharko-dev/keiko-security";
 import {
-  SAFE_ARTIFACT_CLASSES,
-  SAFE_ARTIFACT_FILE_FAILURE_KINDS,
   acknowledgeSafeArtifactFileSet,
+  isSafeArtifactClass,
+  isSafeArtifactFailureKind,
   publishSafeArtifactFileSet,
   recoverSafeArtifactFileSet,
   safeArtifactPublicationSlot,
+  type SafeArtifactClass,
   type SafeArtifactFileFailureKind,
   type SafeArtifactPublicationResult,
 } from "@oscharko-dev/keiko-security/fs-hardening";
@@ -682,20 +683,9 @@ interface RolledBackRecoveryOutcome {
 
 type SupportFailedArtifactClass = "support-report" | "integrity-artifact" | "manifest";
 
-const SAFE_ARTIFACT_CLASS_SET: ReadonlySet<string> = new Set(SAFE_ARTIFACT_CLASSES);
-const SAFE_ARTIFACT_FAILURE_SET: ReadonlySet<string> = new Set(SAFE_ARTIFACT_FILE_FAILURE_KINDS);
-
-function isSafeArtifactClass(value: unknown): value is (typeof SAFE_ARTIFACT_CLASSES)[number] {
-  return typeof value === "string" && SAFE_ARTIFACT_CLASS_SET.has(value);
-}
-
-function isSafeArtifactFailureKind(value: unknown): value is SafeArtifactFileFailureKind {
-  return typeof value === "string" && SAFE_ARTIFACT_FAILURE_SET.has(value);
-}
-
 function safeArtifactFailureRecord(error: unknown):
   | {
-      readonly artifactClass: (typeof SAFE_ARTIFACT_CLASSES)[number];
+      readonly artifactClass: SafeArtifactClass;
       readonly kind: SafeArtifactFileFailureKind;
     }
   | undefined {

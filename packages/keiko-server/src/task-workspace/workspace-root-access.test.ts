@@ -587,7 +587,7 @@ describe("resolveManagedWorkspaceRootAccess", () => {
   it("records an I/O failure inside the proof as a resolution failure, not an identity denial", () => {
     vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
       kind: "failed",
-      cause: new Error("EIO: input/output error"),
+      cause: Object.assign(new Error("input/output error"), { code: "EIO" }),
     });
     const activityLog = createBufferedServerLogSink();
 
@@ -595,7 +595,12 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     expect(denialEvents(activityLog)).toHaveLength(1);
     expect(denialEvents(activityLog)[0]).toMatchObject({
       correlationId: "wra-failed-0001",
-      extra: { decision: "denied", reason: "managed-root-resolution-failed" },
+      errorKind: "read-failed",
+      extra: {
+        decision: "denied",
+        reason: "managed-root-resolution-failed",
+        failureKind: "read-failed",
+      },
     });
     expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain("managed-root-identity");
   });

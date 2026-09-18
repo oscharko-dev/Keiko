@@ -169,7 +169,8 @@ function updateSessionErrorKind(
 ): ActivityLogErrorKind | undefined {
   if (eventKind === "persistence-failed") return "durability-failed";
   if (session.lifecycle.phase === "cancelled") return "cancelled";
-  if (session.lifecycle.phase === "failed") return "internal";
+  if (session.lifecycle.phase === "failed")
+    return updateFailureReasonErrorKind(session.failureReason);
   if (
     session.lifecycle.phase === "recovery-required" ||
     session.lifecycle.phase === "remediation-required"
@@ -177,6 +178,34 @@ function updateSessionErrorKind(
     return "unavailable";
   }
   return undefined;
+}
+
+const UPDATE_FAILURE_REASON_ERROR_KIND: Readonly<
+  Record<UpdateSessionFailureReason, ActivityLogErrorKind | undefined>
+> = {
+  none: undefined,
+  "policy-disabled": "authority-denied",
+  "unsupported-install-mode": "publish-unsupported",
+  "command-denied": "permission-denied",
+  "spawn-error": "internal",
+  "non-zero-exit": "internal",
+  "timed-out": "timeout",
+  cancelled: "cancelled",
+  "portable-preflight-ineligible": "validation-failed",
+  "portable-download-failed": "unavailable",
+  "portable-verification-failed": "validation-failed",
+  "portable-sidecar-verification-failed": "validation-failed",
+  "portable-staging-failed": "write-failed",
+  "portable-activation-failed": "internal",
+  "portable-relaunch-failed": "unavailable",
+  "portable-version-verification-failed": "validation-failed",
+  "restart-version-mismatch": "conflict",
+};
+
+function updateFailureReasonErrorKind(
+  reason: UpdateSessionFailureReason,
+): ActivityLogErrorKind | undefined {
+  return UPDATE_FAILURE_REASON_ERROR_KIND[reason];
 }
 
 function validPort(value: string | undefined): value is string {

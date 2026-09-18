@@ -6435,8 +6435,8 @@ function logToolCallingVerification(
       GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION,
       {
         correlationId: correlationIdOrUnknown(correlationId),
-        status: status === "verified" ? 200 : 503,
-        ...(status === "verified" ? {} : { errorKind: "unavailable" }),
+        status: status === "unverified" ? 503 : 200,
+        ...(status === "unverified" ? { errorKind: "unavailable" as const } : {}),
       },
       {
         verificationStatus: status,

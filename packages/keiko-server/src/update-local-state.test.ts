@@ -643,7 +643,7 @@ describe("update runtime state and audit events", () => {
       op: "update.runtime.event",
       level: "warn",
       correlationId: "request-runtime-failed-0123456789abcdef",
-      errorKind: "internal",
+      errorKind: "write-failed",
       extra: {
         status: "failed",
         failureKind: "portable-staging-result-failed",

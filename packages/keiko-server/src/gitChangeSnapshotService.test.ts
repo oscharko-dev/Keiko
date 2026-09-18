@@ -112,6 +112,22 @@ async function allKinds(workspace: WorkspaceInfo): Promise<void> {
 }
 
 describe("immutable Git change snapshot production", () => {
+  it("preserves the graceful failure result when a native error code exceeds the log bound", async () => {
+    const workspace = await repository();
+    const events: ServerLogEvent[] = [];
+    const code = `E${"R".repeat(90)}`;
+    const service = createGitChangeSnapshotService({
+      runner: () => Promise.reject(Object.assign(new Error("git failed"), { code })),
+      logSink: { write: (event) => events.push(event) },
+    });
+
+    await expect(service.capture(inputFor(workspace))).resolves.toMatchObject({
+      snapshot: { outcome: "failed" },
+    });
+    expect(events.at(-1)?.extra?.code).toBeUndefined();
+    service.close();
+  });
+
   it("keeps canonical digests across clones and refuses lazy fetching missing objects", async () => {
     const workspace = await repository();
     const cloneRoot = await mkdtemp(join(tmpdir(), "keiko-gcs-clone-"));

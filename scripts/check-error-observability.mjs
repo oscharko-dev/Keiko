@@ -33,10 +33,13 @@
 // sink.test.ts / consolidate.test.ts / log-port.test.ts, one per site above).
 
 import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { request } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const scriptPath = fileURLToPath(import.meta.url);
@@ -45,6 +48,7 @@ const serverEntry = resolve(here, "../packages/keiko-server/dist/index.js");
 const SECRET_MARKER = "gate-secret-DO-NOT-LEAK";
 const ID_PATTERN = /^[A-Za-z0-9._-]{8,128}$/;
 const HOST = "127.0.0.1";
+const REPO_ROOT = resolve(here, "..");
 
 export const SERVER_TOP_LEVEL_SITE_ID = "server.top-level-catch";
 export const MIN_STRATIFIED_SITES = 10;
@@ -58,6 +62,138 @@ function fail(message) {
 // use the same shape checks — `fail()` is reserved for `main()`'s own top-level orchestration.
 function check(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function catchFunctionName(node) {
+  let current = node.parent;
+  while (current !== undefined) {
+    if (ts.isFunctionDeclaration(current) && current.name !== undefined) return current.name.text;
+    if (
+      (ts.isFunctionExpression(current) || ts.isArrowFunction(current)) &&
+      ts.isVariableDeclaration(current.parent) &&
+      ts.isIdentifier(current.parent.name)
+    ) {
+      return current.parent.name.text;
+    }
+    current = current.parent;
+  }
+  return "<anonymous>";
+}
+
+function isReviewedCleanupCatch(node) {
+  return /(?:IgnoringErrors|AfterFailure)$/u.test(catchFunctionName(node));
+}
+
+function hasRawConsoleCall(node) {
+  let found = false;
+  const visit = (child) => {
+    if (
+      ts.isCallExpression(child) &&
+      ts.isPropertyAccessExpression(child.expression) &&
+      ts.isIdentifier(child.expression.expression) &&
+      child.expression.expression.text === "console"
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node.block);
+  return found;
+}
+
+function failurePathFinding(sourceFile, node, path) {
+  const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+  const owner = catchFunctionName(node);
+  if (hasRawConsoleCall(node)) return { path, line, owner, kind: "raw-console-catch" };
+  if (node.block.statements.length === 0 && !isReviewedCleanupCatch(node)) {
+    return { path, line, owner, kind: "empty-catch" };
+  }
+  return undefined;
+}
+
+export function unregisteredFailurePathViolations(source, path = "fixture.ts") {
+  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const findings = [];
+  const visit = (node) => {
+    if (ts.isCatchClause(node)) {
+      const finding = failurePathFinding(sourceFile, node, path);
+      if (finding !== undefined) findings.push(finding);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return findings;
+}
+
+function findingSignature(finding) {
+  return `${finding.kind}:${finding.owner}`;
+}
+
+function newFindings(baseSource, headSource, path) {
+  const baseCounts = Map.groupBy(
+    unregisteredFailurePathViolations(baseSource, path),
+    findingSignature,
+  );
+  return unregisteredFailurePathViolations(headSource, path).filter((finding) => {
+    const signature = findingSignature(finding);
+    const matches = baseCounts.get(signature);
+    if (matches === undefined || matches.length === 0) return true;
+    matches.pop();
+    return false;
+  });
+}
+
+function gitText(args, cwd = REPO_ROOT) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+}
+
+function resolveGateBaseCommit(repoRoot) {
+  const configured = process.env.GITHUB_BASE_REF;
+  const candidates = [
+    ...(configured === undefined ? [] : [`origin/${configured}`, configured]),
+    "origin/dev",
+    "dev",
+  ];
+  for (const candidate of candidates) {
+    try {
+      return gitText(["rev-parse", "--verify", `${candidate}^{commit}`], repoRoot).trim();
+    } catch {
+      // Try the next deterministic local spelling of the PR base.
+    }
+  }
+  throw new Error("error-observability-base-ref-unavailable");
+}
+
+function changedProductionTypeScriptFiles(repoRoot, baseCommit) {
+  return gitText(
+    ["diff", "--name-only", "--diff-filter=ACMR", baseCommit, "--", "packages"],
+    repoRoot,
+  )
+    .split("\n")
+    .filter(
+      (path) =>
+        path.endsWith(".ts") &&
+        !path.endsWith(".d.ts") &&
+        !path.endsWith(".test.ts") &&
+        !path.includes("/__tests__/"),
+    );
+}
+
+function baseFileSource(repoRoot, baseCommit, path) {
+  try {
+    return gitText(["show", `${baseCommit}:${path}`], repoRoot);
+  } catch {
+    return "";
+  }
+}
+
+export function unregisteredFailurePathDiffViolations(repoRoot = REPO_ROOT) {
+  const baseCommit = resolveGateBaseCommit(repoRoot);
+  return changedProductionTypeScriptFiles(repoRoot, baseCommit).flatMap((path) => {
+    const headSource = readFileSync(resolve(repoRoot, path), "utf8");
+    return newFindings(baseFileSource(repoRoot, baseCommit, path), headSource, path);
+  });
 }
 
 function distPath(pkg, file) {
@@ -646,6 +782,13 @@ async function runServerTopLevelSite(exercised) {
 }
 
 export async function main() {
+  const staticViolations = unregisteredFailurePathDiffViolations();
+  if (staticViolations.length > 0) {
+    const sites = staticViolations
+      .map((finding) => `${finding.path}:${String(finding.line)} (${finding.kind})`)
+      .join(", ");
+    fail(`new unregistered failure path(s): ${sites}`);
+  }
   const exercised = [];
   await runServerTopLevelSite(exercised);
   for (const probe of SITE_PROBES) {
