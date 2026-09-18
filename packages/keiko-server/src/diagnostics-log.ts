@@ -477,7 +477,19 @@ function buildActivityLogTarget(stateDir: string): ActivityLogTarget {
 function appendDiagnosticToActivityLog(record: ServerDiagnosticRecord): void {
   const stateDir = process.env.KEIKO_STATE_DIR ?? "";
   if (activityLogTarget?.stateDir !== stateDir) {
-    activityLogTarget = buildActivityLogTarget(stateDir);
+    try {
+      activityLogTarget = buildActivityLogTarget(stateDir);
+    } catch (error) {
+      // Same contract as getServerLogger(): record() never throws into the operation it describes.
+      // The failed open is reported body-free and throttled, and is retried on the next record.
+      activityLogTarget = null;
+      reportServerLogFailure(error, {
+        op: "server-log.initialize",
+        correlationId: record.correlationId,
+        loss: "event-dropped",
+      });
+      return;
+    }
   }
   activityLogTarget.write(record);
 }

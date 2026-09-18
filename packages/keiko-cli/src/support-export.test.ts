@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SERVER_LOG_SCHEMA_VERSION } from "@oscharko-dev/keiko-server";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
+import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
 
 import type { AuditResult } from "./audit.js";
 import {
@@ -37,6 +38,12 @@ function fixedWidthLine(index: number): string {
 
 function fixedWidthLogText(count: number): string {
   return `${Array.from({ length: count }, (_, i) => fixedWidthLine(i)).join("\n")}\n`;
+}
+
+// The server's own writer always produces owner-private (0o600) log files, and the export only
+// reads a log through a descriptor verified to be exactly that shape — fixtures mirror it.
+function writePrivateLog(path: string, text: string): void {
+  writeFileSync(path, text, { mode: 0o600 });
 }
 
 const HEALTHY_AUDIT: AuditResult = {
@@ -88,9 +95,9 @@ describe("discoverServerLogFiles", () => {
   });
 
   it("orders rotated files oldest-first with the current file last", () => {
-    writeFileSync(join(dir, "server-2026-08-20.log"), "b\n");
-    writeFileSync(join(dir, "server-2026-08-19.log"), "a\n");
-    writeFileSync(join(dir, CURRENT_LOG_FILE_NAME), "c\n");
+    writePrivateLog(join(dir, "server-2026-08-20.log"), "b\n");
+    writePrivateLog(join(dir, "server-2026-08-19.log"), "a\n");
+    writePrivateLog(join(dir, CURRENT_LOG_FILE_NAME), "c\n");
     writeFileSync(join(dir, "unrelated.txt"), "ignored\n");
 
     const discovery = discoverServerLogFiles(dir);
@@ -105,7 +112,7 @@ describe("discoverServerLogFiles", () => {
   });
 
   it("omits the current file from the ordering when it does not exist", () => {
-    writeFileSync(join(dir, "server-2026-08-19.log"), "a\n");
+    writePrivateLog(join(dir, "server-2026-08-19.log"), "a\n");
 
     const discovery = discoverServerLogFiles(dir);
 
@@ -119,21 +126,63 @@ describe("discoverServerLogFiles", () => {
     });
   });
 
-  // Regression-shaped: a name `readdirSync` returns can vanish before `statSync` runs (for example,
-  // through concurrent operator cleanup), one step earlier than the `readKeptFiles` race already pinned
-  // above. Reproduced with a broken symlink — `readdirSync` lists its name, but `statSync` follows
-  // it and throws ENOENT, a real race rather than a mock — so discovery must skip it (recording
-  // its name and the real fs error code, never a path) instead of throwing out of the whole
-  // export.
-  it("skips a rotated file that vanishes between readdirSync and statSync, recording its name and error kind", () => {
-    writeFileSync(join(dir, "server-2026-08-19.log"), "a\n");
-    symlinkSync(join(dir, "does-not-exist-target.log"), join(dir, "server-2026-08-20.log"));
+  // Regression-shaped: a name `readdirSync` returns can vanish before it is opened (for example,
+  // through concurrent operator cleanup), one step earlier than the `readKeptFiles` race pinned
+  // below. Discovery must skip it (recording its name and the real fs error code, never a path)
+  // instead of throwing out of the whole export. A dangling symlink used to stand in for this
+  // race, but a symlink at a log name is now refused before it is followed (next test), so the
+  // vanished name is reproduced by listing one that no longer exists.
+  it("skips a rotated file that vanishes between readdirSync and the verified open, recording its name and error kind", async () => {
+    writePrivateLog(join(dir, "server-2026-08-19.log"), "a\n");
+    vi.resetModules();
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        readdirSync: (path: string): string[] => [
+          ...actual.readdirSync(path),
+          "server-2026-08-20.log",
+        ],
+      };
+    });
+    try {
+      const isolated = await import("./support-export.js");
+
+      const discovery = isolated.discoverServerLogFiles(dir);
+
+      expect(discovery.files.map((f) => f.name)).toEqual(["server-2026-08-19.log"]);
+      expect(discovery.skippedLogFiles).toEqual([
+        { name: "server-2026-08-20.log", errorKind: "ENOENT" },
+      ]);
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
+  });
+
+  // #3528: the size probe used to `statSync` (and the read `readFileSync`) through a symlink, so a
+  // link named like a log embedded any file this user can read into the exported bundle. Every
+  // entry is now opened without following a link and verified as a private, single-link regular
+  // file: live and dangling symlinks and hard links are refused as `unsafe-target`, a non-private
+  // file as `permission-unsafe` — each skipped by name only, its target never sized or read.
+  it("refuses symlinked, hard-linked, and non-private log entries without following them", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const victim = join(dir, "victim.txt");
+    writePrivateLog(victim, "VICTIM-BYTES\n");
+    writePrivateLog(join(dir, CURRENT_LOG_FILE_NAME), "c\n");
+    symlinkSync(victim, join(dir, "server-2026-08-17.log"));
+    symlinkSync(join(dir, "missing-target.log"), join(dir, "server-2026-08-18.log"));
+    linkSync(victim, join(dir, "server-2026-08-19.log"));
+    writeFileSync(join(dir, "server-2026-08-20.log"), "shared\n", { mode: 0o644 });
 
     const discovery = discoverServerLogFiles(dir);
 
-    expect(discovery.files.map((f) => f.name)).toEqual(["server-2026-08-19.log"]);
+    expect(discovery.files.map((f) => f.name)).toEqual([CURRENT_LOG_FILE_NAME]);
     expect(discovery.skippedLogFiles).toEqual([
-      { name: "server-2026-08-20.log", errorKind: "ENOENT" },
+      { name: "server-2026-08-17.log", errorKind: "unsafe-target" },
+      { name: "server-2026-08-18.log", errorKind: "unsafe-target" },
+      { name: "server-2026-08-19.log", errorKind: "unsafe-target" },
+      { name: "server-2026-08-20.log", errorKind: "permission-unsafe" },
     ]);
   });
 });
@@ -217,21 +266,21 @@ describe("readVerbatimLogLines", () => {
 
   it("splits on newline and drops only the trailing empty artifact", () => {
     const path = join(dir, "server.log");
-    writeFileSync(path, '{"ts":"a"}\n{"ts":"b"}\n');
+    writePrivateLog(path, '{"ts":"a"}\n{"ts":"b"}\n');
 
     expect(readVerbatimLogLines(path)).toEqual(['{"ts":"a"}', '{"ts":"b"}']);
   });
 
   it("keeps a final line that has no trailing newline", () => {
     const path = join(dir, "server.log");
-    writeFileSync(path, '{"ts":"a"}\n{"ts":"b"}');
+    writePrivateLog(path, '{"ts":"a"}\n{"ts":"b"}');
 
     expect(readVerbatimLogLines(path)).toEqual(['{"ts":"a"}', '{"ts":"b"}']);
   });
 
   it("returns an empty array for an empty file", () => {
     const path = join(dir, "server.log");
-    writeFileSync(path, "");
+    writePrivateLog(path, "");
 
     expect(readVerbatimLogLines(path)).toEqual([]);
   });
@@ -251,8 +300,8 @@ describe("readKeptFiles", () => {
   it("reads every kept file's lines, in file order, into one contentLines array", () => {
     const pathA = join(dir, "server-2026-08-19.log");
     const pathB = join(dir, CURRENT_LOG_FILE_NAME);
-    writeFileSync(pathA, '{"ts":"a"}\n');
-    writeFileSync(pathB, '{"ts":"b"}\n');
+    writePrivateLog(pathA, '{"ts":"a"}\n');
+    writePrivateLog(pathB, '{"ts":"b"}\n');
 
     const result = readKeptFiles([
       { name: "server-2026-08-19.log", path: pathA, sizeBytes: 0 },
@@ -273,8 +322,8 @@ describe("readKeptFiles", () => {
   it("skips a kept file that vanishes between discovery and the read, recording its name and error kind", () => {
     const survivingPath = join(dir, "server-2026-08-19.log");
     const vanishingPath = join(dir, CURRENT_LOG_FILE_NAME);
-    writeFileSync(survivingPath, '{"ts":"a"}\n');
-    writeFileSync(vanishingPath, '{"ts":"b"}\n');
+    writePrivateLog(survivingPath, '{"ts":"a"}\n');
+    writePrivateLog(vanishingPath, '{"ts":"b"}\n');
 
     const discovery = discoverServerLogFiles(dir);
     const selection = selectLogFilesWithinBudget(discovery.files, DEFAULT_MAX_BUNDLE_BYTES);
@@ -292,6 +341,32 @@ describe("readKeptFiles", () => {
     expect(result.skippedLogFiles).toEqual([{ name: CURRENT_LOG_FILE_NAME, errorKind: "ENOENT" }]);
   });
 
+  // #3528: discovery's verified open does not protect the later read — a kept name swapped for a
+  // symlink in between must be refused again at read time, whole-file and tail reader alike, so the
+  // link target's bytes never reach the bundle.
+  it("refuses a kept file replaced by a symlink before the read, never reading its target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const victim = join(dir, "victim.txt");
+    writePrivateLog(victim, "VICTIM-BYTES\n");
+    const rotatedPath = join(dir, "server-2026-08-19.log");
+    const currentPath = join(dir, CURRENT_LOG_FILE_NAME);
+    writePrivateLog(rotatedPath, '{"ts":"a"}\n');
+    writePrivateLog(currentPath, '{"ts":"b"}\n');
+    const kept = discoverServerLogFiles(dir).files;
+    for (const path of [rotatedPath, currentPath]) {
+      rmSync(path);
+      symlinkSync(victim, path);
+    }
+
+    const result = readKeptFiles(kept, 1_000);
+
+    expect(result.contentLines).toEqual([]);
+    expect(result.skippedLogFiles).toEqual([
+      { name: "server-2026-08-19.log", errorKind: "unsafe-target" },
+      { name: CURRENT_LOG_FILE_NAME, errorKind: "unsafe-target" },
+    ]);
+  });
+
   // Regression for #2902 PR review: `contentLines.push(...fileLines)` spreads the entire file's
   // lines as call arguments. A 50MB rotated file with short lines produces hundreds of thousands
   // of them, and V8 throws `RangeError: Maximum call stack size exceeded` well before that —
@@ -302,7 +377,7 @@ describe("readKeptFiles", () => {
     const lineCount = 300_000;
     const path = join(dir, CURRENT_LOG_FILE_NAME);
     const text = `${Array.from({ length: lineCount }, (_, i) => `line-${String(i)}`).join("\n")}\n`;
-    writeFileSync(path, text);
+    writePrivateLog(path, text);
 
     const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 0 }]);
 
@@ -334,7 +409,7 @@ describe("readKeptFiles — current-file tail truncation", () => {
     const lineCount = 20;
     const text = fixedWidthLogText(lineCount); // 12 bytes/line (11 + "\n") = 240 bytes total
     const path = join(dir, CURRENT_LOG_FILE_NAME);
-    writeFileSync(path, text);
+    writePrivateLog(path, text);
     const sizeBytes = Buffer.byteLength(text, "utf8");
     const tailBudgetBytes = 30; // < sizeBytes; cuts mid-line, so the boundary advance is exercised
 
@@ -363,9 +438,9 @@ describe("readKeptFiles — current-file tail truncation", () => {
   it("keeps every older file's read in full and only tail-reads the current (last) file", () => {
     const rotatedPath = join(dir, "server-2026-08-19.log");
     const currentPath = join(dir, CURRENT_LOG_FILE_NAME);
-    writeFileSync(rotatedPath, '{"seq":"old"}\n');
+    writePrivateLog(rotatedPath, '{"seq":"old"}\n');
     const currentText = fixedWidthLogText(20);
-    writeFileSync(currentPath, currentText);
+    writePrivateLog(currentPath, currentText);
     const currentSizeBytes = Buffer.byteLength(currentText, "utf8");
 
     const result = readKeptFiles(
@@ -387,7 +462,7 @@ describe("readKeptFiles — current-file tail truncation", () => {
   it("keeps an empty tail and reports budgetExceeded when the budget is smaller than one line", () => {
     const path = join(dir, CURRENT_LOG_FILE_NAME);
     const text = `{"seq":"${"x".repeat(1_000)}"}`; // one line, no trailing newline anywhere
-    writeFileSync(path, text);
+    writePrivateLog(path, text);
     const sizeBytes = Buffer.byteLength(text, "utf8");
 
     const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes }], 5);
@@ -402,7 +477,7 @@ describe("readKeptFiles — current-file tail truncation", () => {
 
   it("never attempts a tail read, and never sets budgetExceeded, when currentFileTailBudgetBytes is undefined", () => {
     const path = join(dir, CURRENT_LOG_FILE_NAME);
-    writeFileSync(path, fixedWidthLogText(5));
+    writePrivateLog(path, fixedWidthLogText(5));
 
     const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 0 }]);
 
@@ -416,7 +491,7 @@ describe("readKeptFiles — current-file tail truncation", () => {
   // before `openSync` runs.
   it("skips the current file, recording its name and error kind, when it vanishes before the tail read", () => {
     const path = join(dir, CURRENT_LOG_FILE_NAME);
-    writeFileSync(path, fixedWidthLogText(5));
+    writePrivateLog(path, fixedWidthLogText(5));
     rmSync(path);
 
     const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 1_000 }], 30);
@@ -448,6 +523,12 @@ describe("describeErrorKind", () => {
 
   it("falls back to the generic Error kind for a thrown non-Error value", () => {
     expect(describeErrorKind("not an error")).toBe("Error");
+  });
+
+  it("reports a hardened-primitive refusal by its closed kind, never its constructor name", () => {
+    expect(describeErrorKind(new SafeArtifactFileError("activity-log", "unsafe-target"))).toBe(
+      "unsafe-target",
+    );
   });
 });
 
@@ -690,8 +771,8 @@ describe("serializeBundleLines and bundleText", () => {
     const currentPath = join(dir, CURRENT_LOG_FILE_NAME);
     const rotatedLine = '{"ts":"2026-08-19T00:00:00.000Z","category":"http","op":"a\\nb","seq":1}';
     const currentLine = '{"ts":"2026-08-20T00:00:00.000Z","category":"http","op":"c","seq":2}';
-    writeFileSync(rotatedPath, `${rotatedLine}\n`);
-    writeFileSync(currentPath, `${currentLine}\n`);
+    writePrivateLog(rotatedPath, `${rotatedLine}\n`);
+    writePrivateLog(currentPath, `${currentLine}\n`);
     const files: readonly LogFileInfo[] = [
       { name: "server-2026-08-19.log", path: rotatedPath, sizeBytes: 0 },
       { name: CURRENT_LOG_FILE_NAME, path: currentPath, sizeBytes: 0 },

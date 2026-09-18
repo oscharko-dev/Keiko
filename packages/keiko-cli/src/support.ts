@@ -11,7 +11,7 @@
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -28,6 +28,7 @@ import {
   acknowledgeSafeArtifactFileSet,
   isSafeArtifactClass,
   isSafeArtifactFailureKind,
+  openSafeArtifactFile,
   publishSafeArtifactFileSet,
   recoverSafeArtifactFileSet,
   safeArtifactPublicationSlot,
@@ -66,6 +67,7 @@ import {
   renderHumanClusters,
   renderHumanReproductionSeed,
   renderHumanTimeline,
+  type ActivityLogEvidenceClassification,
   type AnalyzeAllResult,
   type ProcessSummary,
   type SourceKind,
@@ -86,6 +88,7 @@ import {
   describeErrorKind,
   discoverServerLogFiles,
   readKeptFiles,
+  readVerifiedLogText,
   selectLogFilesWithinBudget,
   serializeBundleLines,
   sha256SidecarPath,
@@ -548,10 +551,11 @@ interface LogContent {
 
 // Discovers, budget-selects, and reads the state dir's server*.log files in one pass, tolerating
 // concurrent removal of the current file or a compatible legacy archive at both boundaries
-// (support-export.ts's `discoverServerLogFiles`, between `readdirSync` and `statSync`, and
+// (support-export.ts's `discoverServerLogFiles`, between `readdirSync` and the verified open, and
 // `readKeptFiles`, between selection and the actual read): `sourceLogFiles` names only the files
-// that actually contributed content; `skippedLogFiles` names every file that vanished at either
-// boundary, by name only, never by its absolute path. `budgetExceeded` and
+// that actually contributed content; `skippedLogFiles` names every file that vanished or was
+// refused (a link or non-regular entry) at either boundary, by name only, never by its absolute
+// path. `budgetExceeded` and
 // `currentFileTailTruncated` come from `readKeptFiles`, not `selection`: only the read step knows
 // whether a tail read of the current file actually managed to keep a complete line, which is what
 // decides whether the size budget was, in the end, honoured.
@@ -931,6 +935,27 @@ const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+type SupportAnalysisIntegrity = Pick<
+  ActivityLogFields<typeof SUPPORT_ANALYZE_CLASSIFICATION_OPERATION>,
+  "completeness" | "loss"
+>;
+
+// ADR-0173 D10's closed vocabularies, derived from the analyzer's own verdict instead of the
+// constructor defaults. Only supported or legacy evidence (which implies no malformed line) is
+// complete; a truncated or corrupt artifact is a known, counted subset whose unreadable bytes stand
+// where a record should be; unsupported lines are preserved but excluded; incomplete identity or
+// writer evidence means completeness cannot be established at all.
+const SUPPORT_ANALYSIS_INTEGRITY: Readonly<
+  Record<ActivityLogEvidenceClassification, SupportAnalysisIntegrity>
+> = {
+  supported: { completeness: "complete", loss: "none" },
+  legacy: { completeness: "complete", loss: "none" },
+  unsupported: { completeness: "partial", loss: "none" },
+  corrupt: { completeness: "partial", loss: "event-dropped" },
+  truncated: { completeness: "partial", loss: "event-dropped" },
+  incomplete: { completeness: "unknown", loss: "none" },
+};
+
 type SupportPublicationEvidenceFields = ActivityLogFields<
   typeof SUPPORT_EXPORT_PUBLICATION_OPERATION
 >;
@@ -1052,8 +1077,7 @@ function emitSupportAnalysisEvidence(
           incompleteLineCount: result.evidence.incompleteLineCount,
           sequenceAnomalyCount: result.evidence.sequenceAnomalies.length,
           malformedLineCount: result.malformedLineCount,
-          completeness: "complete",
-          loss: "none",
+          ...SUPPORT_ANALYSIS_INTEGRITY[result.evidence.classification],
         },
       ),
     );
@@ -1156,19 +1180,17 @@ function reportStoreFingerprintProgress(io: CliIo): void {
   );
 }
 
+// Body-free like every other failure line in this file: an auditor error's text can quote the
+// state tree it was reading, so only the closed `AuditLoadError` reason or the error's kind is
+// printed, never its message.
 function reportAuditFailure(error: unknown, io: CliIo): number {
-  if (error instanceof AuditLoadError) {
-    io.err(
-      `keiko support export: local-state audit could not produce a result (${error.reason}); ` +
-        "refusing to write a bundle without an audit summary.\n",
-    );
-    return 1;
-  }
-  if (error instanceof Error) {
-    io.err(`keiko support export: ${error.message}\n`);
-    return 1;
-  }
-  throw error;
+  if (!(error instanceof Error)) throw error;
+  const reason = error instanceof AuditLoadError ? error.reason : describeErrorKind(error);
+  io.err(
+    `keiko support export: local-state audit could not produce a result (${reason}); ` +
+      "refusing to write a bundle without an audit summary.\n",
+  );
+  return 1;
 }
 
 type ManifestInput = Parameters<typeof buildSupportBundleManifest>[0];
@@ -1219,11 +1241,13 @@ function logContentManifestFields(
   };
 }
 
-// A missing or unreadable ui.log (no `keiko start` has ever run against this state dir, or a
-// permission error) means there is nothing to attach — never a failed export.
+// A missing, unreadable, or unsafe ui.log (no `keiko start` has ever run against this state dir, a
+// permission error, or a symlink/hard link/non-regular entry the verified read refuses) means there
+// is nothing to attach — never a failed export, and never a read through a link. The manifest's
+// `sectionsExcluded` still names the section.
 function readUiLogContentOrUndefined(stateDir: string): string | undefined {
   try {
-    return readFileSync(join(stateDir, UI_LOG_FILE_NAME), "utf8");
+    return readVerifiedLogText(join(stateDir, UI_LOG_FILE_NAME), stateDir);
   } catch {
     return undefined;
   }
@@ -1254,32 +1278,35 @@ function resolveUiLogInclusion(stateDir: string, args: ExportArgs): UiLogInclusi
 // heuristics alone is not enough either — they do not catch, for example, a hex-only secret (no
 // uppercase character, so the high-entropy check never fires) or any other operator-chosen
 // credential shape they were never designed to enumerate. This is therefore a second, independent
-// gate at the COLLECTION layer: a credential-shaped segment anywhere in the name (split on `_`)
-// refuses the field outright, before its value is ever read into the snapshot at all.
-const CREDENTIAL_NAME_SEGMENTS = new Set<string>([
+// gate at the COLLECTION layer: a credential word (optionally plural) ENDING any `_`-separated
+// segment refuses the field outright, before its value is ever read into the snapshot at all —
+// whether the word stands alone (`KEIKO_API_KEY`) or is fused onto a qualifier
+// (`KEIKO_CLIENTSECRET`, `KEIKO_APITOKEN`). The segment end, not any substring, is deliberate:
+// `KEIKO_LOCAL_KNOWLEDGE_TOKENIZER` names a tokenizer mode, not a token.
+const CREDENTIAL_NAME_WORDS = [
   "key",
-  "keys",
-  "apikey",
-  "apikeys",
   "secret",
-  "secrets",
   "token",
-  "tokens",
   "credential",
-  "credentials",
   "password",
   "passwd",
   "pwd",
   "auth",
   "cert",
   "certificate",
-]);
+] as const;
+
+function isCredentialNameSegment(segment: string): boolean {
+  return CREDENTIAL_NAME_WORDS.some(
+    (word) => segment.endsWith(word) || segment.endsWith(`${word}s`),
+  );
+}
 
 function isCredentialShapedEnvName(key: string): boolean {
   return key
     .toLowerCase()
     .split("_")
-    .some((segment) => CREDENTIAL_NAME_SEGMENTS.has(segment));
+    .some((segment) => isCredentialNameSegment(segment));
 }
 
 // "The resolved runtime configuration" scoped to what this CLI itself resolves from the
@@ -1346,18 +1373,20 @@ function assembleWave6Sections(
     : [configSnapshot, ...evidenceSections, uiLog.section];
 }
 
+async function recordRolledBackRecovery(
+  recovery: RolledBackRecoveryOutcome,
+  stateDir: string,
+): Promise<void> {
+  emitSupportPublicationEvidence(await loadServer(), stateDir, randomUUID(), recovery);
+}
+
 async function recoveredSupportExportExitCode(
-  recovery: SupportRecoveryOutcome,
+  recovery: Extract<SupportRecoveryOutcome, { readonly status: "recovered" | "failed" }>,
   stateDir: string,
   io: CliIo,
   context: SupportPublicationContext,
-): Promise<number | undefined> {
-  if (recovery.status === "none") return undefined;
+): Promise<number> {
   const server = await loadServer();
-  if (recovery.status === "rolled-back") {
-    emitSupportPublicationEvidence(server, stateDir, randomUUID(), recovery);
-    return undefined;
-  }
   if (recovery.status === "failed") {
     emitSupportPublicationEvidence(server, stateDir, randomUUID(), recovery);
     return 1;
@@ -1372,6 +1401,8 @@ async function recoveredSupportExportExitCode(
   );
 }
 
+// Success is claimed only once the receipt is acknowledged: an unacknowledged publication exits 1
+// without a success line, and the next run recovers and announces the same durable report.
 function completeSupportPublication(
   publication: CompletedBundlePublicationOutcome,
   server: LoadedServer,
@@ -1381,9 +1412,9 @@ function completeSupportPublication(
   successLine: string,
 ): number {
   const correlationId = randomUUID();
-  io.out(successLine);
   const errorKind = acknowledgeSupportPublication(context, io);
   if (errorKind === undefined) {
+    io.out(successLine);
     emitSupportPublicationEvidence(server, stateDir, correlationId, publication);
     return 0;
   }
@@ -1543,14 +1574,10 @@ async function runSupportExport(
   }
   const publicationContext = supportPublicationContext(cwd, args.out);
   const recovery = recoverSupportBundle(publicationContext, io);
-  const recoveredExitCode = await recoveredSupportExportExitCode(
-    recovery,
-    stateDir,
-    io,
-    publicationContext,
-  );
-  if (recoveredExitCode !== undefined) return recoveredExitCode;
-  if (recovery.status !== "none" && recovery.status !== "rolled-back") return 1;
+  if (recovery.status === "recovered" || recovery.status === "failed") {
+    return recoveredSupportExportExitCode(recovery, stateDir, io, publicationContext);
+  }
+  if (recovery.status === "rolled-back") await recordRolledBackRecovery(recovery, stateDir);
   return publishFreshSupportExport(args, io, env, deps, {
     cwd,
     now,
@@ -1754,22 +1781,35 @@ function resolveFixturePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
 }
 
-// Fail-closed (disclosed gap #1's fix): never overwrites an existing file — a fixture is meant to
-// be hand-edited after generation, and silently clobbering that would destroy real work — and
-// creates the parent directory so `--emit-fixture some/new/dir/fixture.ts` does not require the
-// operator to `mkdir -p` first. Content-free error reporting, same discipline as
-// `writeBundleOrExitCode`: an fs error's message can quote the path it was writing.
+// Fail-closed (disclosed gap #1's fix): never overwrites or follows an existing entry — a fixture
+// is meant to be hand-edited after generation, and silently clobbering that would destroy real
+// work. The one file is created exclusively in place through the shared hardened primitive, with
+// the trust root a user-chosen `--out` report uses (the destination's own directory): a live or
+// dangling symlink, hard link, or FIFO at PATH is refused as an existing target, nothing is ever
+// created at a link's target, and no staging or recovery files are left beside it. The parent
+// directory is created first so `--emit-fixture some/new/dir/fixture.ts` does not require the
+// operator to `mkdir -p`. Content-free error reporting: only the closed failure kind is printed.
 function writeFixtureOrExitCode(path: string, contents: string, io: CliIo): number | undefined {
-  if (existsSync(path)) {
-    io.err(`keiko support analyze: refusing to overwrite existing file: ${path}\n`);
-    return 1;
-  }
   try {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, contents, "utf8");
+    const descriptor = openSafeArtifactFile(path, {
+      artifactClass: "replay-fixture",
+      mode: "exclusive-create",
+      trustedRoot: dirname(path),
+    });
+    try {
+      writeFileSync(descriptor, contents, "utf8");
+    } finally {
+      closeSync(descriptor);
+    }
     return undefined;
   } catch (error) {
-    io.err(`keiko support analyze: could not write fixture: ${describeErrorKind(error)}\n`);
+    const kind = describeErrorKind(error);
+    io.err(
+      kind === "target-exists"
+        ? `keiko support analyze: refusing to overwrite existing file: ${path}\n`
+        : `keiko support analyze: could not write fixture: ${kind}\n`,
+    );
     return 1;
   }
 }

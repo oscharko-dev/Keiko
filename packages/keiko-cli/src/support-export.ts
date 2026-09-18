@@ -15,11 +15,15 @@
 // argv, process.*, or another package's runtime.
 
 import { createHash } from "node:crypto";
-import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, fstatSync, lstatSync, readFileSync, readSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
+import {
+  openSafeArtifactFile,
+  SafeArtifactFileError,
+} from "@oscharko-dev/keiko-security/fs-hardening";
 import type { AuditResult } from "./audit.js";
 
 // The one byte that ends a log line in this format (server-log.ts's own file sink writes ASCII
@@ -62,11 +66,12 @@ export interface LogFileInfo {
 
 // A file the export skipped instead of failing for: `name` is relative only (never the absolute
 // path an fs error's own message can quote, AGENTS.md §7), and `errorKind` is the one diagnosable
-// fact about why — the fs error's `code` (ENOENT, EACCES, EISDIR, EMFILE, …) when it has one, else
-// its constructor name. Recording nothing here (as the previous string[] shape did) turned every
-// skip into "rotation pruned this file", even when the real cause was a permission error or a
-// directory sitting where a log file was expected — a wrong diagnosis for an operator reading the
-// bundle.
+// fact about why — the hardened open's closed refusal kind (`unsafe-target` for a symlink, hard
+// link, or non-regular entry; `permission-unsafe`; …), else the fs error's `code` (ENOENT, EACCES,
+// EMFILE, …), else its constructor name. Recording nothing here (as the previous string[] shape
+// did) turned every skip into "rotation pruned this file", even when the real cause was a
+// permission error or a directory sitting where a log file was expected — a wrong diagnosis for an
+// operator reading the bundle.
 export interface SkippedLogFile {
   readonly name: string;
   readonly errorKind: string;
@@ -75,29 +80,87 @@ export interface SkippedLogFile {
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
 // Identifies an unknown error for redacted diagnostics without ever surfacing its `message` (which
-// an fs error uses to quote the absolute path it failed on, AGENTS.md §7): Node's own fs errors
-// set a short, all-caps `code` (ENOENT, EACCES, EISDIR, EMFILE, EROFS, …); anything else — no
-// `code` at all, or a `code` that is not shaped like one of those short identifiers — falls back to
-// the error's own constructor name.
+// an fs error uses to quote the absolute path it failed on, AGENTS.md §7): the shared hardened
+// primitives throw a `SafeArtifactFileError` whose closed `kind` is the diagnosis; Node's own fs
+// errors set a short, all-caps `code` (ENOENT, EACCES, EISDIR, EMFILE, EROFS, …); anything else —
+// no `code` at all, or a `code` that is not shaped like one of those short identifiers — falls back
+// to the error's own constructor name.
 export function describeErrorKind(error: unknown): string {
+  if (error instanceof SafeArtifactFileError) return error.kind;
   const code = (error as { code?: unknown } | null)?.code;
   if (typeof code === "string" && ERROR_CODE_PATTERN.test(code)) return code;
   return error instanceof Error ? error.constructor.name : "Error";
 }
 
+// The state directory: the trust root the server's own writer opens `<stateDir>/logs/server*.log`
+// under (server-log.ts `resolveActiveLog`), so a symlinked `logs` directory is refused here exactly
+// as the writer refuses it.
+function activityLogTrustedRoot(logPath: string): string {
+  return dirname(dirname(logPath));
+}
+
+// Every exported log byte is read through the shared hardened primitive: the final component is
+// opened without following a symlink, and the descriptor must be a private, single-link regular
+// file owned by this user. A symlink, hard link, FIFO, or directory planted at a log name is
+// therefore refused before one byte is read, and every size comes from this verified descriptor,
+// never from a path lookup that could follow a link.
+function withVerifiedLogDescriptor<T>(
+  path: string,
+  trustedRoot: string,
+  read: (descriptor: number) => T,
+): T {
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass: "activity-log",
+    mode: "read",
+    trustedRoot,
+  });
+  try {
+    return read(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/** Reads a whole log file (a server*.log, or the opt-in ui.log) through a verified descriptor. */
+export function readVerifiedLogText(path: string, trustedRoot: string): string {
+  return withVerifiedLogDescriptor(path, trustedRoot, (descriptor) =>
+    readFileSync(descriptor, "utf8"),
+  );
+}
+
+// The hardened open reports every failed open as the closed `open-failed`. A name that is simply
+// gone — the rotation/cleanup race this module tolerates — keeps its precise fs code instead,
+// probed with an `lstat` that neither follows a link nor reads content.
+function logSkipKind(error: unknown, path: string): string {
+  const kind = describeErrorKind(error);
+  if (kind !== "open-failed") return kind;
+  try {
+    lstatSync(path);
+    return kind;
+  } catch (probeError) {
+    return describeErrorKind(probeError);
+  }
+}
+
 // A concurrent operator or legacy cleanup can remove a name after `readdirSync` but before it is
-// `stat`'d — a race, not a failed export. Returns
-// the skip (name plus the fs error's diagnosable kind — never its absolute path) so the caller can
-// record it and keep going; the export must never fail for one unreadable log file.
+// opened — a race, not a failed export — and an entry at a log name can be a symlink, hard link,
+// or non-regular file the verified open refuses. Returns the skip (name plus the diagnosable kind —
+// never its absolute path) so the caller can record it and keep going; the export must never fail
+// for one unreadable log file.
 function toLogFileInfoOrSkip(
   logsDir: string,
   name: string,
 ): { readonly info: LogFileInfo } | { readonly skip: SkippedLogFile } {
   const path = join(logsDir, name);
   try {
-    return { info: { name, path, sizeBytes: statSync(path).size } };
+    const sizeBytes = withVerifiedLogDescriptor(
+      path,
+      activityLogTrustedRoot(path),
+      (descriptor) => fstatSync(descriptor).size,
+    );
+    return { info: { name, path, sizeBytes } };
   } catch (error) {
-    return { skip: { name, errorKind: describeErrorKind(error) } };
+    return { skip: { name, errorKind: logSkipKind(error, path) } };
   }
 }
 
@@ -125,10 +188,10 @@ function sortedRotatedNames(names: readonly string[]): readonly string[] {
 
 export interface LogFileDiscovery {
   readonly files: readonly LogFileInfo[];
-  // Entries `readdirSync` returned but that vanished before they could be `stat`'d — a concurrent
-  // filesystem change racing this scan — named (never `LogFileInfo.path`, which is
-  // absolute) alongside the fs error kind that caused the skip, so it can be attested in the
-  // bundle manifest and diagnosed by an operator.
+  // Entries `readdirSync` returned but that vanished before they could be opened — a concurrent
+  // filesystem change racing this scan — or that the verified open refused, named (never
+  // `LogFileInfo.path`, which is absolute) alongside the kind that caused the skip, so it can be
+  // attested in the bundle manifest and diagnosed by an operator.
   readonly skippedLogFiles: readonly SkippedLogFile[];
 }
 
@@ -209,7 +272,7 @@ interface VerbatimLogContent {
 }
 
 function readVerbatimLogContent(path: string): VerbatimLogContent {
-  const text = readFileSync(path, "utf8");
+  const text = readVerifiedLogText(path, activityLogTrustedRoot(path));
   if (text.length === 0) return { lines: [], terminalFragment: false };
   const lines = text.split("\n");
   if (lines.at(-1) === "") lines.pop();
@@ -221,15 +284,15 @@ export function readVerbatimLogLines(path: string): readonly string[] {
 }
 
 // Same concurrent-removal race as `discoverServerLogFiles`, one step later: a name that survived the
-// `readdirSync`→`statSync` gap and was kept for the bundle can still vanish before its bytes are
-// actually read. The `skip` branch signals that race to the caller (distinct from the legitimate
-// `lines: []` an empty-but-present file produces) — with the fs error's diagnosable kind — so the
+// discovery open and was kept for the bundle can still vanish, or be replaced by a link, before its
+// bytes are actually read. The `skip` branch signals that to the caller (distinct from the
+// legitimate `lines: []` an empty-but-present file produces) — with the diagnosable kind — so the
 // file is skipped, not aborted.
 function readVerbatimLogLinesOrSkip(path: string): VerbatimLogContent | { readonly skip: string } {
   try {
     return readVerbatimLogContent(path);
   } catch (error) {
-    return { skip: describeErrorKind(error) };
+    return { skip: logSkipKind(error, path) };
   }
 }
 
@@ -249,22 +312,34 @@ interface TailReadOutcome {
   readonly terminalFragment: boolean;
 }
 
-// Reads only the last `tailBudgetBytes` bytes of `path` via a bounded `openSync`/`readSync` pair —
-// never `readFileSync`'ing the whole (potentially oversized) file — then advances past the first
+interface TailRegion {
+  readonly buffer: Buffer;
+  readonly sizeBytes: number;
+  readonly regionStart: number;
+}
+
+// The last `tailBudgetBytes` bytes of the verified descriptor, sized by that descriptor's own
+// `fstat` — one bounded `readSync`, never a whole-file read of a potentially oversized file.
+function readTailRegion(descriptor: number, tailBudgetBytes: number): TailRegion {
+  const sizeBytes = fstatSync(descriptor).size;
+  const regionLength = Math.max(0, Math.min(tailBudgetBytes, sizeBytes));
+  const regionStart = sizeBytes - regionLength;
+  const buffer = Buffer.alloc(regionLength);
+  if (regionLength > 0) readSync(descriptor, buffer, 0, regionLength, regionStart);
+  return { buffer, sizeBytes, regionStart };
+}
+
+// Reads only the tail region of `path` through a verified descriptor, then advances past the first
 // newline inside that region so the kept content always starts on a complete line, never a partial
 // JSON line. When the region contains no newline at all (the budget is smaller than a single
 // line, or the region's only newline is the file's own final byte), nothing can be kept safely and
 // `lines` is empty with `droppedBytes` equal to the whole file size.
-function readTailLines(path: string, sizeBytes: number, tailBudgetBytes: number): TailReadOutcome {
-  const regionLength = Math.max(0, Math.min(tailBudgetBytes, sizeBytes));
-  const regionStart = sizeBytes - regionLength;
-  const buffer = Buffer.alloc(regionLength);
-  const fd = openSync(path, "r");
-  try {
-    if (regionLength > 0) readSync(fd, buffer, 0, regionLength, regionStart);
-  } finally {
-    closeSync(fd);
-  }
+function readTailLines(path: string, tailBudgetBytes: number): TailReadOutcome {
+  const { buffer, sizeBytes, regionStart } = withVerifiedLogDescriptor(
+    path,
+    activityLogTrustedRoot(path),
+    (descriptor) => readTailRegion(descriptor, tailBudgetBytes),
+  );
   const newlineIndex = buffer.indexOf(NEWLINE_BYTE);
   if (newlineIndex === -1) return { lines: [], droppedBytes: sizeBytes, terminalFragment: false };
   const droppedBytes = regionStart + newlineIndex + 1;
@@ -278,13 +353,12 @@ function readTailLines(path: string, sizeBytes: number, tailBudgetBytes: number)
 // Same vanish-before-read race as `readVerbatimLogLinesOrSkip`, for the bounded tail reader.
 function readTailLinesOrSkip(
   path: string,
-  sizeBytes: number,
   tailBudgetBytes: number,
 ): TailReadOutcome | { readonly skip: string } {
   try {
-    return readTailLines(path, sizeBytes, tailBudgetBytes);
+    return readTailLines(path, tailBudgetBytes);
   } catch (error) {
-    return { skip: describeErrorKind(error) };
+    return { skip: logSkipKind(error, path) };
   }
 }
 
@@ -369,7 +443,7 @@ function readKeptFileLines(file: LogFileInfo, tailBudgetBytes: number | undefine
     const whole = readVerbatimLogLinesOrSkip(file.path);
     return "skip" in whole ? whole : { ...whole, tail: undefined };
   }
-  const tail = readTailLinesOrSkip(file.path, file.sizeBytes, tailBudgetBytes);
+  const tail = readTailLinesOrSkip(file.path, tailBudgetBytes);
   if ("skip" in tail) return tail;
   return {
     lines: tail.lines,

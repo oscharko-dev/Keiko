@@ -3,7 +3,7 @@
 // "does the redactor work" (log-redaction.test.ts owns that) but "which fields of the record are
 // allowed to become log fields at all".
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +14,11 @@ import {
   serverDiagnosticFromError,
 } from "./diagnostics-log.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import { closeFileServerLogSinks, SERVER_LOG_LEVEL_ENV } from "./observability/index.js";
+import {
+  closeFileServerLogSinks,
+  resetServerLogFailureNotices,
+  SERVER_LOG_LEVEL_ENV,
+} from "./observability/index.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
   const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8").trim();
@@ -39,6 +43,44 @@ describe("diagnostic records on the activity log", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("never throws from record() when the Activity Log cannot be opened, and recovers later", () => {
+    resetServerLogFailureNotices();
+    const logsPath = join(stateDir, "logs");
+    writeFileSync(logsPath, "occupied by a regular file");
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const record: ServerDiagnosticRecord = {
+      correlationId: "req-open-failed",
+      timestamp: "2026-09-18T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    };
+
+    expect(() => {
+      defaultServerDiagnosticSink.record(record);
+    }).not.toThrow();
+    const notice = stderrWrite.mock.calls
+      .map(([chunk]) => String(chunk))
+      .find((line) => line.includes("server-log.initialize"));
+    expect(notice).toBeDefined();
+    expect(notice).not.toContain(stateDir);
+    expect(JSON.parse(notice ?? "{}")).toMatchObject({
+      op: "server-log.write-failed",
+      correlationId: "req-open-failed",
+      failedOp: "server-log.initialize",
+      writerCapability: "unavailable",
+      loss: "event-dropped",
+    });
+
+    rmSync(logsPath);
+    defaultServerDiagnosticSink.record(record);
+    expect(readActivityLine(stateDir)).toMatchObject({
+      op: "server.diagnostic.failure",
+      correlationId: "req-open-failed",
+    });
   });
 
   it("projects the record onto allowlisted fields instead of passing it whole", () => {

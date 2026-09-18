@@ -172,6 +172,12 @@ async function crashDirectoryMutationAtLink(linkOrdinal: number): Promise<void> 
   }));
 }
 
+// The server's writer (and `keiko start` for ui.log) always creates these files owner-private, and
+// the export reads them only through a descriptor verified to be exactly that shape.
+function writePrivateFile(path: string, text: string): void {
+  writeFileSync(path, text, { mode: 0o600 });
+}
+
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
   const outChunks: string[] = [];
   const errChunks: string[] = [];
@@ -398,6 +404,7 @@ describe("runSupportCli export", () => {
     vi.doUnmock("node:fs");
     vi.doUnmock("node:child_process");
     vi.doUnmock("@oscharko-dev/keiko-security/fs-hardening");
+    vi.doUnmock("./audit.js");
     vi.resetModules();
     rmSync(stateDir, { recursive: true, force: true });
     rmSync(outDir, { recursive: true, force: true });
@@ -457,8 +464,8 @@ describe("runSupportCli export", () => {
       op: "req.b",
       correlationId: "req-1",
     });
-    writeFileSync(join(stateDir, "logs", "server-2026-08-19.log"), `${rotatedLine}\n`);
-    writeFileSync(join(stateDir, "logs", "server.log"), `${currentLine}\n`);
+    writePrivateFile(join(stateDir, "logs", "server-2026-08-19.log"), `${rotatedLine}\n`);
+    writePrivateFile(join(stateDir, "logs", "server.log"), `${currentLine}\n`);
 
     const c = makeIo();
     const code = await runSupportCli(["export", "--state-dir", stateDir], c.io, AUDIT_ENV, {
@@ -522,19 +529,23 @@ describe("runSupportCli export", () => {
 
   it("recovers exact built-CLI bytes after death before acknowledgement", () => {
     const preload = join(outDir, "crash-before-ack.mjs");
+    // Dies at the acknowledgement's first directory mutation (linking the `.complete` receipt to
+    // `.consumed`): the publication is durable but unacknowledged, and nothing has claimed success.
     writeFileSync(
       preload,
       `
-        const originalWrite = process.stdout.write.bind(process.stdout);
-        process.stdout.write = (chunk, ...args) => {
-          const result = originalWrite(chunk, ...args);
-          if (String(chunk).startsWith("Wrote ")) process.kill(process.pid, "SIGKILL");
-          return result;
+        import childProcess from "node:child_process";
+        import { syncBuiltinESMExports } from "node:module";
+        const spawnSync = childProcess.spawnSync;
+        childProcess.spawnSync = (command, args, options) => {
+          if (String(options?.input ?? "").includes('.consumed"')) process.kill(process.pid, "SIGKILL");
+          return spawnSync(command, args, options);
         };
+        syncBuiltinESMExports();
       `,
     );
     const interrupted = runBuiltSupportCli(outDir, stateDir, ["--import", preload]);
-    expect(interrupted.status).not.toBe(0);
+    expect(interrupted.signal).toBe("SIGKILL");
     const [reportName] = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
     expect(reportName).toBeDefined();
     if (reportName === undefined) throw new Error("expected interrupted report");
@@ -835,7 +846,7 @@ describe("runSupportCli export", () => {
     const c = makeIo();
     const correlationId = "00000000-0000-4000-8000-000000000001";
     const currentLog = join(stateDir, "logs", "server.log");
-    writeFileSync(currentLog, "");
+    writePrivateFile(currentLog, "");
 
     const code = await runSupportCli(
       ["export", "--state-dir", stateDir],
@@ -993,12 +1004,77 @@ describe("runSupportCli export", () => {
     expect(configSnapshot.fields).not.toHaveProperty("KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY");
   });
 
+  // The name gate split on `_` and required an exact segment match, so a credential word fused
+  // onto a qualifier (`CLIENTSECRET`, `APITOKEN`, `ACCESSTOKEN`) slipped into the always-attached
+  // snapshot. A tokenizer MODE is not a token and must stay visible.
+  it("never embeds a fused credential-shaped KEIKO_* name, but keeps a non-secret one", async () => {
+    const hexOnlyEnvValue = "a1b2c3d4e5f6".repeat(5).slice(0, 64);
+    const env = {
+      ...AUDIT_ENV,
+      KEIKO_CLIENTSECRET: hexOnlyEnvValue,
+      KEIKO_APITOKEN: hexOnlyEnvValue,
+      KEIKO_ACCESSTOKEN: hexOnlyEnvValue,
+      KEIKO_LOCAL_KNOWLEDGE_TOKENIZER: "heuristic",
+    };
+    const outPath = join(outDir, "fused-credential-names.jsonl");
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      makeIo().io,
+      env,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const written = readFileSync(outPath, "utf8");
+    expect(written).not.toContain(hexOnlyEnvValue);
+    const [, configSnapshotLine] = written.trimEnd().split("\n");
+    const { fields } = JSON.parse(configSnapshotLine ?? "{}") as {
+      readonly fields: Record<string, unknown>;
+    };
+    expect(fields).not.toHaveProperty("KEIKO_CLIENTSECRET");
+    expect(fields).not.toHaveProperty("KEIKO_APITOKEN");
+    expect(fields).not.toHaveProperty("KEIKO_ACCESSTOKEN");
+    expect(fields.KEIKO_LOCAL_KNOWLEDGE_TOKENIZER).toBe("heuristic");
+  });
+
+  // Every other failure line in this command is body-free; this one echoed `error.message`, which
+  // for an auditor failure can quote the state tree it was reading.
+  it("reports an unexpected audit failure by its kind, never its message", async () => {
+    const privateDetail = join(stateDir, "private-customer-file.db");
+    vi.resetModules();
+    vi.doMock("./audit.js", async () => {
+      const actual = await vi.importActual<typeof import("./audit.js")>("./audit.js");
+      return {
+        ...actual,
+        auditLocalStateResult: (): Promise<never> =>
+          Promise.reject(new Error(`cannot read ${privateDetail}`)),
+      };
+    });
+    const isolated = await import("./support.js");
+    const c = makeIo();
+    const outPath = join(outDir, "audit-message.jsonl");
+
+    const code = await isolated.runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("local-state audit could not produce a result (Error)");
+    expect(c.err()).not.toContain(privateDetail);
+    expect(c.err()).not.toContain("private-customer-file");
+    expect(existsSync(outPath)).toBe(false);
+  });
+
   it("records a log file that vanishes between discovery and read as skipped, not aborted", async () => {
-    // `discoverServerLogFiles` only `statSync`s each name (which succeeds on a directory too), so
-    // a directory sitting where `server.log` belongs passes discovery — the read step afterward
-    // (`readFileSync`) is what actually fails, with EISDIR. This is the same "vanished between two
-    // fs calls" shape concurrent operator cleanup can produce, exercised deterministically instead
-    // of via a real race.
+    // A directory sitting where `server.log` belongs — the same "not the file discovery expected"
+    // shape concurrent operator cleanup can produce, exercised deterministically instead of via a
+    // real race. It used to pass a `statSync` probe and fail only at `readFileSync` (EISDIR); the
+    // verified open now refuses any non-regular entry up front, with the closed `unsafe-target`
+    // kind. Either way the export must record the skip by name and still succeed.
     mkdirSync(join(stateDir, "logs", "server.log"), { recursive: true });
 
     const c = makeIo();
@@ -1015,7 +1091,52 @@ describe("runSupportCli export", () => {
       readFileSync(outPath, "utf8").split("\n")[0] ?? "{}",
     ) as Record<string, unknown>;
     expect(manifest.sourceLogFiles).toEqual([]);
-    expect(manifest.skippedLogFiles).toEqual([{ name: "server.log", errorKind: "EISDIR" }]);
+    expect(manifest.skippedLogFiles).toEqual([{ name: "server.log", errorKind: "unsafe-target" }]);
+  });
+
+  // #3528: the only state-dir symlink check is gated on an install-layout override, so a normal
+  // export used to `statSync`/`readFileSync` straight through a link named like a log (or ui.log)
+  // and embed the target — any file this user can read — in a bundle meant to be shared. Every
+  // exported file is now read through a no-follow, single-link, private regular-file descriptor.
+  it("never exports a symlinked or hard-linked log or ui.log target, and leaves the victim unchanged", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const victimContent = "VICTIM-7f3a-must-never-reach-the-bundle\n";
+    const victim = join(outDir, "victim.txt");
+    writePrivateFile(victim, victimContent);
+    symlinkSync(victim, join(stateDir, "logs", CURRENT_LOG_FILE_NAME));
+    symlinkSync(victim, join(stateDir, "logs", "server-2026-08-19.log"));
+    linkSync(victim, join(stateDir, "logs", "server-2026-08-18.log"));
+    symlinkSync(victim, join(stateDir, "ui.log"));
+    const outPath = join(outDir, "linked-logs.jsonl");
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      [
+        "export",
+        "--state-dir",
+        stateDir,
+        "--out",
+        outPath,
+        "--include-ui-log",
+        "--i-understand-this-is-unredacted",
+      ],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const bundle = readFileSync(outPath, "utf8");
+    expect(bundle).not.toContain("VICTIM-7f3a");
+    expect(readFileSync(victim, "utf8")).toBe(victimContent);
+    const manifest = JSON.parse(bundle.split("\n")[0] ?? "{}") as Record<string, unknown>;
+    expect(manifest.sourceLogFiles).toEqual([]);
+    expect(manifest.skippedLogFiles).toEqual([
+      { name: "server-2026-08-18.log", errorKind: "unsafe-target" },
+      { name: "server-2026-08-19.log", errorKind: "unsafe-target" },
+      { name: CURRENT_LOG_FILE_NAME, errorKind: "unsafe-target" },
+    ]);
+    expect(manifest.sectionsExcluded).toEqual(["ui-log"]);
   });
 
   it("defaults stateDirSource to 'default' when neither --state-dir nor KEIKO_STATE_DIR is set", async () => {
@@ -1052,8 +1173,11 @@ describe("runSupportCli export", () => {
       category: "http",
       op: "new",
     });
-    writeFileSync(join(stateDir, "logs", "server-2026-08-18.log"), `${rotatedLine}\n`.repeat(50));
-    writeFileSync(join(stateDir, "logs", "server.log"), `${currentLine}\n`);
+    writePrivateFile(
+      join(stateDir, "logs", "server-2026-08-18.log"),
+      `${rotatedLine}\n`.repeat(50),
+    );
+    writePrivateFile(join(stateDir, "logs", "server.log"), `${currentLine}\n`);
 
     const c = makeIo();
     const code = await runSupportCli(
@@ -1080,7 +1204,7 @@ describe("runSupportCli export", () => {
   });
 
   it("preserves an unterminated crash fragment for bundle analysis", async () => {
-    writeFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), '{"ts":');
+    writePrivateFile(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), '{"ts":');
     const outPath = join(outDir, "terminal-fragment.jsonl");
     const c = makeIo();
 
@@ -1112,13 +1236,16 @@ describe("runSupportCli export", () => {
       category: "http",
       op: "old",
     });
-    writeFileSync(join(stateDir, "logs", "server-2026-08-18.log"), `${rotatedLine}\n`.repeat(50));
+    writePrivateFile(
+      join(stateDir, "logs", "server-2026-08-18.log"),
+      `${rotatedLine}\n`.repeat(50),
+    );
     // 20 fixed-width lines (11 bytes + "\n" = 12 bytes each, 240 bytes total) so the tail cut lands
     // at a byte offset that can be reasoned about exactly, the same fixture shape
     // support-export.test.ts uses for the same scenario.
     const currentLine = (i: number): string => `{"seq":${String(i).padStart(3, "0")}}`;
     const currentText = `${Array.from({ length: 20 }, (_, i) => currentLine(i)).join("\n")}\n`;
-    writeFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), currentText);
+    writePrivateFile(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), currentText);
 
     const c = makeIo();
     const code = await runSupportCli(
@@ -1382,7 +1509,7 @@ describe("runSupportCli export", () => {
   }
 
   it("excludes ui.log by default: no ui-log section, and sectionsExcluded names it", async () => {
-    writeFileSync(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
+    writePrivateFile(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
     const c = makeIo();
     const outPath = join(outDir, "default-no-ui-log.jsonl");
     const code = await runSupportCli(
@@ -1401,7 +1528,7 @@ describe("runSupportCli export", () => {
   // THE key regression-shaped assertion: one flag alone is NOT sufficient consent. Without this
   // gate, an operator (or a script) passing only --include-ui-log would leak unredacted free text.
   it("still excludes ui.log with ONLY --include-ui-log — the confirmation flag is not optional", async () => {
-    writeFileSync(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
+    writePrivateFile(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
     const c = makeIo();
     const outPath = join(outDir, "half-consent.jsonl");
     const code = await runSupportCli(
@@ -1419,7 +1546,7 @@ describe("runSupportCli export", () => {
 
   it("attaches ui.log verbatim, and clears sectionsExcluded, when BOTH flags are passed", async () => {
     const uiLogContent = "TypeError: boom at /Users/jsmith/app\n";
-    writeFileSync(join(stateDir, "ui.log"), uiLogContent);
+    writePrivateFile(join(stateDir, "ui.log"), uiLogContent);
     const c = makeIo();
     const outPath = join(outDir, "full-consent.jsonl");
     const code = await runSupportCli(
@@ -1583,7 +1710,9 @@ describe("runSupportCli export", () => {
         { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
       ),
     ).toBe(1);
-    expect(c.out()).toContain("Wrote ");
+    // Success is claimed only after the receipt is acknowledged; the success line used to be
+    // printed first, contradicting the exit code.
+    expect(c.out()).not.toContain("Wrote ");
     expect(c.err()).toContain("could not acknowledge publication: durability-failed");
     const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
       .trim()
@@ -1692,15 +1821,20 @@ describe("runSupportCli analyze", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("records body-free classification counts with a correlation id", async () => {
+  async function analyzeAndReadClassification(
+    fileName: string,
+    text: string,
+  ): Promise<{
+    readonly filePath: string;
+    readonly evidence: Record<string, unknown> | undefined;
+  }> {
     const stateDir = join(dir, "state");
-    const filePath = join(dir, "truncated-bundle.jsonl");
-    writeFileSync(filePath, `${JSON.stringify({ $section: "manifest" })}\n{"ts":`);
-    const c = makeIo();
+    const filePath = join(dir, fileName);
+    writeFileSync(filePath, text);
 
     const code = await runSupportCli(
       ["analyze", filePath, "--json"],
-      c.io,
+      makeIo().io,
       { KEIKO_STATE_DIR: stateDir },
       { cwd: dir },
     );
@@ -1717,6 +1851,18 @@ describe("runSupportCli analyze", () => {
         }
       })
       .find((record) => record.op === "support.analyze.classified");
+    return { filePath, evidence };
+  }
+
+  // A truncated bundle is not complete evidence: its final record never finished persisting. The
+  // event used to hard-code `complete`/`none` for every input, contradicting its own
+  // classification in the same line.
+  it("records body-free classification counts with a correlation id", async () => {
+    const { filePath, evidence } = await analyzeAndReadClassification(
+      "truncated-bundle.jsonl",
+      `${JSON.stringify({ $section: "manifest" })}\n{"ts":`,
+    );
+
     expect(evidence).toMatchObject({
       category: "diagnostic",
       sourceKind: "bundle",
@@ -1724,11 +1870,26 @@ describe("runSupportCli analyze", () => {
       truncatedLineCount: 1,
       corruptLineCount: 0,
       malformedLineCount: 1,
-      completeness: "complete",
-      loss: "none",
+      completeness: "partial",
+      loss: "event-dropped",
     });
     expect(String(evidence?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
     expect(JSON.stringify(evidence)).not.toContain(filePath);
+  });
+
+  it("records complete, loss-free classification evidence only for a clean analyzed log", async () => {
+    const { evidence } = await analyzeAndReadClassification(
+      "clean-server.log",
+      `${JSON.stringify(validV2AnalysisRecord())}\n`,
+    );
+
+    expect(evidence).toMatchObject({
+      sourceKind: "raw-log",
+      evidenceClassification: "supported",
+      malformedLineCount: 0,
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   it("auto-detects a raw log and emits the minimal LogTimeline JSON for one correlation id", async () => {
@@ -2101,6 +2262,41 @@ describe("runSupportCli analyze", () => {
     expect(rerun.err()).toContain("refusing to overwrite existing file");
     // The original fixture content must survive the refused overwrite attempt.
     expect(readFileSync(fixturePath, "utf8")).toBe(contents);
+    if (process.platform !== "win32") expect(statSync(fixturePath).mode & 0o777).toBe(0o600);
+  });
+
+  // #3528: `existsSync` follows a symlink, so a DANGLING link at PATH read as "absent" and the plain
+  // `writeFileSync` then created the file at the link's target. The fixture is now published
+  // exclusively through the hardened primitive: any link at PATH is an existing entry, refused.
+  it("refuses a dangling or live symlink at --emit-fixture without touching its target", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const victim = join(dir, "victim.ts");
+    writeFileSync(victim, "operator-owned\n", { mode: 0o640 });
+    chmodSync(victim, 0o640);
+    const danglingTarget = join(dir, "created-through-link.ts");
+
+    for (const [linkName, target] of [
+      ["dangling.fixture.ts", danglingTarget],
+      ["live.fixture.ts", victim],
+    ] as const) {
+      const fixturePath = join(dir, linkName);
+      symlinkSync(target, fixturePath);
+      const c = makeIo();
+
+      const code = await runSupportCli(
+        ["analyze", filePath, "--correlation-id", "req-1", "--emit-fixture", fixturePath],
+        c.io,
+      );
+
+      expect(code).toBe(1);
+      expect(c.err()).toContain("refusing to overwrite existing file");
+      expect(c.out()).not.toContain("Wrote fixture");
+    }
+    expect(existsSync(danglingTarget)).toBe(false);
+    expect(readFileSync(victim, "utf8")).toBe("operator-owned\n");
+    expect(statSync(victim).mode & 0o777).toBe(0o640);
   });
 
   it("combines --seed and --emit-fixture into one JSON object under --json", async () => {
