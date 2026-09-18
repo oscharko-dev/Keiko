@@ -1111,7 +1111,7 @@ describe("server activity log", () => {
     expect(statSync(current).mode & 0o777).toBe(0o600);
   });
 
-  it("defers rotation and retention without mutating files at the day boundary", () => {
+  it("rotates exactly one archive at the day boundary and prunes only closed-grammar archives", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-15T00:00:00Z"));
     const logsDir = join(stateDir, "logs");
@@ -1127,8 +1127,10 @@ describe("server activity log", () => {
       "2026-08-07",
       "2026-08-08",
     ]) {
-      writeFileSync(join(logsDir, `server-${day}.log`), "seed\n");
+      writeFileSync(join(logsDir, `server-${day}.log`), "seed\n", { mode: 0o600 });
     }
+    writeFileSync(join(logsDir, "server-2026-08-00.log"), "non-grammar\n");
+    writeFileSync(join(logsDir, "server-2026-08-01.log.bak"), "non-grammar\n");
     vi.setSystemTime(new Date("2026-08-16T00:00:00Z"));
     sink.write({
       category: "http",
@@ -1140,31 +1142,53 @@ describe("server activity log", () => {
       .filter((name) => name.startsWith("server-"))
       .sort();
     expect(rolled).toStrictEqual([
-      "server-2026-08-01.log",
-      "server-2026-08-02.log",
+      "server-2026-08-00.log",
+      "server-2026-08-01.log.bak",
       "server-2026-08-03.log",
       "server-2026-08-04.log",
       "server-2026-08-05.log",
       "server-2026-08-06.log",
       "server-2026-08-07.log",
       "server-2026-08-08.log",
+      "server-2026-08-15.log",
     ]);
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["day1", "day2"]);
+    expect(readFileSync(join(logsDir, "server-2026-08-00.log"), "utf8")).toBe("non-grammar\n");
+    expect(readFileSync(join(logsDir, "server-2026-08-01.log.bak"), "utf8")).toBe("non-grammar\n");
+    expect(readFileSync(join(logsDir, "server-2026-08-15.log"), "utf8")).toContain(":day1");
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["day2"]);
     expect(readLines(stateDir)).toContainEqual(
       expect.objectContaining({
         op: "server-log.rotation",
         correlationId: "rotation-deferred-3528",
-        errorKind: "publish-unsupported",
-        persistenceStatus: "deferred",
-        durabilityAssurance: "unchanged",
-        rotationAssurance: "append-only-current",
-        retentionStatus: "deferred",
-        retentionReason: "segment-retention-owned-by-3530",
-        completeness: "partial",
+        persistenceStatus: "rotated",
+        rotationReason: "hard-link-winner",
+        archivedCount: 1,
+        retentionStatus: "pruned",
+        prunedCount: 2,
+        retainedCount: 7,
+        completeness: "complete",
         loss: "none",
       }),
     );
     sink.close?.();
+  });
+
+  it("honors a configured bounded retention window instead of the default", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
+    const logsDir = join(stateDir, "logs");
+    const sink = createFileServerLogSink(stateDir, { retentionDays: 2 });
+    sink.write({ category: "http", op: "bounded-day-20" });
+    for (const day of ["2026-08-17", "2026-08-18", "2026-08-19"]) {
+      writeFileSync(join(logsDir, `server-${day}.log`), "seed\n", { mode: 0o600 });
+    }
+
+    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
+    sink.write({ category: "http", op: "bounded-day-21" });
+
+    expect(
+      readdirSync(logsDir).filter((name) => /^server-2026-08-(?:19|20)\.log$/u.test(name)),
+    ).toStrictEqual(["server-2026-08-19.log", "server-2026-08-20.log"]);
   });
 
   it("warns once at the size threshold without rotating, truncating, or deleting", () => {

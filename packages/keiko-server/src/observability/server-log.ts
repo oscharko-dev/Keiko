@@ -37,13 +37,16 @@ import {
   mkdirSync,
   openSync,
   readSync,
+  readdirSync,
   writeSync,
 } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import {
   SAFE_ARTIFACT_FILE_FAILURE_KINDS,
   SafeArtifactFileError,
+  archiveSafeArtifactFile,
   openSafeArtifactFile,
+  removeSafeArtifactFile,
   safeArtifactContainmentAssurance,
   safeArtifactPermissionAssurance,
 } from "@oscharko-dev/keiko-security/fs-hardening";
@@ -867,6 +870,7 @@ interface ActiveLog {
   readonly directory: string;
   readonly trustedRoot: string;
   readonly currentPath: string;
+  readonly retentionDays: number;
   currentDay: string;
   handle: number | null;
   // Set while a record is being written and cleared once it has landed whole, so a write that
@@ -879,8 +883,17 @@ interface ActiveLog {
 }
 
 interface RotationOutcome {
-  readonly status: "deferred";
-  readonly durability: "unchanged";
+  readonly persistenceStatus: "rotated" | "skipped" | "failed";
+  readonly rotationReason:
+    | "hard-link-winner"
+    | "rename-fallback"
+    | "archive-exists"
+    | "source-missing"
+    | "mutation-failed";
+  readonly archivedCount: number;
+  readonly retentionStatus: "pruned" | "unchanged" | "failed";
+  readonly prunedCount: number;
+  readonly retainedCount: number;
 }
 
 // PROCESS-WIDE `seq` ALLOCATOR — one counter, one module, for the life of the process.
@@ -979,15 +992,76 @@ function ensureHandle(active: ActiveLog): number {
   return active.handle;
 }
 
-// Node does not expose descriptor-relative rename/unlink primitives. Every path-based rotation
-// implementation therefore has an unavoidable final ancestor-substitution window that can mutate
-// a same-UID target outside the trusted root. Until #3530 installs bounded append-only segments,
-// keep writing the already-verified current descriptor and record the deferred boundary once.
 function rotateIfNeeded(active: ActiveLog): RotationOutcome | undefined {
   const day = todayUtc();
   if (day === active.currentDay) return undefined;
+  closeHandle(active);
+  const archived = archiveCurrentDay(active);
+  if (archived.persistenceStatus === "rotated") active.pendingNewline = false;
   active.currentDay = day;
-  return { status: "deferred", durability: "unchanged" };
+  return { ...archived, ...pruneOldFiles(active) };
+}
+
+function archiveCurrentDay(
+  active: ActiveLog,
+): Pick<RotationOutcome, "persistenceStatus" | "rotationReason" | "archivedCount"> {
+  const archivePath = join(active.directory, `server-${active.currentDay}.log`);
+  try {
+    const reason = archiveSafeArtifactFile(active.currentPath, archivePath, {
+      artifactClass: "activity-log",
+      trustedRoot: active.trustedRoot,
+    });
+    if (reason === "hard-link-winner" || reason === "rename-fallback") {
+      return { persistenceStatus: "rotated", rotationReason: reason, archivedCount: 1 };
+    }
+    return { persistenceStatus: "skipped", rotationReason: reason, archivedCount: 0 };
+  } catch {
+    return { persistenceStatus: "failed", rotationReason: "mutation-failed", archivedCount: 0 };
+  }
+}
+
+const ARCHIVE_NAME_PATTERN = /^server-(\d{4}-\d{2}-\d{2})\.log$/u;
+
+function archiveDay(name: string): string | undefined {
+  const day = ARCHIVE_NAME_PATTERN.exec(name)?.[1];
+  if (day === undefined) return undefined;
+  const parsed = new Date(`${day}T00:00:00.000Z`);
+  return Number.isNaN(parsed.valueOf()) || todayUtc(parsed) !== day ? undefined : day;
+}
+
+function archiveNames(active: ActiveLog): readonly string[] {
+  return readdirSync(active.directory)
+    .filter((name) => archiveDay(name) !== undefined)
+    .sort((left, right) => left.localeCompare(right, "en-US"));
+}
+
+function pruneOldFiles(
+  active: ActiveLog,
+): Pick<RotationOutcome, "retentionStatus" | "prunedCount" | "retainedCount"> {
+  try {
+    const entries = archiveNames(active);
+    let prunedCount = 0;
+    let failed = false;
+    for (const stale of entries.slice(0, Math.max(0, entries.length - active.retentionDays))) {
+      try {
+        removeSafeArtifactFile(join(active.directory, stale), {
+          artifactClass: "activity-log",
+          trustedRoot: active.trustedRoot,
+        });
+        prunedCount += 1;
+      } catch {
+        failed = true;
+      }
+    }
+    const retainedCount = archiveNames(active).length;
+    return {
+      retentionStatus: failed ? "failed" : prunedCount > 0 ? "pruned" : "unchanged",
+      prunedCount,
+      retainedCount,
+    };
+  } catch {
+    return { retentionStatus: "failed", prunedCount: 0, retainedCount: 0 };
+  }
 }
 
 function refreshPendingRotation(active: ActiveLog): void {
@@ -1079,39 +1153,36 @@ const SERVER_LOG_ROTATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["deferred"],
+      values: ["rotated", "skipped", "failed"],
     },
-    durabilityAssurance: {
+    rotationReason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["unchanged"],
+      values: [
+        "hard-link-winner",
+        "rename-fallback",
+        "archive-exists",
+        "source-missing",
+        "mutation-failed",
+      ],
     },
-    rotationAssurance: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["append-only-current"],
-    },
+    archivedCount: { type: "integer", dataClass: "count", required: true },
     retentionStatus: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["deferred"],
+      values: ["pruned", "unchanged", "failed"],
     },
-    retentionReason: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["segment-retention-owned-by-3530"],
-    },
+    prunedCount: { type: "integer", dataClass: "count", required: true },
+    retainedCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "capability",
-  failureClasses: ["activity-log-rotation-deferred"],
+  failureClasses: ["activity-log-rotation"],
   proofIds: ["server-log.rotation.emitted-line"],
   releaseImpact: "patch",
 });
@@ -1185,18 +1256,27 @@ function rotationEvidence(
   return activityLogEvent(
     SERVER_LOG_ROTATION_OPERATION,
     {
-      level: "warn",
+      level:
+        outcome.persistenceStatus === "failed" || outcome.retentionStatus === "failed"
+          ? "warn"
+          : "info",
       correlationId: correlationIdOrUnknown(correlationId),
-      errorKind: "publish-unsupported",
+      ...(outcome.persistenceStatus === "failed" || outcome.retentionStatus === "failed"
+        ? { errorKind: "durability-failed" as const }
+        : {}),
     },
     {
       artifactClass: "activity-log",
-      persistenceStatus: outcome.status,
-      durabilityAssurance: outcome.durability,
-      rotationAssurance: "append-only-current",
-      retentionStatus: "deferred",
-      retentionReason: "segment-retention-owned-by-3530",
-      completeness: "partial",
+      persistenceStatus: outcome.persistenceStatus,
+      rotationReason: outcome.rotationReason,
+      archivedCount: outcome.archivedCount,
+      retentionStatus: outcome.retentionStatus,
+      prunedCount: outcome.prunedCount,
+      retainedCount: outcome.retainedCount,
+      completeness:
+        outcome.persistenceStatus === "failed" || outcome.retentionStatus === "failed"
+          ? "partial"
+          : "complete",
       loss: "none",
     },
   );
@@ -1364,7 +1444,6 @@ function persistCapacityWarning(
 
 export interface FileServerLogSinkOptions {
   readonly level?: ServerLogThreshold | undefined;
-  // Retained for configuration compatibility while mutation-based retention is deferred to #3530.
   readonly retentionDays?: number | undefined;
   /** Test/deployment seam for the non-mutating capacity warning; never rotates or deletes. */
   readonly capacityWarningBytes?: number | undefined;
@@ -1834,7 +1913,16 @@ function capacityWarningBytes(value: number | undefined): number {
     : DEFAULT_LOG_CAPACITY_WARNING_BYTES;
 }
 
-function resolveActiveLog(directory: string): ActiveLog {
+function configuredRetentionDays(value: number | undefined): number {
+  return value !== undefined && Number.isSafeInteger(value) && value > 0
+    ? value
+    : DEFAULT_LOG_RETENTION_DAYS;
+}
+
+function resolveActiveLog(
+  directory: string,
+  retentionDays = DEFAULT_LOG_RETENTION_DAYS,
+): ActiveLog {
   const key = resolvePath(directory);
   const existing = activeLogs.get(key);
   if (existing !== undefined) return existing;
@@ -1842,6 +1930,7 @@ function resolveActiveLog(directory: string): ActiveLog {
     directory,
     trustedRoot: dirname(directory),
     currentPath: join(directory, "server.log"),
+    retentionDays,
     currentDay: todayUtc(),
     handle: null,
     pendingNewline: false,
@@ -1877,7 +1966,7 @@ export function createFileServerLogSink(
     // intentionally need no persistence must choose nullServerLogSink() explicitly.
     throw new SafeArtifactFileError("activity-log", "open-failed");
   }
-  const active = resolveActiveLog(directory);
+  const active = resolveActiveLog(directory, configuredRetentionDays(options.retentionDays));
   const threshold = options.level ?? resolveServerLogThreshold(options.env ?? process.env);
   return createFileSinkFacade(
     active,

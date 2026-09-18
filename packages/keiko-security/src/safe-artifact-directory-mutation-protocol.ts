@@ -1,4 +1,4 @@
-export const SAFE_ARTIFACT_DIRECTORY_MUTATION_OPERATIONS = ["link", "unlink"] as const;
+export const SAFE_ARTIFACT_DIRECTORY_MUTATION_OPERATIONS = ["link", "rename", "unlink"] as const;
 
 export type SafeArtifactDirectoryMutationOperation =
   (typeof SAFE_ARTIFACT_DIRECTORY_MUTATION_OPERATIONS)[number];

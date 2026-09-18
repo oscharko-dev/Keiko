@@ -183,6 +183,14 @@ interface DirectoryGuard {
 
 type GuardedDirectoryMutationResult = "success" | "target-exists" | "unsupported" | "failed";
 
+export interface SafeArtifactDirectoryEntryOptions {
+  readonly artifactClass: SafeArtifactClass;
+  readonly trustedRoot: string;
+}
+
+export type SafeArtifactArchiveResult =
+  "hard-link-winner" | "archive-exists" | "source-missing" | "rename-fallback";
+
 const DIRECTORY_MUTATION_TIMEOUT_MS = 5_000;
 
 function directoryMutationHelperPath(): string {
@@ -270,6 +278,156 @@ function unlinkGuardedPath(
   const result = runGuardedDirectoryMutation("unlink", path, trustedRoot, artifactClass);
   if (result === "success") return;
   throw safeFileError(artifactClass, "publish-failed");
+}
+
+function archiveDescriptor(
+  path: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): number | undefined {
+  const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
+  let descriptor: number | undefined;
+  try {
+    const noFollow = noFollowFlag();
+    if (noFollow === 0) refuseSymlinkFallback(path, options.artifactClass);
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | noFollow);
+    const opened = fstatSync(descriptor, { bigint: true });
+    const pathname = lstatSync(path, { bigint: true });
+    if (
+      !opened.isFile() ||
+      !descriptorOwnerIsTrusted(opened) ||
+      !permissionIsPrivate(opened.mode) ||
+      (opened.nlink !== 1n && opened.nlink !== 2n) ||
+      opened.dev !== pathname.dev ||
+      opened.ino !== pathname.ino ||
+      !guards.every(directoryGuardStillMatches)
+    ) {
+      throw safeFileError(options.artifactClass, "unsafe-target");
+    }
+    closeDirectoryGuards(guards, options.artifactClass);
+    return descriptor;
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (descriptor !== undefined) closeDescriptorIgnoringErrors(descriptor);
+    if (errorCode(error) === "ENOENT") return undefined;
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(options.artifactClass, "unsafe-target");
+  }
+}
+
+function linkedArchiveMatches(descriptor: number, source: string, target: string): boolean {
+  try {
+    const opened = fstatSync(descriptor, { bigint: true });
+    const sourceStat = lstatSync(source, { bigint: true });
+    const targetStat = lstatSync(target, { bigint: true });
+    return (
+      opened.isFile() &&
+      descriptorOwnerIsTrusted(opened) &&
+      permissionIsPrivate(opened.mode) &&
+      opened.nlink === 2n &&
+      sourceStat.dev === opened.dev &&
+      sourceStat.ino === opened.ino &&
+      targetStat.dev === opened.dev &&
+      targetStat.ino === opened.ino
+    );
+  } catch {
+    return false;
+  }
+}
+
+function movedArchiveMatches(descriptor: number, target: string): boolean {
+  try {
+    const opened = fstatSync(descriptor, { bigint: true });
+    const targetStat = lstatSync(target, { bigint: true });
+    return (
+      descriptorIsSafeArtifact(opened) &&
+      permissionIsPrivate(opened.mode) &&
+      targetStat.dev === opened.dev &&
+      targetStat.ino === opened.ino &&
+      targetStat.nlink === 1n
+    );
+  } catch {
+    return false;
+  }
+}
+
+function finalizeLinkedArchive(
+  descriptor: number,
+  source: string,
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): void {
+  if (!linkedArchiveMatches(descriptor, source, target)) {
+    throw safeFileError(options.artifactClass, "target-mutated");
+  }
+  unlinkGuardedPath(source, options.trustedRoot, options.artifactClass);
+  if (!movedArchiveMatches(descriptor, target)) {
+    throw safeFileError(options.artifactClass, "target-mutated");
+  }
+}
+
+/** Archives one private regular file without replacing an existing destination. */
+export function archiveSafeArtifactFile(
+  source: string,
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): SafeArtifactArchiveResult {
+  const descriptor = archiveDescriptor(source, options);
+  if (descriptor === undefined) return "source-missing";
+  try {
+    const linked = runGuardedDirectoryMutation(
+      "link",
+      source,
+      options.trustedRoot,
+      options.artifactClass,
+      target,
+    );
+    if (linked === "success") {
+      finalizeLinkedArchive(descriptor, source, target, options);
+      return "hard-link-winner";
+    }
+    if (linked === "target-exists") {
+      if (linkedArchiveMatches(descriptor, source, target)) {
+        finalizeLinkedArchive(descriptor, source, target, options);
+      }
+      return "archive-exists";
+    }
+    if (linked !== "unsupported") {
+      throw safeFileError(options.artifactClass, "publish-failed");
+    }
+    if (pathExists(target, options.artifactClass)) return "archive-exists";
+    const renamed = runGuardedDirectoryMutation(
+      "rename",
+      source,
+      options.trustedRoot,
+      options.artifactClass,
+      target,
+    );
+    if (renamed !== "success" || !movedArchiveMatches(descriptor, target)) {
+      throw safeFileError(options.artifactClass, "publish-failed");
+    }
+    return "rename-fallback";
+  } finally {
+    closeArtifactDescriptor(descriptor, options.artifactClass);
+  }
+}
+
+/** Removes only an opened, owner-private, single-link regular file in an attested directory. */
+export function removeSafeArtifactFile(
+  path: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): void {
+  const descriptor = openSafeArtifactFile(path, {
+    ...options,
+    mode: "read",
+  });
+  try {
+    verifySafeArtifactFileDescriptor(descriptor, path, options);
+    unlinkGuardedPath(path, options.trustedRoot, options.artifactClass);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    throw error;
+  }
+  closeArtifactDescriptor(descriptor, options.artifactClass);
 }
 
 function lstatDirectory(path: string, artifactClass: SafeArtifactClass): BigIntStats {

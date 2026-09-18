@@ -61,6 +61,7 @@ function runtimeIo(
   return {
     directoryMatches: () => true,
     link: () => undefined,
+    rename: () => undefined,
     unlink: () => undefined,
     ...overrides,
   };

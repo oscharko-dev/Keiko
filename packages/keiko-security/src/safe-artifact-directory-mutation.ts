@@ -1,4 +1,4 @@
-import { lstatSync, linkSync, readSync, unlinkSync } from "node:fs";
+import { lstatSync, linkSync, readSync, renameSync, unlinkSync } from "node:fs";
 import { MAX_SAFE_ARTIFACT_DIRECTORY_MUTATION_PROTOCOL_BYTES } from "./safe-artifact-directory-mutation-protocol.js";
 import {
   runSafeArtifactDirectoryMutation,
@@ -38,6 +38,7 @@ function readRequest(): unknown {
 const mutationIo: SafeArtifactDirectoryMutationIo = {
   directoryMatches,
   link: linkSync,
+  rename: renameSync,
   unlink: unlinkSync,
 };
 

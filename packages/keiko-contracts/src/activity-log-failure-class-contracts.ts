@@ -89,7 +89,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
-    failureClass: "activity-log-rotation-deferred",
+    failureClass: "activity-log-rotation",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
@@ -103,7 +103,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: ["server-log.rotation"],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["server-log.rotation"],
-    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },

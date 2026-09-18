@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "85a6ea540cc898f306dd314df73631cad993b1e695fa0da8d7af6d903e67c9b4" as const;
+  "a5e8ff46f3523c7556fd7ac5b6d2634a5a301421417bc801fd4d4f30b3bc839a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -20740,37 +20740,46 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["deferred"],
+        values: ["rotated", "skipped", "failed"],
       },
-      durabilityAssurance: {
+      rotationReason: {
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["unchanged"],
+        values: [
+          "hard-link-winner",
+          "rename-fallback",
+          "archive-exists",
+          "source-missing",
+          "mutation-failed",
+        ],
       },
-      rotationAssurance: {
-        type: "string",
-        dataClass: "closed-enum",
+      archivedCount: {
+        type: "integer",
+        dataClass: "count",
         required: true,
-        values: ["append-only-current"],
       },
       retentionStatus: {
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["deferred"],
+        values: ["pruned", "unchanged", "failed"],
       },
-      retentionReason: {
-        type: "string",
-        dataClass: "closed-enum",
+      prunedCount: {
+        type: "integer",
+        dataClass: "count",
         required: true,
-        values: ["segment-retention-owned-by-3530"],
+      },
+      retainedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
       },
     },
     causal: "correlation",
     lifecycle: "state",
     analyzerProjection: "capability",
-    failureClasses: ["activity-log-rotation-deferred"],
+    failureClasses: ["activity-log-rotation"],
     proofIds: ["server-log.rotation.emitted-line"],
     releaseImpact: "patch",
   },
@@ -24316,8 +24325,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
-      failureClass: "activity-log-rotation-deferred",
-      requirementContract: "activity-log-rotation-deferred",
+      failureClass: "activity-log-rotation",
+      requirementContract: "activity-log-rotation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
@@ -24346,13 +24355,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "capability",
           safeContextFields: [
             {
-              name: "artifactClass",
-              type: "string",
-              dataClass: "closed-enum",
+              name: "archivedCount",
+              type: "integer",
+              dataClass: "count",
               required: true,
             },
             {
-              name: "durabilityAssurance",
+              name: "artifactClass",
               type: "string",
               dataClass: "closed-enum",
               required: true,
@@ -24364,9 +24373,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
-              name: "retentionReason",
-              type: "string",
-              dataClass: "closed-enum",
+              name: "prunedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "retainedCount",
+              type: "integer",
+              dataClass: "count",
               required: true,
             },
             {
@@ -24376,13 +24391,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
-              name: "rotationAssurance",
+              name: "rotationReason",
               type: "string",
               dataClass: "closed-enum",
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

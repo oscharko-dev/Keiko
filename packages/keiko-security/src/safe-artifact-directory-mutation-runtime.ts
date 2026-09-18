@@ -12,6 +12,7 @@ const UNSUPPORTED_LINK_CODES = new Set(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUP
 export interface SafeArtifactDirectoryMutationIo {
   readonly directoryMatches: (expectedDev: bigint, expectedIno: bigint) => boolean;
   readonly link: (source: string, target: string) => void;
+  readonly rename: (source: string, target: string) => void;
   readonly unlink: (source: string) => void;
 }
 
@@ -72,7 +73,8 @@ function executeMutation(
     return;
   }
   if (target === undefined) throw new TypeError("missing mutation target");
-  io.link(source, target);
+  if (operation === "link") io.link(source, target);
+  else io.rename(source, target);
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -94,7 +96,7 @@ function parsedRequest(value: unknown): SafeArtifactDirectoryMutationRequest | u
     return undefined;
   }
   const identity = { expectedDev: expectedDev.toString(), expectedIno: expectedIno.toString() };
-  if (value.operation === "link") {
+  if (value.operation === "link" || value.operation === "rename") {
     if (!isSafeBasename(target)) return undefined;
     return { operation: value.operation, ...identity, source, target };
   }
