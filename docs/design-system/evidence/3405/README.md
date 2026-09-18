@@ -2,7 +2,7 @@
 
 The current repair evidence was regenerated on 2026-09-18 for PR #3554 (Epic #3527 Wave 1). Its
 sources change four pinned files: `api.ts` (the health response now carries the diagnostics
-readiness the footer reads), the English and German i18n messages (ten diagnostics-footer strings
+readiness the footer reads), the English and German i18n messages (eleven diagnostics-footer strings
 each), and the outage harness, which no longer prints a stdout marker because the UI child's output
 is no longer captured. Current-branch verification passed all eight Chromium checks, including the
 real-BFF outage journey, and refreshed the tracked updater artifacts. It proves the startup notice
