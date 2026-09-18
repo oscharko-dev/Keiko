@@ -101,7 +101,7 @@ const DRAFT_TEMPLATE_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-draft-template"],
-  proofIds: ["git.draft-template"],
+  proofIds: ["git.draft-template.emitted-line"],
   releaseImpact: "patch",
 });
 

@@ -209,7 +209,7 @@ const CLI_SUPPORT_EXPORT_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["cli-support-export"],
-  proofIds: ["cli.support.export.install-layout-refusal"],
+  proofIds: ["cli.support.export.failed.install-layout-refusal"],
   releaseImpact: "patch",
 });
 
@@ -910,7 +910,7 @@ const SUPPORT_EXPORT_PUBLICATION_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["support-publication", "support-publication-acknowledgement"],
-  proofIds: ["support.export.publication-evidence", "support.export.commit-last"],
+  proofIds: ["support.export.publication.publication-evidence", "support.export.publication.commit-last"],
   releaseImpact: "patch",
 });
 
@@ -949,7 +949,7 @@ const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["support-analysis"],
-  proofIds: ["support.analyze.classification-evidence"],
+  proofIds: ["support.analyze.classified.classification-evidence"],
   releaseImpact: "patch",
 });
 

@@ -58,7 +58,7 @@ const DENIED_PATHS_EXCLUDED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-denied-path-exclusion"],
-  proofIds: ["git.raw-status.denied-paths-excluded"],
+  proofIds: ["git.raw-status.denied-paths-excluded.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -83,7 +83,7 @@ const DIFF_SEARCH_BOUNDED_OPERATION = defineActivityLogOperation({
   lifecycle: "loss",
   analyzerProjection: "timeline",
   failureClasses: ["git-diff-search-bounded"],
-  proofIds: ["git.runtime-diff.search-bounded"],
+  proofIds: ["git.runtime-diff.search-bounded.emitted-line"],
   releaseImpact: "patch",
 });
 /**

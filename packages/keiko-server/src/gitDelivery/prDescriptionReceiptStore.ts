@@ -74,7 +74,7 @@ const PR_DESCRIPTION_RECEIPT_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-pr-description-receipt"],
-  proofIds: ["git.pr-description.receipt"],
+  proofIds: ["git.pr-description.receipt.emitted-line"],
   releaseImpact: "patch",
 });
 

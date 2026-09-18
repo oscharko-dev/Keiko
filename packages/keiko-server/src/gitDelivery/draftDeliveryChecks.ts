@@ -105,7 +105,7 @@ const DRAFT_CHECKS_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-draft-checks"],
-  proofIds: ["git.draft-checks"],
+  proofIds: ["git.draft-checks.emitted-line"],
   releaseImpact: "patch",
 });
 

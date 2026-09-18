@@ -79,7 +79,7 @@ const REPOSITORY_INITIALIZE_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-repository-initialization"],
-  proofIds: ["git.repository.initialize"],
+  proofIds: ["git.repository.initialize.emitted-line"],
   releaseImpact: "minor",
 });
 

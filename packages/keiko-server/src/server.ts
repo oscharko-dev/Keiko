@@ -498,7 +498,7 @@ const HTTP_REQUEST_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["http-request"],
-  proofIds: ["http-request.close-line"],
+  proofIds: ["request.close-line"],
   releaseImpact: "patch",
 });
 

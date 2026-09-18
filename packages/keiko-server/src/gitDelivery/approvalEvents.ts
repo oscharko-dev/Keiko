@@ -90,7 +90,7 @@ const PUSH_APPROVAL_REQUIRED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.push.approval.required"],
+  proofIds: ["git.delivery.push.approval.required.emitted-line"],
   releaseImpact: "patch",
 });
 const PUSH_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
@@ -105,7 +105,7 @@ const PUSH_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.push.approval.minted"],
+  proofIds: ["git.delivery.push.approval.minted.emitted-line"],
   releaseImpact: "patch",
 });
 const PR_APPROVAL_REQUIRED_OPERATION = defineActivityLogOperation({
@@ -120,7 +120,7 @@ const PR_APPROVAL_REQUIRED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.pr.approval.required"],
+  proofIds: ["git.delivery.pr.approval.required.emitted-line"],
   releaseImpact: "patch",
 });
 const PR_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
@@ -135,7 +135,7 @@ const PR_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.pr.approval.minted"],
+  proofIds: ["git.delivery.pr.approval.minted.emitted-line"],
   releaseImpact: "patch",
 });
 const COMMIT_APPROVAL_REQUIRED_OPERATION = defineActivityLogOperation({
@@ -150,7 +150,7 @@ const COMMIT_APPROVAL_REQUIRED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.commit.approval.required"],
+  proofIds: ["git.delivery.commit.approval.required.emitted-line"],
   releaseImpact: "patch",
 });
 const COMMIT_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
@@ -165,7 +165,7 @@ const COMMIT_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.commit.approval.minted"],
+  proofIds: ["git.delivery.commit.approval.minted.emitted-line"],
   releaseImpact: "patch",
 });
 const SYNC_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
@@ -180,7 +180,7 @@ const SYNC_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.sync.approval.minted"],
+  proofIds: ["git.delivery.sync.approval.minted.emitted-line"],
   releaseImpact: "patch",
 });
 const PR_MARK_READY_APPROVAL_REQUIRED_OPERATION = defineActivityLogOperation({
@@ -195,7 +195,7 @@ const PR_MARK_READY_APPROVAL_REQUIRED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.pr-mark-ready.approval.required"],
+  proofIds: ["git.delivery.pr-mark-ready.approval.required.emitted-line"],
   releaseImpact: "patch",
 });
 const PR_MARK_READY_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
@@ -210,7 +210,7 @@ const PR_MARK_READY_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-approval"],
-  proofIds: ["git.delivery.pr-mark-ready.approval.minted"],
+  proofIds: ["git.delivery.pr-mark-ready.approval.minted.emitted-line"],
   releaseImpact: "patch",
 });
 

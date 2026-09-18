@@ -147,7 +147,7 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-runtime-action"],
-  proofIds: ["git.runtime-action"],
+  proofIds: ["git.runtime-action.emitted-line"],
   releaseImpact: "patch",
 });
 

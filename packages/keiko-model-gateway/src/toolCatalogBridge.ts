@@ -114,7 +114,7 @@ const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-tool-catalog"],
-  proofIds: ["gateway.tool-catalog-rejected.emitted-line"],
+  proofIds: ["gateway.tool-catalog.rejected.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -133,7 +133,7 @@ const TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-tool-catalog"],
-  proofIds: ["gateway.tool-catalog-native.emitted-line"],
+  proofIds: ["gateway.tool-catalog.native-passthrough.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -152,7 +152,7 @@ const TOOL_CATALOG_CALL_BOUND_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-tool-catalog"],
-  proofIds: ["gateway.tool-catalog-call-bound.emitted-line"],
+  proofIds: ["gateway.tool-catalog.call-bound.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -178,7 +178,7 @@ const TOOL_CATALOG_PROJECTED_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-tool-catalog"],
-  proofIds: ["gateway.tool-catalog-projected.emitted-line"],
+  proofIds: ["gateway.tool-catalog.projected.emitted-line"],
   releaseImpact: "patch",
 });
 

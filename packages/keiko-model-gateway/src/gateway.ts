@@ -168,7 +168,7 @@ const GATEWAY_CONFIG_RESOLVED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "capability",
   failureClasses: ["gateway-configuration"],
-  proofIds: ["gateway.config-resolved.emitted-line"],
+  proofIds: ["gateway.config.resolved.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -213,7 +213,7 @@ const GATEWAY_TOOL_CATALOG_REPAIR_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-tool-schema-rejection"],
-  proofIds: ["gateway.tool-catalog-repair.emitted-line"],
+  proofIds: ["gateway.tool-catalog.repair.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -271,7 +271,7 @@ const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
     ...GATEWAY_CALL_STARTED_EXECUTION_FIELDS,
   },
   failureClasses: ["gateway-chat-call"],
-  proofIds: ["gateway.chat-started.emitted-line"],
+  proofIds: ["gateway.chat.started.emitted-line"],
 });
 
 const GATEWAY_STREAM_STARTED_OPERATION = defineActivityLogOperation({
@@ -282,7 +282,7 @@ const GATEWAY_STREAM_STARTED_OPERATION = defineActivityLogOperation({
     ...GATEWAY_CALL_STARTED_EXECUTION_FIELDS,
   },
   failureClasses: ["gateway-stream-call"],
-  proofIds: ["gateway.stream-started.emitted-line"],
+  proofIds: ["gateway.stream.started.emitted-line"],
 });
 
 const GATEWAY_CHAT_FAILED_OPERATION = defineActivityLogOperation({
@@ -305,7 +305,7 @@ const GATEWAY_CHAT_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-chat-call"],
-  proofIds: ["gateway.chat-failed.emitted-line"],
+  proofIds: ["gateway.chat.failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -334,7 +334,7 @@ const GATEWAY_STREAM_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-stream-call"],
-  proofIds: ["gateway.stream-completed.emitted-line"],
+  proofIds: ["gateway.stream.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -371,7 +371,7 @@ const GATEWAY_STREAM_ABANDONED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-stream-call"],
-  proofIds: ["gateway.stream-abandoned.emitted-line"],
+  proofIds: ["gateway.stream.abandoned.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -401,7 +401,7 @@ const GATEWAY_STREAM_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-stream-call"],
-  proofIds: ["gateway.stream-failed.emitted-line"],
+  proofIds: ["gateway.stream.failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -440,7 +440,7 @@ const GATEWAY_CHAT_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-chat-call"],
-  proofIds: ["gateway.chat-completed.emitted-line"],
+  proofIds: ["gateway.chat.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -465,7 +465,7 @@ const GATEWAY_STREAM_BUFFERED_FALLBACK_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-stream-call"],
-  proofIds: ["gateway.stream-buffered-fallback.emitted-line"],
+  proofIds: ["gateway.stream.buffered-fallback.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -495,7 +495,7 @@ const GATEWAY_ROUTE_REJECTED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-route-rejection"],
-  proofIds: ["gateway.route-rejected.emitted-line"],
+  proofIds: ["gateway.route.rejected.emitted-line"],
   releaseImpact: "patch",
 });
 

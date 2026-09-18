@@ -68,7 +68,7 @@ const EDITOR_WORKSPACE_WATCH_AUTHORITY_REVOKED_OPERATION = defineActivityLogOper
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["editor-workspace-watch-authority"],
-  proofIds: ["editor.workspace-watch-authority-revoked.emitted-line"],
+  proofIds: ["editor.workspace-watch.authority-revoked.emitted-line"],
   releaseImpact: "patch",
 });
 
