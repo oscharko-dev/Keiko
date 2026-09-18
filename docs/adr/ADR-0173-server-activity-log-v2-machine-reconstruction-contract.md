@@ -451,7 +451,8 @@ production sink refused.
 3. It receives the process sink from the server or CLI composition root. It never constructs a file
    sink and never reads `KEIKO_STATE_DIR` itself.
 4. It isolates its sink. A throwing `write` is caught and counted as `port-sink-failed` in the loss
-   ledger, every time and not only the first.
+   ledger, every time and not only the first. An event handed to a port with no sink wired is
+   counted as `port-unwired`, so a missed composition edge is visible instead of silent.
 5. It reports a failing sink once per sink instance, on the independent process-warning channel.
 
 **Loss is counted, never silent (#3532).** One bounded, process-wide loss ledger lives in the
@@ -981,6 +982,15 @@ bound.
 
 Segments stay uncompressed. A sealed segment is directly readable by `keiko support analyze` and by
 line tools, and the byte budget already bounds disk use.
+
+**Calibration (#3532).** The defaults were checked against the traces of the 29 failure scenarios,
+each run through the real file writer in one process. Together they wrote 128 lines and 95,305 bytes:
+2 to 20 lines and 1,400 to 15,076 bytes per scenario (median 2,534 bytes), 745 bytes per line on
+average. The largest trace, the memory-knowledge loss scenario, is 20 lines and 15,076 bytes. At that
+line size an 8 MiB segment holds about 11,000 lines, and the 256 MiB budget about 360,000. The
+64 MiB pin quota holds about 4,400 incident traces of the largest measured size. No default had to
+grow. The report-size cap belongs to #3534, which is not part of this change; for reference, a 1 MiB
+cap would leave more than 60 times the largest trace.
 
 **Legacy input.** Existing `server.log` and `server-YYYY-MM-DD.log` files are read-only legacy
 segments. They count toward the budget, age out under the same retention, and are never rewritten or

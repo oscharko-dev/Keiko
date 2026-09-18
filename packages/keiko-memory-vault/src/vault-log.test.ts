@@ -334,4 +334,14 @@ describe("emitMemoryVaultLogEvent loss accounting", () => {
       resetActivityLogLossCountersForTests();
     }
   });
+
+  it("counts an event handed to an unwired port as lost", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      emitMemoryVaultLogEvent(undefined, { category: "memory", op: "memory-vault.store.opened" });
+      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
 });

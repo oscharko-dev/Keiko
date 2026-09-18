@@ -354,4 +354,14 @@ describe("emitKnowledgeLogEvent loss accounting", () => {
       resetActivityLogLossCountersForTests();
     }
   });
+
+  it("counts an event handed to an unwired port as lost", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      emitKnowledgeLogEvent(undefined, { category: "indexing", op: "indexing.job.received" });
+      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
 });
