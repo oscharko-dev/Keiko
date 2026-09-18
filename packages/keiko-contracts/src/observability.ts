@@ -602,6 +602,18 @@ const ACTIVITY_LOG_REDUCER_OWNED_FIELDS: ReadonlySet<string> = new Set([
   "routeTemplate",
 ]);
 export const ACTIVITY_LOG_FRAME_FIELD_NAME = "frames";
+export const ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME = "causeChain";
+
+/**
+ * The array fields persisted-line redaction reduces element by element and OMITS when nothing
+ * survives (an error without Keiko frames, an error without a cause). A registration therefore
+ * never declares them required: a required one would make every such failure persist a line that
+ * fails its own registration. The op-catalog generator rejects that declaration.
+ */
+export const ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES = [
+  ACTIVITY_LOG_FRAME_FIELD_NAME,
+  ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME,
+] as const;
 
 function isBodyFreeMachineValue(value: string): boolean {
   if (value.length === 0 || value.startsWith("{") || value.startsWith("<")) return false;

@@ -1871,6 +1871,7 @@ describe("human-readable rendering", () => {
         warnings: [],
         clusters: [],
         updateAttempts: [],
+        sufficiency: analyzeLogText("").sufficiency,
       }),
     ).toBe("No correlated events found.\n");
   });
@@ -2127,6 +2128,7 @@ describe("renderHumanReproductionSeed — Wave 6 sub-field rendering", () => {
       sourceArtifact: { kind: "raw-log", lineCount: 1, sha256: "a".repeat(64) },
       correlationId: "req-seed",
       timeline: [],
+      sufficiency: analyzeLogText("").sufficiency,
       warnings: ["no prompt/response body was ever logged by design"],
       ...overrides,
     };

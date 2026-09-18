@@ -805,6 +805,39 @@ describe("op catalog drift", () => {
     );
   });
 
+  // #3532: persisted-line redaction omits an empty frames/causeChain array, so a required one
+  // rejected every failure line without Keiko frames or a cause (found twice in production).
+  it.each(["frames", "causeChain"])("rejects a registration that requires %s", (fieldName) => {
+    withTypedRegistryFixture(
+      "zzz-fixture-required-omitted-field",
+      [
+        'import { activityLogEvent, defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        "const operation = defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+        '  op: "fixture.registry.omitted-field", category: "diagnostic",',
+        '  owner: "zzz-fixture-required-omitted-field", emitter: "fixture",',
+        `  fields: { ${fieldName}: { type: "string-array", dataClass: "opaque-id", required: true, maxLength: 64, maxItems: 4 } },`,
+        '  causal: "correlation", lifecycle: "failure", analyzerProjection: "failure-cluster",',
+        '  failureClasses: ["fixture-failure"], proofIds: ["fixture.registry.omitted-field.line"],',
+        '  releaseImpact: "patch",',
+        "});",
+        "activityLogEvent(operation, {}, {});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root, []);
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({
+            code: "registration-omitted-field-required",
+            site: "packages/zzz-fixture-required-omitted-field/src/fixture.ts:2",
+            detail: `fields.${fieldName}`,
+          }),
+        );
+      },
+    );
+  });
+
   it("rejects an emitted event whose descriptor is not a discovered registration", () => {
     withTypedRegistryFixture(
       "zzz-fixture-unregistered-emission",

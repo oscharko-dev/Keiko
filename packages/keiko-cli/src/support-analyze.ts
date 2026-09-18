@@ -68,7 +68,9 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import {
+  activityLogFailureClassesOf,
   projectActivityLogSufficiency,
+  restrictActivityLogSufficiency,
   type ActivityLogSufficiency,
   type ActivityLogSufficiencyLine,
 } from "./support-analyze-sufficiency.js";
@@ -1456,6 +1458,17 @@ export function analyzeLogText(
   };
 }
 
+/** The artifact's sufficiency narrowed to the failure classes one timeline observed (#3532). */
+export function timelineSufficiency(
+  result: AnalyzeAllResult,
+  timeline: LogTimeline,
+): ActivityLogSufficiency {
+  return restrictActivityLogSufficiency(
+    result.sufficiency,
+    activityLogFailureClassesOf(timeline.lines.map((line) => line.op)),
+  );
+}
+
 function sufficiencyLine(line: ParsedLine): ActivityLogSufficiencyLine {
   return {
     op: line.view.op,
@@ -2083,6 +2096,8 @@ export interface ReproductionSeed {
   readonly issueToPrJourney?: IssueToPrJourneyView | undefined;
   readonly stackFrames?: readonly string[] | undefined;
   readonly causeChain?: readonly string[] | undefined;
+  // #3532: complete/degraded/insufficient for the failure classes this timeline observed.
+  readonly sufficiency: ActivityLogSufficiency;
   // What could NOT be reconstructed from this artifact, and why — GRAFTED FROM DESIGN C
   // (ADR-0173 §10). Never empty in practice: every seed at minimum names the standing
   // by-design gap that no prompt/response body is ever logged.
@@ -2228,7 +2243,8 @@ export function buildReproductionSeed(
   generatedAt: Date,
   options: SupportAnalyzeOptions = {},
 ): ReproductionSeed | undefined {
-  const timeline = findTimeline(analyzeLogText(text, options), correlationId);
+  const analysis = analyzeLogText(text, options);
+  const timeline = findTimeline(analysis, correlationId);
   if (timeline === undefined) return undefined;
   const fields = computeSeedFields(text, timeline, options);
 
@@ -2244,6 +2260,7 @@ export function buildReproductionSeed(
     timeline: timeline.lines,
     ...optionalSeedFields(fields),
     ...toolCatalogSeed(fields.toolCatalog),
+    sufficiency: timelineSufficiency(analysis, timeline),
     warnings: [
       ...toolCatalogWarnings(fields.toolCatalog),
       ...buildSeedWarnings({
@@ -2366,6 +2383,8 @@ export function renderHumanReproductionSeed(seed: ReproductionSeed): string {
     `correlationId=${seed.correlationId} schemaVersion=${String(seed.schemaVersion)}`,
     `source: kind=${seed.sourceArtifact.kind} lines=${String(seed.sourceArtifact.lineCount)} ` +
       `sha256=${seed.sourceArtifact.sha256}`,
+    `sufficiency: ${seed.sufficiency.status}` +
+      (seed.sufficiency.reasons.length === 0 ? "" : ` (${seed.sufficiency.reasons.join(", ")})`),
     ...renderOptionalSeedSections(seed),
   ];
   if (seed.stackFrames !== undefined && seed.stackFrames.length > 0) {

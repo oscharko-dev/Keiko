@@ -6,6 +6,10 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NativeFileDialogRequest } from "@oscharko-dev/keiko-contracts";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -112,6 +116,31 @@ describe("native file dialog route", () => {
       selections: [{ path: root, kind: "directory" }],
       rejectedSelectionCount: 0,
       partial: false,
+    });
+  });
+
+  // Registry-linked executable proof (#3532): the same projection event above, read back through
+  // the real formatter/registry path so `native-file-dialog.selection.projected.counts` resolves
+  // against a production-computed event (this task's rule 1: no hand-built event).
+  it("persists native-file-dialog.selection.projected as a registered Activity Log proof line", async () => {
+    const root = await tempDir("keiko-native-dir-proof-");
+    const { deps, activity } = buildDeps({
+      adapter: fakeAdapter({ cancelled: false, paths: [root] }),
+    });
+
+    const result = await handleNativeFileDialogOpen(openContext({ mode: "open-directory" }), deps);
+    expect(result.status).toBe(200);
+
+    const event = activity.find((entry) => entry.op === "native-file-dialog.selection.projected");
+    if (event === undefined) throw new Error("expected a selection-projected event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("native-file-dialog.selection.projected.counts", line);
+    expect(persisted).toMatchObject({
+      category: "diagnostic",
+      correlationId: CORRELATION_ID,
+      outcome: "complete",
+      selectionCount: 1,
+      rejectedSelectionCount: 0,
     });
   });
 

@@ -115,10 +115,17 @@ const READ_ONLY_CHILD_REASON_FIELD = {
   values: READ_ONLY_CHILD_REASON_CODE_VALUES,
 } as const;
 
+// Optional, like every other diagnostic-trace field pair in this package (e.g.
+// `CODING_RUNTIME_OPTIONAL_DIAGNOSTIC_FIELDS` in codingRuntimeOrchestrator.ts): the shared
+// redaction pipeline (`redactAcceptedField` in observability/log-redaction.ts) drops an empty
+// guarded array outright rather than persisting `[]`, and both fields are routinely empty on a
+// genuine runner fault -- `causeChain` whenever the thrown error carries no `.cause`, `frames`
+// whenever none of its stack frames anchor to a known workspace package. `required: true` would
+// demand a field the production sink itself omits whenever there is nothing to report.
 const READ_ONLY_CHILD_FRAMES_FIELD = {
   type: "string-array",
   dataClass: "opaque-id",
-  required: true,
+  required: false,
   maxLength: 512,
   maxItems: 8,
 } as const;
@@ -126,7 +133,7 @@ const READ_ONLY_CHILD_FRAMES_FIELD = {
 const READ_ONLY_CHILD_CAUSE_CHAIN_FIELD = {
   type: "string-array",
   dataClass: "error-kind",
-  required: true,
+  required: false,
   maxLength: 128,
   maxItems: 5,
 } as const;

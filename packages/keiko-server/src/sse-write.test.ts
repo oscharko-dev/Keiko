@@ -4,6 +4,10 @@
 // must never break the protective abort+destroy path.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerResponse } from "node:http";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { mockResponse } from "./_support.js";
 import {
   currentOpenSseStreamCount,
@@ -173,6 +177,31 @@ describe("sse.stream.closed terminal line", () => {
       frameCount: 3,
       bytesStreamed: frames.reduce((sum, f) => sum + Buffer.byteLength(f, "utf8"), 0),
       reason: "completed",
+    });
+  });
+
+  // Registry-linked executable proof (#3532): the same terminal line above, read back through the
+  // real formatter/registry path so `sse.stream.closed.line` resolves against a
+  // production-computed event (this task's rule 1: no hand-built event or registration object).
+  it("persists sse.stream.closed as a registered Activity Log proof line", async () => {
+    const sink = captureServerLog();
+    const { res } = mockResponse();
+    const controller = new AbortController();
+
+    writeOrDestroy(res, "event: a\ndata: {}\n\n", controller, undefined, "corr-sse-closed-proof");
+    const closed = new Promise<void>((resolve) => res.once("close", resolve));
+    res.end();
+    await closed;
+
+    const [event] = sink.events;
+    if (event === undefined) throw new Error("expected a stream-closed event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("sse.stream.closed.line", line);
+    expect(persisted).toMatchObject({
+      category: "http",
+      correlationId: "corr-sse-closed-proof",
+      reason: "completed",
+      frameCount: 1,
     });
   });
 

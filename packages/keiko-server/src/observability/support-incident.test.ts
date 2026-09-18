@@ -60,6 +60,9 @@ const FRAMES = [
   "packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js:710:9",
   "packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js:640:3",
 ];
+// SHA-256 of the v1 preimage of (tools-workflows, FAILURE_OP, unavailable, FRAMES).
+const GOLDEN_FAILURE_FINGERPRINT =
+  "7a18258e2761c06fc058ff77d9335f3f6747abac74de4e3a5b73b45cc6677b08";
 
 function failureEvent(overrides: Partial<ServerLogEvent> = {}): ServerLogEvent {
   const registration = activityLogOperationSchema(FAILURE_OP);
@@ -342,6 +345,23 @@ describe("SupportIncident candidates", () => {
       });
     });
 
+    it("never interprets a record of another schema version (a newer Keiko) and sweeps it", () => {
+      const { record } = created(recordUserReportedIncident(stateDir));
+      const directory = join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME);
+      const futureId = "e".repeat(32);
+      writeFileSync(
+        join(directory, supportIncidentFileName(futureId)),
+        JSON.stringify({ ...record, schemaVersion: 2, incidentId: futureId }),
+        { mode: 0o600 },
+      );
+      expect(readSupportIncident(stateDir, futureId)).toBeUndefined();
+      expect(listSupportIncidents(stateDir)).toEqual([record]);
+      expect(JSON.parse(lines("support.incident.expired")[0] ?? "{}")).toMatchObject({
+        incidentId: futureId,
+        expiryReason: "invalid-record",
+      });
+    });
+
     it("dismisses only on an explicit request and evidences it", () => {
       const { record } = created(recordUserReportedIncident(stateDir));
       expect(dismissSupportIncident(stateDir, "0".repeat(32))).toBe("not-found");
@@ -474,5 +494,47 @@ describe("SupportIncident candidates", () => {
         frames: [],
       }),
     ).not.toMatch(new RegExp(`${String(process.pid)}|${stateDir.replaceAll("/", "\\/")}`, "u"));
+  });
+
+  it("pins algorithm version 1: any drift must bump DEFECT_FINGERPRINT_ALGORITHM_VERSION", () => {
+    // Golden values. If this fails, the fingerprint algorithm changed incompatibly: bump the
+    // version (fingerprints of different versions are never compared) instead of editing these.
+    expect(
+      computeDefectFingerprint({
+        surface: "unattributed",
+        op: "unattributed",
+        errorKind: "unknown",
+        frames: [],
+      }),
+    ).toBe("6e372bd5ff10f6b663533afe15aa6b4c8f487e9d4e2532a1b390be02dfbfde99");
+    expect(
+      computeDefectFingerprint({
+        surface: "tools-workflows",
+        op: FAILURE_OP,
+        errorKind: "unavailable",
+        frames: FRAMES,
+      }),
+    ).toBe(GOLDEN_FAILURE_FINGERPRINT);
+  });
+
+  it("never copies an event body into the record: hostile values are reduced or dropped", () => {
+    const { record } = created(
+      recordRegisteredFailureIncident(stateDir, {
+        op: FAILURE_OP,
+        errorKind: "Request to https://api.example.com failed for alice@example.com",
+        correlationId: "/Users/alice/secret-project",
+        parentCorrelationId: "Bearer sk-live-abcdefghijklmnop",
+        frames: ["/Users/alice/keiko/packages/keiko-server/dist/a.js:1:1", "prompt: tell me"],
+      }),
+    );
+    const persisted = readFileSync(
+      join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME, supportIncidentFileName(record.incidentId)),
+      "utf8",
+    );
+    for (const hostile of ["example.com", "alice", "/Users", "prompt", "sk-live", "https"]) {
+      expect(persisted).not.toContain(hostile);
+    }
+    expect(record.fingerprint).toMatchObject({ errorKind: "unknown", frameCount: 0 });
+    expect(record.correlation).toEqual({ childCorrelationIds: [] });
   });
 });

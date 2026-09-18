@@ -14,6 +14,10 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   createDefaultChatCapability,
   type GatewayCallRequest,
   type GatewayConfig,
@@ -601,5 +605,43 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(persisted.validationState).toBe("rejected");
     expect(persisted.failureReason).toBe("timed-out");
     expect(persisted.content).toBe("");
+  });
+
+  // Registry-linked executable proof (#3532): the inferred-vs-verbatim fact classification event,
+  // read back through the real formatter/registry path so `chat.compaction.facts.classified.line`
+  // resolves against a production-computed event (this task's rule 1).
+  it("persists chat.compaction.facts.classified as a registered Activity Log proof line", async () => {
+    const store = createInMemoryEvidenceStore();
+    const calls: GatewayRequest[] = [];
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const input = defaultEnrichmentInput();
+
+    await enrichChatCompactionWithModelSummary(deps(store, structuredSummaryModel(calls)), {
+      ...input,
+      compaction: {
+        ...compactionRecord(),
+        preservedFacts: [
+          {
+            statement: "the compaction plan has verified evidence",
+            sourceRef: { kind: "message", stableId: "history-msg-0" },
+          },
+          { statement: "the plan likely needs no further review", inferred: true },
+        ],
+      },
+    });
+
+    const event = sink.events.find((entry) => entry.op === "chat.compaction.facts.classified");
+    if (event === undefined) throw new Error("expected a fact-classification event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("chat.compaction.facts.classified.line", line);
+    expect(persisted).toMatchObject({
+      category: "gateway",
+      correlationId: CORRELATION_ID,
+      inferredFactCount: 1,
+      verbatimFactCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
   });
 });

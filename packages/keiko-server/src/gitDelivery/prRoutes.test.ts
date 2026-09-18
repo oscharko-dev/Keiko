@@ -1710,9 +1710,7 @@ describe("pr mark-ready routes (#3389)", () => {
       );
       expect(refreshedPersisted).toMatchObject({ recorded: true, reason: "observed" });
 
-      const executed = activity.find(
-        (event) => event.op === "git.delivery.pr-mark-ready.executed",
-      );
+      const executed = activity.find((event) => event.op === "git.delivery.pr-mark-ready.executed");
       const executedPersisted = expectActivityLogProof(
         "git.delivery.pr-mark-ready.executed.emitted-line",
         formatActivityLogProofLine(executed ?? {}),

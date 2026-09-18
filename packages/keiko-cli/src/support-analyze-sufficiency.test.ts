@@ -288,7 +288,9 @@ describe("analyzeLogText sufficiency", () => {
     const result = analyzeLogText(text);
     expect(result.sufficiency.status).toBe("complete");
     expect(result.sufficiency.classes.map((entry) => entry.failureClass)).toEqual(
-      expect.arrayContaining(activityLogFailureClassesOf(["process.fatal", "process.exiting"])),
+      expect.arrayContaining([
+        ...activityLogFailureClassesOf(["process.fatal", "process.exiting"]),
+      ]),
     );
     expect(analyzeLogText(`${text}{"torn`).sufficiency).toEqual(
       expect.objectContaining({ status: "degraded", reasons: ["truncated-evidence"] }),

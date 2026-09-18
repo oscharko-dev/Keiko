@@ -1,6 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
   createGitJourneyOutcomeStore,
   produceJourneyOutcome,
 } from "../gitDelivery/journeyOutcome.js";
@@ -145,6 +149,35 @@ describe("V32 upgrades the original journey outcome table", () => {
         },
       });
       expect(JSON.stringify(write.mock.calls)).not.toContain(outcome.binding.repository);
+    } finally {
+      write.mockRestore();
+      db.close();
+    }
+  });
+
+  // Registry-linked executable proof (#3532): the same migration event above, read back through
+  // the real formatter/registry path so `store.journey-outcomes.migration.count` resolves against
+  // a production-computed event (this task's rule 1: no hand-built event or registration object).
+  it("persists store.journey-outcomes.migration as a registered Activity Log proof line", () => {
+    const db = legacyDatabase(31);
+    const write = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
+    try {
+      seedLegacy(db);
+
+      runMigrations(db, processServerLogSink());
+
+      const event = write.mock.calls
+        .map((call) => call[0])
+        .find((candidate) => candidate.op === "store.journey-outcomes.migration");
+      if (event === undefined) throw new Error("expected a migration event");
+      const line = formatActivityLogProofLine(event);
+      const persisted = expectActivityLogProof("store.journey-outcomes.migration.count", line);
+      expect(persisted).toMatchObject({
+        category: "setup",
+        storeSchemaVersion: 32,
+        stage: "prepared",
+        migratedCount: 1,
+      });
     } finally {
       write.mockRestore();
       db.close();

@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { CODE_TASK_AUXILIARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
@@ -500,7 +504,8 @@ describe("createReadOnlyChildOrchestrator", () => {
     // now also gets the same generic durable terminal write every other terminal gets
     // (completed) — one additional diagnostic line, not a replacement.
     expect(logs).toHaveLength(2);
-    expect(logOfOp(logs, "coding-runtime.read-only-child.runner-failed")).toMatchObject({
+    const runnerFailedLine = logOfOp(logs, "coding-runtime.read-only-child.runner-failed");
+    expect(runnerFailedLine).toMatchObject({
       correlationId: "run-2387",
       errorKind: "authority-denied",
       extra: {
@@ -509,10 +514,23 @@ describe("createReadOnlyChildOrchestrator", () => {
         reasonCode: "fabricated-tool-denied",
       },
     });
-    expect(logOfOp(logs, "coding-runtime.read-only-child.completed")).toMatchObject({
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.read-only-child.runner-failed.emitted-line",
+        formatActivityLogProofLine(runnerFailedLine),
+      ),
+    ).toMatchObject({ childRunId: CHILD_RUN_ID, terminal: "denied" });
+    const completedLine = logOfOp(logs, "coding-runtime.read-only-child.completed");
+    expect(completedLine).toMatchObject({
       correlationId: "run-2387",
       extra: { childRunId: CHILD_RUN_ID, terminal: "denied", reasonCode: "fabricated-tool-denied" },
     });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.read-only-child.completed.emitted-line",
+        formatActivityLogProofLine(completedLine),
+      ),
+    ).toMatchObject({ childRunId: CHILD_RUN_ID, terminal: "denied" });
   });
 
   it("classifies malformed tool arguments as denied, not unavailable, charging nothing", async () => {
