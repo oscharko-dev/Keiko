@@ -44,6 +44,10 @@ import {
   type ServerLogThreshold,
 } from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const EMBEDDING_MODEL = "text-embedding-3-large";
 const CHAT_MODEL = "gpt-4o-mini";
@@ -789,6 +793,12 @@ describe("memory embedding activity log", () => {
       failureKind: "rate-limited",
     });
     expect(sink.lines().join("\n")).not.toContain("the user prefers tabs");
+
+    const persisted = expectActivityLogProof(
+      "embedding.memory.failed.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ modelId: EMBEDDING_MODEL, failureKind: "rate-limited" });
   });
 
   it("classifies a thrown transport failure by its code and never by its message", async () => {
@@ -855,6 +865,21 @@ describe("memory embedding activity log", () => {
     });
     expect(atDebug.events[1]?.extra).toMatchObject({ dimensions: 8, embeddingKind: "document" });
     expect(typeof atDebug.events[1]?.durationMs).toBe("number");
+
+    const unavailablePersisted = expectActivityLogProof(
+      "embedding.memory.unavailable.line",
+      formatActivityLogProofLine(atDebug.events[0] ?? {}),
+    );
+    expect(unavailablePersisted).toMatchObject({
+      reason: "no-embedding-capable-model",
+      providerCount: 0,
+    });
+
+    const succeededPersisted = expectActivityLogProof(
+      "embedding.memory.succeeded.line",
+      formatActivityLogProofLine(atDebug.events[1] ?? {}),
+    );
+    expect(succeededPersisted).toMatchObject({ dimensions: 8, embeddingKind: "document" });
   });
 
   it("names the novelty gate's decision for an insert and for a merge", async () => {
@@ -877,6 +902,12 @@ describe("memory embedding activity log", () => {
     // The scoping id and the memory body are the two things this line must never carry.
     expect(sink.lines().join("\n")).not.toContain("local-operator");
     expect(sink.lines().join("\n")).not.toContain("postgres");
+
+    const persisted = expectActivityLogProof(
+      "memory.capture.novelty-gate.line",
+      formatActivityLogProofLine(decisions[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "inserted", scopeKind: "user" });
   });
 
   it("records that a capture was suppressed as a paraphrase of a refusal, and why", async () => {
@@ -944,6 +975,12 @@ describe("memory embedding activity log", () => {
       },
     ]);
     expect(sink.lines().join("\n")).not.toContain("dimension mismatch");
+
+    const persisted = expectActivityLogProof(
+      "memory.embedding.store-rejected.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "EDIMENSION" });
   });
 
   it("names the stale-vector invalidation a body edit falls back to when re-embedding fails", async () => {
@@ -968,5 +1005,46 @@ describe("memory embedding activity log", () => {
       loss: "none",
       reason: "no-embedding",
     });
+
+    const persisted = expectActivityLogProof(
+      "memory.embedding.invalidated.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "no-embedding" });
+  });
+
+  it("surfaces a vault rejection when the stale embedding cannot even be deleted", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const stored = insertAccepted(vault, "the user prefers tabs");
+    vault.upsertEmbedding(stored.id, {
+      provider: "openai-compatible:0123456789abcdef",
+      modelId: EMBEDDING_MODEL,
+      metric: "cosine",
+      vector: Float32Array.from([1, 0, 0, 0]),
+    });
+    const deletionFailure = Object.assign(new Error("row locked"), { code: "EBUSY" });
+    vi.spyOn(vault, "deleteEmbedding").mockImplementation(() => {
+      throw deletionFailure;
+    });
+    const sink = capture("info");
+
+    await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, stored.id, "the user prefers spaces");
+
+    expect(opsIn(sink)).toEqual([
+      "memory.embedding.invalidated",
+      "memory.embedding.invalidation-failed",
+    ]);
+    const [, failure] = sink.events;
+    expect(failure?.level).toBe("warn");
+    expect(failure?.category).toBe("memory");
+    expect(failure?.extra).toMatchObject({ failureKind: "EBUSY" });
+    expect(sink.lines().join("\n")).not.toContain("row locked");
+
+    const persisted = expectActivityLogProof(
+      "memory.embedding.invalidation-failed.line",
+      formatActivityLogProofLine(failure ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "EBUSY" });
   });
 });

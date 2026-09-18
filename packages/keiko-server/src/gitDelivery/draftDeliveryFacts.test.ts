@@ -20,6 +20,10 @@ import {
   type DraftDeliveryRunContext,
   type DraftDeliveryTargetResolution,
 } from "./draftDeliveryTypes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const DIGEST = "a".repeat(64);
 const MISMATCHED_DIGEST = "b".repeat(64);
@@ -161,6 +165,11 @@ describe("resolveDraftRepository repository drift", () => {
       const line = events.find((event) => event.op === DRIFT_OP);
       expect(line?.correlationId).toBe(CORRELATION_ID);
       expect(line?.extra).toMatchObject({ runId: context.runId, condition });
+      const persisted = expectActivityLogProof(
+        "git.draft-delivery.repository-drift.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+      expect(persisted).toMatchObject({ condition });
     },
   );
 

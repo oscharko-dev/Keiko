@@ -23,6 +23,10 @@ import {
   type WindowsAuthenticodeCommandRunner,
   type WindowsAuthenticodeSystemOptions,
 } from "./windowsPortableAuthenticode.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const SYSTEM_OPTIONS: WindowsAuthenticodeSystemOptions = {
   env: { SystemRoot: String.raw`D:\Windows` },
@@ -368,6 +372,11 @@ describe("Windows portable Authenticode identity", (): void => {
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain(hostileRoot);
+    const persisted = expectActivityLogProof(
+      "portable.windows-authenticode.system-binary-refused.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failure: "system-directory-refused" });
   });
 
   it("emits body-free diagnostic evidence when a trusted system binary is missing", (): void => {
@@ -401,5 +410,10 @@ describe("Windows portable Authenticode identity", (): void => {
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain(trustedRoot);
+    const persisted = expectActivityLogProof(
+      "portable.windows-authenticode.system-binary-refused.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failure: "system-binary-missing" });
   });
 });

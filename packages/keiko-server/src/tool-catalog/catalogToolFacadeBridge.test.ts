@@ -35,6 +35,10 @@ import {
   type CanonicalCatalogFacadeBridgeInput,
 } from "./catalogToolFacadeBridge.js";
 import type { CatalogToolBudgetPort } from "./catalogToolPorts.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const identity = { actionId: "action-1", idempotencyKey: "key-1" } as const;
 const discoverRequest: CodingToolActionRequest = {
@@ -412,6 +416,11 @@ describe("canonical catalog facade bridge", () => {
       errorKind: "unavailable",
       extra: { action: "command" },
     });
+    const proven = expectActivityLogProof(
+      "tool-catalog.dispatch-unbound.emitted-line",
+      formatActivityLogProofLine(log.events[0] ?? {}),
+    );
+    expect(proven).toMatchObject({ action: "command" });
   });
 
   it("revalidates the live branch-head revision at the effect boundary", async () => {

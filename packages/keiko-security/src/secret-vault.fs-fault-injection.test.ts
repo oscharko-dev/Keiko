@@ -14,6 +14,10 @@ import {
   createShardedLocalSecretVault,
   type LocalSecretVaultDeps,
 } from "./secret-vault.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 let blockedOpenDir = "";
 let blockedRenameDest = "";
@@ -181,5 +185,10 @@ describe("createShardedLocalSecretVault — rollback failure evidence", () => {
     expect(
       events.find((event) => event.op === "security.vault.entries-merge-failed"),
     ).toBeDefined();
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-rollback-failed.count",
+      formatActivityLogProofLine(rollback ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 1, failureKind: "EACCES" });
   });
 });

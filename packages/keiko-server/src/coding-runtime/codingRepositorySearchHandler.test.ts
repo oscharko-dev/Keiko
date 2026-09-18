@@ -7,6 +7,10 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { formatServerLogLine } from "../observability/server-log.js";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandlerOptions,
 } from "./codingRepositorySearchHandler.js";
@@ -112,6 +116,22 @@ describe("production coding repository handler composition", () => {
     });
     for (const body of [root, "example.ts", "parseConfig", "private-credential-value"])
       expect(lines).not.toContain(body);
+    const startedProof = expectActivityLogProof(
+      "coding-repository-handler.started.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(startedProof).toMatchObject({ correlationId: context().correlationId });
+    const settledProof = expectActivityLogProof(
+      "coding-repository-handler.settled.emitted-line",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+    expect(settledProof).toMatchObject({
+      state: "completed",
+      reason: "none",
+      filesScanned: 1,
+      resultCount: 1,
+      resultPathSha256: [createHash("sha256").update("src/example.ts").digest("hex")],
+    });
   });
   it("fails closed before work when the bound authority is unavailable", async () => {
     const { handler, events } = fixture(() => false);

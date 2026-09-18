@@ -11,6 +11,10 @@ import { GOVERNED_GIT_REMOTE_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/
 import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogEvent } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const WORKSPACE: WorkspaceInfo = {
   root: process.cwd(),
@@ -72,6 +76,15 @@ describe("github code context port", () => {
     await port.readJson(READ_ARGV, { correlationId: "read-issue-42" });
     expect(events).toContainEqual(expect.objectContaining({ correlationId: "read-issue-42" }));
     expect(JSON.stringify(events)).not.toContain("repos/oscharko-dev");
+    const succeeded = events.find(
+      (event) =>
+        event.op === "coding-context.github.read" && event.correlationId === "read-issue-42",
+    );
+    const persisted = expectActivityLogProof(
+      "coding-context.github.read.line",
+      formatActivityLogProofLine(succeeded ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "succeeded", correlationId: "read-issue-42" });
   });
 
   it("preserves repository provenance while scrubbing credentials in an issue response", async () => {

@@ -62,6 +62,10 @@ import {
 } from "../task-workspace/naming.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const PREVIEW = "/api/git-delivery/commit/preview";
 const DRAFT = "/api/git-delivery/commit/draft";
@@ -568,6 +572,16 @@ describe("commit preview — read-only verification context (AC3)", () => {
       },
     });
     expect(JSON.stringify(events)).not.toContain("update staged changes");
+    const preview = events.find((event) => event.op === "git.commit.preview.completed");
+    const persisted = expectActivityLogProof(
+      "git.commit.preview.completed.emitted-line",
+      formatActivityLogProofLine(preview ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      stagedFileCount: 2,
+      areaCount: 2,
+      policyOutcome: "allowed",
+    });
   });
 
   it("discloses a trusted signed-commit requirement before commit", async () => {
@@ -836,6 +850,15 @@ describe("commit draft — explicit model-backed generation", () => {
         outcome: "failed",
         failureCode: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
       },
+    });
+    const draftCompleted = events.find((event) => event.op === "git.commit.draft.completed");
+    const persisted = expectActivityLogProof(
+      "git.commit.draft.completed.emitted-line",
+      formatActivityLogProofLine(draftCompleted ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      outcome: "failed",
+      failureCode: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
     });
   });
 

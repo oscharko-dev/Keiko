@@ -12,6 +12,10 @@ import {
 import { CircuitBreaker, executeWithRetry } from "./resilience.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import type { CircuitBreakerConfig, Clock } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
@@ -85,6 +89,18 @@ describe("executeWithRetry — activity log", () => {
     // positive ones below honest.
     expect(scheduled.extra?.httpStatus).toBeUndefined();
     expect(scheduled.extra?.retryAfterMs).toBeUndefined();
+    const persisted = expectActivityLogProof(
+      "gateway.retry.scheduled.emitted-line",
+      formatActivityLogProofLine(scheduled),
+    );
+    expect(persisted).toMatchObject({
+      modelId: "example-chat-model",
+      attempt: 1,
+      maxRetries: 2,
+    });
+    expect(typeof persisted.delayMs).toBe("number");
+    expect(persisted.httpStatus).toBeUndefined();
+    expect(persisted.retryAfterMs).toBeUndefined();
   });
 
   it("carries the provider's httpStatus on both the scheduled and exhausted retry lines", async () => {
@@ -211,6 +227,16 @@ describe("executeWithRetry — activity log", () => {
     });
     // A rate limit is always HTTP 429 by definition — RateLimitError carries httpStatus too.
     expect(budget.extra?.httpStatus).toBe(429);
+    const persisted = expectActivityLogProof(
+      "gateway.retry.budget-exhausted.emitted-line",
+      formatActivityLogProofLine(budget),
+    );
+    expect(persisted).toMatchObject({
+      modelId: "m",
+      hadPriorFailure: true,
+      retryAfterMs: 5,
+      httpStatus: 429,
+    });
   });
 
   it("carries the provider's httpStatus on the budget-exhausted line", async () => {
@@ -273,6 +299,16 @@ describe("CircuitBreaker — activity log", () => {
       consecutiveFailures: 2,
       cooldownMs: 1000,
     });
+    const persisted = expectActivityLogProof(
+      "gateway.circuit.opened.emitted-line",
+      formatActivityLogProofLine(opened),
+    );
+    expect(persisted).toMatchObject({
+      modelId: "m",
+      previousState: "closed",
+      consecutiveFailures: 2,
+      cooldownMs: 1000,
+    });
   });
 
   // While the breaker is open EVERY caller is refused, so one fact — "the breaker for model m is
@@ -311,6 +347,16 @@ describe("CircuitBreaker — activity log", () => {
     });
     // The count is what makes the demotion lossless: the volume is still reported, as a number.
     expect(rejections.at(-1)?.extra).toMatchObject({ rejectedSinceTransition: 5 });
+    const persisted = expectActivityLogProof(
+      "gateway.circuit.rejected.emitted-line",
+      formatActivityLogProofLine(rejections[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      modelId: "m",
+      state: "open",
+      reason: "cooldown",
+      rejectedSinceTransition: 1,
+    });
   });
 
   // The demotion must be a real saving, not a relabelling: for a sink that declines `debug`,
@@ -387,14 +433,26 @@ describe("CircuitBreaker — activity log", () => {
     breaker.recordFailure();
     now = 2000;
     breaker.assertAllowed();
-    expect(eventFor(log.events, "gateway.circuit.half-open").extra).toMatchObject({
+    const halfOpen = eventFor(log.events, "gateway.circuit.half-open");
+    expect(halfOpen.extra).toMatchObject({
       modelId: "m",
       probes: 1,
     });
+    const halfOpenPersisted = expectActivityLogProof(
+      "gateway.circuit.half-open.emitted-line",
+      formatActivityLogProofLine(halfOpen),
+    );
+    expect(halfOpenPersisted).toMatchObject({ modelId: "m", probes: 1 });
     breaker.recordSuccess();
-    expect(eventFor(log.events, "gateway.circuit.closed").extra).toMatchObject({
+    const closed = eventFor(log.events, "gateway.circuit.closed");
+    expect(closed.extra).toMatchObject({
       previousState: "half-open",
     });
+    const closedPersisted = expectActivityLogProof(
+      "gateway.circuit.closed.emitted-line",
+      formatActivityLogProofLine(closed),
+    );
+    expect(closedPersisted).toMatchObject({ previousState: "half-open" });
     expect(breaker.status("m").state).toBe("closed");
   });
 

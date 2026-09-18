@@ -13,6 +13,10 @@ import type { ModelGatewayLogEvent } from "./observability.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import type { Clock, GatewayConfig, ModelProviderConfig, NormalizedResponse } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const MODEL_ID = "fixture-model";
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
@@ -189,7 +193,8 @@ describe("Gateway bounded tool-schema repair", () => {
       "Properties whose value does not match the schema: changeset.files, changeset.selectedFiles.",
     );
     expect(serializedRepair).not.toContain(INVALID_ARGUMENT_SECRET);
-    expect(events.find((event) => event.op === "gateway.tool-catalog.repair")).toMatchObject({
+    const repairEvent = events.find((event) => event.op === "gateway.tool-catalog.repair");
+    expect(repairEvent).toMatchObject({
       correlationId: "correlation-1",
       extra: {
         state: "scheduled",
@@ -204,6 +209,16 @@ describe("Gateway bounded tool-schema repair", () => {
       },
     });
     expect(JSON.stringify(events)).not.toContain(INVALID_ARGUMENT_SECRET);
+    const persisted = expectActivityLogProof(
+      "gateway.tool-catalog.repair.emitted-line",
+      formatActivityLogProofLine(repairEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "scheduled",
+      reason: "invalid-shape",
+      toolCallId: "call-actual-1",
+      offeredAlias: "keiko_changeset_edit",
+    });
   });
 
   it("hashes an oversized provider tool-call id before writing bounded repair evidence", async () => {

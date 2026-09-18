@@ -40,6 +40,10 @@ import {
   resetServerLogger,
   setServerLogger,
 } from "../../observability/server-logger.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../tests/support/activity-log-proof.js";
 
 const cleanups: (() => void)[] = [];
 
@@ -566,6 +570,21 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     return events;
   }
 
+  // Kept as its own helper so the long-running HOME-ownership test below stays under the file's
+  // complexity ceiling: the proof call itself needs no additional branching once the event is in
+  // hand.
+  function proveRuntimeErrorLine(
+    event: ServerLogEvent | undefined,
+    childPid: number | undefined,
+  ): void {
+    if (event === undefined) throw new Error("expected an lsp.process.runtime-error event");
+    const proven = expectActivityLogProof(
+      "lsp.process.runtime-error.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(proven).toMatchObject({ childPid });
+  }
+
   it("logs lsp.spawn.completed with the wrapper-engagement decision, platform, and the childPid", async () => {
     const events = captureLog();
     const binDir = makeTempDir("keiko-lsp-real-");
@@ -601,6 +620,11 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     const redacted = redactLogFields(extra) ?? {};
     expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
     expect(redacted.childPid).toBe(extra.childPid);
+    const proven = expectActivityLogProof(
+      "lsp.spawn.completed.emitted-line",
+      formatActivityLogProofLine(spawned ?? {}),
+    );
+    expect(proven).toMatchObject({ platform: process.platform });
   });
 
   // The LSP twin of the reused-pid window closed in keiko-tools' exec.ts (PR #3355 review, P1).
@@ -657,6 +681,11 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(failed?.category).toBe("diagnostic");
     expect(failed?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(failed?.errorKind).toBe("unavailable");
+    const proven = expectActivityLogProof(
+      "lsp.spawn.failed.emitted-line",
+      formatActivityLogProofLine(failed ?? {}),
+    );
+    expect(proven).toMatchObject({ platform: process.platform });
   });
 
   // Review 5058544058/5058571583: spawn() returning is NOT spawn success — ENOENT arrives
@@ -746,6 +775,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     const runtimeExtra = runtimeError?.extra ?? {};
     expect(redactLogFields(runtimeExtra)).toEqual(runtimeExtra);
     expect(existsSync(homePath)).toBe(true);
+    proveRuntimeErrorLine(runtimeError, child.pid);
 
     const exited = new Promise<void>((resolve) => {
       handle.onExit(() => {
@@ -841,5 +871,10 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     ]);
     const redacted = redactLogFields(extra) ?? {};
     expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
+    const proven = expectActivityLogProof(
+      "lsp.process.terminated.emitted-line",
+      formatActivityLogProofLine(terminated ?? {}),
+    );
+    expect(proven).toMatchObject({ signal: "SIGTERM" });
   });
 });

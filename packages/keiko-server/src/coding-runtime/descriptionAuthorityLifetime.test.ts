@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
@@ -103,6 +107,14 @@ describe("description authority lifetime and capacity", () => {
       expect(event.correlationId).toBe(input.correlationId);
       expect(event.extra?.scopeDigest).toMatch(/^[a-f\d]{64}$/u);
     }
+    const [mintedEvent] = log.events;
+    if (mintedEvent === undefined) throw new Error("expected description-authority mint line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.description-authority.emitted-line",
+        formatActivityLogProofLine(mintedEvent),
+      ),
+    ).toMatchObject({ event: "minted", requestedMode: "governed-assist" });
     expect(log.events[1]?.extra?.effectiveMode).toBe("governed-assist");
     expect(log.events[2]).toMatchObject({
       errorKind: "validation-failed",

@@ -9,6 +9,10 @@ import {
   readMacosKeychainSecret,
   writeMacosKeychainSecret,
 } from "./macos-keychain.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const fakeDirs: string[] = [];
 
@@ -324,6 +328,11 @@ describe("readMacosKeychainSecret sink wiring", () => {
     // Never the service/account this call was made with, never a path.
     expect(JSON.stringify(event)).not.toContain("svc");
     expect(JSON.stringify(event)).not.toContain("acct");
+    const persisted = expectActivityLogProof(
+      "security.keychain.fallback.bounded-exit",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ reasonKind: "Error", boundedExitKind: "exit-status" });
   });
 
   it("classifies a timed-out spawn distinctly from an immediate refusal", () => {

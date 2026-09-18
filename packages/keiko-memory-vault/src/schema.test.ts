@@ -8,6 +8,10 @@ import {
 } from "./schema.js";
 import { TEST_CIPHER } from "./_support.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 function openMemDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -312,6 +316,15 @@ describe("flushPlaintextResidueWithRetry", () => {
     expect(degraded?.extra?.attempts).toBe(3);
     expect(degraded?.extra?.busy).toBe(true);
     expect(degraded?.extra?.failureKind).toBe("checkpoint-busy-retries-exhausted");
+    const persisted = expectActivityLogProof(
+      "memory-vault.store.encryption-checkpoint-degraded.state",
+      formatActivityLogProofLine(degraded ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      attempts: 3,
+      busy: true,
+      failureKind: "checkpoint-busy-retries-exhausted",
+    });
   });
 
   it("stops retrying after the first non-busy success (busy=1 then busy=0)", () => {

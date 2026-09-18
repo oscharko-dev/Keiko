@@ -17,6 +17,10 @@ import {
 } from "./opencodeRuntimeAdapter.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const DIGEST = "a".repeat(64);
 const SECRET = "SENTINEL_OPENCODE_RUNTIME_SECRET";
@@ -522,6 +526,25 @@ describe("OpenCode runtime adapter readiness", () => {
         }),
       );
       expect(JSON.stringify(events)).not.toContain(SECRET);
+      const readinessPhaseEvent = events.find(
+        (entry) =>
+          entry.op === "coding-runtime.readiness.phase" &&
+          entry.extra?.phase === "config-materialization",
+      );
+      const readinessPhaseProof = expectActivityLogProof(
+        "coding-runtime.readiness.phase.emitted-line",
+        formatActivityLogProofLine(readinessPhaseEvent ?? {}),
+      );
+      expect(readinessPhaseProof).toMatchObject({
+        correlationId: "run-pending-handshake",
+        phase: "config-materialization",
+        dependencyInstallPolicy: "offline",
+        contextWindowTokens: 32_768,
+        maxInputTokens: 28_672,
+        maxOutputTokens: 4_096,
+        compactionAuto: true,
+        compactionPrune: true,
+      });
     } finally {
       resolvePending?.({ done: true, value: undefined });
       await starting;
@@ -565,6 +588,14 @@ describe("OpenCode runtime adapter readiness", () => {
     });
     expect(JSON.stringify(events)).not.toContain(SECRET);
     expect(harness.effects).toContain("require-manager-reap");
+    const readinessFailedProof = expectActivityLogProof(
+      "coding-runtime.readiness.failed.emitted-line",
+      formatActivityLogProofLine(failures[0] ?? {}),
+    );
+    expect(readinessFailedProof).toMatchObject({
+      correlationId: "run-handshake-1",
+      phase: "sse-history-reconciliation",
+    });
   });
 
   it("bounds a turn at thirty minutes while allowing caller cancellation to shorten it", async () => {
@@ -1161,6 +1192,21 @@ describe("OpenCode runtime adapter readiness", () => {
       }),
     ]);
     expect(JSON.stringify(log)).not.toMatch(/msg_|provider body/u);
+    const startedCompactionEvent = log.find(
+      (entry) => entry.op === "coding-runtime.compaction" && entry.extra?.event === "started",
+    );
+    const compactionProof = expectActivityLogProof(
+      "coding-runtime.compaction.emitted-line",
+      formatActivityLogProofLine(startedCompactionEvent ?? {}),
+    );
+    expect(compactionProof).toMatchObject({
+      correlationId: "run-native-compaction",
+      event: "started",
+      compactionIdSha256,
+      auto: true,
+      overflow: true,
+      retainedTail: false,
+    });
     await adapter.close();
   });
 

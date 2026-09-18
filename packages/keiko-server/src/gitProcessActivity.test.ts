@@ -9,6 +9,10 @@ import {
   type ServerLogEvent,
   type ServerLogSink,
 } from "./observability/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 function result(overrides: Partial<GitProcessResult> = {}): GitProcessResult {
   return {
@@ -63,7 +67,8 @@ describe("logGitProcessOutcome", () => {
       1,
     );
 
-    expect(onlyEvent(log.events)).toMatchObject({
+    const event = onlyEvent(log.events);
+    expect(event).toMatchObject({
       level: "error",
       category: "security",
       op: "git.process.refused",
@@ -80,6 +85,11 @@ describe("logGitProcessOutcome", () => {
         aborted: false,
       },
     });
+    const persisted = expectActivityLogProof(
+      "git.process.refused.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({ refusal: "config-override", subcommand: "diff" });
   });
 
   it("does not classify a refusal through the shared git failure classifier", () => {
@@ -271,7 +281,8 @@ describe("logGitProcessOutcome", () => {
       9,
     );
 
-    expect(onlyEvent(log.events)).toMatchObject({
+    const event = onlyEvent(log.events);
+    expect(event).toMatchObject({
       level: "warn",
       category: "diagnostic",
       op: "git.process.failed",
@@ -285,6 +296,11 @@ describe("logGitProcessOutcome", () => {
         failureKind: "output-truncated",
       },
     });
+    const persisted = expectActivityLogProof(
+      "git.process.failed.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({ failureKind: "output-truncated", truncated: true });
   });
 
   it("keeps the deadline and the caller's cancellation ranked above the byte cap", () => {

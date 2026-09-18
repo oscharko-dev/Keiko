@@ -5,6 +5,10 @@ import { FIXED_NOW_MS, makeEdgeIdFactory, makeIdFactory, makeRecord, must } from
 import { runConsolidation } from "./consolidate.js";
 import type { ConsolidationLogEvent, ConsolidationLogSink } from "./log-port.js";
 import type { ConsolidationOptions } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 function baseOptions(overrides: Partial<ConsolidationOptions> = {}): ConsolidationOptions {
   return {
@@ -532,6 +536,11 @@ describe("runConsolidation - summaryFallbackReason", () => {
       op: "consolidation.summary.fallback",
       extra: { reason: "absent" },
     });
+    const persisted = expectActivityLogProof(
+      "consolidation.summary.fallback.reason",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "absent" });
   });
 
   it("reports 'invalid-output' when the summaryGenerator returns null", () => {

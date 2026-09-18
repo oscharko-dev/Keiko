@@ -34,6 +34,10 @@ import {
   createProductionJourneyReader,
   type DraftDeliveryCompositionDeps,
 } from "./productionDraftDeliveryDependencies.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
   const actual =
@@ -317,6 +321,17 @@ describe("production draft delivery dependencies", () => {
         issueBindingDigest: f.context.issueBinding.bindingDigest,
       },
     });
+    const resolvedEvent = f.events.at(-1);
+    if (resolvedEvent === undefined) throw new Error("expected a target-resolved event");
+    const persistedResolved = expectActivityLogProof(
+      "git.draft-target.resolved.emitted-line",
+      formatActivityLogProofLine(resolvedEvent),
+    );
+    expect(persistedResolved).toMatchObject({
+      state: "ready",
+      reason: "completed",
+      issueBindingDigest: f.context.issueBinding.bindingDigest,
+    });
     for (const secret of [
       f.root,
       f.context.workspace.root,
@@ -598,6 +613,13 @@ describe("production draft delivery dependencies", () => {
       errorKind: "internal",
       extra: { runId: "run-42", state: "failed" },
     });
+    const preparationEvent = f.events.at(-1);
+    if (preparationEvent === undefined) throw new Error("expected a push-preparation event");
+    const persistedPreparation = expectActivityLogProof(
+      "git.draft-push.preparation.emitted-line",
+      formatActivityLogProofLine(preparationEvent),
+    );
+    expect(persistedPreparation).toMatchObject({ runId: "run-42", state: "failed" });
     expect(JSON.stringify(f.events)).not.toContain("private push failure");
     expect(JSON.stringify(f.events)).not.toContain("https://secret.example");
     args?.onPreparationFailure?.(new Error("git-publish-private-root-overlap"));

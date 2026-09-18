@@ -10,12 +10,17 @@ import {
   resetServerLogger,
   setServerLogger,
   type BufferedServerLogSink,
+  type ServerLogEvent,
 } from "../observability/index.js";
 import { createFakeSessionPairingPort, fakePairingRequestBody } from "./_support.js";
 import {
   CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS,
   openCodingAppSessionStream,
 } from "./codingAppSessionRoutes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import {
   CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS,
   type CodingAppSessionChannelContent,
@@ -155,7 +160,7 @@ function fixture(
 }
 
 describe("channel lifecycle lines (F65)", () => {
-  function channelLines(): readonly unknown[] {
+  function channelLines(): readonly ServerLogEvent[] {
     return sink.events.filter((event) => event.op.startsWith("coding-app-session.channel."));
   }
 
@@ -164,7 +169,8 @@ describe("channel lifecycle lines (F65)", () => {
     await vi.advanceTimersByTimeAsync(1_500);
     response.destroy();
 
-    expect(channelLines()).toEqual([
+    const lines = channelLines();
+    expect(lines).toEqual([
       expect.objectContaining({
         op: "coding-app-session.channel.opened",
         correlationId: CORRELATION,
@@ -177,6 +183,16 @@ describe("channel lifecycle lines (F65)", () => {
         extra: { completeness: "complete", loss: "none" },
       }),
     ]);
+    const opened = expectActivityLogProof(
+      "coding-app-session.channel.opened.live",
+      formatActivityLogProofLine(lines[0] ?? {}),
+    );
+    expect(opened).toMatchObject({ correlationId: CORRELATION, live: true });
+    const closed = expectActivityLogProof(
+      "coding-app-session.channel.closed.duration",
+      formatActivityLogProofLine(lines[1] ?? {}),
+    );
+    expect(closed).toMatchObject({ correlationId: CORRELATION, durationMs: 1_500 });
   });
 
   it("logs a stream without a channel as opened, not live", () => {

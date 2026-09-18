@@ -28,6 +28,10 @@ import {
 } from "../../observability/server-logger.js";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 import { redactLogFields } from "../../observability/log-redaction.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../tests/support/activity-log-proof.js";
 
 // `resolveExecutableOutsideWorkspace` runs against the real filesystem even when the spawn function is
 // faked, so the manager only proceeds to spawn if `fakelsp` actually resolves on PATH outside the
@@ -475,7 +479,13 @@ describe("createLspProcessManager", () => {
       manager.sendRequest("textDocument/hover", {}, new AbortController().signal),
     ).rejects.toMatchObject({ code: "RESOURCE_BUDGET_EXCEEDED" });
     expect(controller.exitEmitted()).toBe(false);
-    expect(findOwnershipLog(log, "retained-unconfirmed", { childPid: 4242 })).toBeDefined();
+    const retained = findOwnershipLog(log, "retained-unconfirmed", { childPid: 4242 });
+    expect(retained).toBeDefined();
+    const proven = expectActivityLogProof(
+      "lsp.process.ownership.changed.emitted-line",
+      formatActivityLogProofLine(retained ?? {}),
+    );
+    expect(proven).toMatchObject({ action: "retained-unconfirmed", childPid: 4242 });
     controller.confirmExit();
     await settle();
     expect(findOwnershipLog(log, "released-after-exit", { childPid: 4242 })).toBeDefined();

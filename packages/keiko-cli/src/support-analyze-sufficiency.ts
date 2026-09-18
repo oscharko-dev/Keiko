@@ -21,8 +21,10 @@
 // Loss propagation. A loss-lifecycle line records the loss of its own subject; that line IS the
 // class's evidence, so it never degrades its own class. Only a loss of Activity Log evidence itself
 // — a loss line of an `activity-log-*` failure class whose `loss` state is not `none` — degrades
-// other classes: the classes of the operation it names (`failedOp`/`droppedOp`), or else every
-// class observed in the same process lifetime. The `activity-log.loss` summary also counts
+// other classes: the classes of the operation it names (`failedOp`/`droppedOp`); for a package
+// port that names the dropped operation only by digest (`droppedOpDigest`), the classes of that
+// package's operations observed in the same process lifetime; or else every class observed in the
+// same process lifetime. The `activity-log.loss` summary also counts
 // browser-side drops (`client*` counters) that the client-diagnostic loss lines evidence on their
 // own, so only its Activity Log counters propagate. A product loss fully evidenced by its own
 // registered loss line (a rate-limited client report, a bounded discovery) keeps the report
@@ -84,6 +86,7 @@ interface ClassCoverage {
 }
 
 interface OperationFacts {
+  readonly owner: string;
   readonly lifecycle: string;
   readonly causal: string;
   readonly failureClasses: readonly string[];
@@ -106,6 +109,7 @@ const ACTIVITY_LOG_EVIDENCE_CLASS_PREFIX = "activity-log-";
 const ACTIVITY_LOG_LOSS_SUMMARY_OP = "activity-log.loss";
 const CLIENT_LOSS_COUNTER_PREFIX = "client";
 const DROPPED_OPERATION_FIELDS = ["failedOp", "droppedOp"] as const;
+const DROPPED_OPERATION_DIGEST_FIELD = "droppedOpDigest";
 
 function knownCorrelation(value: string | undefined): value is string {
   return value !== undefined && value !== ACTIVITY_LOG_UNKNOWN_CORRELATION_ID;
@@ -150,21 +154,47 @@ function droppedOperation(line: ActivityLogSufficiencyLine): string | undefined 
   return undefined;
 }
 
+function ownerOf(op: string): string {
+  return OPERATION_FACTS.get(op)?.owner ?? "";
+}
+
+// A lost event is attributed as precisely as its loss line allows: the named operation's classes;
+// else, for a package port that names the dropped operation only by digest, that package's
+// classes in the same process lifetime; else every class of the process lifetime.
 interface LossAttribution {
   readonly droppedClasses: ReadonlySet<string>;
   readonly lossLifetimes: ReadonlySet<string>;
+  readonly ownerLosses: ReadonlySet<string>;
+}
+
+function ownerLossKey(line: ActivityLogSufficiencyLine, owner: string): string {
+  return `${lifetimeKey(line)}|${owner}`;
 }
 
 function lossAttribution(lines: readonly ActivityLogSufficiencyLine[]): LossAttribution {
   const droppedClasses = new Set<string>();
   const lossLifetimes = new Set<string>();
+  const ownerLosses = new Set<string>();
   for (const line of lines) {
     if (!isEvidenceLossLine(line)) continue;
     const dropped = droppedOperation(line);
-    if (dropped === undefined) lossLifetimes.add(lifetimeKey(line));
-    else for (const name of classesOf(dropped)) droppedClasses.add(name);
+    if (dropped !== undefined) {
+      for (const name of classesOf(dropped)) droppedClasses.add(name);
+    } else if (line.fields?.[DROPPED_OPERATION_DIGEST_FIELD] !== undefined) {
+      ownerLosses.add(ownerLossKey(line, ownerOf(line.op)));
+    } else {
+      lossLifetimes.add(lifetimeKey(line));
+    }
   }
-  return { droppedClasses, lossLifetimes };
+  return { droppedClasses, lossLifetimes, ownerLosses };
+}
+
+function lineLostEvidence(line: ActivityLogSufficiencyLine, loss: LossAttribution): boolean {
+  if (isEvidenceLossLine(line)) return false;
+  return (
+    loss.lossLifetimes.has(lifetimeKey(line)) ||
+    loss.ownerLosses.has(ownerLossKey(line, ownerOf(line.op)))
+  );
 }
 
 function integrityReasons(
@@ -248,9 +278,7 @@ function classSufficiency(
   const reasons = new Set<DiagnosticSufficiencyReason>(shared);
   for (const line of members) {
     for (const reason of lineReasons(line)) reasons.add(reason);
-    if (loss.lossLifetimes.has(lifetimeKey(line)) && !isEvidenceLossLine(line)) {
-      reasons.add("activity-log-loss");
-    }
+    if (lineLostEvidence(line, loss)) reasons.add("activity-log-loss");
   }
   if (loss.droppedClasses.has(failureClass)) reasons.add("events-dropped");
   const coverage = COVERAGE_BY_CLASS.get(failureClass);

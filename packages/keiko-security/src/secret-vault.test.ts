@@ -31,6 +31,10 @@ import {
   readLocalVaultReferences,
   resolveLocalVaultKey,
 } from "./secret-vault.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // A stable 32-byte key used for vault-CRUD tests — same pattern as figmaTokenStore.test.ts.
 const KEY = Buffer.alloc(32, 7);
@@ -263,6 +267,11 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
       "level",
       "op",
     ]);
+    const persisted = expectActivityLogProof(
+      "security.vault.key-resolved.source",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ source: "env" });
   });
 
   it("emits source=keychain when the keychain tier answers", () => {
@@ -334,6 +343,11 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
     expect(isVaultFrameArray(events[0]?.extra?.frames)).toBe(true);
     expect(JSON.stringify(events)).not.toContain("32 bytes");
     expect(JSON.stringify(events)).not.toContain(Buffer.alloc(16, 3).toString("base64"));
+    const persisted = expectActivityLogProof(
+      "security.vault.key-resolution-failed.evidence",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "Error" });
   });
 
   it("classifies a symlinked key path as an unsafe target", (ctx) => {
@@ -557,6 +571,11 @@ describe("createLocalSecretVault — setMany", () => {
     expect(JSON.stringify(events)).not.toContain("cred:a");
     expect(JSON.stringify(events)).not.toContain("cred:b");
     expect(events.filter((event) => event.op === "security.vault.entries-merged")).toHaveLength(1);
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-merged.count",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 2 });
   });
 
   it("stores __proto__ as a real key without polluting Object.prototype", () => {
@@ -601,6 +620,11 @@ describe("createLocalSecretVault — setMany", () => {
     expect(events[0]?.extra?.causeChain).toEqual(["EISDIR"]);
     expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
     expect(JSON.stringify(events)).not.toContain("cred:a");
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-merge-failed.count",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 1 });
   });
 
   it("does not emit entries-merged for a single set()", () => {
@@ -685,6 +709,11 @@ describe("createLocalSecretVault — delete", () => {
       correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
       extra: { count: 2, completeness: "complete", loss: "none" },
     });
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-deleted.count",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 2 });
   });
 
   it("emits structured body-free evidence when deleteMany cannot read the store", () => {
@@ -716,6 +745,11 @@ describe("createLocalSecretVault — delete", () => {
     expect(isVaultFrameArray(events[0]?.extra?.frames)).toBe(true);
     expect(JSON.stringify(events)).not.toContain(storePath);
     expect(JSON.stringify(events)).not.toContain("cred:a");
+    const persisted = expectActivityLogProof(
+      "security.vault.entries-delete-failed.count",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 1, failureKind: "SECRET_VAULT_STORE_INVALID_JSON" });
   });
 
   it("deleteMany of an empty list does not read an unreadable store", () => {
@@ -1512,6 +1546,11 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     // Never the reference, never the shard's filename/path.
     expect(JSON.stringify(event)).not.toContain("cred:a");
     expect(JSON.stringify(event)).not.toContain(storeDir);
+    const persisted = expectActivityLogProof(
+      "security.vault.shard-unreadable.count",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ count: 1, failureKind: "EISDIR" });
   });
 
   // EACCES specifically, as distinct proof from the EISDIR case above — skipped only when the

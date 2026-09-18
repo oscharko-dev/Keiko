@@ -48,6 +48,10 @@ import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // Installs a buffered process logger at `level` and returns its sink, mirroring
 // `bounded-request-body.test.ts`'s helper of the same name. `resetServerLogger` in each suite's
@@ -1019,6 +1023,15 @@ describe("coding-sidecar gateway", () => {
       expect(availabilityEvents[0]?.extra?.handlerSetDigest).not.toBe(
         availabilityEvents[1]?.extra?.handlerSetDigest,
       );
+      const persistedAvailability = expectActivityLogProof(
+        "coding-sidecar.gateway.tool-availability.line",
+        formatActivityLogProofLine(availabilityEvents[0] ?? {}),
+      );
+      expect(persistedAvailability).toMatchObject({
+        runId: "run-real",
+        unavailableOptionalTools: ["keiko_research_fetch"],
+        offeredOptionalToolCount: 3,
+      });
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();
