@@ -1,7 +1,7 @@
 // Diagnostic readiness (#3532): evaluated before the server accepts work, persisted through the
 // observable production append path, and exposed on /api/health as a closed, body-free block.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,30 +19,29 @@ import {
 import { API_ROUTES, type RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
-  ACTIVITY_LOG_MIN_FREE_BYTES,
   checkActivityLogReadiness,
   currentActivityLogReadiness,
-  defaultActivityLogStorageHealth,
   refreshActivityLogReadiness,
   resetActivityLogReadinessForTests,
-  type ActivityLogStorageHealth,
 } from "./activity-log-readiness.js";
-import { resetServerLogFailureNotices } from "./server-log.js";
+import { resetServerLogFailureNotices, type ActivityLogStoreHealth } from "./server-log.js";
 import { resetServerLogger } from "./server-logger.js";
 
-function healthyStorage(
-  overrides: Partial<ActivityLogStorageHealth> = {},
-): ActivityLogStorageHealth {
+// A stub of the store's own health snapshot type — readiness has no parallel shape to fake.
+function healthyStorage(overrides: Partial<ActivityLogStoreHealth> = {}): ActivityLogStoreHealth {
   return {
     writable: true,
     usedBytes: 0,
     budgetBytes: 1_000,
     pinQuotaBytes: 100,
     pinnedBytes: 0,
-    freeBytes: ACTIVITY_LOG_MIN_FREE_BYTES * 10,
+    freeBytes: 1_000_000_000,
     activeSegments: 1,
     sealedSegments: 0,
+    legacyFiles: 0,
+    orphanedSegments: 0,
     pressure: "none",
+    pressureState: "none",
     recoveredSegments: 0,
     ...overrides,
   };
@@ -110,15 +109,27 @@ describe("diagnostic readiness", () => {
     expect(currentActivityLogReadiness().readiness).toBe("unavailable");
   });
 
-  it("names storage pressure and an exceeded budget from the storage-health provider", () => {
-    const snapshot = checkActivityLogReadiness({
-      stateDir,
-      storageHealth: () => healthyStorage({ pressure: "critical", usedBytes: 2_000 }),
-    });
-    expect(snapshot).toMatchObject({
-      readiness: "degraded",
-      reasons: ["storage-pressure", "budget-exceeded"],
-    });
+  it.each([
+    ["low-disk-space", "elevated", "storage-pressure"],
+    ["retention-blocked", "elevated", "storage-pressure"],
+    ["backpressure", "elevated", "storage-pressure"],
+    ["disk-full", "critical", "storage-pressure"],
+    ["budget-exceeded", "critical", "budget-exceeded"],
+  ] as const)(
+    "maps the store's %s pressure onto the closed readiness reason",
+    (pressureState, pressure, reason) => {
+      const snapshot = checkActivityLogReadiness({
+        stateDir,
+        storageHealth: () => healthyStorage({ pressure, pressureState }),
+      });
+      expect(snapshot).toMatchObject({ readiness: "degraded", reasons: [reason] });
+    },
+  );
+
+  it("reads the real store health for the checked directory", () => {
+    const snapshot = checkActivityLogReadiness({ stateDir });
+    expect(snapshot.reasons).not.toContain("budget-exceeded");
+    expect(snapshot.readiness).toBe("ready");
   });
 
   it("treats an unwritable storage report as an unavailable sink", () => {
@@ -145,6 +156,7 @@ describe("diagnostic readiness", () => {
     vi.stubEnv("KEIKO_STATE_DIR", "");
     resetServerLogger();
     const inspected = join(stateDir, "inspected");
+    mkdirSync(inspected, { mode: 0o700 });
     const snapshot = checkActivityLogReadiness({ stateDir: inspected, scope: "directory" });
     expect(snapshot).toMatchObject({ readiness: "ready", writer: "production-file" });
     expect(readinessLines(inspected)).toHaveLength(1);
@@ -199,30 +211,5 @@ describe("diagnostic readiness", () => {
     expect(result.body.status).toBe("ok");
     expect(isActivityLogReadinessSnapshot(result.body.diagnostics)).toBe(true);
     expect(result.body.diagnostics).toMatchObject({ readiness: "ready", lostEvents: 2 });
-  });
-});
-
-describe("default storage health", () => {
-  let stateDir: string;
-
-  beforeEach(() => {
-    stateDir = mkdtempSync(join(tmpdir(), "keiko-storage-health-"));
-  });
-
-  afterEach(() => {
-    rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("answers from the state directory before the first log write", () => {
-    const health = defaultActivityLogStorageHealth(stateDir);
-    expect(health.writable).toBe(true);
-    expect(health.pressure).toBe("none");
-    expect(health.usedBytes).toBe(0);
-    expect(typeof health.freeBytes === "number" || health.freeBytes === undefined).toBe(true);
-  });
-
-  it("reports an unwritable log path that is not a directory", () => {
-    writeFileSync(join(stateDir, "logs"), "not a directory");
-    expect(defaultActivityLogStorageHealth(stateDir).writable).toBe(false);
   });
 });

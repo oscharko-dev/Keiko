@@ -7,21 +7,22 @@
 // text onto the line just because the string happens to be short and space-free enough to slip
 // past the generic value guards `log-redaction.test.ts` owns.
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 import { UNSUPPORTED_REASON_VOCABULARY, defaultServerDiagnosticSink } from "./diagnostics-log.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
-  const lines = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+  const lines = readPersistedActivityLog(stateDir)
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
-  const activityLine = lines.find((line) => line.op !== "server-log.safe-open");
+  const activityLine = lines.find((line) => line.op === "server.diagnostic.failure");
   if (activityLine === undefined) throw new Error("expected a diagnostic activity line");
   return activityLine;
 }

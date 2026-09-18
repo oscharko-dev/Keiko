@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
 import { REDACTED_KEY } from "./log-redaction.js";
 import {
   LOG_FAILURE_NOTICE_WINDOW_MS,
@@ -436,9 +437,7 @@ describe("process-wide server logger", () => {
     );
 
     expect(recovered.level).toBe("debug");
-    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).toContain(
-      '"eventId":"event-init-recovered"',
-    );
+    expect(readPersistedActivityLog(stateDir)).toContain('"eventId":"event-init-recovered"');
     expect(stderr).toHaveBeenCalledTimes(1);
   });
 
@@ -447,7 +446,7 @@ describe("process-wide server logger", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     stderr.mockClear();
     getServerLogger().warn({ category: "indexing", op: "test.unregistered-operation" });
-    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    const raw = readPersistedActivityLog(stateDir);
     expect(raw).toContain('"op":"server-log.safe-open"');
     expect(raw).toContain('"writerCapability":"active"');
     expect(raw).not.toContain("test.unregistered-operation");
@@ -474,7 +473,7 @@ describe("process-wide server logger", () => {
         }),
       );
 
-    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    const raw = readPersistedActivityLog(stateDir);
     expect(raw).toContain('"op":"update.runtime.event"');
     expect(raw).toContain('"eventId":"event-child-bound-registered"');
     expect(raw).not.toContain("undeclaredChildField");

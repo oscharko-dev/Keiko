@@ -945,7 +945,12 @@ describe("op catalog drift", () => {
     () => {
       const coverage = generateCurrentTypedRegistry().failureClassCoverage;
       const byFailureClass = new Map(coverage.classes.map((entry) => [entry.failureClass, entry]));
-      expect(byFailureClass.get("activity-log-capacity")?.lossSignals).toEqual([]);
+      // A state-only class projects no loss signal; the pin class projects exactly its one
+      // registered loss marker (#3530 retired the capacity class this pin first sat on).
+      expect(byFailureClass.get("activity-log-retention")?.lossSignals).toEqual([]);
+      expect(byFailureClass.get("activity-log-pin")?.lossSignals).toEqual([
+        "activity-log.pin.quota-exhausted",
+      ]);
       expect(byFailureClass.get("activity-log-contract")?.lossSignals).toEqual([
         "server-log.line-dropped",
         "server-log.write-failed",
