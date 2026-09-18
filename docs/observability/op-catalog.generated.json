@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "98b5c28d4cdd4e5267f0a77c41bf8c6103ca2c4ce89966c6defb0cdce21f2192",
+    "catalogDigest": "7b067c4859ec4448275ec01c7bfbd4de2a4b00dde68ad9dab2cf6cb090949544",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -81,6 +81,11 @@
             "dataClass": "count",
             "required": false
           },
+          "portUnwired": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "clientRejected": {
             "type": "integer",
             "dataClass": "count",
@@ -134,7 +139,7 @@
         "proofIds": ["activity-log.loss.heartbeat-summary", "activity-log.loss.exit-summary"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/observability/activity-log-loss-summary.ts:30",
-        "emitterSites": ["packages/keiko-server/src/observability/activity-log-loss-summary.ts:107"]
+        "emitterSites": ["packages/keiko-server/src/observability/activity-log-loss-summary.ts:109"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -6725,7 +6730,7 @@
         "proofIds": ["consolidation.log.sink-failed.body-free"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-consolidation/src/log-port.ts:102",
-        "emitterSites": ["packages/keiko-memory-consolidation/src/log-port.ts:151"]
+        "emitterSites": ["packages/keiko-memory-consolidation/src/log-port.ts:155"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10289,8 +10294,8 @@
         "failureClasses": ["activity-log-sink-failure"],
         "proofIds": ["gateway.log.sink-failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/observability.ts:109",
-        "emitterSites": ["packages/keiko-model-gateway/src/observability.ts:168"]
+        "registrationSite": "packages/keiko-model-gateway/src/observability.ts:110",
+        "emitterSites": ["packages/keiko-model-gateway/src/observability.ts:169"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -17939,7 +17944,7 @@
         "proofIds": ["knowledge.log.sink-failed.body-free"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-local-knowledge/src/knowledge-log.ts:157",
-        "emitterSites": ["packages/keiko-local-knowledge/src/knowledge-log.ts:206"]
+        "emitterSites": ["packages/keiko-local-knowledge/src/knowledge-log.ts:210"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18419,7 +18424,7 @@
         "proofIds": ["memory-vault.log.sink-failed.body-free"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:163",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:212"]
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:216"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -21748,7 +21753,7 @@
         "proofIds": ["security.log.sink-failed.body-free"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-security/src/log-port.ts:123",
-        "emitterSites": ["packages/keiko-security/src/log-port.ts:191"]
+        "emitterSites": ["packages/keiko-security/src/log-port.ts:195"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35141,6 +35146,12 @@
                 },
                 {
                   "name": "portSinkFailed",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "portUnwired",
                   "type": "integer",
                   "dataClass": "count",
                   "required": false
@@ -67336,7 +67347,7 @@
     {
       "op": "gateway.log.sink-failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/observability.ts:112",
+      "site": "packages/keiko-model-gateway/src/observability.ts:113",
       "package": "keiko-model-gateway"
     },
     {
@@ -68004,7 +68015,7 @@
     {
       "op": "activity-log.loss",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/activity-log-loss-summary.ts:155",
+      "site": "packages/keiko-server/src/observability/activity-log-loss-summary.ts:157",
       "package": "keiko-server"
     },
     {

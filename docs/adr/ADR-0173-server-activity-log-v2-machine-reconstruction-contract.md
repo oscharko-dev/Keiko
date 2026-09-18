@@ -451,7 +451,8 @@ production sink refused.
 3. It receives the process sink from the server or CLI composition root. It never constructs a file
    sink and never reads `KEIKO_STATE_DIR` itself.
 4. It isolates its sink. A throwing `write` is caught and counted as `port-sink-failed` in the loss
-   ledger, every time and not only the first.
+   ledger, every time and not only the first. An event handed to a port with no sink wired is
+   counted as `port-unwired`, so a missed composition edge is visible instead of silent.
 5. It reports a failing sink once per sink instance, on the independent process-warning channel.
 
 **Loss is counted, never silent (#3532).** One bounded, process-wide loss ledger lives in the

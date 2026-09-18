@@ -383,4 +383,14 @@ describe("emitSecurityLogEvent loss accounting", () => {
       resetActivityLogLossCountersForTests();
     }
   });
+
+  it("counts an event handed to an unwired port as lost", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      emitSecurityLogEvent(undefined, { category: "security", op: "security.keychain.fallback" });
+      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
 });

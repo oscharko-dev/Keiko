@@ -31,6 +31,8 @@ export const ACTIVITY_LOG_LOSS_REASONS = [
   "diagnostic-sink-failed",
   // A domain package's log-port sink threw; every failure is counted, not only the first.
   "port-sink-failed",
+  // A domain package's log port had no sink wired, so the event it was handed went nowhere.
+  "port-unwired",
   // The BFF refused a browser diagnostic report as malformed or oversized.
   "client-rejected",
   // The BFF rate limiter dropped a browser diagnostic report.
