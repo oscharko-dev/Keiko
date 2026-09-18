@@ -180,7 +180,7 @@ const MARK_READY_REFRESHED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-pr-mark-ready-refresh"],
-  proofIds: ["git.delivery.pr-mark-ready.readiness-refreshed"],
+  proofIds: ["git.delivery.pr-mark-ready.readiness-refreshed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -196,7 +196,7 @@ const MARK_READY_EXECUTED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["git-pr-mark-ready-execution"],
-  proofIds: ["git.delivery.pr-mark-ready.executed"],
+  proofIds: ["git.delivery.pr-mark-ready.executed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -212,7 +212,7 @@ const MARK_READY_DRIFT_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["git-pr-mark-ready-drift"],
-  proofIds: ["git.delivery.pr-mark-ready.drift"],
+  proofIds: ["git.delivery.pr-mark-ready.drift.emitted-line"],
   releaseImpact: "patch",
 });
 

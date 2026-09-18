@@ -105,7 +105,7 @@ const AUTHORITY_DENIED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["git-delivery-authority"],
-  proofIds: ["git.delivery.authority.denied"],
+  proofIds: ["git.delivery.authority.denied.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -131,7 +131,7 @@ const AUTHORITY_ADMITTED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-authority-gap"],
-  proofIds: ["git.delivery.authority.admitted"],
+  proofIds: ["git.delivery.authority.admitted.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -163,7 +163,7 @@ const REPOSITORY_MISMATCH_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["git-delivery-repository-binding"],
-  proofIds: ["git.delivery.repository.mismatch"],
+  proofIds: ["git.delivery.repository.mismatch.emitted-line"],
   releaseImpact: "patch",
 });
 

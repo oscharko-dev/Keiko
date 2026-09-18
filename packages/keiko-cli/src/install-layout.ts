@@ -51,7 +51,7 @@ export const INSTALL_LAYOUT_NORMALIZED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["cli-install-layout-normalization"],
-  proofIds: ["cli.install-layout.normalized-before-support-snapshot"],
+  proofIds: ["cli.install-layout.normalized.before-support-snapshot"],
   releaseImpact: "patch",
 });
 

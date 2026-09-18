@@ -113,7 +113,7 @@ const DRAFT_DELIVERY_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-draft-delivery"],
-  proofIds: ["git.draft-delivery"],
+  proofIds: ["git.draft-delivery.emitted-line"],
   releaseImpact: "patch",
 });
 

@@ -889,7 +889,7 @@ const APPLY_STARTED_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["pr-description-apply"],
-  proofIds: ["pr-description.apply.started"],
+  proofIds: ["pr-description.apply.started.emitted-line"],
   releaseImpact: "patch",
 });
 const APPLY_SUCCEEDED_OPERATION = defineActivityLogOperation({
@@ -904,7 +904,7 @@ const APPLY_SUCCEEDED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["pr-description-apply"],
-  proofIds: ["pr-description.apply.succeeded"],
+  proofIds: ["pr-description.apply.succeeded.emitted-line"],
   releaseImpact: "patch",
 });
 const APPLY_BLOCKED_OPERATION = defineActivityLogOperation({
@@ -919,7 +919,7 @@ const APPLY_BLOCKED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["pr-description-apply-blocked"],
-  proofIds: ["pr-description.apply.blocked"],
+  proofIds: ["pr-description.apply.blocked.emitted-line"],
   releaseImpact: "patch",
 });
 const APPLY_FAILED_OPERATION = defineActivityLogOperation({
@@ -934,7 +934,7 @@ const APPLY_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["pr-description-apply-failed"],
-  proofIds: ["pr-description.apply.failed"],
+  proofIds: ["pr-description.apply.failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -950,7 +950,7 @@ const MODEL_EGRESS_DENIED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["pr-description-model-egress"],
-  proofIds: ["pr-description.model-egress.denied"],
+  proofIds: ["pr-description.model-egress.denied.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -966,7 +966,7 @@ const PR_DESCRIPTION_REPOSITORY_MISMATCH_OPERATION = defineActivityLogOperation(
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["pr-description-repository-binding"],
-  proofIds: ["pr-description.repository.mismatch"],
+  proofIds: ["pr-description.repository.mismatch.emitted-line"],
   releaseImpact: "patch",
 });
 

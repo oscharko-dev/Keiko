@@ -102,7 +102,7 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-chat-provider-call"],
-  proofIds: ["chat.request-dispatch.emitted-line"],
+  proofIds: ["chat.request.dispatch.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -132,7 +132,7 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-stream-read"],
-  proofIds: ["chat.response-streamed.emitted-line"],
+  proofIds: ["chat.response.streamed.emitted-line"],
   releaseImpact: "patch",
 });
 const GATEWAY_EGRESS_CODES: Record<OutboundHttpEgressErrorCode, GatewayEgressErrorCode> = {

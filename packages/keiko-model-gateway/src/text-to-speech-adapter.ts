@@ -60,7 +60,7 @@ const SPEECH_TTS_MIME_CORRECTED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["speech-mime-correction"],
-  proofIds: ["speech.tts-mime-corrected.emitted-line"],
+  proofIds: ["speech.tts.mime.corrected.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -104,7 +104,7 @@ const SPEECH_TTS_STREAM_PEEK_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["speech-stream-response"],
-  proofIds: ["speech.tts-stream-peek-failed.emitted-line"],
+  proofIds: ["speech.tts.stream.peek.failed.emitted-line"],
   releaseImpact: "patch",
 });
 

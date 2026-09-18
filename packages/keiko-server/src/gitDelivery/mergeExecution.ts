@@ -93,7 +93,7 @@ const READINESS_OBSERVED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-delivery-readiness-provider"],
-  proofIds: ["git.delivery.readiness.observed"],
+  proofIds: ["git.delivery.readiness.observed.emitted-line"],
   releaseImpact: "patch",
 });
 import {

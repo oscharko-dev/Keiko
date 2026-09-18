@@ -74,7 +74,7 @@ const REPOSITORY_FINGERPRINT_DIFF_COMPLETED_OPERATION = defineActivityLogOperati
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["repository-fingerprint-diff"],
-  proofIds: ["repository.fingerprint-diff.counts"],
+  proofIds: ["repository.fingerprint-diff.completed.counts"],
   releaseImpact: "patch",
 });
 

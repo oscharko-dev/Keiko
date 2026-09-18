@@ -74,7 +74,7 @@ const DAP_DEBUG_RUNTIME_SELECTED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["debug-runtime-selection"],
-  proofIds: ["dap.debug-runtime-selected.emitted-line"],
+  proofIds: ["dap.debug-runtime.selected.emitted-line"],
   releaseImpact: "patch",
 });
 

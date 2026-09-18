@@ -133,13 +133,13 @@ exist under --state-dir contributes no section. After a successful export the co
 state directory's diagnostic readiness (ready, degraded or unavailable, with closed reasons).
 
 analyze reads FILE (a support bundle or one raw Activity Log file — auto-detected), groups its
-lines by correlationId, and prints one reconstructed timeline per id. Each process lifetime is
-ordered by seq; lifetimes are ordered by the position of their first line in the file, because the log
-envelope promises no order across processes. The default and per-correlation reports identify the
-resolved input file, an inferable raw-log state directory, newest valid event and instance, and
-whether the raw log is current and apparently active. A raw log more than five minutes behind the
-analysis clock is reported as stale; bundles are historical artifacts and are never presented as
-live processes.
+lines by correlationId, and prints one reconstructed timeline per id.
+Each process lifetime is ordered by seq; lifetimes are ordered by the position of their first line
+in the file, because the log envelope promises no order across processes. The default and
+per-correlation reports identify the resolved input file, an inferable raw-log state directory,
+newest valid event and instance, and whether the raw log is current and apparently active. A raw
+log more than five minutes behind the analysis clock is reported as stale; bundles are historical
+artifacts and are never presented as live processes.
 --correlation-id narrows to a single id; --json emits the machine-readable form. --clusters prints
 a whole-file view of every parsed line grouped by (category, op, errorKind), independent of
 --correlation-id: a count and up to 5 sample correlation ids per group. --seed (requires
@@ -209,7 +209,7 @@ const CLI_SUPPORT_EXPORT_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["cli-support-export"],
-  proofIds: ["cli.support.export.install-layout-refusal"],
+  proofIds: ["cli.support.export.failed.install-layout-refusal"],
   releaseImpact: "patch",
 });
 
@@ -910,7 +910,7 @@ const SUPPORT_EXPORT_PUBLICATION_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["support-publication", "support-publication-acknowledgement"],
-  proofIds: ["support.export.publication-evidence", "support.export.commit-last"],
+  proofIds: ["support.export.publication.publication-evidence", "support.export.publication.commit-last"],
   releaseImpact: "patch",
 });
 
@@ -949,7 +949,7 @@ const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["support-analysis"],
-  proofIds: ["support.analyze.classification-evidence"],
+  proofIds: ["support.analyze.classified.classification-evidence"],
   releaseImpact: "patch",
 });
 

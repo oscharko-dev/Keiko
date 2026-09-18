@@ -51,7 +51,7 @@ const SPEECH_STT_LANGUAGE_NORMALIZED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["speech-language-normalization"],
-  proofIds: ["speech.stt-language-normalized.emitted-line"],
+  proofIds: ["speech.stt.language.normalized.emitted-line"],
   releaseImpact: "patch",
 });
 

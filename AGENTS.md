@@ -368,7 +368,7 @@ sent back.
 
 ## 8. Logging is part of every change — and the first thing you read when something breaks
 
-Keiko's activity log (`<stateDir>/logs/server.log`, governed by
+Keiko's activity log (the segments in `<stateDir>/logs/`, governed by
 [ADR-0173](docs/adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) and
 described in [`docs/observability/`](docs/observability/README.md)) is a **machine-reconstruction
 contract**: a customer's log file must let an agent rebuild a defect 1:1 without access to the
@@ -450,16 +450,19 @@ system that exists, never beside it:
   emitted line(s) — `op`, `correlationId`, `errorKind`, the fields that carry the evidence — and a
   change to a user-visible or failure-prone surface is checked against `keiko support analyze`
   showing the operation in its timeline. The pull-request template carries this as a checklist item.
-- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log;
-  it must not create a second logical stream or a path-based replacement shortcut. Until immutable
-  segments replace daily files, the current file rotates at UTC day boundaries and dated archives
-  are retained for the configured bounded window. Never remove an existing disk bound while a
-  successor is unfinished. Rotation and pruning operate only inside an owner-private,
-  non-redirected directory, on closed-grammar names whose opened handles prove regular,
-  owner-matched files; hard-link publication selects one cross-process archive winner, and rename is
-  only the fallback on filesystems that report hard links unsupported. Segment and retention
-  changes preserve ordering, compatibility classification, explicit truncation/loss, and
-  support-export reconstruction.
+- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log
+  in `<stateDir>/logs/`; it must not create a second logical stream or a path-based replacement
+  shortcut. It is stored as immutable segments (ADR-0173 D14). Each process appends only to its own
+  active segment, and a sealed segment is read-only and never rewritten. Retention bounds the whole
+  directory by bytes and age, so total use stays within the byte budget plus the pin quota. Never
+  remove or loosen a disk bound. Sealing, recovery and pruning operate only inside an
+  owner-private, non-redirected directory, on the closed name grammar in `keiko-contracts`
+  (`activity-log-files.ts`), and only on opened handles that prove regular, owner-matched files.
+  Publication never replaces an existing name; rename is only the fallback on filesystems that
+  report hard links unsupported. Readers enumerate and order the files only through that grammar
+  (`orderActivityLogFileNames`), never through a hand-written pattern or a fixed file path. Segment
+  and retention changes preserve ordering, compatibility classification, explicit truncation/loss,
+  and support-export reconstruction.
 - **Saved reports remain under human control.** A support export or replay fixture is written only
   to the local destination the user selected. Keiko does not upload it, attach it to GitHub, open an
   issue, or otherwise disclose it automatically. Content-bearing optional sections require their
@@ -477,8 +480,9 @@ Before you read code, form a hypothesis, or ask a human for a screenshot, read w
 already recorded:
 
 1. **Get the artifact.** `keiko support export --out bundle.jsonl` (adds store fingerprints, a
-   manifest and — with `--include-evidence` — evidence manifests), or the raw
-   `<stateDir>/logs/server.log`; the analyzer auto-detects which it was handed.
+   manifest and — with `--include-evidence` — evidence manifests), or one raw Activity Log file
+   from `<stateDir>/logs/` (a segment or a legacy file); the analyzer auto-detects which it was
+   handed.
 2. **Reconstruct.** `keiko support analyze bundle.jsonl` prints every timeline;
    `--correlation-id <id> --json` narrows to one as a machine-readable `LogTimeline`; `--clusters`
    groups every parsed line of the file by category, `op` and `errorKind` (errors and successes

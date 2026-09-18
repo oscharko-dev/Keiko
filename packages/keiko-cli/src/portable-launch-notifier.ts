@@ -61,7 +61,7 @@ const WINDOWS_ALERT_SPAWN_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["windows-alert-spawn"],
-  proofIds: ["portable.windows-alert.spawn-failed"],
+  proofIds: ["portable.windows-alert.spawn-failed.emitted-line"],
   releaseImpact: "patch",
 });
 export type PortableFailureNotifierFn = (message: string, env: EnvSource) => void;
