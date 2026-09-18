@@ -23,6 +23,10 @@ import {
 import { API_ROUTES, matchRoute, type RouteContext } from "./routes.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 function captureServerLog(): BufferedServerLogSink {
   const sink = createBufferedServerLogSink();
@@ -157,6 +161,11 @@ describe("coding-sidecar tool facade route", () => {
     ).toBeDefined();
     // Body-free: the log line never carries the browser origin value itself.
     expect(log.lines().join("\n")).not.toContain("evil.test");
+    const persisted = expectActivityLogProof(
+      "coding-sidecar.tool-facade.rejected.line",
+      formatActivityLogProofLine(log.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "origin-not-allowed" });
   });
 
   it("returns 503 CODING_TOOL_FACADE_UNAVAILABLE, without logging a rejection, when no run is active", async () => {

@@ -13,6 +13,10 @@ import type { RouteContext } from "../routes.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { GIT_DELIVERY_MAX_BODY_BYTES } from "./requestGuards.js";
 import { createHandleGitRepositoryInitialize } from "./repositoryInitializationRoutes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const CORRELATION_ID = "123e4567-e89b-42d3-a456-426614174000";
 const ROUTE = "/api/git-delivery/repository/initialize";
@@ -109,6 +113,12 @@ describe("repository initialization route", () => {
       }),
     );
     expect(JSON.stringify(events)).not.toContain(root);
+    const initialized = events.find((event) => event.op === "git.repository.initialize");
+    const persisted = expectActivityLogProof(
+      "git.repository.initialize.emitted-line",
+      formatActivityLogProofLine(initialized ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "succeeded" });
   });
 
   it("rejects an existing repository before init can run", async () => {

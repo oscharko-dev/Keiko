@@ -7,6 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/index.js";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
   productionOpenCodeLoopbackEndpoints,
   resolveProductionOpenCodeActivation,
 } from "./productionOpenCodeActivation.js";
@@ -160,6 +164,15 @@ describe("production OpenCode activation", () => {
         },
       },
     ]);
+    const refusedProof = expectActivityLogProof(
+      "coding-runtime.dev-lane.refused.emitted-line",
+      formatActivityLogProofLine(activity[0] ?? {}),
+    );
+    expect(refusedProof).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      lane: "dev-checkout",
+      reason: "payload-missing",
+    });
   });
 
   it("classifies a tampered dev-lane payload separately from routine unavailability", () => {
@@ -223,6 +236,16 @@ describe("production OpenCode activation", () => {
       extra: { lane: "dev-checkout", target: "windows-x64" },
     });
     expect(event.extra?.runtimeSupervisorSha256).toMatch(/^[a-f0-9]{64}$/u);
+    const activatedProof = expectActivityLogProof(
+      "coding-runtime.dev-lane.activated.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(activatedProof).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      lane: "dev-checkout",
+      target: "windows-x64",
+      evidenceClass: "functional-not-platform-qualified",
+    });
   });
 
   it("prefers an injected secure-read port over dev-lane construction", () => {

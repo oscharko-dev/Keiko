@@ -15,6 +15,10 @@ import {
   MAX_DOCUMENTS,
 } from "./prDescriptionReceiptStore.js";
 import type { PrDescriptionReceiptRead } from "./prDescriptionReceiptTypes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 function version(read: PrDescriptionReceiptRead): string | null {
   if (!read.ok) throw new TypeError("Receipt unavailable");
@@ -65,6 +69,11 @@ describe.each(["memory", "file"] as const)(
         errorKind: "conflict",
         extra: { reason: "receipt-conflict", failureKind: "conflict" },
       });
+      const persisted = expectActivityLogProof(
+        "git.pr-description.receipt.emitted-line",
+        formatActivityLogProofLine(fixture.events.at(-1) ?? {}),
+      );
+      expect(persisted).toMatchObject({ phase: "record", reason: "receipt-conflict" });
       const next = store.recordStatus(fixture.context, journal, version(first));
       expect(version(next)).not.toBe(version(first));
       expect(store.recordStatus(fixture.context, journal, version(first))).toEqual({

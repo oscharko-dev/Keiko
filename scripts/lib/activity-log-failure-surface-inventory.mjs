@@ -147,8 +147,8 @@ function proofCallViolations(operations, calls) {
     });
 }
 
-function unresolvedProofViolations(proofs) {
-  if (!RESOLUTION_ENFORCED) return [];
+function unresolvedProofViolations(proofs, enforceResolution) {
+  if (!enforceResolution) return [];
   return proofs
     .filter((proof) => proof.status === "unresolved")
     .map((proof) =>
@@ -192,7 +192,7 @@ function scenarioEntries(classes, calls) {
   });
 }
 
-function scenarioViolations(scenarios, calls) {
+function scenarioViolations(scenarios, calls, enforceResolution) {
   const callViolations = calls
     .filter((call) => call.kind === "scenario")
     .filter((call) => call.id === undefined || !isScenarioId(call.id))
@@ -204,7 +204,7 @@ function scenarioViolations(scenarios, calls) {
         "Name the scenario as a literal '<surface>.<failure mode>' from the closed vocabularies.",
       ),
     );
-  const unresolved = RESOLUTION_ENFORCED
+  const unresolved = enforceResolution
     ? scenarios
         .filter((scenario) => scenario.status === "unresolved")
         .map((scenario) =>
@@ -290,8 +290,8 @@ function assembleViolations(repoRoot, registry, context, parts) {
     ...unmappedOperationViolations(parts.operations),
     ...emptySurfaceViolations(parts.surfaces),
     ...proofCallViolations(parts.operations, parts.calls),
-    ...unresolvedProofViolations(parts.proofs),
-    ...scenarioViolations(parts.scenarios, parts.calls),
+    ...unresolvedProofViolations(parts.proofs, context.enforceResolution),
+    ...scenarioViolations(parts.scenarios, parts.calls, context.enforceResolution),
   ].toSorted(
     (left, right) =>
       compareCodepoints(left.site, right.site) || compareCodepoints(left.code, right.code),
@@ -306,6 +306,7 @@ export function generateFailureSurfaceInventory(repoRoot, registry, options = {}
   const context = {
     surfaceRules: options.surfaceRules ?? ACTIVITY_LOG_SURFACE_RULES,
     ownerPorts: options.ownerPorts ?? ACTIVITY_LOG_OWNER_PORTS,
+    enforceResolution: options.enforceResolution ?? RESOLUTION_ENFORCED,
   };
   const calls = options.calls ?? scanActivityLogProofCalls(repoRoot);
   const operations = registry.operations.map((entry) => inventoryOperation(entry, context));
