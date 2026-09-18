@@ -101,17 +101,28 @@ function persistedFields(
   );
 }
 
+// The two channels a registered line reaches: the production file sink (a supported line of an
+// active or degraded writer) and the emergency stderr notice the sink writes when it cannot persist
+// (an incomplete line of an unavailable writer — never a file line).
+type ProofChannel = "file-sink" | "stderr-notice";
+
 function expectPersistedIdentity(
   proofId: string,
   op: string,
   record: Record<string, unknown>,
+  channel: ProofChannel,
 ): void {
   const context = `Activity Log proof ${proofId} (${op})`;
   expect(record.schemaVersion, `${context}: schemaVersion`).toBe(2);
   expect(record.registryVersion, `${context}: registryVersion`).toBe(ACTIVITY_LOG_REGISTRY_VERSION);
   expect(record.schemaDigest, `${context}: schemaDigest`).toBe(ACTIVITY_LOG_SCHEMA_DIGEST);
   expect(record.catalogDigest, `${context}: catalogDigest`).toBe(ACTIVITY_LOG_CATALOG_DIGEST);
-  expect(record.compatibilityState, `${context}: compatibilityState`).toBe("supported");
+  expect(record.compatibilityState, `${context}: compatibilityState`).toBe(
+    channel === "file-sink" ? "supported" : "incomplete",
+  );
+  if (channel === "stderr-notice") {
+    expect(record.writerCapability, `${context}: writerCapability`).toBe("unavailable");
+  }
   expect(isActivityLogProcessId(record.pid), `${context}: pid`).toBe(true);
   expect(isActivityLogInstanceId(record.instanceId), `${context}: instanceId`).toBe(true);
   expect(isActivityLogSequence(record.seq), `${context}: seq`).toBe(true);
@@ -123,10 +134,31 @@ function expectPersistedIdentity(
  * a string literal at the call site: the op-catalog generator resolves proofs from those literals.
  */
 export function expectActivityLogProof(proofId: string, line: string): Record<string, unknown> {
+  return expectRegisteredLine(proofId, line, "file-sink");
+}
+
+/**
+ * Asserts that `line` is the emergency stderr notice the production sink writes when a line cannot
+ * be persisted (`reportServerLogFailure`): this build's identity, an incomplete line of an
+ * unavailable writer, and closed registered fields. Resolved by the generator like
+ * `expectActivityLogProof`; `proofId` must be a string literal.
+ */
+export function expectActivityLogStderrProof(
+  proofId: string,
+  line: string,
+): Record<string, unknown> {
+  return expectRegisteredLine(proofId, line, "stderr-notice");
+}
+
+function expectRegisteredLine(
+  proofId: string,
+  line: string,
+  channel: ProofChannel,
+): Record<string, unknown> {
   const registration = registrationForProof(proofId);
   const record = parsePersistedLine(proofId, line);
   const context = `Activity Log proof ${proofId} (${registration.op})`;
-  expectPersistedIdentity(proofId, registration.op, record);
+  expectPersistedIdentity(proofId, registration.op, record, channel);
   expect(record.op, `${context}: op`).toBe(registration.op);
   expect(record.category, `${context}: category`).toBe(registration.category);
   if (registration.causal !== "none") {
