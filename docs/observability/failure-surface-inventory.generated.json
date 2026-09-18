@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c86ba9564bbbc0cc6402002c84f5b75936c8f458acb5ee7f09493312448b2f90"
+    "catalogDigest": "b4c6697153d853b3a4590d76ed950b232a26e89c9f5d62db1e408bfee93ade12"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -54,7 +54,7 @@
     "operationCount": 420,
     "proofCount": 428,
     "resolvedProofCount": 353,
-    "failureClassCount": 307,
+    "failureClassCount": 308,
     "scenarioCount": 29,
     "resolvedScenarioCount": 1
   },
@@ -853,6 +853,7 @@
     "store-encryption-checkpoint": ["memory-knowledge.dependency-failure"],
     "store-encryption-migration": ["memory-knowledge.dependency-failure"],
     "support-analysis": ["runtime-packages.dependency-failure"],
+    "support-incident": ["lifecycle-crash.loss"],
     "support-publication": ["runtime-packages.dependency-failure"],
     "support-publication-acknowledgement": ["runtime-packages.dependency-failure"],
     "task-workspace-lifecycle": ["tools-workflows.dependency-failure"],

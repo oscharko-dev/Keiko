@@ -63,6 +63,7 @@ import type { ServerLogEnv } from "./log-level.js";
 import {
   createFileServerLogSink,
   pinActivityLogWindow,
+  releaseActivityLogPin,
   reportServerLogFailure,
   serverLogProcessIdentity,
   type ActivityLogPinResult,
@@ -220,6 +221,12 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["candidate", "acknowledged", "reported"],
     },
+    pinRelease: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["released", "not-pinned", "rejected"],
+    },
     openIncidentCount: OPEN_COUNT_FIELD,
   },
   causal: "correlation",
@@ -370,24 +377,33 @@ function rejectionErrorKind(
   return reason === "store-unavailable" ? "unavailable" : "validation-failed";
 }
 
+export type SupportIncidentPinRelease = "released" | "not-pinned" | "rejected";
+
+interface DismissalFacts {
+  readonly correlationId: string;
+  readonly openIncidentCount: number;
+  readonly pinRelease: SupportIncidentPinRelease;
+}
+
 function dismissedEvidence(
   stateDir: string,
   record: SupportIncidentRecord,
-  correlationId: string,
-  openIncidentCount: number,
+  facts: DismissalFacts,
 ): void {
   writeEvidence(
     stateDir,
     activityLogEvent(
       SUPPORT_INCIDENT_DISMISSED_OPERATION,
-      { correlationId },
+      { correlationId: facts.correlationId },
       {
         incidentId: record.incidentId,
         defectFingerprint: record.fingerprint.defectFingerprint,
         fingerprintAlgorithm: record.fingerprint.algorithm,
         trigger: record.trigger,
         incidentState: record.state,
-        openIncidentCount,
+        pinRelease: facts.pinRelease,
+        openIncidentCount: facts.openIncidentCount,
+        ...(facts.pinRelease === "rejected" ? { completeness: "partial" as const } : {}),
       },
     ),
   );
@@ -826,7 +842,24 @@ export function supportIncidentSegmentFiles(
 
 export type SupportIncidentDismissal = "dismissed" | "not-found" | "failed";
 
-/** Explicit human dismissal: removes the record; its pin lapses at its (bounded) expiry. */
+function releaseIncidentPin(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  context: { readonly correlationId: string; readonly env: ServerLogEnv },
+): SupportIncidentPinRelease {
+  if (record.pin.pinId === undefined) return "not-pinned";
+  const result = releaseActivityLogPin(
+    stateDir,
+    { pinId: record.pin.pinId, correlationId: context.correlationId },
+    context.env,
+  );
+  return result.status === "released" ? "released" : "rejected";
+}
+
+/**
+ * Explicit human dismissal: removes the record and releases its Activity Log pin, so the window
+ * returns to ordinary retention. A pin that cannot be released still lapses at its bounded expiry.
+ */
 export function dismissSupportIncident(
   stateDir: string,
   incidentId: string,
@@ -842,35 +875,57 @@ export function dismissSupportIncident(
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op, correlationId });
     return "failed";
   }
-  dismissedEvidence(stateDir, record, correlationId, open.length - 1);
+  const pinRelease = releaseIncidentPin(stateDir, record, {
+    correlationId,
+    env: options.env ?? process.env,
+  });
+  dismissedEvidence(stateDir, record, {
+    correlationId,
+    openIncidentCount: open.length - 1,
+    pinRelease,
+  });
   return "dismissed";
 }
 
 // ─── The registered-failure trigger ────────────────────────────────────────────────────────────
+//
+// The Activity Log file sink calls `observeSupportIncidentTrigger` for every persisted line. The
+// hook only admits and queues: candidate creation (a store write plus a pin, which seals the active
+// segment) runs outside the sink's write path on the next turn of the event loop, and synchronously
+// on process exit so a failure that ends the process still becomes a candidate.
 
 /** A process evaluates at most this many new candidates per rolling minute (all fingerprints). */
 export const MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE = 6;
 const MAX_REMEMBERED_FINGERPRINTS = 128;
 
+interface PendingCandidate {
+  readonly stateDir: string;
+  readonly evidence: SupportIncidentFailureEvidence;
+}
+
 let triggerDepth = 0;
 let triggerOverride: boolean | undefined;
+let drainScheduled = false;
+let exitFlushInstalled = false;
 const recentFingerprints = new Map<string, number>();
 const recentEvaluations: number[] = [];
+const pendingCandidates: PendingCandidate[] = [];
 
 /** Test seam: force the automatic trigger on or off; `undefined` restores the default. */
 export function setSupportIncidentTriggerForTests(enabled: boolean | undefined): void {
   triggerOverride = enabled;
   recentFingerprints.clear();
   recentEvaluations.length = 0;
+  pendingCandidates.length = 0;
 }
 
 function triggerEnabled(): boolean {
   return triggerOverride ?? !activityLogTestWriterInstalled();
 }
 
-// Bounds the synchronous cost a failure storm can add to the logging path: one fingerprint is
-// re-evaluated at most once per SUPPORT_INCIDENT_SUPPRESSION_MS, and all fingerprints together at
-// most MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE times. The failure lines themselves are always
+// Bounds the cost a failure storm can add: one fingerprint is re-evaluated at most once per
+// SUPPORT_INCIDENT_SUPPRESSION_MS, and all fingerprints together at most
+// MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE times. The failure lines themselves are always
 // persisted, so a skipped evaluation loses no evidence; the pinned window of the first occurrence
 // and the Activity Log's own retention still hold it.
 function admitEvaluation(fingerprint: string, nowMs: number): boolean {
@@ -888,11 +943,11 @@ function admitEvaluation(fingerprint: string, nowMs: number): boolean {
 
 function eventFrames(event: ServerLogEvent): readonly unknown[] | undefined {
   const frames = event.extra?.frames;
-  return Array.isArray(frames) ? frames : undefined;
+  return Array.isArray(frames) ? [...(frames as readonly unknown[])] : undefined;
 }
 
-function triggerCandidate(stateDir: string, event: ServerLogEvent): void {
-  if (!supportIncidentEligibleOperation(event.op)) return;
+function admittedEvidence(event: ServerLogEvent): SupportIncidentFailureEvidence | undefined {
+  if (!supportIncidentEligibleOperation(event.op)) return undefined;
   const evidence: SupportIncidentFailureEvidence = {
     op: event.op,
     errorKind: event.errorKind,
@@ -900,31 +955,60 @@ function triggerCandidate(stateDir: string, event: ServerLogEvent): void {
     parentCorrelationId: event.parentCorrelationId,
     frames: eventFrames(event),
   };
-  if (!admitEvaluation(computeDefectFingerprint(failureFingerprintInput(evidence)), Date.now())) {
-    return;
+  const fingerprint = computeDefectFingerprint(failureFingerprintInput(evidence));
+  return admitEvaluation(fingerprint, Date.now()) ? evidence : undefined;
+}
+
+function reportLostCandidate(error: unknown, correlationId: string | undefined): void {
+  // The failure line itself is already persisted; only the candidate is lost, and says so.
+  recordActivityLogLoss("persistence-failed");
+  reportServerLogFailure(error, {
+    op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
+    correlationId,
+    loss: "event-dropped",
+  });
+}
+
+function createQueuedCandidate(pending: PendingCandidate): void {
+  triggerDepth += 1;
+  try {
+    recordRegisteredFailureIncident(pending.stateDir, pending.evidence);
+  } catch (error) {
+    reportLostCandidate(error, pending.evidence.correlationId);
+  } finally {
+    triggerDepth -= 1;
   }
-  recordRegisteredFailureIncident(stateDir, evidence);
+}
+
+/** Creates every queued candidate now: the deferred drain, and the synchronous exit flush. */
+export function drainSupportIncidentCandidates(): void {
+  drainScheduled = false;
+  for (const pending of pendingCandidates.splice(0)) createQueuedCandidate(pending);
+}
+
+function scheduleDrain(): void {
+  if (!exitFlushInstalled) {
+    exitFlushInstalled = true;
+    process.once("exit", drainSupportIncidentCandidates);
+  }
+  if (drainScheduled) return;
+  drainScheduled = true;
+  setImmediate(drainSupportIncidentCandidates);
 }
 
 /**
- * Called by the Activity Log file sink after it persisted `event`. Creates (or deduplicates) an
- * incident candidate for an eligible failure. Never throws and never re-enters itself: the
- * candidate's own lifecycle and pin lines are written from inside this call.
+ * Called by the Activity Log file sink after it persisted `event`. Queues an incident candidate
+ * for an eligible, admitted failure and returns; it never throws and never writes from inside the
+ * sink's own write.
  */
 export function observeSupportIncidentTrigger(stateDir: string, event: ServerLogEvent): void {
   if (triggerDepth > 0 || event.level !== "error" || !triggerEnabled()) return;
-  triggerDepth += 1;
   try {
-    triggerCandidate(stateDir, event);
+    const evidence = admittedEvidence(event);
+    if (evidence === undefined) return;
+    pendingCandidates.push({ stateDir, evidence });
+    scheduleDrain();
   } catch (error) {
-    // The failure line itself is already persisted; only the candidate is lost, and says so.
-    recordActivityLogLoss("persistence-failed");
-    reportServerLogFailure(error, {
-      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
-      correlationId: event.correlationId,
-      loss: "event-dropped",
-    });
-  } finally {
-    triggerDepth -= 1;
+    reportLostCandidate(error, event.correlationId);
   }
 }

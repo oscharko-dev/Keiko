@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c86ba9564bbbc0cc6402002c84f5b75936c8f458acb5ee7f09493312448b2f90" as const;
+  "b4c6697153d853b3a4590d76ed950b232a26e89c9f5d62db1e408bfee93ade12" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -22846,6 +22846,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["candidate", "acknowledged", "reported"],
       },
+      pinRelease: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["released", "not-pinned", "rejected"],
+      },
       openIncidentCount: {
         type: "integer",
         dataClass: "count",
@@ -25041,8 +25047,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
   supportedClassCount: 308,
-  completeClassCount: 307,
-  completeness: "incomplete",
+  completeClassCount: 308,
+  completeness: "complete",
   classes: [
     {
       failureClass: "activity-log-contract",
@@ -51614,6 +51620,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "support-incident",
+      requirementContract: "support-incident",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "loss", "start", "state"],
       lifecycleOperations: {
@@ -51847,6 +51854,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "pinRelease",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "trigger",
               type: "string",
               dataClass: "closed-enum",
@@ -51981,8 +51994,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           missingObligations: [],
         },
       ],
-      missingObligations: ["failure-class-contract", "support-incident"],
-      completeness: "incomplete",
+      missingObligations: [],
+      completeness: "complete",
     },
     {
       failureClass: "support-publication",
