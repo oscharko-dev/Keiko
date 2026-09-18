@@ -1044,11 +1044,20 @@ An incident is a control artifact over the Activity Log, not a second log (#3533
 is created automatically for a registered failure operation logged at `error` with at least one
 supported failure class, or explicitly by the user (`keiko support incident report`); a closed
 `trigger` records which. Eligibility derives from the registry, never from a UI-side list.
-Candidate creation runs outside the logging call and never transfers data.
 
-On creation the candidate pins a bounded window (15 minutes before, 5 minutes after) through D14's pin
-primitive, across every process instance. No causal-closure computation happens at pin time; a later
-selective export chooses the closure from the pinned window.
+On the registered-failure trigger, the window's Activity Log retention pin (15 minutes before, 5
+minutes after, through D14's pin primitive, across every process instance) is published
+synchronously, in the same turn as the triggering write — before any later maintenance pass, this
+process's own next segment admission or another process sharing the state directory, can run against
+an unprotected window. Only the rest of candidate creation — deduplication, the quota check, and the
+record write — runs outside the logging call; it never transfers data. A duplicate or a rejected
+candidate releases the pin its trigger already published instead of leaving it to sit until its own
+TTL. The residual race a synchronous publish cannot fully close on its own — a concurrent process's
+retention removing a sealed segment in the narrow gap between observing the window and the pin
+actually covering it — is detected by comparing that snapshot to the pin's own outcome and reported
+as the pin's `evidenceLostBeforePin`, so the window is never reported as a clean "pinned" when part
+of it was already lost. No causal-closure computation happens at pin time; a later selective export
+chooses the closure from the pinned window.
 
 Two identifiers serve two purposes. `incidentId` is random and names one occurrence.
 `defectFingerprint` is deterministic and versioned over allowlisted stable inputs (owning surface,

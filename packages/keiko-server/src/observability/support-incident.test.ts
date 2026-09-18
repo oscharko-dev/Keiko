@@ -14,7 +14,38 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Simulates "a retention pass racing the gap" (#3533 review 4050605915): armed for one test, the
+// next directory listing taken through the real `listActivityLogDirectory` -- the same read
+// `pinIncidentWindow`'s before/after snapshots and retention itself use -- also deletes a sealed
+// segment as a side effect, as if a concurrent maintenance pass (this process's own next segment
+// admission, or another process sharing stateDir) removed it between the trigger observing the
+// window and its pin actually covering it. Every other call is an untouched passthrough.
+const retentionRace = vi.hoisted(() => ({
+  targetPath: undefined as string | undefined,
+  armed: false,
+}));
+
+vi.mock("./activity-log-store.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./activity-log-store.js")>();
+  const { unlinkSync } = await import("node:fs");
+  return {
+    ...original,
+    listActivityLogDirectory: (
+      directory: string,
+    ): ReturnType<typeof original.listActivityLogDirectory> => {
+      const listing = original.listActivityLogDirectory(directory);
+      if (retentionRace.armed && retentionRace.targetPath !== undefined) {
+        retentionRace.armed = false;
+        unlinkSync(retentionRace.targetPath);
+      }
+      return listing;
+    },
+  };
+});
+
 import {
+  ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_OPERATION_SURFACES,
   SUPPORT_INCIDENT_DIRECTORY_NAME,
   activityLogOperationSchema,
@@ -108,6 +139,8 @@ describe("SupportIncident candidates", () => {
     closeFileServerLogSinks();
     resetServerLogFailureNotices();
     vi.restoreAllMocks();
+    retentionRace.targetPath = undefined;
+    retentionRace.armed = false;
     rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -250,6 +283,52 @@ describe("SupportIncident candidates", () => {
       );
       created(recordRegisteredFailureIncident(stateDir, { op: FAILURE_OP, errorKind: "timeout" }));
       expect(storeNames()).toHaveLength(2);
+    });
+  });
+
+  describe("the incident window pin", () => {
+    it("is already published before recordRegisteredFailureIncident returns", () => {
+      const { record } = created(
+        recordRegisteredFailureIncident(stateDir, {
+          op: FAILURE_OP,
+          errorKind: "unavailable",
+          frames: FRAMES,
+        }),
+      );
+      expect(record.pin.status).toBe("pinned");
+      expect(record.pin.evidenceLostBeforePin).toBe(false);
+      expect(lines("activity-log.pin.created")).toHaveLength(1);
+    });
+
+    it("marks evidenceLostBeforePin when a maintenance pass removes a sealed segment inside the window before the pin covers it (#3533 review 4050605915)", () => {
+      // A sealed segment that will fall inside the next incident's [-15min, +5min] window.
+      createFileServerLogSink(stateDir).write(failureEvent({ correlationId: "prior-occurrence" }));
+      closeFileServerLogSinks();
+      const directory = join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
+      const sealedName = readdirSync(directory).find(
+        (name) => name.endsWith(".jsonl") && !name.endsWith(".active.jsonl"),
+      );
+      if (sealedName === undefined) throw new Error("fixture: expected a sealed segment on disk");
+      retentionRace.targetPath = join(directory, sealedName);
+      retentionRace.armed = true;
+
+      const { record } = created(
+        recordRegisteredFailureIncident(stateDir, {
+          op: FAILURE_OP,
+          errorKind: "unavailable",
+          correlationId: "racing-occurrence",
+          frames: ["packages/keiko-server/dist/race/m0.js:1:1"],
+        }),
+      );
+
+      expect(retentionRace.armed).toBe(false); // the race fired exactly once
+      expect(record.pin.status).toBe("pinned");
+      expect(record.pin.evidenceLostBeforePin).toBe(true);
+      const line = expectActivityLogProof(
+        "support.incident.created.emitted-line",
+        lines("support.incident.created")[0] ?? "",
+      );
+      expect(line).toMatchObject({ evidenceLostBeforePin: true, completeness: "partial" });
     });
   });
 
@@ -403,11 +482,15 @@ describe("SupportIncident candidates", () => {
   });
 
   describe("the file-sink hook", () => {
-    it("queues a persisted eligible failure and creates the candidate outside the write", async () => {
+    it("publishes the window pin inside the sink's write, but defers the record to the next turn", async () => {
       setSupportIncidentTriggerForTests(true);
       createFileServerLogSink(stateDir).write(failureEvent());
-      // Nothing happens inside the sink's own write: no pin, no seal, no store write.
-      expect(lines("activity-log.pin.created")).toHaveLength(0);
+      // The window is already protected before write() returns: no later maintenance pass -- this
+      // process's own next segment admission, or a second process sharing stateDir -- can run
+      // against an unpinned window (#3533 review 4050605915). Only the record itself is deferred.
+      expect(lines("activity-log.pin.created")).toHaveLength(1);
+      expect(listSupportIncidents(stateDir)).toEqual([]);
+      expect(lines("support.incident.created")).toHaveLength(0);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -416,7 +499,7 @@ describe("SupportIncident candidates", () => {
         trigger: "registered-failure",
         fingerprint: { op: FAILURE_OP, errorKind: "unavailable", frameCount: 1 },
         correlation: { rootCorrelationId: "failure-correlation-1", childCorrelationIds: [] },
-        pin: { status: "pinned" },
+        pin: { status: "pinned", evidenceLostBeforePin: false },
       });
       const ops = readPersistedActivityLog(stateDir)
         .split("\n")
@@ -426,6 +509,34 @@ describe("SupportIncident candidates", () => {
           [FAILURE_OP, "activity-log.pin.created", "support.incident.created"].includes(op),
         );
       expect(ops).toEqual([FAILURE_OP, "activity-log.pin.created", "support.incident.created"]);
+    });
+
+    it("releases the trigger's own pin when the deferred step finds a duplicate", async () => {
+      setSupportIncidentTriggerForTests(true);
+      const sink = createFileServerLogSink(stateDir);
+      sink.write(failureEvent());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(listSupportIncidents(stateDir)).toHaveLength(1);
+
+      // A second occurrence of the identical defect also pins its own window synchronously (the
+      // trigger always pre-pins before it knows whether this will be a duplicate) and is then
+      // deduplicated onto the open incident in the deferred step, so the redundant second pin must
+      // be released rather than sit and hold segments until its own 14-day TTL.
+      setSupportIncidentTriggerForTests(true); // clears the one-per-minute suppression memory
+      sink.write(failureEvent({ correlationId: "second-occurrence" }));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(listSupportIncidents(stateDir)).toHaveLength(1);
+      expect(lines("support.incident.deduplicated")).toHaveLength(1);
+      expect(lines("activity-log.pin.created")).toHaveLength(2);
+      const released = lines("activity-log.pin.expired")
+        .map((text) => JSON.parse(text) as { expiryReason?: string })
+        .filter((entry) => entry.expiryReason === "released");
+      expect(released).toHaveLength(1);
     });
 
     it("ignores warn-level failures, and the whole trigger under the test-writer marker", () => {
