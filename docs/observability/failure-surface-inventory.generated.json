@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3a105c6bdf582156f48592c27b72757894c2b3027e0b73f8dedce074f9c13177"
+    "catalogDigest": "3dcce1c6c17766992245589cfccd92a7a97bc592b4d8c4c7006c64969ee9d797"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 420,
-    "proofCount": 428,
-    "resolvedProofCount": 353,
+    "operationCount": 419,
+    "proofCount": 427,
+    "resolvedProofCount": 352,
     "failureClassCount": 308,
     "scenarioCount": 29,
     "resolvedScenarioCount": 1
@@ -160,7 +160,6 @@
         "gateway.retry.scheduled",
         "gateway.route.rejected",
         "gateway.spend.ceiling",
-        "gateway.spend.rejected",
         "gateway.spend.reserved",
         "gateway.spend.settled",
         "gateway.stream.abandoned",
@@ -713,7 +712,7 @@
     "gateway-route-rejection": ["model-gateway.rejection"],
     "gateway-spend-ceiling": ["model-gateway.dependency-failure"],
     "gateway-spend-measurement": ["model-gateway.dependency-failure"],
-    "gateway-spend-policy": ["model-gateway.rejection"],
+    "gateway-spend-policy": [],
     "gateway-spend-reservation": ["model-gateway.dependency-failure"],
     "gateway-stream-call": ["model-gateway.crash"],
     "gateway-stream-read": ["model-gateway.dependency-failure"],
@@ -1130,6 +1129,7 @@
       "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts"
     ],
     "coding-runtime.tool-availability.failed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.omitted-evidence.test.ts",
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
     ],
     "coding-runtime.tool-result.emitted-line": [],
@@ -1364,7 +1364,6 @@
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
     "gateway.spend.ceiling.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
-    "gateway.spend.rejected.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
     "gateway.spend.reserved.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
     "gateway.spend.settled.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
     "gateway.stream.abandoned.emitted-line": [
@@ -1963,5 +1962,12 @@
     "ui.crash": [],
     "ui.dependency-failure": []
   },
-  "violations": []
+  "violations": [
+    {
+      "code": "proof-unregistered",
+      "site": "packages/keiko-server/src/gateway-spend-budget.test.ts:91",
+      "detail": "gateway.spend.rejected.line",
+      "correctiveAction": "Use a proof id a registered operation declares, or register the proof id."
+    }
+  ]
 }
