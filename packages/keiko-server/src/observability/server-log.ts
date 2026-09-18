@@ -107,6 +107,7 @@ import {
   activityLogSegmentSeqSpan,
   applyActivityLogRetention,
   inspectActivityLogSegmentTail,
+  isActivityLogPinId,
   isActivityLogPinScope,
   isActivityLogSegmentEntry,
   listActivityLogDirectory,
@@ -1324,7 +1325,7 @@ const ACTIVITY_LOG_PIN_EXPIRED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["expired", "invalid-record"],
+      values: ["expired", "invalid-record", "released"],
     },
     removalStatus: {
       type: "string",
@@ -1892,7 +1893,7 @@ function pinRejectionErrorKind(reason: ActivityLogPinRejection | undefined): Act
 
 interface PinExpiryFacts {
   readonly pinId: string;
-  readonly reason: "expired" | "invalid-record";
+  readonly reason: "expired" | "invalid-record" | "released";
   readonly removed: boolean;
   readonly releasedSegmentCount: number;
   readonly releasedBytes: number;
@@ -2160,10 +2161,15 @@ function recoverOrphanedSegments(
   return changed;
 }
 
+interface PinCoverage {
+  readonly count: number;
+  readonly bytes: number;
+}
+
 function pinCoverage(
   pin: ActivityLogPinRecord | undefined,
   files: readonly ActivityLogFileEntry[],
-): { readonly count: number; readonly bytes: number } {
+): PinCoverage {
   let count = 0;
   let bytes = 0;
   if (pin === undefined) return { count, bytes };
@@ -2972,8 +2978,25 @@ function rejectedPin(
   };
 }
 
-function pinOutcome(active: ActiveLog, record: ActivityLogPinRecord, nowMs: number): PinAttempt {
-  const listing = listActivityLogDirectory(active.directory);
+// The pin API is reachable from a sink's own write path, which never throws, so a directory that
+// cannot be listed (EACCES, EMFILE, …) becomes a closed outcome here instead of an exception.
+function listingOrUndefined(directory: string): ActivityLogDirectoryListing | undefined {
+  try {
+    return listActivityLogDirectory(directory);
+  } catch {
+    return undefined;
+  }
+}
+
+function pinOutcome(
+  active: ActiveLog,
+  record: ActivityLogPinRecord,
+  nowMs: number,
+  preSealListing: ActivityLogDirectoryListing,
+): PinAttempt {
+  // The record is already published, so a listing that fails after the seal still reports the pin,
+  // from the listing taken before it.
+  const listing = listingOrUndefined(active.directory) ?? preSealListing;
   const reads = readActivityLogPins(listing, active.trustedRoot);
   const protection = planActivityLogPinProtection(
     listing.files,
@@ -3020,7 +3043,8 @@ function createPin(
 ): PinAttempt {
   if (!validPinRequest(request, nowMs)) return rejectedPin(request, "invalid-request", undefined);
   const scope = copyPinScope(request.scope);
-  const listing = listActivityLogDirectory(active.directory);
+  const listing = listingOrUndefined(active.directory);
+  if (listing === undefined) return rejectedPin(request, "storage-unavailable", scope);
   const pins = activeActivityLogPins(readActivityLogPins(listing, active.trustedRoot), nowMs);
   if (pins.length >= MAX_ACTIVITY_LOG_PINS) return rejectedPin(request, "pin-limit-reached", scope);
   const record: ActivityLogPinRecord = {
@@ -3038,7 +3062,7 @@ function createPin(
     return rejectedPin(request, "storage-unavailable", scope);
   }
   sealSegment(active, cursor, "pin-request");
-  return pinOutcome(active, record, nowMs);
+  return pinOutcome(active, record, nowMs, listing);
 }
 
 function storeForStateDir(stateDir: string, env: ServerLogEnv): ActiveLog {
@@ -3047,10 +3071,15 @@ function storeForStateDir(stateDir: string, env: ServerLogEnv): ActiveLog {
   return resolveActiveLog(directory, resolveActivityLogStorageConfig(env));
 }
 
-function persistPinEvidence(active: ActiveLog, cursor: WriteCursor, facts: PinEvidenceFacts): void {
+function persistPinLine(
+  active: ActiveLog,
+  cursor: WriteCursor,
+  op: string,
+  build: () => ServerLogEvent,
+): void {
   let queued = false;
   try {
-    queueEvidence(active, pinCreatedEvidence(facts, cursor.correlationId));
+    queueEvidence(active, build());
     queued = true;
     writeQueued(active, cursor, undefined);
   } catch (error) {
@@ -3059,11 +3088,17 @@ function persistPinEvidence(active: ActiveLog, cursor: WriteCursor, facts: PinEv
     if (queued) return;
     recordPersistenceLoss(error);
     reportServerLogFailure(error, {
-      op: ACTIVITY_LOG_PIN_CREATED_OPERATION.op,
+      op,
       correlationId: cursor.correlationId,
       loss: failureLoss(error),
     });
   }
+}
+
+function persistPinEvidence(active: ActiveLog, cursor: WriteCursor, facts: PinEvidenceFacts): void {
+  persistPinLine(active, cursor, ACTIVITY_LOG_PIN_CREATED_OPERATION.op, () =>
+    pinCreatedEvidence(facts, cursor.correlationId),
+  );
 }
 
 /**
@@ -3094,6 +3129,91 @@ export function pinActivityLogWindow(
   const attempt = createPin(active, request, cursor, Date.now());
   persistPinEvidence(active, cursor, attempt.facts);
   return attempt.result;
+}
+
+export interface ActivityLogPinReleaseRequest {
+  readonly pinId: string;
+  readonly correlationId?: string | undefined;
+}
+
+export type ActivityLogPinReleaseResult =
+  | {
+      readonly status: "released";
+      readonly releasedSegmentCount: number;
+      readonly releasedBytes: number;
+    }
+  | {
+      readonly status: "rejected";
+      readonly reason: "invalid-request" | "not-found" | "storage-unavailable" | "removal-failed";
+    };
+
+function persistPinExpiry(active: ActiveLog, cursor: WriteCursor, facts: PinExpiryFacts): void {
+  persistPinLine(active, cursor, ACTIVITY_LOG_PIN_EXPIRED_OPERATION.op, () =>
+    pinExpiredEvidence(facts, cursor.correlationId),
+  );
+}
+
+function releaseFacts(pinId: string, removed: boolean, coverage: PinCoverage): PinExpiryFacts {
+  return {
+    pinId,
+    reason: "released",
+    removed,
+    releasedSegmentCount: coverage.count,
+    releasedBytes: coverage.bytes,
+  };
+}
+
+function releaseListedPin(
+  active: ActiveLog,
+  cursor: WriteCursor,
+  pinId: string,
+): ActivityLogPinReleaseResult {
+  const listing = listingOrUndefined(active.directory);
+  if (listing === undefined) {
+    persistPinExpiry(active, cursor, releaseFacts(pinId, false, { count: 0, bytes: 0 }));
+    return { status: "rejected", reason: "storage-unavailable" };
+  }
+  const read = readActivityLogPins(listing, active.trustedRoot).find(
+    (candidate) => candidate.entry.pinId === pinId,
+  );
+  if (read === undefined) return { status: "rejected", reason: "not-found" };
+  const coverage = pinCoverage(read.record, listing.files);
+  const removed = removePinRecordQuietly(active, read);
+  persistPinExpiry(active, cursor, releaseFacts(pinId, removed, coverage));
+  return removed
+    ? { status: "released", releasedSegmentCount: coverage.count, releasedBytes: coverage.bytes }
+    : { status: "rejected", reason: "removal-failed" };
+}
+
+/**
+ * Releases one retention pin before its expiry, for example once the incident it protected was
+ * reported or dismissed (#3533). The closed-grammar record is removed through the guarded,
+ * identity-bound unlink and evidenced as `activity-log.pin.expired` with `expiryReason:
+ * "released"`; the segments it protected return to normal retention. Never throws: an unknown pin
+ * is `not-found`, and an unlistable directory or a failed removal is a closed, evidenced rejection.
+ */
+export function releaseActivityLogPin(
+  stateDir: string,
+  request: ActivityLogPinReleaseRequest,
+  env: ServerLogEnv = process.env,
+): ActivityLogPinReleaseResult {
+  if (!isActivityLogPinId(Reflect.get(request, "pinId"))) {
+    return { status: "rejected", reason: "invalid-request" };
+  }
+  let active: ActiveLog;
+  try {
+    active = storeForStateDir(stateDir, env);
+  } catch (error) {
+    recordActivityLogLoss("persistence-failed");
+    reportServerLogFailure(error, {
+      op: ACTIVITY_LOG_PIN_EXPIRED_OPERATION.op,
+      correlationId: request.correlationId,
+      loss: "event-dropped",
+    });
+    return { status: "rejected", reason: "storage-unavailable" };
+  }
+  const cursor: WriteCursor = { claimed: undefined, correlationId: request.correlationId };
+  return releaseListedPin(active, cursor, request.pinId);
 }
 
 // ─── Storage health (read-only; consumed by the diagnostic-readiness check, #3532) ─────────────

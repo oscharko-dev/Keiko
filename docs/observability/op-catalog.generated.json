@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f1f2e0a0610c70330291e21b24031c15278bd107512e3074b58a41cf24433400",
+    "catalogDigest": "49ae72dd888a9f061e8476fc21512a5e8d652272b95440dc993c998c77ebf13c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -217,8 +217,8 @@
         "failureClasses": ["activity-log-pin"],
         "proofIds": ["activity-log.pin.created.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1262",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1867"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1263",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1868"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -248,7 +248,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["expired", "invalid-record"]
+            "values": ["expired", "invalid-record", "released"]
           },
           "removalStatus": {
             "type": "string",
@@ -273,8 +273,8 @@
         "failureClasses": ["activity-log-pin"],
         "proofIds": ["activity-log.pin.expired.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1314",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1905"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1315",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1906"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -346,8 +346,8 @@
         "failureClasses": ["activity-log-pin"],
         "proofIds": ["activity-log.pin.quota-exhausted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1346",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1937"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1347",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1938"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -418,8 +418,8 @@
         "failureClasses": ["activity-log-pressure"],
         "proofIds": ["activity-log.pressure.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1221",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1807"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1222",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1808"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -575,8 +575,8 @@
         "failureClasses": ["activity-log-retention"],
         "proofIds": ["activity-log.retention.pruned.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1173",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1757"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1174",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1758"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -648,8 +648,8 @@
         "failureClasses": ["activity-log-segment"],
         "proofIds": ["activity-log.segment.recovered.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1123",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1722"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1124",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1723"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -727,8 +727,8 @@
         "failureClasses": ["activity-log-segment"],
         "proofIds": ["activity-log.segment.sealed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1091",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1665"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1092",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1666"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22633,8 +22633,8 @@
         "failureClasses": ["activity-log-contract"],
         "proofIds": ["server-log.line-dropped.registered-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:483",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:888"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:484",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:889"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22685,8 +22685,8 @@
         "failureClasses": ["activity-log-persistence"],
         "proofIds": ["server-log.safe-open.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1064",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1619"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1065",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1620"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22737,8 +22737,8 @@
         "failureClasses": ["activity-log-persistence"],
         "proofIds": ["server-log.target-mutated.registered-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:528",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1634"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:529",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1635"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22811,10 +22811,10 @@
         "failureClasses": ["activity-log-persistence", "activity-log-contract"],
         "proofIds": ["server-log.write-failed.stderr-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:427",
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:428",
         "emitterSites": [
-          "packages/keiko-server/src/observability/server-log.ts:680",
-          "packages/keiko-server/src/observability/server-log.ts:756"
+          "packages/keiko-server/src/observability/server-log.ts:681",
+          "packages/keiko-server/src/observability/server-log.ts:757"
         ]
       },
       {
@@ -66273,43 +66273,43 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1517",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1518",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2598",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2604",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2738",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2744",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2820",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2826",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2889",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2895",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:3062",
+      "site": "packages/keiko-server/src/observability/server-log.ts:3122",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:3087",
+      "site": "packages/keiko-server/src/observability/server-log.ts:3209",
       "package": "keiko-server"
     },
     {
@@ -66520,25 +66520,25 @@
     {
       "op": "activity-log.pin.created",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1265",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1266",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.pin.expired",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1317",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1318",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.pin.quota-exhausted",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1349",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1350",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.pressure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1224",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1225",
       "package": "keiko-server"
     },
     {
@@ -66556,19 +66556,19 @@
     {
       "op": "activity-log.retention.pruned",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1176",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1177",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.segment.recovered",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1126",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1127",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.segment.sealed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1094",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1095",
       "package": "keiko-server"
     },
     {
@@ -68575,31 +68575,31 @@
     {
       "op": "server-log.line-dropped",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:486",
+      "site": "packages/keiko-server/src/observability/server-log.ts:487",
       "package": "keiko-server"
     },
     {
       "op": "server-log.safe-open",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1067",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1068",
       "package": "keiko-server"
     },
     {
       "op": "server-log.target-mutated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:531",
+      "site": "packages/keiko-server/src/observability/server-log.ts:532",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:430",
+      "site": "packages/keiko-server/src/observability/server-log.ts:431",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:664",
+      "site": "packages/keiko-server/src/observability/server-log.ts:665",
       "package": "keiko-server"
     },
     {
