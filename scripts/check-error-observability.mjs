@@ -121,12 +121,20 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "Activity Log construction itself failed; the CLI reports the unavailable capability and stops.",
   ],
   [
+    "packages/keiko-cli/src/support-export.ts:logSkipKind",
+    "A no-follow lstat probe classifies a skipped log file; the manifest attests its name and kind.",
+  ],
+  [
     "packages/keiko-cli/src/ui.ts:safeCliErrorKind",
     "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
   ],
   [
     "packages/keiko-contracts/src/observability.ts:registrationMatchesCanonical",
     "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
+  ],
+  [
+    "packages/keiko-contracts/src/observability.ts:activityLogEvent",
+    "A validation failure becomes the rejection sentinel the sink drops with one bounded notice.",
   ],
   [
     "packages/keiko-model-gateway/src/http.ts:logEndpointClass",
@@ -149,6 +157,22 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
   ],
   [
+    "packages/keiko-security/src/fs-hardening.ts:linkedArchiveMatches",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:movedArchiveMatches",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:pathHasIdentity",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:directoryGuardStillOwnerOnly",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
     "packages/keiko-security/src/fs-hardening.ts:processIsAlive",
     "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
   ],
@@ -167,6 +191,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
     "packages/keiko-security/src/safe-artifact-directory-mutation.ts:directoryMatches",
     "A failed identity read is the fail-closed false result of this isolated helper predicate.",
+  ],
+  [
+    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:entryMatches",
+    "A failed identity read refuses the unlink as an entry mismatch in this isolated helper.",
   ],
   [
     "packages/keiko-security/src/safe-artifact-directory-mutation.ts:readRequest",

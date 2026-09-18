@@ -1011,11 +1011,10 @@ function operationEvidenceClasses(operation) {
   );
 }
 
+// Registration already rejects empty proofIds, so a missing executable proof surfaces as a
+// typed-registry violation and through the failure-class contract comparison, never here.
 function operationCoverageMissing(operation) {
-  const missing = [];
-  if (operation.emitterSites.length === 0) missing.push("failure-evidence");
-  if (operation.proofIds.length === 0) missing.push("executable-proof");
-  return missing;
+  return operation.emitterSites.length === 0 ? ["failure-evidence"] : [];
 }
 
 function sortedUnique(values) {
