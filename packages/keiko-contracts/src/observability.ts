@@ -30,6 +30,28 @@ export {
   ACTIVITY_LOG_SCHEMA_DIGEST,
 } from "./activity-log-registry.generated.js";
 export { ACTIVITY_LOG_OPERATION_REGISTRY };
+// The Activity Log directory's closed file-name grammar travels with the runtime observability
+// contract, so every reader that already imports this entry point shares the writer's grammar.
+export {
+  ACTIVITY_LOG_DIRECTORY_NAME,
+  ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
+  ACTIVITY_LOG_PIN_ID_PATTERN,
+  activityLogPinFileName,
+  activityLogSegmentFileName,
+  compareActivityLogFileNames,
+  formatActivityLogSegmentId,
+  isActivityLogOwnedFileName,
+  orderActivityLogFileNames,
+  parseActivityLogFileName,
+  parseActivityLogPinFileName,
+  parseActivityLogSegmentId,
+  type ActivityLogFileName,
+  type ActivityLogLegacyArchiveFileName,
+  type ActivityLogLegacyCurrentFileName,
+  type ActivityLogSegmentFileName,
+  type ActivityLogSegmentIdentity,
+  type ActivityLogSegmentState,
+} from "./activity-log-files.js";
 
 /**
  * The shape an error KIND may take: a leading letter, then up to 63 more letters, digits,
