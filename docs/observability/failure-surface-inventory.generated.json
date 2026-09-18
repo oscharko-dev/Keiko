@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a319067460b946d18308ed52d63b34715b1a7c72c7f3eed03f3b4219f1562dff"
+    "catalogDigest": "ff9b7252ab00c96e1d6b342b2f2ea9b80d15d7921fb23f436478cacbdee0357d"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 415,
-    "proofCount": 423,
-    "resolvedProofCount": 245,
-    "failureClassCount": 307,
+    "operationCount": 420,
+    "proofCount": 428,
+    "resolvedProofCount": 59,
+    "failureClassCount": 308,
     "scenarioCount": 29,
     "resolvedScenarioCount": 0
   },
@@ -512,7 +512,12 @@
         "server-log.safe-open",
         "server-log.target-mutated",
         "server-log.write-failed",
-        "server.runtime.shutdown"
+        "server.runtime.shutdown",
+        "support.incident.created",
+        "support.incident.deduplicated",
+        "support.incident.dismissed",
+        "support.incident.expired",
+        "support.incident.rejected"
       ],
       "scenarios": [
         "lifecycle-crash.crash",
@@ -848,6 +853,7 @@
     "store-encryption-checkpoint": ["memory-knowledge.dependency-failure"],
     "store-encryption-migration": ["memory-knowledge.dependency-failure"],
     "support-analysis": ["runtime-packages.dependency-failure"],
+    "support-incident": ["lifecycle-crash.loss"],
     "support-publication": ["runtime-packages.dependency-failure"],
     "support-publication-acknowledgement": ["runtime-packages.dependency-failure"],
     "task-workspace-lifecycle": ["tools-workflows.dependency-failure"],
@@ -914,32 +920,18 @@
     "chat.compaction.facts.classified.line": [],
     "chat.creation.rejected.reason": [],
     "chat.regeneration.rejected.reason": [],
-    "chat.request.dispatch.emitted-line": [
-      "packages/keiko-model-gateway/src/openai-adapter.logging.test.ts"
-    ],
-    "chat.response.streamed.emitted-line": [
-      "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
-    ],
+    "chat.request.dispatch.emitted-line": [],
+    "chat.response.streamed.emitted-line": [],
     "chat.send.rejected.reason": [],
     "chat.turn.started.shape": [],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.failed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.started.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
-    "cli.install-layout.normalized.before-support-snapshot": [
-      "packages/keiko-cli/src/install-layout.activity-log-proof.test.ts"
-    ],
-    "cli.lifecycle.stop-escalated.disposition": [
-      "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
-    ],
-    "cli.lifecycle.stop-escalation-failed.kind": [
-      "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
-    ],
-    "cli.lifecycle.stop-request-failed.kind": [
-      "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
-    ],
-    "cli.lifecycle.stop-requested.channel": [
-      "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
-    ],
+    "cli.install-layout.normalized.before-support-snapshot": [],
+    "cli.lifecycle.stop-escalated.disposition": [],
+    "cli.lifecycle.stop-escalation-failed.kind": [],
+    "cli.lifecycle.stop-request-failed.kind": [],
+    "cli.lifecycle.stop-requested.channel": [],
     "cli.support.export.failed.install-layout-refusal": [],
     "cli.uninstall.completed.persisted": [],
     "cli.uninstall.failed.persisted": [],
@@ -954,129 +946,57 @@
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
-    "coding-app-session.channel.closed.duration": [
-      "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
-    ],
-    "coding-app-session.channel.opened.live": [
-      "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
-    ],
-    "coding-app-session.local-session.issued.request": [
-      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
-    ],
-    "coding-app-session.paired.request": [
-      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
-    ],
-    "coding-app-session.rotated.request": [
-      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
-    ],
-    "coding-app-session.signed-out.request": [
-      "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
-    ],
-    "coding-context.github-authorization.changed.line": [
-      "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.test.ts"
-    ],
-    "coding-context.github-authorization.evaluated.line": [
-      "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.test.ts"
-    ],
-    "coding-context.github-remote.evaluated.line": [
-      "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.test.ts"
-    ],
-    "coding-context.github.read.line": [
-      "packages/keiko-server/src/coding-context/codingContextPorts.test.ts"
-    ],
-    "coding-context.linked-issue-skipped.line": [
-      "packages/keiko-server/src/coding-context/codingRuntimeIssueIntake.test.ts"
-    ],
-    "coding-context.pack.line": [
-      "packages/keiko-server/src/coding-context/codingRuntimeIssueIntake.test.ts"
-    ],
+    "coding-app-session.channel.closed.duration": [],
+    "coding-app-session.channel.opened.live": [],
+    "coding-app-session.local-session.issued.request": [],
+    "coding-app-session.paired.request": [],
+    "coding-app-session.rotated.request": [],
+    "coding-app-session.signed-out.request": [],
+    "coding-context.github-authorization.changed.line": [],
+    "coding-context.github-authorization.evaluated.line": [],
+    "coding-context.github-remote.evaluated.line": [],
+    "coding-context.github.read.line": [],
+    "coding-context.linked-issue-skipped.line": [],
+    "coding-context.pack.line": [],
     "coding-repository-handler.settled.emitted-line": [],
     "coding-repository-handler.started.emitted-line": [],
-    "coding-runtime.approval.waiting.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.authority.mint-failed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.test.ts"
-    ],
-    "coding-runtime.authority.minted.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.test.ts"
-    ],
-    "coding-runtime.authority.revalidation-refused.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.test.ts"
-    ],
+    "coding-runtime.approval.waiting.emitted-line": [],
+    "coding-runtime.authority.mint-failed.emitted-line": [],
+    "coding-runtime.authority.minted.emitted-line": [],
+    "coding-runtime.authority.revalidation-refused.emitted-line": [],
     "coding-runtime.compaction.emitted-line": [],
     "coding-runtime.context-usage.observed.emitted-line": [],
-    "coding-runtime.description.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.description-authority.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/descriptionAuthorityLifetime.test.ts"
-    ],
+    "coding-runtime.description.emitted-line": [],
+    "coding-runtime.description-authority.emitted-line": [],
     "coding-runtime.dev-lane.activated.emitted-line": [],
     "coding-runtime.dev-lane.refused.emitted-line": [],
     "coding-runtime.editor-mutation.settled.emitted-line": [],
-    "coding-runtime.event.dropped.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.follow-up.dispatch-failed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
-    ],
-    "coding-runtime.initial-turn.dispatch-failed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
-    ],
-    "coding-runtime.initial-turn.stop-failed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
-    ],
+    "coding-runtime.event.dropped.emitted-line": [],
+    "coding-runtime.follow-up.dispatch-failed.emitted-line": [],
+    "coding-runtime.initial-turn.dispatch-failed.emitted-line": [],
+    "coding-runtime.initial-turn.stop-failed.emitted-line": [],
     "coding-runtime.operation.refused.emitted-line": [],
     "coding-runtime.operator-decision.emitted-line": [],
-    "coding-runtime.project-memory.context.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.question.authority-resolution-failed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
-    ],
-    "coding-runtime.question.list-failed.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
-    ],
-    "coding-runtime.question.list-revision-rebound.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
-    ],
+    "coding-runtime.project-memory.context.emitted-line": [],
+    "coding-runtime.question.authority-resolution-failed.emitted-line": [],
+    "coding-runtime.question.list-failed.emitted-line": [],
+    "coding-runtime.question.list-revision-rebound.emitted-line": [],
     "coding-runtime.read-only-child.completed.emitted-line": [],
     "coding-runtime.read-only-child.runner-failed.emitted-line": [],
     "coding-runtime.readiness.failed.emitted-line": [],
     "coding-runtime.readiness.phase.emitted-line": [],
     "coding-runtime.repository-rerank.emitted-line": [],
-    "coding-runtime.run.delivery-continuation-refused.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.run.delivery-continued.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.run.delivery-evidence-unreadable.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.run.delivery-unevidenced.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
+    "coding-runtime.run.delivery-continuation-refused.emitted-line": [],
+    "coding-runtime.run.delivery-continued.emitted-line": [],
+    "coding-runtime.run.delivery-evidence-unreadable.emitted-line": [],
+    "coding-runtime.run.delivery-unevidenced.emitted-line": [],
     "coding-runtime.run.issue-binding-refused.emitted-line": [],
-    "coding-runtime.run.issue-context-attached.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.run.operator-decision.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.run.recovery-acknowledged.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.run.settled.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.run.shutdown.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
-    "coding-runtime.run.started.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
+    "coding-runtime.run.issue-context-attached.emitted-line": [],
+    "coding-runtime.run.operator-decision.emitted-line": [],
+    "coding-runtime.run.recovery-acknowledged.emitted-line": [],
+    "coding-runtime.run.settled.emitted-line": [],
+    "coding-runtime.run.shutdown.emitted-line": [],
+    "coding-runtime.run.started.emitted-line": [],
     "coding-runtime.safe-activity.emitted-line": [],
     "coding-runtime.skill-discovery.emitted-line": [],
     "coding-runtime.task-replacement.emitted-line": [],
@@ -1084,51 +1004,25 @@
     "coding-runtime.tool-availability.failed.emitted-line": [],
     "coding-runtime.tool-result.emitted-line": [],
     "coding-runtime.verification.emitted-line": [],
-    "coding-runtime.verification-summarized.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
-    ],
+    "coding-runtime.verification-summarized.emitted-line": [],
     "coding-runtime.workspace-read.emitted-line": [],
     "coding-sidecar.gateway.readiness-insufficient.line": [],
     "coding-sidecar.gateway.rejected.line": [],
     "coding-sidecar.gateway.request-validated.line": [],
     "coding-sidecar.gateway.tool-availability.line": [],
     "coding-sidecar.tool-facade.rejected.line": [],
-    "coding-workbench.issue.previewed.line": [
-      "packages/keiko-server/src/coding-context/issuePreviewRoutes.test.ts"
-    ],
-    "coding-workbench.issue.resolved.line": [
-      "packages/keiko-server/src/coding-context/githubIssueResolution.test.ts"
-    ],
-    "command.terminated.line": [
-      "packages/keiko-server/src/process-log-sink.activity-log-proof.test.ts"
-    ],
-    "consolidation.log.sink-failed.body-free": [
-      "packages/keiko-memory-consolidation/src/log-port.test.ts"
-    ],
-    "consolidation.summary.fallback.reason": [
-      "packages/keiko-memory-consolidation/src/consolidate.test.ts"
-    ],
-    "dap.debug-runtime.selected.emitted-line": [
-      "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
-    ],
-    "editor.local-history.rekey.completed.emitted-line": [
-      "packages/keiko-server/src/editor/localHistory/localHistoryCapture.test.ts"
-    ],
-    "editor.local-history.rekey.failed.emitted-line": [
-      "packages/keiko-server/src/editor/localHistory/localHistoryCapture.test.ts"
-    ],
-    "editor.producer-turn.completed.emitted-line": [
-      "packages/keiko-server/src/editor/agentProducerRoute.test.ts"
-    ],
-    "editor.verification.dependencies.emitted-line": [
-      "packages/keiko-server/src/editor/verificationRunner.test.ts"
-    ],
-    "editor.verification.execute.emitted-line": [
-      "packages/keiko-server/src/editor/verificationRunner.test.ts"
-    ],
-    "editor.workspace-watch.authority-revoked.emitted-line": [
-      "packages/keiko-server/src/editor/watch/workspaceWatchRoutes.test.ts"
-    ],
+    "coding-workbench.issue.previewed.line": [],
+    "coding-workbench.issue.resolved.line": [],
+    "command.terminated.line": [],
+    "consolidation.log.sink-failed.body-free": [],
+    "consolidation.summary.fallback.reason": [],
+    "dap.debug-runtime.selected.emitted-line": [],
+    "editor.local-history.rekey.completed.emitted-line": [],
+    "editor.local-history.rekey.failed.emitted-line": [],
+    "editor.producer-turn.completed.emitted-line": [],
+    "editor.verification.dependencies.emitted-line": [],
+    "editor.verification.execute.emitted-line": [],
+    "editor.workspace-watch.authority-revoked.emitted-line": [],
     "embedding.batch.array-unsupported.emitted-line": [],
     "embedding.batch.budgeting-failed.count": [
       "packages/keiko-local-knowledge/src/indexing/embedding-activity-log.test.ts"
@@ -1181,9 +1075,9 @@
     "embedding.identity.rejected.dimensions": [
       "packages/keiko-local-knowledge/src/indexing/embedding-activity-log.test.ts"
     ],
-    "embedding.memory.failed.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
-    "embedding.memory.succeeded.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
-    "embedding.memory.unavailable.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
+    "embedding.memory.failed.line": [],
+    "embedding.memory.succeeded.line": [],
+    "embedding.memory.unavailable.line": [],
     "embedding.preflight.cache-hit.profile": [
       "packages/keiko-local-knowledge/src/indexing/preflight-activity-log.test.ts"
     ],
@@ -1213,212 +1107,104 @@
     "embedding.scalar-ladder.deadline-expired.emitted-line": [],
     "embedding.scalar-ladder.item-completed.emitted-line": [],
     "embedding.scalar-ladder.item-failed.emitted-line": [],
-    "evidence.retention.line": ["packages/keiko-server/src/evidence-retention-log.test.ts"],
-    "gateway.chat.completed.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
-    "gateway.chat.failed.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
-    "gateway.chat.started.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
-    "gateway.circuit.closed.emitted-line": [
-      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
-    ],
-    "gateway.circuit.half-open.emitted-line": [
-      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
-    ],
-    "gateway.circuit.opened.emitted-line": [
-      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
-    ],
-    "gateway.circuit.rejected.emitted-line": [
-      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
-    ],
-    "gateway.config.resolved.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
-    "gateway.instance.bound.line": ["packages/keiko-server/src/gateway-instance-cache.test.ts"],
-    "gateway.instance.reset.line": ["packages/keiko-server/src/gateway-instance-cache.test.ts"],
-    "gateway.instance.reused.line": ["packages/keiko-server/src/gateway-instance-cache.test.ts"],
-    "gateway.instance.unavailable.line": [
-      "packages/keiko-server/src/gateway-instance-cache.test.ts"
-    ],
-    "gateway.log.sink-failed.emitted-line": [
-      "packages/keiko-model-gateway/src/observability.test.ts"
-    ],
-    "gateway.readiness.automatic.completed.line": [
-      "packages/keiko-server/src/gateway-readiness.test.ts"
-    ],
-    "gateway.readiness.automatic.started.line": [
-      "packages/keiko-server/src/gateway-readiness.test.ts"
-    ],
-    "gateway.retry.budget-exhausted.emitted-line": [
-      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
-    ],
+    "evidence.retention.line": [],
+    "gateway.chat.completed.emitted-line": [],
+    "gateway.chat.failed.emitted-line": [],
+    "gateway.chat.started.emitted-line": [],
+    "gateway.circuit.closed.emitted-line": [],
+    "gateway.circuit.half-open.emitted-line": [],
+    "gateway.circuit.opened.emitted-line": [],
+    "gateway.circuit.rejected.emitted-line": [],
+    "gateway.config.resolved.emitted-line": [],
+    "gateway.instance.bound.line": [],
+    "gateway.instance.reset.line": [],
+    "gateway.instance.reused.line": [],
+    "gateway.instance.unavailable.line": [],
+    "gateway.log.sink-failed.emitted-line": [],
+    "gateway.readiness.automatic.completed.line": [],
+    "gateway.readiness.automatic.started.line": [],
+    "gateway.retry.budget-exhausted.emitted-line": [],
     "gateway.retry.exhausted.emitted-line": ["packages/keiko-model-gateway/src/resilience.test.ts"],
-    "gateway.retry.scheduled.emitted-line": [
-      "packages/keiko-model-gateway/src/resilience.logging.test.ts"
-    ],
-    "gateway.route.rejected.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
+    "gateway.retry.scheduled.emitted-line": [],
+    "gateway.route.rejected.emitted-line": [],
     "gateway.spend.ceiling.line": [],
     "gateway.spend.rejected.line": [],
     "gateway.spend.reserved.line": [],
     "gateway.spend.settled.line": [],
-    "gateway.stream.abandoned.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
-    "gateway.stream.buffered-fallback.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
-    "gateway.stream.completed.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
-    "gateway.stream.failed.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
-    "gateway.stream.started.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
-    ],
+    "gateway.stream.abandoned.emitted-line": [],
+    "gateway.stream.buffered-fallback.emitted-line": [],
+    "gateway.stream.completed.emitted-line": [],
+    "gateway.stream.failed.emitted-line": [],
+    "gateway.stream.started.emitted-line": [],
     "gateway.tool-calling.verification.line": [],
     "gateway.tool-catalog.call-bound.emitted-line": [],
     "gateway.tool-catalog.native-passthrough.emitted-line": [],
     "gateway.tool-catalog.projected.emitted-line": [],
     "gateway.tool-catalog.rejected.emitted-line": [],
-    "gateway.tool-catalog.repair.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.tool-schema-repair.test.ts"
-    ],
+    "gateway.tool-catalog.repair.emitted-line": [],
     "git-change.chat.apply.outcome": [],
-    "git-change.chat.blocked.reason": ["packages/keiko-server/src/gitChangeRoutes.test.ts"],
-    "git-change.chat.connected.scope": ["packages/keiko-server/src/gitChangeRoutes.test.ts"],
+    "git-change.chat.blocked.reason": [],
+    "git-change.chat.connected.scope": [],
     "git-change.chat.description-target.denied.reason": [],
-    "git-change.chat.refreshed.scope": ["packages/keiko-server/src/gitChangeRoutes.test.ts"],
-    "git-change.chat.stale.scope": ["packages/keiko-server/src/gitChangeRoutes.test.ts"],
-    "git.ci-observation.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/ciObservationService.test.ts"
-    ],
+    "git-change.chat.refreshed.scope": [],
+    "git-change.chat.stale.scope": [],
+    "git.ci-observation.emitted-line": [],
     "git.ci-repair.budget.emitted-line": [],
-    "git.commit.draft.completed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts"
-    ],
-    "git.commit.preview.completed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts"
-    ],
-    "git.delivery.authority.admitted.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/requestPreparation.test.ts"
-    ],
-    "git.delivery.authority.denied.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/requestPreparation.test.ts"
-    ],
-    "git.delivery.buffers.checked.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/productionVerifiedCommitDependencies.test.ts"
-    ],
-    "git.delivery.commit.approval.minted.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.delivery.commit.approval.required.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.delivery.dispatch.no-spawn.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/execution.test.ts"
-    ],
-    "git.delivery.mutation.completed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/execution.test.ts"
-    ],
-    "git.delivery.mutation.failed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/execution.test.ts"
-    ],
-    "git.delivery.pr-mark-ready.approval.minted.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.delivery.pr-mark-ready.approval.required.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.delivery.pr-mark-ready.drift.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/prRoutes.test.ts"
-    ],
-    "git.delivery.pr-mark-ready.executed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/prRoutes.test.ts"
-    ],
-    "git.delivery.pr-mark-ready.readiness-refreshed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/prRoutes.test.ts"
-    ],
-    "git.delivery.pr.approval.minted.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.delivery.pr.approval.required.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.delivery.push.approval.minted.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.delivery.push.approval.required.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.delivery.push.upstream-tracking-failed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/execution.test.ts"
-    ],
-    "git.delivery.readiness.observed.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/mergeRoutes.test.ts"
-    ],
-    "git.delivery.repository.mismatch.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/requestPreparation.test.ts"
-    ],
-    "git.delivery.sync.approval.minted.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
-    ],
-    "git.draft-checks.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/draftDeliveryChecks.test.ts"
-    ],
-    "git.draft-delivery.emitted-line": [
-      "packages/keiko-server/src/gitDelivery/draftDeliveryService.test.ts"
-    ],
+    "git.commit.draft.completed.emitted-line": [],
+    "git.commit.preview.completed.emitted-line": [],
+    "git.delivery.authority.admitted.emitted-line": [],
+    "git.delivery.authority.denied.emitted-line": [],
+    "git.delivery.buffers.checked.emitted-line": [],
+    "git.delivery.commit.approval.minted.emitted-line": [],
+    "git.delivery.commit.approval.required.emitted-line": [],
+    "git.delivery.dispatch.no-spawn.emitted-line": [],
+    "git.delivery.mutation.completed.emitted-line": [],
+    "git.delivery.mutation.failed.emitted-line": [],
+    "git.delivery.pr-mark-ready.approval.minted.emitted-line": [],
+    "git.delivery.pr-mark-ready.approval.required.emitted-line": [],
+    "git.delivery.pr-mark-ready.drift.emitted-line": [],
+    "git.delivery.pr-mark-ready.executed.emitted-line": [],
+    "git.delivery.pr-mark-ready.readiness-refreshed.emitted-line": [],
+    "git.delivery.pr.approval.minted.emitted-line": [],
+    "git.delivery.pr.approval.required.emitted-line": [],
+    "git.delivery.push.approval.minted.emitted-line": [],
+    "git.delivery.push.approval.required.emitted-line": [],
+    "git.delivery.push.upstream-tracking-failed.emitted-line": [],
+    "git.delivery.readiness.observed.emitted-line": [],
+    "git.delivery.repository.mismatch.emitted-line": [],
+    "git.delivery.sync.approval.minted.emitted-line": [],
+    "git.draft-checks.emitted-line": [],
+    "git.draft-delivery.emitted-line": [],
     "git.draft-delivery.repository-drift.emitted-line": [],
-    "git.draft-push.preparation.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.test.ts"
-    ],
+    "git.draft-push.preparation.emitted-line": [],
     "git.draft-related-issues.emitted-line": [],
     "git.draft-remote.observed.emitted-line": [],
-    "git.draft-target.resolved.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.test.ts"
-    ],
+    "git.draft-target.resolved.emitted-line": [],
     "git.draft-template.emitted-line": [],
     "git.journey-observation.emitted-line": [],
     "git.journey-outcome.recorded.emitted-line": [],
     "git.journey-readiness.refreshed.emitted-line": [],
     "git.pr-description.emitted-line": [],
     "git.pr-description.receipt.emitted-line": [],
-    "git.process.failed.line": ["packages/keiko-server/src/gitProcessActivity.test.ts"],
-    "git.process.refused.line": ["packages/keiko-server/src/gitProcessActivity.test.ts"],
+    "git.process.failed.line": [],
+    "git.process.refused.line": [],
     "git.raw-status.denied-paths-excluded.emitted-line": [],
     "git.repository.initialize.emitted-line": [],
     "git.runtime-action.emitted-line": [],
     "git.runtime-diff.search-bounded.emitted-line": [],
-    "git.runtime-identity.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/productionRuntimeGitPreparation.test.ts"
-    ],
-    "git.snapshot.capacity-denied.line": [
-      "packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"
-    ],
-    "git.snapshot.capture.outcome": ["packages/keiko-server/src/gitChangeSnapshotService.test.ts"],
-    "git.snapshot.expired.line": ["packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"],
-    "git.snapshot.invalidated.line": [
-      "packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"
-    ],
-    "git.snapshot.read.line": ["packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"],
-    "git.snapshot.recheck.state": ["packages/keiko-server/src/gitChangeSnapshotService.test.ts"],
-    "git.snapshot.released.line": ["packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"],
-    "git.snapshot.reserve-denied.line": [
-      "packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"
-    ],
-    "git.snapshot.reserved.line": ["packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"],
+    "git.runtime-identity.emitted-line": [],
+    "git.snapshot.capacity-denied.line": [],
+    "git.snapshot.capture.outcome": [],
+    "git.snapshot.expired.line": [],
+    "git.snapshot.invalidated.line": [],
+    "git.snapshot.read.line": [],
+    "git.snapshot.recheck.state": [],
+    "git.snapshot.released.line": [],
+    "git.snapshot.reserve-denied.line": [],
+    "git.snapshot.reserved.line": [],
     "git.verified-commit.emitted-line": [],
     "git.verified-commit.authority.emitted-line": [],
-    "harness.context.compacted.line": [
-      "packages/keiko-server/src/harness-context-compactor.test.ts"
-    ],
+    "harness.context.compacted.line": [],
     "http.gateway.egress.planned.emitted-line": [],
     "http.gateway.fetch.completed.emitted-line": [],
     "http.gateway.fetch.failed.emitted-line": [],
@@ -1493,60 +1279,36 @@
     "knowledge.store.quarantined.recovery": [
       "packages/keiko-local-knowledge/src/store.log-sink-safety.test.ts"
     ],
-    "lsp.java.version-probe.completed.emitted-line": [
-      "packages/keiko-server/src/editor/lsp/providers/javaProvider.test.ts"
-    ],
-    "lsp.process.ownership.changed.emitted-line": [
-      "packages/keiko-server/src/editor/lsp/lspProcessManager.test.ts"
-    ],
-    "lsp.process.runtime-error.emitted-line": [
-      "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
-    ],
-    "lsp.process.terminated.emitted-line": [
-      "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
-    ],
-    "lsp.spawn.completed.emitted-line": [
-      "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
-    ],
-    "lsp.spawn.failed.emitted-line": [
-      "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
-    ],
-    "memory-vault.log.sink-failed.body-free": ["packages/keiko-memory-vault/src/vault-log.test.ts"],
-    "memory-vault.store.encryption-checkpoint-degraded.state": [
-      "packages/keiko-memory-vault/src/schema.test.ts"
-    ],
-    "memory-vault.store.encryption-migrated.rows": [
-      "packages/keiko-memory-vault/src/migrate-encrypt.test.ts"
-    ],
-    "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
-    "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
-    "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
-    "memory.capture.novelty-gate.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
-    "memory.embedding.invalidated.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
-    "memory.embedding.invalidation-failed.line": [
-      "packages/keiko-server/src/memory-embedding.test.ts"
-    ],
-    "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
+    "lsp.java.version-probe.completed.emitted-line": [],
+    "lsp.process.ownership.changed.emitted-line": [],
+    "lsp.process.runtime-error.emitted-line": [],
+    "lsp.process.terminated.emitted-line": [],
+    "lsp.spawn.completed.emitted-line": [],
+    "lsp.spawn.failed.emitted-line": [],
+    "memory-vault.log.sink-failed.body-free": [],
+    "memory-vault.store.encryption-checkpoint-degraded.state": [],
+    "memory-vault.store.encryption-migrated.rows": [],
+    "memory-vault.store.opened.key-source": [],
+    "memory-vault.store.quarantined.recovery": [],
+    "memory.audit.state-cache.seeded.count": [],
+    "memory.capture.novelty-gate.line": [],
+    "memory.embedding.invalidated.line": [],
+    "memory.embedding.invalidation-failed.line": [],
+    "memory.embedding.store-rejected.line": [],
     "native-file-dialog.selection.projected.counts": [],
     "portable.normal-startup-recovery.completed.outcome": [],
     "portable.normal-startup-recovery.required.reason": [],
-    "portable.windows-alert.spawn-failed.emitted-line": [
-      "packages/keiko-cli/src/portable-launch-notifier.activity-log-proof.test.ts"
-    ],
+    "portable.windows-alert.spawn-failed.emitted-line": [],
     "portable.windows-authenticode.system-binary-refused.emitted-line": [],
     "pr-description.apply.blocked.emitted-line": [],
     "pr-description.apply.failed.emitted-line": [],
     "pr-description.apply.started.emitted-line": [],
     "pr-description.apply.succeeded.emitted-line": [],
     "pr-description.authority.revalidation.failed.emitted-line": [],
-    "pr-description.chat.generated.outcome": [
-      "packages/keiko-server/src/gitChangeChatContext.test.ts"
-    ],
+    "pr-description.chat.generated.outcome": [],
     "pr-description.chat.turn.admitted.relationship": [],
     "pr-description.chat.turn.denied.reason": [],
-    "pr-description.chat.unavailable.reason": [
-      "packages/keiko-server/src/gitChangeChatContext.test.ts"
-    ],
+    "pr-description.chat.unavailable.reason": [],
     "pr-description.generation.completed.emitted-line": [],
     "pr-description.generation.failed.emitted-line": [],
     "pr-description.generation.started.emitted-line": [],
@@ -1558,13 +1320,9 @@
     "pr-description.repository.mismatch.emitted-line": [],
     "pr-description.workbench.egress.denied.emitted-line": [],
     "process.exiting.reason": ["packages/keiko-cli/src/process-guards.test.ts"],
-    "process.exiting.uptime": [
-      "packages/keiko-cli/src/process-activity-log.activity-log-proof.test.ts"
-    ],
+    "process.exiting.uptime": [],
     "process.fatal.body-free": ["packages/keiko-cli/src/process-guards.test.ts"],
-    "process.fatal.stack-context": [
-      "packages/keiko-cli/src/process-activity-log.activity-log-proof.test.ts"
-    ],
+    "process.fatal.stack-context": [],
     "process.heartbeat.resources": [],
     "process.heartbeat.event-loop": [],
     "process.started.runtime": [],
@@ -1588,65 +1346,39 @@
       "packages/keiko-local-knowledge/src/retrieval/usearch-runtime-resolved-logging.test.ts"
     ],
     "search.rerank.completed.line": [],
-    "security.fs.atomic-rename-failed.attempts": [
-      "packages/keiko-security/src/fs-atomic-rename.test.ts"
-    ],
-    "security.fs.atomic-rename-retried.attempts": [
-      "packages/keiko-security/src/fs-atomic-rename.test.ts"
-    ],
-    "security.keychain.fallback.bounded-exit": [
-      "packages/keiko-security/src/macos-keychain.test.ts"
-    ],
-    "security.log.sink-failed.body-free": ["packages/keiko-security/src/log-port.test.ts"],
-    "security.portable-tree-attestation.failed.driver": [
-      "packages/keiko-security/src/portable-tree-attestation.test.ts"
-    ],
-    "security.vault.entries-delete-failed.count": [
-      "packages/keiko-security/src/secret-vault.test.ts"
-    ],
-    "security.vault.entries-deleted.count": ["packages/keiko-security/src/secret-vault.test.ts"],
-    "security.vault.entries-merge-failed.count": [
-      "packages/keiko-security/src/secret-vault.test.ts"
-    ],
-    "security.vault.entries-merged.count": ["packages/keiko-security/src/secret-vault.test.ts"],
+    "security.fs.atomic-rename-failed.attempts": [],
+    "security.fs.atomic-rename-retried.attempts": [],
+    "security.keychain.fallback.bounded-exit": [],
+    "security.log.sink-failed.body-free": [],
+    "security.portable-tree-attestation.failed.driver": [],
+    "security.vault.entries-delete-failed.count": [],
+    "security.vault.entries-deleted.count": [],
+    "security.vault.entries-merge-failed.count": [],
+    "security.vault.entries-merged.count": [],
     "security.vault.entries-rollback-failed.count": [],
-    "security.vault.key-resolution-failed.evidence": [
-      "packages/keiko-security/src/secret-vault.test.ts"
-    ],
-    "security.vault.key-resolved.source": ["packages/keiko-security/src/secret-vault.test.ts"],
-    "security.vault.shard-unreadable.count": ["packages/keiko-security/src/secret-vault.test.ts"],
+    "security.vault.key-resolution-failed.evidence": [],
+    "security.vault.key-resolved.source": [],
+    "security.vault.shard-unreadable.count": [],
     "security.windows-launcher.system-binary-missing.emitted-line": [],
     "security.windows-launcher.system-root-refused.emitted-line": [],
     "security.windows-lifecycle-opener.system-binary-missing.emitted-line": [],
     "security.windows-lifecycle-opener.system-root-refused.emitted-line": [],
-    "security.windows-local-volume.refused.phase": [
-      "packages/keiko-security/src/windows-local-volume.test.ts"
-    ],
+    "security.windows-local-volume.refused.phase": [],
     "security.windows-portable-alert.system-binary-missing.emitted-line": [],
     "security.windows-portable-alert.system-root-refused.emitted-line": [],
     "security.windows-portable-legacy-launcher.system-binary-missing.emitted-line": [],
     "security.windows-portable-legacy-launcher.system-root-refused.emitted-line": [],
-    "security.windows-shortcut.system-binary-missing.mode": [
-      "packages/keiko-security/src/windows-shortcuts.test.ts"
-    ],
-    "security.windows-shortcut.system-root-refused.mode": [
-      "packages/keiko-security/src/windows-shortcuts.test.ts"
-    ],
+    "security.windows-shortcut.system-binary-missing.mode": [],
+    "security.windows-shortcut.system-root-refused.mode": [],
     "server-log.line-dropped.registered-line": [],
     "server-log.safe-open.emitted-line": [],
     "server-log.target-mutated.registered-line": [],
     "server-log.write-failed.stderr-line": [],
     "server.diagnostic.failure.activity-log-line": [],
-    "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
-    "speech.stt.language.normalized.emitted-line": [
-      "packages/keiko-model-gateway/src/speech-to-text-adapter.test.ts"
-    ],
-    "speech.tts.mime.corrected.emitted-line": [
-      "packages/keiko-model-gateway/src/text-to-speech-adapter.test.ts"
-    ],
-    "speech.tts.stream.peek.failed.emitted-line": [
-      "packages/keiko-model-gateway/src/text-to-speech-adapter.test.ts"
-    ],
+    "server.runtime.shutdown.lifecycle": [],
+    "speech.stt.language.normalized.emitted-line": [],
+    "speech.tts.mime.corrected.emitted-line": [],
+    "speech.tts.stream.peek.failed.emitted-line": [],
     "sse.run-events.resume.line": [],
     "sse.stream.closed.line": [],
     "store.encryption-checkpoint-degraded.state": [
@@ -1660,39 +1392,22 @@
     "support.analyze.classified.classification-evidence": [],
     "support.export.publication.publication-evidence": [],
     "support.export.publication.commit-last": [],
-    "task-workspace.identity.creation-time-probe.line": [
-      "packages/keiko-server/src/task-workspace/activity-log.test.ts"
-    ],
-    "task-workspace.lifecycle.line": [
-      "packages/keiko-server/src/task-workspace/activity-log.test.ts"
-    ],
-    "task-workspace.repository.registered.restricted": [
-      "packages/keiko-server/src/deps-activity.test.ts"
-    ],
-    "task-workspace.repository.registration-refused.reason": [
-      "packages/keiko-server/src/deps-activity.test.ts"
-    ],
-    "tool-catalog.bind-ready.emitted-line": [
-      "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
-    ],
-    "tool-catalog.bind-unavailable.emitted-line": [
-      "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
-    ],
-    "tool-catalog.completion-discarded.emitted-line": [
-      "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
-    ],
-    "tool-catalog.dispatch-unbound.emitted-line": [
-      "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.test.ts"
-    ],
-    "tool-catalog.invocation-settled.emitted-line": [
-      "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
-    ],
-    "tool-catalog.invocation-started.emitted-line": [
-      "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
-    ],
-    "tool-catalog.projection.emitted-line": [
-      "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
-    ],
+    "support.incident.created.emitted-line": [],
+    "support.incident.deduplicated.emitted-line": [],
+    "support.incident.dismissed.emitted-line": [],
+    "support.incident.expired.emitted-line": [],
+    "support.incident.rejected.emitted-line": [],
+    "task-workspace.identity.creation-time-probe.line": [],
+    "task-workspace.lifecycle.line": [],
+    "task-workspace.repository.registered.restricted": [],
+    "task-workspace.repository.registration-refused.reason": [],
+    "tool-catalog.bind-ready.emitted-line": [],
+    "tool-catalog.bind-unavailable.emitted-line": [],
+    "tool-catalog.completion-discarded.emitted-line": [],
+    "tool-catalog.dispatch-unbound.emitted-line": [],
+    "tool-catalog.invocation-settled.emitted-line": [],
+    "tool-catalog.invocation-started.emitted-line": [],
+    "tool-catalog.projection.emitted-line": [],
     "update.candidate.consumed.identity": [],
     "update.candidate.issued.identity": [],
     "update.candidate.rejected.reason": [],
@@ -1708,22 +1423,12 @@
     "voice.realtime.policy-decision.reason": [],
     "voice.realtime.session-ended.closed": [],
     "voice.realtime.session-started.profile": [],
-    "workspace-script-trust.granted.line": [
-      "packages/keiko-server/src/workspace-script-trust.test.ts"
-    ],
-    "workspace-script-trust.revoked.line": [
-      "packages/keiko-server/src/workspace-script-trust.test.ts"
-    ],
-    "workspace-script-trust.run-manifest-admitted.line": [
-      "packages/keiko-server/src/workspace-script-trust.test.ts"
-    ],
-    "workspace-script-trust.run-manifest-not-admitted.line": [
-      "packages/keiko-server/src/workspace-script-trust.test.ts"
-    ],
-    "workspace-script-trust.run-manifest-revoked.line": [
-      "packages/keiko-server/src/workspace-script-trust.test.ts"
-    ],
-    "workspace.root.denied.line": ["packages/keiko-server/src/workspace-root-denial-log.test.ts"]
+    "workspace-script-trust.granted.line": [],
+    "workspace-script-trust.revoked.line": [],
+    "workspace-script-trust.run-manifest-admitted.line": [],
+    "workspace-script-trust.run-manifest-not-admitted.line": [],
+    "workspace-script-trust.run-manifest-revoked.line": [],
+    "workspace.root.denied.line": []
   },
   "scenarios": {
     "bff.crash": [],
@@ -1756,18 +1461,5 @@
     "ui.crash": [],
     "ui.dependency-failure": []
   },
-  "violations": [
-    {
-      "code": "proof-call-not-literal",
-      "site": "packages/keiko-cli/src/security-log.activity-log-proof.test.ts:67",
-      "detail": "expectActivityLogProof",
-      "correctiveAction": "Pass the registered proof id as a string literal so the generator can resolve it."
-    },
-    {
-      "code": "proof-call-not-literal",
-      "site": "packages/keiko-cli/src/security-log.activity-log-proof.test.ts:85",
-      "detail": "expectActivityLogProof",
-      "correctiveAction": "Pass the registered proof id as a string literal so the generator can resolve it."
-    }
-  ]
+  "violations": []
 }

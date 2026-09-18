@@ -373,7 +373,7 @@ export function createActivityLogSink(
 
 const ACTIVITY_LOG_TEST_WRITER = Symbol.for("@oscharko-dev/keiko-server/activity-log-test-writer");
 
-function activityLogTestWriterInstalled(): boolean {
+export function activityLogTestWriterInstalled(): boolean {
   return (globalThis as Readonly<Record<symbol, unknown>>)[ACTIVITY_LOG_TEST_WRITER] === true;
 }
 
