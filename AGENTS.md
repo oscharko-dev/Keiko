@@ -398,7 +398,8 @@ system that exists, never beside it:
   classes and vocabularies, causal/lifecycle semantics, analyzer projection, failure classes,
   proof ids, and release impact. The generator resolves those canonical APIs through TypeScript
   symbols; same-shaped local helpers, unresolved dynamic calls, duplicate registrations,
-  registrations without an emitter, and unregistered emitters fail closed. Run
+  registrations without an emitter, unregistered emitters, and an emission outside the operation's
+  owner package (a bypass of its owning port) fail closed. Run
   `npm run generate:op-catalog` and commit the regenerated
   [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
   `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
