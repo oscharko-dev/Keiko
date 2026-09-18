@@ -549,7 +549,7 @@ describe("server activity log", () => {
     }
   });
 
-  it("emits separate safe-open and deferred-rotation evidence for a durable batch", () => {
+  it("emits separate safe-open and completed-rotation evidence for a durable batch", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
     const sink = createFileServerLogSink(stateDir);
@@ -581,9 +581,12 @@ describe("server activity log", () => {
       expect.objectContaining({
         op: "server-log.rotation",
         correlationId: "unknown-correlation-id",
-        persistenceStatus: "deferred",
-        durabilityAssurance: "unchanged",
-        retentionStatus: "deferred",
+        persistenceStatus: "rotated",
+        rotationReason: "hard-link-winner",
+        archivedCount: 1,
+        retentionStatus: "unchanged",
+        prunedCount: 0,
+        retainedCount: 1,
       }),
       expect.objectContaining({
         op: "durable-after-boundary",
@@ -633,8 +636,9 @@ describe("server activity log", () => {
       expect.objectContaining({
         op: "server-log.rotation",
         correlationId: "unknown-correlation-id",
-        persistenceStatus: "deferred",
-        durabilityAssurance: "unchanged",
+        persistenceStatus: "rotated",
+        rotationReason: "hard-link-winner",
+        retentionStatus: "unchanged",
       }),
     ]);
     expect(fsCalls.fsync).toBe(1);
@@ -756,7 +760,7 @@ describe("server activity log", () => {
 
   it("terminates and syncs a partial current-file tail before fresh-process inspection", async () => {
     const logs = join(stateDir, "logs");
-    mkdirSync(logs);
+    mkdirSync(logs, { mode: 0o700 });
     writeFileSync(join(logs, "server.log"), '{"interrupted":', "utf8");
     let inspected = false;
     vi.resetModules();
@@ -791,7 +795,7 @@ describe("server activity log", () => {
 
   it("does not inspect or truncate a partial tail when delimiter durability is uncertain", () => {
     const logs = join(stateDir, "logs");
-    mkdirSync(logs);
+    mkdirSync(logs, { mode: 0o700 });
     const interrupted = '{"interrupted":';
     writeFileSync(join(logs, "server.log"), interrupted, "utf8");
     fsCalls.failFsync = true;
@@ -1113,7 +1117,7 @@ describe("server activity log", () => {
     if (process.platform === "win32") ctx.skip();
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const logsDir = join(stateDir, "logs");
-    mkdirSync(logsDir);
+    mkdirSync(logsDir, { mode: 0o700 });
     const victim = join(stateDir, "victim");
     writeFileSync(victim, "unchanged", { mode: 0o640 });
     chmodSync(victim, 0o640);
@@ -1211,7 +1215,7 @@ describe("server activity log", () => {
   it("tightens an existing current log to owner-only permissions before appending", (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const logsDir = join(stateDir, "logs");
-    mkdirSync(logsDir);
+    mkdirSync(logsDir, { mode: 0o700 });
     const current = join(logsDir, "server.log");
     writeFileSync(current, "", { mode: 0o644 });
     chmodSync(current, 0o644);
@@ -1400,11 +1404,14 @@ describe("server activity log", () => {
     );
     expect(
       records.filter((line) => !FILESYSTEM_EVIDENCE_OPS.has(line.op)).map((line) => line.op),
-    ).toStrictEqual(["before-boundary-caller-failure", "boundary-caller-retry"]);
+    ).toStrictEqual(["boundary-caller-retry"]);
     expect(records.filter((line) => line.op === "server-log.rotation")).toHaveLength(1);
+    expect(readFileSync(join(stateDir, "logs", "server-2026-08-20.log"), "utf8")).toContain(
+      ":before-boundary-caller-failure",
+    );
   });
 
-  it("keeps Windows logging active with explicit platform and deferred-rotation evidence", () => {
+  it("keeps Windows logging active with explicit platform and completed-rotation evidence", () => {
     stateDir = realpathSync(stateDir);
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.useFakeTimers();
@@ -1419,20 +1426,22 @@ describe("server activity log", () => {
       correlationId: "windows-rotation-3528",
     });
 
-    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual(["server.log"]);
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
-      "windows-day-20",
-      "windows-day-21",
+    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual([
+      "server-2026-08-20.log",
+      "server.log",
     ]);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["windows-day-21"]);
+    expect(readFileSync(join(stateDir, "logs", "server-2026-08-20.log"), "utf8")).toContain(
+      ":windows-day-20",
+    );
     expect(readLines(stateDir)).toContainEqual(
       expect.objectContaining({
         op: "server-log.rotation",
         correlationId: "windows-rotation-3528",
-        errorKind: "publish-unsupported",
-        persistenceStatus: "deferred",
-        durabilityAssurance: "unchanged",
-        retentionStatus: "deferred",
-        completeness: "partial",
+        persistenceStatus: "rotated",
+        rotationReason: "hard-link-winner",
+        retentionStatus: "unchanged",
+        completeness: "complete",
         loss: "none",
       }),
     );
@@ -1706,7 +1715,7 @@ describe("server activity log", () => {
     expect(readCallerLines(stateDir)).toHaveLength(2);
   });
 
-  it("shares one boundary state and emits one deferred warning across every sink", () => {
+  it("shares one boundary state and emits one rotation record across every sink", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
     // Two independent consumers, exactly as the CLI and the process logger ask for them.
@@ -1720,12 +1729,17 @@ describe("server activity log", () => {
     cliSink.close?.();
 
     expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
-      "before-midnight",
       "after-midnight-cli",
       "after-midnight-process",
     ]);
     expect(readLines(stateDir).filter((line) => line.op === "server-log.rotation")).toHaveLength(1);
-    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual(["server.log"]);
+    expect(readFileSync(join(stateDir, "logs", "server-2026-08-20.log"), "utf8")).toContain(
+      ":before-midnight",
+    );
+    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual([
+      "server-2026-08-20.log",
+      "server.log",
+    ]);
   });
 
   it("coalesces multi-day open failures into one warning on the recovery day", () => {

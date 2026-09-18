@@ -271,11 +271,12 @@ export interface ServerLogSink {
   readonly close?: (() => void) | undefined;
 }
 
-// Compatibility value for existing callers. Mutation-based retention is deferred to #3530.
+// Daily archives retain the proven seven-day bound unless a caller selects a smaller or larger
+// positive window explicitly.
 export const DEFAULT_LOG_RETENTION_DAYS = 7;
 
-// Interim #3529 safeguard. #3530 owns bounded append-only segments and retention; this threshold
-// only emits one body-free operator warning and never mutates the file.
+// The capacity threshold remains diagnostic evidence for future byte-budgeted segments. Daily
+// rotation and retention provide the active disk bound; this warning never mutates the file.
 export const DEFAULT_LOG_CAPACITY_WARNING_BYTES = 256 * 1024 * 1024;
 
 // A hard ceiling on one serialised line. Every field guard runs first, so reaching this means a
@@ -865,7 +866,7 @@ const SERVER_LOG_IDENTITY_FIELDS = [
 // file.
 //
 // ONE ActiveLog PER FILE, PROCESS-WIDE. Besides sharing the append descriptor, this keeps one UTC
-// boundary state so a process emits exactly one deferred-rotation warning per day.
+// boundary state so a process performs and reports exactly one rotation attempt per day.
 interface ActiveLog {
   readonly directory: string;
   readonly trustedRoot: string;
