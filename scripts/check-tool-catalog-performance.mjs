@@ -676,6 +676,14 @@ function performanceCaseIdentityDefects(measurement, calibration) {
   });
 }
 
+function performanceCaseToolCountDefects(measurement, calibration) {
+  return expectedPerformanceCaseIds().flatMap((id) =>
+    measurement.cases[id].toolCount === calibration.cases[id].toolCount
+      ? []
+      : [`${id} tool count differs from calibration`],
+  );
+}
+
 function performanceVerdicts(measurement, budget) {
   const verdicts = [];
   for (const [id, testCase] of Object.entries(measurement.cases))
@@ -791,6 +799,39 @@ export async function recalibrateToolCatalogPerformance(root = process.cwd(), ov
   return { calibration, budget };
 }
 
+export async function rebindToolCatalogPerformanceCaseIdentity(
+  root = process.cwd(),
+  overrides = {},
+) {
+  const deps = evidenceWriterDependencies(overrides);
+  const previousCalibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
+  const previousBudget = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
+  const previousBudgetDefects = performanceBudgetDefects(previousBudget, previousCalibration);
+  if (previousBudgetDefects.length > 0) throw new TypeError(previousBudgetDefects.join("; "));
+  const environment = deps.environment();
+  if (!isDeepStrictEqual(environment, previousCalibration.environment))
+    throw new TypeError("catalog case-identity rebind reference environment differs");
+  const measurementHarnessSha256 = deps.rulerDigest(root);
+  if (measurementHarnessSha256 !== previousCalibration.subject.measurementHarnessSha256)
+    throw new TypeError("catalog case-identity rebind measurement ruler differs");
+  const calibrationRaw = await deps.measure(root);
+  const calibration = buildToolCatalogPerformanceDocument(calibrationRaw, {
+    role: "calibration",
+    measuredAtIso: deps.now(),
+    measurementHarnessSha256,
+    environment,
+  });
+  const toolCountDefects = performanceCaseToolCountDefects(calibration, previousCalibration);
+  if (toolCountDefects.length > 0) throw new TypeError(toolCountDefects.join("; "));
+  const identityDefects = performanceCaseIdentityDefects(calibration, previousCalibration);
+  if (identityDefects.length === 0)
+    throw new TypeError("catalog case identity did not change; use candidate measurement mode");
+  const budget = ratchetToolCatalogPerformanceBudgets(calibration, previousBudget);
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration, calibration);
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.budget, budget);
+  return { calibration, budget };
+}
+
 export async function writeToolCatalogPerformanceMeasurement(root = process.cwd(), overrides = {}) {
   const deps = evidenceWriterDependencies(overrides);
   const calibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
@@ -863,8 +904,9 @@ export async function checkToolCatalogPerformanceReference(
 if (isMainModule(import.meta.url)) {
   const calibrate = process.argv.includes("--calibrate");
   const recalibrate = process.argv.includes("--recalibrate");
+  const rebindCaseIdentity = process.argv.includes("--rebind-case-identity");
   const writeMeasurement = process.argv.includes("--write-measurement");
-  if ([calibrate, recalibrate, writeMeasurement].filter(Boolean).length > 1) {
+  if ([calibrate, recalibrate, rebindCaseIdentity, writeMeasurement].filter(Boolean).length > 1) {
     throw new TypeError("choose one performance evidence operation");
   } else if (calibrate) {
     await writeToolCatalogPerformanceCalibration();
@@ -872,6 +914,9 @@ if (isMainModule(import.meta.url)) {
   } else if (recalibrate) {
     await recalibrateToolCatalogPerformance();
     console.log("tool-catalog-performance: PASS — non-widening recalibration written");
+  } else if (rebindCaseIdentity) {
+    await rebindToolCatalogPerformanceCaseIdentity();
+    console.log("tool-catalog-performance: PASS — non-widening case-identity rebind written");
   } else if (writeMeasurement) {
     const { result } = await writeToolCatalogPerformanceMeasurement();
     if (result.defects.length > 0 || result.verdicts.length > 0)

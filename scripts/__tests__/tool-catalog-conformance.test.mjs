@@ -41,6 +41,7 @@ import {
   measureToolCatalogPerformance,
   measureToolCatalogPerformanceInFreshProcess,
   recalibrateToolCatalogPerformance,
+  rebindToolCatalogPerformanceCaseIdentity,
   ratchetToolCatalogPerformanceBudgets,
   toolCatalogPerformanceBudgets,
   TOOL_CATALOG_PERFORMANCE_FILES,
@@ -301,6 +302,27 @@ describe("compiler measurements reuse the existing sample and percentile convent
     ]);
   });
 
+  it("makes case-identity rebinding explicit and copies all governed documents", () => {
+    const copies = [];
+    const args = regenerateArguments("/repo-root", { rebindCaseIdentity: true });
+    expect(args.at(-1)).toContain("--rebind-case-identity");
+    expect(args.at(-1)).not.toContain("--recalibrate");
+    expect(args.at(-1)).toContain("--write-measurement");
+
+    regenerateToolCatalogPerformanceEvidence({
+      rebindCaseIdentity: true,
+      status: () => "",
+      makeWorkdir: () => "/work",
+      run: () => undefined,
+      copyFile: (...values) => copies.push(values),
+    });
+    expect(copies.map((values) => values[1])).toEqual([
+      join(ROOT, "docs/release/3415-tool-catalog-calibration.json"),
+      join(ROOT, "scripts/tool-catalog-performance-budget.json"),
+      join(ROOT, "docs/release/3415-tool-catalog-perf-evidence.json"),
+    ]);
+  });
+
   it("refuses to measure a working tree that the clean clone cannot reproduce", () => {
     expect(() =>
       regenerateToolCatalogPerformanceEvidence({
@@ -380,7 +402,7 @@ describe("compiler measurements reuse the existing sample and percentile convent
   it("isolates calibration and candidate measurements in separate fresh processes", async () => {
     const source = readFileSync(join(ROOT, "scripts/check-tool-catalog-performance.mjs"), "utf8");
     expect(source).toContain("measure: measureToolCatalogPerformanceInFreshProcess,");
-    expect(source.match(/const calibrationRaw = await deps\.measure\(root\);/gu)).toHaveLength(2);
+    expect(source.match(/const calibrationRaw = await deps\.measure\(root\);/gu)).toHaveLength(3);
     expect(source).toContain("const measurementRaw = await deps.measure(root);");
 
     const evidence = await measureToolCatalogPerformanceInFreshProcess(ROOT);
@@ -642,6 +664,72 @@ describe("compiler measurements reuse the existing sample and percentile convent
       await expect(recalibrateToolCatalogPerformance(root, dependencies)).rejects.toThrow(
         "budget exceeds its reviewed ceiling",
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  it("rebinds changed producer identity without changing the ruler or numeric ceilings", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-catalog-rebind-"));
+    mkdirSync(join(root, "docs", "release"), { recursive: true });
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    let clock = 0;
+    const raw = await measureToolCatalogPerformance(ROOT, () => ++clock);
+    const environment = {
+      platform: "linux",
+      architecture: "arm64",
+      nodeVersion: "v24.18.0",
+      logicalCores: 16,
+      totalMemoryBytes: 24_000_000_000,
+      containerImage: TOOL_CATALOG_REFERENCE_IMAGE,
+    };
+    const dependencies = {
+      environment: () => environment,
+      measure: async () => structuredClone(raw),
+      now: () => "2026-09-06T00:00:00.000Z",
+      rulerDigest: () => "a".repeat(64),
+    };
+    try {
+      const initial = await writeToolCatalogPerformanceCalibration(root, dependencies);
+      const driftedRaw = structuredClone(raw);
+      for (const testCase of Object.values(driftedRaw.cases))
+        for (const sample of testCase.samples) sample.projectionDigest = "f".repeat(64);
+
+      const rebound = await rebindToolCatalogPerformanceCaseIdentity(root, {
+        ...dependencies,
+        measure: async () => driftedRaw,
+        now: () => "2026-09-06T00:01:00.000Z",
+      });
+      expect(rebound.budget.maximumP95Ms).toEqual(initial.budget.maximumP95Ms);
+      expect(rebound.budget.ceilingP95Ms).toEqual(initial.budget.ceilingP95Ms);
+
+      await expect(
+        rebindToolCatalogPerformanceCaseIdentity(root, {
+          ...dependencies,
+          measure: async () => driftedRaw,
+          rulerDigest: () => "b".repeat(64),
+        }),
+      ).rejects.toThrow("catalog case-identity rebind measurement ruler differs");
+      await expect(
+        rebindToolCatalogPerformanceCaseIdentity(root, {
+          ...dependencies,
+          environment: () => ({ ...environment, totalMemoryBytes: 1 }),
+          measure: async () => driftedRaw,
+        }),
+      ).rejects.toThrow("catalog case-identity rebind reference environment differs");
+
+      const changedToolCount = structuredClone(driftedRaw);
+      changedToolCount.cases["legacy-native-6-tool"].toolCount += 1;
+      for (const sample of changedToolCount.cases["legacy-native-6-tool"].samples) {
+        sample.toolCount += 1;
+        sample.lookups = deriveLookupIterations(sample.toolCount) * sample.toolCount;
+      }
+      await expect(
+        rebindToolCatalogPerformanceCaseIdentity(root, {
+          ...dependencies,
+          measure: async () => changedToolCount,
+        }),
+      ).rejects.toThrow("legacy-native-6-tool tool count differs from calibration");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

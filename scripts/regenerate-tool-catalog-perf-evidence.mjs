@@ -17,13 +17,18 @@ const CALIBRATION_FILES = [
   "scripts/tool-catalog-performance-budget.json",
 ];
 
-function containerScript(recalibrate) {
-  const measurementCommands = recalibrate
-    ? [
-        "node scripts/check-tool-catalog-performance.mjs --recalibrate",
-        "node scripts/check-tool-catalog-performance.mjs --write-measurement",
-      ]
-    : ["node scripts/check-tool-catalog-performance.mjs --write-measurement"];
+function containerScript({ recalibrate, rebindCaseIdentity }) {
+  if (recalibrate && rebindCaseIdentity)
+    throw new TypeError("choose one tool-catalog performance evidence migration");
+  const migrationCommand = rebindCaseIdentity
+    ? "node scripts/check-tool-catalog-performance.mjs --rebind-case-identity"
+    : recalibrate
+      ? "node scripts/check-tool-catalog-performance.mjs --recalibrate"
+      : undefined;
+  const measurementCommands = [
+    ...(migrationCommand === undefined ? [] : [migrationCommand]),
+    "node scripts/check-tool-catalog-performance.mjs --write-measurement",
+  ];
   return [
     "set -euo pipefail",
     "npm ci --ignore-scripts --no-audit --no-fund",
@@ -35,7 +40,7 @@ function containerScript(recalibrate) {
 
 export function regenerateArguments(
   clone,
-  { image = TOOL_CATALOG_REFERENCE_IMAGE, recalibrate = false } = {},
+  { image = TOOL_CATALOG_REFERENCE_IMAGE, recalibrate = false, rebindCaseIdentity = false } = {},
 ) {
   return [
     "run",
@@ -53,7 +58,7 @@ export function regenerateArguments(
     image,
     "bash",
     "-lc",
-    containerScript(recalibrate),
+    containerScript({ recalibrate, rebindCaseIdentity }),
   ];
 }
 
@@ -76,21 +81,28 @@ function defaultDependencies() {
 }
 
 export function regenerateToolCatalogPerformanceEvidence(options = {}) {
-  const { recalibrate = false } = options;
+  const { recalibrate = false, rebindCaseIdentity = false } = options;
   const deps = { ...defaultDependencies(), ...options };
   if (deps.status() !== "") {
     throw new TypeError("tool-catalog measurement requires a clean working tree");
   }
   const clone = join(deps.makeWorkdir(), "repo.noindex");
   deps.run("git", ["clone", "--no-local", "--quiet", repoRoot, clone]);
-  deps.run("docker", regenerateArguments(clone, { recalibrate }));
-  const files = recalibrate ? [...CALIBRATION_FILES, MEASUREMENT_FILE] : [MEASUREMENT_FILE];
+  deps.run("docker", regenerateArguments(clone, { recalibrate, rebindCaseIdentity }));
+  const files =
+    recalibrate || rebindCaseIdentity
+      ? [...CALIBRATION_FILES, MEASUREMENT_FILE]
+      : [MEASUREMENT_FILE];
   for (const file of files) deps.copyFile(join(clone, file), join(repoRoot, file));
-  return { clone, files, recalibrate };
+  return { clone, files, recalibrate, rebindCaseIdentity };
 }
 
 if (isMainModule(import.meta.url)) {
-  const unknown = process.argv.slice(2).filter((argument) => argument !== "--recalibrate");
+  const acceptedArguments = new Set(["--recalibrate", "--rebind-case-identity"]);
+  const unknown = process.argv.slice(2).filter((argument) => !acceptedArguments.has(argument));
   if (unknown.length > 0) throw new TypeError(`unknown argument: ${unknown.join(", ")}`);
-  regenerateToolCatalogPerformanceEvidence({ recalibrate: process.argv.includes("--recalibrate") });
+  regenerateToolCatalogPerformanceEvidence({
+    recalibrate: process.argv.includes("--recalibrate"),
+    rebindCaseIdentity: process.argv.includes("--rebind-case-identity"),
+  });
 }
