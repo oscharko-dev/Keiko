@@ -64,7 +64,18 @@ describe("useWindowErrorLog", () => {
       useWindowErrorLog();
     });
     view.unmount();
-    dispatchWindowError(new Error("after unmount"));
+    // Vitest's jsdom environment rethrows an error event as an uncaught exception once no `error`
+    // listener is registered, so a test-owned listener absorbs this one. It does not hide the hook:
+    // a hook listener still attached would receive the same event and report it.
+    const absorb = (event: ErrorEvent): void => {
+      event.preventDefault();
+    };
+    window.addEventListener("error", absorb);
+    try {
+      dispatchWindowError(new Error("after unmount"));
+    } finally {
+      window.removeEventListener("error", absorb);
+    }
 
     expect(received).toEqual([]);
     expect(takeClientDiagnosticLoss()).toBeUndefined();
