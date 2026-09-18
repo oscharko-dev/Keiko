@@ -19,7 +19,7 @@ const PRERELEASE_IDENTIFIER = /^[0-9A-Za-z-]+$/u;
 const DIGITS = /^\d+$/u;
 const VERSION_CONSTANT =
   /(export\s+const\s+(?:KEIKO_PRODUCT_VERSION|KEIKO_[A-Z0-9_]*_VERSION)\s*=\s*")[^"]+("\s+as\s+const)/gu;
-export const DEPENDENCY_FIELDS = [
+const DEPENDENCY_FIELDS = [
   "dependencies",
   "devDependencies",
   "optionalDependencies",
