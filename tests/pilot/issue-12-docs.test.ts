@@ -121,9 +121,9 @@ describe("Issue #12 docs drift", () => {
   it("prunes publisher-native optional dependencies before manual package-surface gates", () => {
     expectPruneBeforePackageSurface(readWorkflowJobBlock(".github/workflows/ci.yml", "ui"));
 
-    // #3498 Phase 2 retired the wait-for-required-checks `release-verify` job. The stable portable
-    // build now emits a read-only owner handoff, while `publish` still re-verifies required checks
-    // itself before publishing — that is what this pin covers.
+    // #3498 Phase 2 retired the wait-for-required-checks `release-verify` job. ADR-0177 D9 starts the
+    // publish from release-advance.yml once the required checks are green, while `publish` still
+    // re-verifies them itself before publishing — that is what this pin covers.
     const publish = readWorkflowJobBlock(".github/workflows/release.yml", "publish");
     expect(publish).toContain("Verify required checks for release SHA");
     expect(publish).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
