@@ -64,6 +64,7 @@ import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 import {
   ensureSupportIncidentDirectory,
   listSupportIncidentEntries,
+  supportIncidentDirectory,
   removeSupportIncidentRecord,
   serializeSupportIncidentRecord,
   writeSupportIncidentRecord,
@@ -502,7 +503,6 @@ interface CandidateDraft {
 
 interface CandidateContext {
   readonly stateDir: string;
-  readonly directory: string;
   readonly nowMs: number;
   readonly env: ServerLogEnv;
   readonly defectFingerprint: string;
@@ -582,20 +582,37 @@ function reject(
   return { status: "rejected", reason };
 }
 
+const REJECTED_PIN: SupportIncidentPin = {
+  status: "rejected",
+  pinnedSegmentCount: 0,
+  pinnedBytes: 0,
+};
+
+// Seals the active segment and pins the bounded window across every process instance, including
+// segments sealed later inside it. A failed pin never blocks the candidate: it is recorded as
+// `rejected` in the record and in `support.incident.created`, so sufficiency can say so.
 function pinIncidentWindow(draft: CandidateDraft, context: CandidateContext): SupportIncidentPin {
   const window = incidentWindow(context.nowMs);
-  return pinFromResult(
-    pinActivityLogWindow(
-      context.stateDir,
-      {
-        scope: { kind: "window", fromMs: window.fromMs, toMs: window.toMs },
-        expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
-        reason: "incident",
-        correlationId: draft.evidenceCorrelationId,
-      },
-      context.env,
-    ),
-  );
+  try {
+    return pinFromResult(
+      pinActivityLogWindow(
+        context.stateDir,
+        {
+          scope: { kind: "window", fromMs: window.fromMs, toMs: window.toMs },
+          expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
+          reason: "incident",
+          correlationId: draft.evidenceCorrelationId,
+        },
+        context.env,
+      ),
+    );
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_CREATED_OPERATION.op,
+      correlationId: draft.evidenceCorrelationId,
+    });
+    return REJECTED_PIN;
+  }
 }
 
 function publishCandidate(
@@ -607,8 +624,16 @@ function publishCandidate(
   const payload = serializeSupportIncidentRecord(record);
   if (payload === undefined) return reject(context, draft, "record-too-large", entries.length);
   try {
-    writeSupportIncidentRecord(context.directory, payload, record.incidentId);
-  } catch {
+    writeSupportIncidentRecord(
+      supportIncidentDirectory(context.stateDir),
+      payload,
+      record.incidentId,
+    );
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
+      correlationId: draft.evidenceCorrelationId,
+    });
     // The pin (if any) still expires with the candidate's TTL; nothing is left unbounded.
     return reject(context, draft, "store-unavailable", entries.length);
   }
@@ -634,30 +659,24 @@ function createCandidate(
   draft: CandidateDraft,
   options: SupportIncidentOptions,
 ): SupportIncidentCreation {
-  const nowMs = options.nowMs ?? Date.now();
-  const defectFingerprint = computeDefectFingerprint(draft.input);
-  let directory: string;
-  try {
-    directory = ensureSupportIncidentDirectory(stateDir);
-  } catch {
-    const context = {
-      stateDir,
-      directory: "",
-      nowMs,
-      env: options.env ?? process.env,
-      defectFingerprint,
-    };
-    return reject(context, draft, "store-unavailable", 0);
-  }
   const context: CandidateContext = {
     stateDir,
-    directory,
-    nowMs,
+    nowMs: options.nowMs ?? Date.now(),
     env: options.env ?? process.env,
-    defectFingerprint,
+    defectFingerprint: computeDefectFingerprint(draft.input),
   };
-  const entries = sweepExpiredEntries(stateDir, nowMs, draft.evidenceCorrelationId);
-  const duplicate = openDuplicate(entries, draft, defectFingerprint);
+  let entries: readonly SupportIncidentStoreEntry[];
+  try {
+    ensureSupportIncidentDirectory(stateDir);
+    entries = sweepExpiredEntries(stateDir, context.nowMs, draft.evidenceCorrelationId);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
+      correlationId: draft.evidenceCorrelationId,
+    });
+    return reject(context, draft, "store-unavailable", 0);
+  }
+  const duplicate = openDuplicate(entries, draft, context.defectFingerprint);
   if (duplicate !== undefined) {
     deduplicatedEvidence(stateDir, duplicate, draft.evidenceCorrelationId, entries.length);
     return { status: "deduplicated", record: duplicate };
@@ -786,26 +805,42 @@ export function dismissSupportIncident(
 
 // ─── The registered-failure trigger ────────────────────────────────────────────────────────────
 
+/** A process evaluates at most this many new candidates per rolling minute (all fingerprints). */
+export const MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE = 6;
+const MAX_REMEMBERED_FINGERPRINTS = 128;
+
 let triggerDepth = 0;
 let triggerOverride: boolean | undefined;
 const recentFingerprints = new Map<string, number>();
+const recentEvaluations: number[] = [];
 
 /** Test seam: force the automatic trigger on or off; `undefined` restores the default. */
 export function setSupportIncidentTriggerForTests(enabled: boolean | undefined): void {
   triggerOverride = enabled;
   recentFingerprints.clear();
+  recentEvaluations.length = 0;
 }
 
 function triggerEnabled(): boolean {
   return triggerOverride ?? !activityLogTestWriterInstalled();
 }
 
-function suppressed(fingerprint: string, nowMs: number): boolean {
+// Bounds the synchronous cost a failure storm can add to the logging path: one fingerprint is
+// re-evaluated at most once per SUPPORT_INCIDENT_SUPPRESSION_MS, and all fingerprints together at
+// most MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE times. The failure lines themselves are always
+// persisted, so a skipped evaluation loses no evidence; the pinned window of the first occurrence
+// and the Activity Log's own retention still hold it.
+function admitEvaluation(fingerprint: string, nowMs: number): boolean {
   const last = recentFingerprints.get(fingerprint);
-  if (last !== undefined && nowMs - last < SUPPORT_INCIDENT_SUPPRESSION_MS) return true;
-  if (recentFingerprints.size >= MAX_SUPPORT_INCIDENTS * 4) recentFingerprints.clear();
+  if (last !== undefined && nowMs - last < SUPPORT_INCIDENT_SUPPRESSION_MS) return false;
+  while (recentEvaluations.length > 0 && nowMs - (recentEvaluations[0] ?? nowMs) >= MINUTE_MS) {
+    recentEvaluations.shift();
+  }
+  if (recentEvaluations.length >= MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE) return false;
+  recentEvaluations.push(nowMs);
+  if (recentFingerprints.size >= MAX_REMEMBERED_FINGERPRINTS) recentFingerprints.clear();
   recentFingerprints.set(fingerprint, nowMs);
-  return false;
+  return true;
 }
 
 function eventFrames(event: ServerLogEvent): readonly unknown[] | undefined {
@@ -822,7 +857,9 @@ function triggerCandidate(stateDir: string, event: ServerLogEvent): void {
     parentCorrelationId: event.parentCorrelationId,
     frames: eventFrames(event),
   };
-  if (suppressed(computeDefectFingerprint(failureFingerprintInput(evidence)), Date.now())) return;
+  if (!admitEvaluation(computeDefectFingerprint(failureFingerprintInput(evidence)), Date.now())) {
+    return;
+  }
   recordRegisteredFailureIncident(stateDir, evidence);
 }
 

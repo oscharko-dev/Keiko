@@ -588,6 +588,8 @@ describe("OpenCode runtime adapter readiness", () => {
     });
     expect(JSON.stringify(events)).not.toContain(SECRET);
     expect(harness.effects).toContain("require-manager-reap");
+    // eslint-disable-next-line no-console -- temporary debug, removed before finishing
+    console.error("DEBUG persisted line", formatActivityLogProofLine(failures[0] ?? {}));
     const readinessFailedProof = expectActivityLogProof(
       "coding-runtime.readiness.failed.emitted-line",
       formatActivityLogProofLine(failures[0] ?? {}),

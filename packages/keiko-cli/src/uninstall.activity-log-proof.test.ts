@@ -93,7 +93,10 @@ describe("uninstall activity log proofs", () => {
     const code = await runUninstallCli(["--dry-run"], io, {}, deps);
 
     expect(code).toBe(0);
-    expect(events.map((event) => event.op)).toEqual(["cli.uninstall.started", "cli.uninstall.completed"]);
+    expect(events.map((event) => event.op)).toEqual([
+      "cli.uninstall.started",
+      "cli.uninstall.completed",
+    ]);
 
     const startedLine = formatActivityLogProofLine(events[0] ?? {});
     const startedRecord = expectActivityLogProof("cli.uninstall.started.persisted", startedLine);
@@ -106,7 +109,10 @@ describe("uninstall activity log proofs", () => {
     expect(startedRecord.targetSha256).toMatch(/^[0-9a-f]{64}$/u);
 
     const completedLine = formatActivityLogProofLine(events[1] ?? {});
-    const completedRecord = expectActivityLogProof("cli.uninstall.completed.persisted", completedLine);
+    const completedRecord = expectActivityLogProof(
+      "cli.uninstall.completed.persisted",
+      completedLine,
+    );
     expect(completedRecord).toMatchObject({ dryRun: true, stateDisposition: "would-remove" });
   });
 
@@ -125,7 +131,10 @@ describe("uninstall activity log proofs", () => {
 
     expect(code).toBe(1);
     expect(err()).toContain("is running");
-    expect(events.map((event) => event.op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
+    expect(events.map((event) => event.op)).toEqual([
+      "cli.uninstall.started",
+      "cli.uninstall.failed",
+    ]);
 
     const failedLine = formatActivityLogProofLine(events[1] ?? {});
     const failedRecord = expectActivityLogProof("cli.uninstall.failed.persisted", failedLine);

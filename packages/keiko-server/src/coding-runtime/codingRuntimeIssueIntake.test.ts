@@ -15,6 +15,10 @@ import type {
   CodingWorkbenchIssueBinding,
   CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
@@ -142,6 +146,13 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
     expect(refusal).toMatchObject({
       extra: { runId: "run-2", stage: "reattach", issueBindingFailure: "issue-unavailable" },
     });
+    if (refusal === undefined) throw new Error("expected issue-binding-refused line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.issue-binding-refused.emitted-line",
+        formatActivityLogProofLine(refusal),
+      ),
+    ).toMatchObject({ runId: "run-2", stage: "reattach" });
     expect(JSON.stringify(captured.records)).not.toContain(ISSUE_TITLE);
   });
 

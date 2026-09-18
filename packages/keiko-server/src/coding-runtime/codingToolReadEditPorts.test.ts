@@ -14,6 +14,10 @@ import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runti
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import type { CodingRuntimeEditorMutationLeaseRegistration } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
@@ -449,6 +453,16 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         totalLines: 1,
       },
     });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.workspace-read.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "completed",
+      targetPathSha256: createHash("sha256").update("src/a.ts").digest("hex"),
+      startLine: 1,
+      maxLines: 0,
+    });
   });
 
   it("returns the requested line window while keeping the digest anchored to the whole file (#2473)", async () => {
@@ -872,6 +886,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         ...admittedBinding,
         expiresAt: "2099-01-01T00:00:00.000Z",
       };
+      const events: ServerLogEvent[] = [];
       const ports = createCodingToolReadEditPorts({
         secureWorkspaceTextRead: { readText: vi.fn() },
         editorAgentClient: {
@@ -905,6 +920,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
           discard: vi.fn((): boolean => true),
           waitForMutation: () => Promise.resolve("succeeded"),
         },
+        activityLog: { write: (event): void => void events.push(event) },
       });
 
       await expect(
@@ -927,6 +943,11 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         }),
       );
       expect(register.mock.calls[0]?.[0]).not.toHaveProperty("changeset");
+      const persisted = expectActivityLogProof(
+        "coding-runtime.editor-mutation.settled.emitted-line",
+        formatActivityLogProofLine(events[0] ?? {}),
+      );
+      expect(persisted).toMatchObject({ state: "succeeded", actionKind: "edit" });
     },
   );
 

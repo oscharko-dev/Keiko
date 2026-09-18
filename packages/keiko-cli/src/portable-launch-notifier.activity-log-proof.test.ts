@@ -22,10 +22,10 @@ describe("portable-launch-notifier activity log proof", () => {
       "the portable launch failed",
       { SystemRoot: String.raw`C:\Windows` },
       (_command, _args, _options) => ({
-        on: (event, listener): undefined => {
-          if (event === "error") {
-            listener(Object.assign(new Error("spawn failed"), { code: "ENOENT" }));
-          }
+        // The real `DetachedAlertChild` contract only ever calls this with `"error"`; no branch is
+        // needed to match that one listener the production code registers.
+        on: (_event, listener): undefined => {
+          listener(Object.assign(new Error("spawn failed"), { code: "ENOENT" }));
           return undefined;
         },
         unref: (): void => undefined,
@@ -39,7 +39,9 @@ describe("portable-launch-notifier activity log proof", () => {
       () => true,
     );
 
-    expect(reportedLines).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
+    expect(reportedLines).toEqual([
+      "keiko portable launch: the failure alert could not be shown\n",
+    ]);
     expect(events).toHaveLength(1);
     const line = formatActivityLogProofLine(events[0] ?? {});
     const record = expectActivityLogProof("portable.windows-alert.spawn-failed.emitted-line", line);

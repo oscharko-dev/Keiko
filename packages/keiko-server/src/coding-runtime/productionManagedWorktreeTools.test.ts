@@ -20,6 +20,11 @@ import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-wor
 import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { validateActivityLogOperationFields } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {
   VerificationRunnerError,
@@ -1216,6 +1221,16 @@ describe("production managed worktree tools", () => {
         },
       }),
     );
+    const notRunEvent = log.find((event) => event.op === "coding-runtime.verification");
+    const persisted = expectActivityLogProof(
+      "coding-runtime.verification.emitted-line",
+      formatActivityLogProofLine(notRunEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "not-run",
+      stepCount: 1,
+      steps: ["typecheck:script-missing"],
+    });
   });
 
   // PR #3452 review: the orchestrator lets a run-level cancellation win in the overall status, but
@@ -2394,6 +2409,17 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     expect(rerank?.correlationId).toBe("run-h1-search");
     expect(JSON.stringify(rerank)).not.toContain("parseConfig");
     expect(JSON.stringify(rerank)).not.toContain("src/b.ts");
+    const persisted = expectActivityLogProof(
+      "coding-runtime.repository-rerank.emitted-line",
+      formatActivityLogProofLine(rerank ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      runId: "run-h1-search",
+      ranking: "hybrid",
+      indexFreshness: "fresh",
+      rerankedHits: 1,
+      lexicalHits: 1,
+    });
   });
 
   it("denies a workspace-denylisted path as a completed domain outcome, never invented coverage", async () => {
@@ -2586,6 +2612,32 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     expect(Array.isArray(extra.frames)).toBe(true);
     expect(extra.causeChain).toEqual([]);
     expect(JSON.stringify(events)).not.toContain("private configuration failure");
+    {
+      const line = formatActivityLogProofLine(event);
+      const parsed: Record<string, unknown> = JSON.parse(line);
+      // eslint-disable-next-line no-console
+      console.error("DEBUG_PARSED", JSON.stringify(parsed));
+      try {
+        validateActivityLogOperationFields(
+          "coding-runtime.tool-availability.failed",
+          "gateway",
+          parsed,
+        );
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("DEBUG_ERR_KIND", (err as { kind?: unknown }).kind);
+      }
+    }
+    const persisted = expectActivityLogProof(
+      "coding-runtime.tool-availability.failed.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({
+      runId,
+      optionalTool: "keiko_research_fetch",
+      stage: "research-egress-config",
+      reason: "configuration-resolution-failed",
+    });
   });
 
   // #3417: both skill tools are absent together unless an approved skill could actually run for
@@ -2916,10 +2968,20 @@ describe("verification waiting on the operator's package-script trust decision",
       { decision: "workspace-script-trust" },
       { decision: "workspace-script-trust", outcome: "accepted" },
     ]);
-    expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
+    const decisionEvent = log.find((event) => event.op === "coding-runtime.operator-decision");
+    expect(decisionEvent).toMatchObject({
       level: "info",
       correlationId: "run-verification-3",
       extra: { decision: "workspace-script-trust", state: "settled", reason: "granted" },
+    });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.operator-decision.emitted-line",
+      formatActivityLogProofLine(decisionEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      decision: "workspace-script-trust",
+      state: "settled",
+      reason: "granted",
     });
   });
 
