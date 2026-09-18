@@ -218,7 +218,7 @@ evidence.
 | Retrieval / RAG / grounding                                     | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                                                                                                                                                                                                 |
 | Context lanes / compaction                                      | `check:context-quality`                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Server error handling / diagnostics                             | `check:error-observability`                                                                                                                                                                                                                                                                                                                                                                                                  |
-| A new or changed activity-log line or `op`                      | `npm run generate:op-catalog` then `npm run check:op-catalog` (the catalog is generated, never hand-edited — §8)                                                                                                                                                                                                                                                                                                             |
+| A new or changed activity-log line or `op`                      | `npm run generate:op-catalog`, then `npm run check:activity-log`, the Activity Log implementation gate over the complete registered inventory (it runs `check:op-catalog` itself; the catalog is generated, never hand-edited — §8)                                                                                                                                                                                          |
 | An ADR (added/renumbered)                                       | `npm run check:adr-index`                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Anything under `tests/e2e/` — added, renamed, deleted OR edited | `npm run check:e2e-suite-wiring` — a suite no lane runs is not coverage (#2629), a spec no script can reach is not a suite, and a retained spec calling an unmounted route is a journey that cannot pass (#2955). An EDIT counts: changing a title, a `@tag` or an `/api/...` literal moves reachability just as a rename does. Reads the built `API_ROUTES`, so run `npm run build:packages` (or `npm run typecheck`) first |
 | The ESLint toolchain or `eslint.config.*`                       | `npm run check:eslint-lane` and `npm run check:dependency-hygiene` — #2777: covers `eslint`, `@eslint/js`, and a workspace's own `eslint` range, none of which `npm ls` can police                                                                                                                                                                                                                                           |
@@ -408,8 +408,10 @@ system that exists, never beside it:
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
   replay references. Its release expectation is 100% complete. A genuinely unavoidable platform
   or durability boundary may use only the registry's reviewed exemption shape: one exact operation
-  and failure class, owner, technical reason, linked issue, and expiry. Wildcards, expired records,
-  unknown operations, extra authorization fields, silent loss, and incomplete evidence fail closed.
+  and failure class, the operation's owning package as owner, a technical reason, a linked issue,
+  and an expiry at most 180 days ahead. Wildcards, expired or effectively permanent records, unknown
+  operations, another owner, extra authorization fields, silent loss, and incomplete evidence fail
+  closed.
 - **Sufficiency is complete by default.** A supported failure class owns its start/state/end/failure
   and loss transitions, causal edges, safe context, frames/causes, analyzer projection, and replay
   proof. Exercise unavailable sinks, rejected writes, backpressure, disk and durability failures,
@@ -474,8 +476,14 @@ system that exists, never beside it:
 - **Keep the contract converged in the same change.** When runtime behavior changes this contract,
   update the owning code, failure-first regression, emitted-line/analyzer or replay proof,
   ADR-0173, this section, `CONTRIBUTING.md`, and directly affected operator documentation together.
-  Run the existing locally executable op-catalog and error-observability checks; do not document a
-  future gate name before its command exists.
+- **One command is the gate.** `npm run check:activity-log` is the Activity Log implementation
+  gate, and required CI runs that exact command. Every run builds the packages and evaluates the
+  complete registered inventory: `check:op-catalog` (typed registrations and emitters, closed fields
+  and vocabularies, exemptions, failure-class coverage, the failure-surface inventory, and proof and
+  scenario resolution), `check:error-observability`, `arch:check` with `arch:check:negative`, and
+  `check:release-impact`. It takes no changed-file input, so an unchanged emitter is proven again
+  on every run. Each failure names its check, rule, site, and remediation. Run it before every pull
+  request that changes product runtime behaviour.
 
 ### Rule 2 — when you debug, the log is your primary source
 

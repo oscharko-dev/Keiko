@@ -38,15 +38,19 @@ operations, arbitrary metadata, nested objects, missing required fields, unbound
 unknown error/loss states fail closed. Persisted v2 records also require the sink-owned version and
 digest dimensions, compatibility/writer state, and complete `(pid, instanceId, seq)` identity.
 Tests for changed behavior assert the emitted line and the support-analyzer projection. Regenerate
-and check the catalog with `npm run generate:op-catalog` and `npm run check:op-catalog`; error-path
-changes also run `npm run check:error-observability` during the verification phase.
+the catalog with `npm run generate:op-catalog`, then run `npm run check:activity-log`, the Activity
+Log implementation gate, which required CI runs unchanged. Every run builds the packages and
+evaluates the complete registered inventory by composing `check:op-catalog`,
+`check:error-observability`, `arch:check`, `arch:check:negative`, and `check:release-impact`; it
+takes no changed-file input, so a narrower change set never narrows what it proves.
 
 The generated registry also publishes the stable implementation-obligation categories and the
 failure-class coverage matrix consumed by permanent quality gates. Its release expectation is
 100% complete. Exemptions are not comments or wildcards: the sole registry exemption contract is
-limited to one registered operation/failure-class pair and requires an owner, technical reason,
-linked tracking issue, unavoidable platform or durability boundary, and expiry. It cannot permit
-unknown fields, prohibited data, silent loss, or incomplete evidence.
+limited to one registered operation/failure-class pair and requires the operation's owning package
+as owner, a technical reason, a linked tracking issue, an unavoidable platform or durability
+boundary, and an expiry at most 180 days ahead. It cannot permit unknown fields, prohibited data,
+silent loss, or incomplete evidence.
 
 Keep this contract converged in one change. A runtime change that affects Activity Log behavior
 updates the owning implementation, its failure-first regression, emitted-line and analyzer/replay
