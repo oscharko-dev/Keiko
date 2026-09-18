@@ -9,6 +9,10 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  activityLogLossCounters,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   emitMemoryVaultLogEvent,
@@ -295,5 +299,27 @@ describe("MemoryVaultLogEvent", () => {
     };
     expect(badOp.category).toBe("memory");
     expect(badExtra.category).toBe("memory");
+  });
+});
+
+// #3532: the process warning is once per sink, but the process loss ledger counts every line a
+// failing sink loses, so a quiet log can be told apart from a log that stopped working.
+describe("emitMemoryVaultLogEvent loss accounting", () => {
+  it("counts every line a dead sink loses in the process loss ledger", () => {
+    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    resetActivityLogLossCountersForTests();
+    const dead: MemoryVaultLogSink = {
+      write: (): never => {
+        throw new Error("sink is down");
+      },
+    };
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        emitMemoryVaultLogEvent(dead, { category: "memory", op: "memory-vault.store.opened" });
+      }
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(3);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
   });
 });

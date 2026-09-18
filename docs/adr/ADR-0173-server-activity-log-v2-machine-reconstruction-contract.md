@@ -25,6 +25,13 @@ exclusive claim of the dated name, and verified
 single-link archive handles before retention unlink. The residual same-user pathname race is explicit
 and does not authorize unbounded growth.
 
+Amended by #3530 on 2026-09-18: bounded immutable segments replace the single shared
+`server.log`, its UTC-daily archives and count-only retention (D14). Each process appends only to its
+own active segment; sealed segments are read-only and never rewritten. Retention is bounded by bytes
+and age across every segment and legacy file, with crash recovery, retention pins under a reserved
+quota, and closed body-free evidence for sealing, recovery, retention, pressure and pins.
+`server-log.rotation` and `server-log.capacity-warning` are retired.
+
 Amended by #3529 on 2026-09-17: the heuristic operation inventory is now a non-authoritative
 migration view. Canonical TypeScript-resolved registrations form the versioned production registry,
 derive exact emitter types, and are revalidated at the serialization boundary. Persisted v2
@@ -89,7 +96,7 @@ complete v2 identity below; no producer may set or override any of it:
 - `seq: number` — allocated from one module-level counter shared by every `ActiveLog` in the
   process (not one counter per resolved log directory), so a process writing to more than one
   state directory still stamps one monotonic sequence, never two independently-numbered ones.
-  Survives UTC day boundaries and every `ActiveLog` reinitialization; resets only on process
+  Survives segment seals and every `ActiveLog` reinitialization; resets only on process
   restart.
   Reserved because it is the ordering primitive (D2) — if a caller could set `extra.seq`, ordering
   claims would be forgeable.
@@ -132,7 +139,7 @@ the tuple alone.
 
 **The sequence is monotonic and may contain gaps.** Each non-filtered
 `createFileSinkFacade.write` invocation reserves one identity before boundary handling or opening the
-file. The first record that invocation actually persists — safe-open evidence, rotation/retention
+file. The first record that invocation actually persists — safe-open evidence, segment or retention
 evidence, or the caller record — uses that reserved identity; any additional records allocate their
 identities immediately before their physical writes. An opening or write failure never rolls an
 identity back. Two callers racing the same failure therefore cannot reuse the number that follows it;
@@ -140,7 +147,7 @@ a missing number is the strictly safer failure than a repeated one. A gap marks 
 subsequent evidence write that could not persist its next record. On a clean exit the associated
 failure is accounted for by `reportServerLogFailure`, which emits a throttled, independent-channel
 stderr notice (`server-log.write-failed`) whose `suppressedNotices` count accounts for the failed
-sink invocations, so the throttle hides the failure's *repetition*, never its *scale*. That
+sink invocations, so the throttle hides the failure's _repetition_, never its _scale_. That
 notice travels a fixed **channel order**, each one independent of the one before it: the **file
 sink** is the primary write path and is what the notice reports on; failing that, the **stderr
 notice** carries the redacted classification (`op`, `failedOp`, `correlationId`, `errorKind`,
@@ -154,10 +161,10 @@ the next unthrottled failure notice, or, if none arrives first, flushed once by
 test teardown) before the counter is cleared. **The stated limit**: a hard kill the process never
 gets to handle — `SIGKILL`, a container OOM-kill, power loss — skips shutdown entirely, and whatever
 count was still open in that instant is lost with it. The channel layering has the same honest
-ceiling, not a stronger one: if the file sink, the stderr notice, *and* the `process.emitWarning`
+ceiling, not a stronger one: if the file sink, the stderr notice, _and_ the `process.emitWarning`
 fallback are all unavailable in the same instant (for example, stderr is gone and nothing in the
 process is listening for `'warning'`), the notice is lost — three independent channels are not an
-infinite one. The `seq` gap itself still marks that a write failed even then; only the *count* of how
+infinite one. The `seq` gap itself still marks that a write failed even then; only the _count_ of how
 many is not recoverable after that kind of exit. Exact accounting across every conceivable process
 exit or channel failure was never a promise this design can keep, and this ADR states that limit
 rather than the stricter claim the code cannot back.
@@ -191,7 +198,7 @@ protected target and preserve the single-log contract. Once isolation has been p
 open failure is retried only through the established control-state log.
 
 This is a placement rule, not a second logging system. The control root receives the existing
-`ServerLogSink` at `logs/server.log`, so D1-D13, correlation, redaction, rotation, retention, and
+`ServerLogSink` at `logs/`, so D1-D14, correlation, redaction, segments, retention, and
 the generated op vocabulary apply unchanged. Install-layout normalization is persisted there
 before a corrected internal path is consumed, and its correlation id joins the complete command
 lifecycle. Audit records start and completion/failure without writing into the audited tree.
@@ -453,10 +460,11 @@ Two new commands under one `support` command family (not `bundle export` / `log:
 coherent noun groups the artifact producer and its own consumer under one verb space):
 
 - `keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N] [--include-ui-log
-  --i-understand-this-is-unredacted] [--include-evidence RUNID[,RUNID...]]` composes existing,
+--i-understand-this-is-unredacted] [--include-evidence RUNID[,RUNID...]]` composes existing,
   already-hardened pieces — the evidence index listing, the local-state audit summary, a redacted
   config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a concatenation of
-  the current log plus retained daily archives and compatible legacy rotation files, each read
+  every Activity Log file in logical-log order (legacy files, then sealed and active segments, D14),
+  selected oldest-first within the byte budget, each read
   through a no-follow, private, single-link regular-file descriptor (a symlink, hard link, or
   non-regular entry at a log name is skipped by name with its closed refusal kind, never read
   through) — into one manifest-led
@@ -552,15 +560,15 @@ parsed successfully.
 
 The compatibility and deprecation contract is explicit:
 
-| Input or contract surface                                                                                      | Contract state / analyzer classification | Required behavior                                                                                      | Retirement condition                                                                                                                                             |
-| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Complete v2 identity with current registry/schema/catalog and `supported`/`active`                             | `supported`                              | Validate the registered operation, exact fields, closed vocabularies, bounds, and sequence integrity. | A breaking change requires a new versioned compatibility contract; it is never inferred from shape.                                                              |
-| Parseable pre-v2 line with no v2 identity                                                                      | `legacy-supported` / `legacy`            | Preserve, order by file position, count, and warn exactly once per analysis.                          | Reviewed release-impact/support baselines plus bounded retention prove no supported input can contain it; remove reader/tests/docs together.                      |
-| Unknown schema version or mismatched registry/schema/catalog identity                                          | `unsupported-version` / `unsupported`    | Preserve the classification but exclude the record from trusted current reconstruction.              | No implicit coercion; analyze with the matching versioned contract.                                                                                               |
-| Invalid JSON away from a terminal fragment, invalid types/ranges, or invalid current-registry operation/fields | `corrupt`                                | Report and exclude from trusted reconstruction.                                                       | Never demote to legacy because a prefix or subset parsed.                                                                                                         |
-| Unterminated terminal fragment or explicitly declared truncation                                               | `truncated`                              | Preserve the surviving evidence and report that it is not complete.                                  | Remains explicit; no reader may silently normalize it away.                                                                                                       |
-| Partial v2 identity, missing required evidence, declared `incomplete`, or non-`active` writer capability       | `incomplete`                             | Report the missing evidence/capability and refuse a complete-reconstruction claim.                    | Only a complete record emitted under the current contract is supported; readers do not synthesize missing fields.                                                 |
-| Predecessor literal scanner                                                                                    | migration-only                           | May inventory migration candidates but authorizes no operation.                                      | Remove only when all production producers use canonical typed registration/emission and authoritative generation reports no legacy production dependency.        |
+| Input or contract surface                                                                                      | Contract state / analyzer classification | Required behavior                                                                                     | Retirement condition                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete v2 identity with current registry/schema/catalog and `supported`/`active`                             | `supported`                              | Validate the registered operation, exact fields, closed vocabularies, bounds, and sequence integrity. | A breaking change requires a new versioned compatibility contract; it is never inferred from shape.                                                       |
+| Parseable pre-v2 line with no v2 identity                                                                      | `legacy-supported` / `legacy`            | Preserve, order by file position, count, and warn exactly once per analysis.                          | Reviewed release-impact/support baselines plus bounded retention prove no supported input can contain it; remove reader/tests/docs together.              |
+| Unknown schema version or mismatched registry/schema/catalog identity                                          | `unsupported-version` / `unsupported`    | Preserve the classification but exclude the record from trusted current reconstruction.               | No implicit coercion; analyze with the matching versioned contract.                                                                                       |
+| Invalid JSON away from a terminal fragment, invalid types/ranges, or invalid current-registry operation/fields | `corrupt`                                | Report and exclude from trusted reconstruction.                                                       | Never demote to legacy because a prefix or subset parsed.                                                                                                 |
+| Unterminated terminal fragment or explicitly declared truncation                                               | `truncated`                              | Preserve the surviving evidence and report that it is not complete.                                   | Remains explicit; no reader may silently normalize it away.                                                                                               |
+| Partial v2 identity, missing required evidence, declared `incomplete`, or non-`active` writer capability       | `incomplete`                             | Report the missing evidence/capability and refuse a complete-reconstruction claim.                    | Only a complete record emitted under the current contract is supported; readers do not synthesize missing fields.                                         |
+| Predecessor literal scanner                                                                                    | migration-only                           | May inventory migration candidates but authorizes no operation.                                       | Remove only when all production producers use canonical typed registration/emission and authoritative generation reports no legacy production dependency. |
 
 The other closed evidence vocabularies are equally versioned: `completeness` is exactly
 `complete | partial | unknown`; `loss` is exactly
@@ -705,52 +713,161 @@ The agent-reading step this adds: **for a failed request**, read `routeTemplate`
 `reason`, then look for a `client.diagnostic` line sharing the `correlationId` to learn what the
 browser saw. Everything on these lines is a count, a closed label, a template, or an id.
 
-### D14 — Daily rotation remains bounded and uses the OS-user filesystem boundary
+### D14 — Bounded immutable segments under the OS-user filesystem boundary
 
-Until immutable byte-bounded segments replace it, the current persistence format keeps the existing
-UTC-day bound: `server.log` becomes one `server-YYYY-MM-DD.log` archive at the next write after a
-day boundary, and the oldest closed-grammar archives are pruned until exactly the configured
-`retentionDays` window remains (seven by default). A candidate name is admitted only when its date is
-a real ISO calendar day; suffixes, stages, backups, malformed dates, and unrelated files are never
-retention targets. A successor storage design must replace this bound in the same revision rather
-than remove it first.
+The Activity Log is one logical log stored as immutable segments in one closed-grammar directory,
+`<stateDir>/logs/`. Segments replaced the single shared `server.log`, its UTC-daily archives and
+count-only retention in #3530. A byte bound and an age bound hold at every revision; a successor
+storage design must replace them in the same revision rather than remove them first.
 
-The trust boundary is the operating-system user. The configured state/log directory is accepted only
-while it remains owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected owner's
-inherited ACL on Windows). Directory device/inode identity is captured and rechecked before and after
-every link, rename, and unlink. Retention opens each target without following its final symlink and
-requires a regular, owner-matched, private, single-link file whose descriptor and pathname identities
-agree immediately before unlink. The cached append descriptor retains D2's `ensureHandle`/
-`handleStillCurrent` stale-inode protection before and after every caller write.
+**Layout.** The grammar lives in `keiko-contracts` (`activity-log-files.ts`). The writer and every
+reader import it; nothing restates it.
 
-Cross-process archive publication uses `link(2)` as a non-replacing winner primitive. `EEXIST`
-means a peer already published the destination; Keiko verifies and preserves it rather than
-overwriting it. The winner (or a peer observing the same two-link inode) removes only the current
-name, leaving the archive as a single-link file. Rename is reachable only for filesystem error codes
-that explicitly classify hard links as unsupported. Ordinary permission, I/O, link-count, unsafe
-target, and identity failures do not enter that fallback.
+| Name                                                     | Meaning                                                                |
+| -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `activity-<start>-<pid>-<instance>-<index>.active.jsonl` | The active segment of one process instance. Only that process appends. |
+| `activity-<start>-<pid>-<instance>-<index>.jsonl`        | A sealed segment: read-only (`0400`), never rewritten.                 |
+| `server-YYYY-MM-DD.log`, `server.log`                    | Legacy files of the retired daily rotation. Read-only.                 |
+| `pin-<24 hex>.json`                                      | A retention-pin record.                                                |
 
-Every boundary attempt produces body-free typed `server-log.rotation` evidence once persistence is
-available: closed persistence/rotation/retention outcomes and reasons plus archived, pruned, and
-retained counts. Mutation failures are partial `durability-failed` evidence and never escape into
-the product operation that triggered the write.
+`<start>` is the segment's UTC start time (`YYYYMMDDTHHMMSSmmmZ`), `<pid>` and `<instance>` are the
+envelope's process identity, and `<index>` counts that instance's segments from `000001`. Sealing
+drops only `.active`, so a segment keeps one id for its whole life. The logical order is the legacy
+archives by day, then the legacy current file, then segments by start time and owning process.
+Within one process instance the order is exact; across processes the start time is a best-effort
+hint, exactly like `ts` (D2).
+
+**Writing and sealing.** Each process creates its own active segment with an exclusive create and
+never opens another instance's active segment for writing, so no two processes append to one file.
+A segment is sealed:
+
+- when the next line would exceed `KEIKO_LOG_SEGMENT_BYTES`;
+- when it is older than `KEIKO_LOG_SEGMENT_SECONDS`, measured by the wall clock or the monotonic
+  clock, whichever is further (a backwards wall-clock step beyond five seconds seals it with
+  `clock-change`);
+- at shutdown;
+- on a pin request.
+
+Sealing writes a final `activity-log.segment.sealed` line and fsyncs. The line carries the seal
+reason, the seq range, the line count, the byte size, the duration, the dropped-event count and the
+configured limits. Sealing then publishes the sealed name with the guarded primitive described under
+**Trust boundary** and makes the file read-only. A seal that fails leaves the file under its active
+name; the writer never appends to it again, and the next maintenance pass recovers it. Lines over
+8 KiB are still replaced by `server-log.line-dropped`.
+
+**Recovery.** At startup and before every new segment, the writer seals orphaned active segments. A
+segment is orphaned when:
+
+- its owner has exited, or its pid now belongs to this process;
+- it is older than two segment windows and unwritten for one (pid reuse);
+- it is this instance's own abandoned segment.
+
+Recovery seals the file as it is: a partial final line is kept and reported (`tailState:
+"truncated"`, `truncatedBytes`), and valid lines are never rewritten. An interrupted seal whose seal
+line is already present is only completed. Every recovery is `activity-log.segment.recovered`
+evidence with lifecycle `loss`.
+
+**Retention and the bound.** Retention runs at startup and before every new segment, never
+deferred. It counts every file in the grammar: legacy files, sealed segments, pin records, and every
+active segment at its reservation, the larger of its size and the segment size. Oldest first, it
+deletes the unprotected sealed and legacy files that are past `KEIKO_LOG_RETENTION_DAYS`. It then
+deletes as many more as the `KEIKO_LOG_RETENTION_BYTES` budget requires, including the reservation of
+the segment about to open.
+
+- **Deletion.** Every deletion is the guarded, identity-bound unlink of `removeSafeArtifactFile`. A
+  failed deletion is counted and retried after a 60-second backoff; the next candidate is tried
+  meanwhile.
+- **Admission.** A new segment is admitted only when the unprotected total, including its
+  reservation, fits the budget. Admission is checked again after the exclusive create. Concurrent
+  processes can therefore observe the same free reservation only while their new segments are still
+  empty, and the loser withdraws its segment.
+- **Budget exceeded.** When the budget cannot be met, the event is dropped and counted, and
+  `activity-log.pressure` reports `budget-exceeded`.
+- **Evidence.** Each pass that deletes or fails to delete is `activity-log.retention.pruned`
+  evidence.
+
+Total disk use is therefore at most the byte budget plus the pin quota.
+
+**Pins.** `pinActivityLogWindow` protects one of two scopes until an expiry of at most 3650 days:
+
+- a time window of up to seven days, across every process instance, including segments sealed later
+  inside it;
+- up to 64 named segments.
+
+At most 64 pins are active. The pin record is published before the current segment is sealed, so
+the next retention pass honors it. Pinned sealed segments count against `KEIKO_LOG_PIN_QUOTA_BYTES`,
+oldest pin first, and only while the quota lasts. A pin the quota cannot hold is still recorded with
+`quotaStatus: "exceeded"`. Its unprotected remainder produces one `activity-log.pin.quota-exhausted`
+loss marker with segment counts, bytes and the seq span. Expired and invalid pin records are removed
+with `activity-log.pin.expired`. #3530 provides the primitive; #3533 decides when and what to pin.
+The legacy update-audit import pins its durable batch (`reason: "durable-batch"`).
+
+**Pressure and health.** `activity-log.pressure` records transitions between these closed states:
+
+- `low-disk-space`: free space is below the larger of four segments and 64 MiB;
+- `disk-full`: a write failed with `ENOSPC`, `EDQUOT` or `EFBIG`;
+- `backpressure`;
+- `budget-exceeded`;
+- `retention-blocked`;
+- `cleared`.
+
+The line carries the dropped-event count and the used, budget, pin-quota and free bytes. Writing
+never stalls silently. `activityLogStorageHealth(stateDir)` returns a read-only snapshot: one
+listing, the pin records and one `statfs`. Diagnostic readiness (#3532) consumes it.
+
+**Configuration.** Five environment variables bound the store. Each value must be a positive decimal
+integer inside its bounds. Any other value falls back to the default, so a typo never disables the
+bound.
+
+| Variable                    | Default | Bounds                                                     |
+| --------------------------- | ------- | ---------------------------------------------------------- |
+| `KEIKO_LOG_SEGMENT_BYTES`   | 8 MiB   | At least 32 KiB; at most a quarter of the retention budget |
+| `KEIKO_LOG_SEGMENT_SECONDS` | 3600    | 1 to 604800                                                |
+| `KEIKO_LOG_RETENTION_BYTES` | 256 MiB | At least 64 KiB                                            |
+| `KEIKO_LOG_RETENTION_DAYS`  | 14      | 1 to 3650                                                  |
+| `KEIKO_LOG_PIN_QUOTA_BYTES` | 64 MiB  | At least 1 byte                                            |
+
+Segments stay uncompressed. A sealed segment is directly readable by `keiko support analyze` and by
+line tools, and the byte budget already bounds disk use.
+
+**Legacy input.** Existing `server.log` and `server-YYYY-MM-DD.log` files are read-only legacy
+segments. They count toward the budget, age out under the same retention, and are never rewritten or
+appended to. `server-log.rotation` and `server-log.capacity-warning` are retired; lines that carry
+them stay readable as legacy evidence.
+
+**Trust boundary.** The trust boundary is the operating-system user. The log directory is accepted
+only while it remains owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected
+owner's inherited ACL on Windows). Maintenance refuses to list, recover, or prune through a
+redirected directory. Directory device/inode identity is captured and rechecked before and after
+every link, rename, and unlink. Every target is opened without following its final symlink. It must
+be a regular, owner-matched, private, single-link file whose descriptor and pathname identities agree
+immediately before the mutation.
+
+Publication of a sealed name uses `link(2)` as a non-replacing primitive and then removes the active
+name, leaving the sealed segment as a single-link file. `EEXIST` means the sealed name already
+exists; Keiko verifies and preserves it rather than overwriting it. Rename is reachable only for
+filesystem error codes that explicitly classify hard links as unsupported. Ordinary permission, I/O,
+link-count, unsafe-target, and identity failures do not enter that fallback. Mutation failures are
+body-free evidence and never escape into the product operation that triggered the write.
 
 **Residual same-user race.** Node exposes no portable descriptor-relative link/rename/unlink API,
 and a filesystem without hard links offers no portable no-replace rename. The rename fallback
-therefore first claims the dated name with an exclusive no-follow create: a concurrent rotation that
-loses the claim preserves the winner's archive, and the winner's rename can replace only its own
-empty claim. Every link, rename, and unlink carries the device/inode of a source descriptor its
-caller holds open until the helper returns, and the mutation helper acts on the name only while it
-still has that identity. The held descriptor keeps the inode allocated: Linux file systems hand a
-freed inode number to the next file at once, so an identity without a holder could match the
-replacement. A process that finalizes a peer's hard-link winner can therefore never delete the
-`server.log` a concurrent writer has just recreated, and no link or rename publishes a file that
-replaced the verified one. A process
-already executing as the same OS user can still act in the narrow interval between pathname checks.
-Owner-private directories, held descriptors, pre/post identity checks, the hard-link winner, closed
-names, and target-handle verification narrow and detect that interval; they do not claim to
-eliminate it. This residual is part of the stated OS-user threat model and is never
-a reason to disable or defer bounded retention.
+therefore first claims the destination name with an exclusive no-follow create. A concurrent
+publication that loses the claim preserves the winner's file, and the winner's rename can replace
+only its own empty claim.
+
+Every link, rename, and unlink carries the device/inode of a source descriptor that its caller holds
+open until the helper returns. The mutation helper acts on the name only while it still has that
+identity. The held descriptor keeps the inode allocated: Linux file systems hand a freed inode number
+to the next file at once, so an identity without a holder could match the replacement. A process
+that completes a peer's interrupted seal can therefore never delete a file that replaced the
+verified one, and no link or rename publishes such a file.
+
+A process already executing as the same OS user can still act in the narrow interval between
+pathname checks. Owner-private directories, held descriptors, pre/post identity checks, the
+non-replacing link, closed names, and target-handle verification narrow and detect that interval.
+They do not claim to eliminate it. This residual is part of the stated OS-user threat model and is
+never a reason to disable or defer bounded retention.
 
 ### D12 — Relation to prior decisions
 
@@ -799,7 +916,7 @@ a reason to disable or defer bounded retention.
   that same spirit: every log line it carries was already redacted before this contract existed
   (`redactLogFields`'s choke point, unchanged here), and the one field this contract adds outside
   that pipeline — the manifest's `auditSummary`, built from the `AuditResult` `keiko audit
-  local-state` already produces — is redacted by a dedicated projection in
+local-state` already produces — is redacted by a dedicated projection in
   `buildSupportBundleManifest` (`support-export.ts`) that drops `AuditResult.stateDir` before the
   manifest is ever assembled, because that field echoes the absolute directory the audit ran
   against and can embed the operator's OS username on a real machine. That projection is a
@@ -807,8 +924,7 @@ a reason to disable or defer bounded retention.
   `auditSummary` through `redactLogFields` itself — `AuditResult` is a typed value, not a log line,
   so the log envelope's choke point does not apply to it. The manifest's `stateDirSource`
   closed-union label already carries everything an agent needs from that field (default vs.
-  override), so nothing is lost. Its integrity sidecar (a `sha256` file alongside the bundle, Wave
-  6) exists because the
+  override), so nothing is lost. Its integrity sidecar (a `sha256` file alongside the bundle, Wave 6) exists because the
   bundle crosses a real trust boundary — customer machine → support ticket → agent — the same
   boundary ADR-0048's confidentiality tiers were written to reason about.
 
@@ -864,14 +980,16 @@ rather than left implicit across the Decision section:
   `suppressedNotices` counts failed sink invocations; it is not an exact persisted-gap counter when
   one invocation attempted more than one record (D2).
 - Retained pre-v2 log lines are a real compatibility case, not an oversight: a line written before
-  this contract shipped can still appear in the long-lived current file or a legacy rotation
-  archive. The analyzer never drops or misorders such a line — it orders it by file position, counts
+  this contract shipped can still appear in a retained legacy `server.log` or
+  `server-YYYY-MM-DD.log` file. The analyzer never drops or misorders such a line — it orders it by file position, counts
   it in `legacyLineCount`, and surfaces exactly one `warnings[]` entry naming that count (D9, D10).
   An agent must read `warnings[]` before trusting that every line in a bundle came from an ordered
   v2 process lifetime.
-- Daily rotation and retention remain a real bound until immutable segments replace them (D14).
-  Cross-process publication cannot replace a winning archive, pruning cannot select a non-grammar
-  name or an unverified target, and every outcome is reconstructable from typed body-free evidence.
+- Bounded immutable segments are the disk bound (D14): total use is at most the byte budget plus
+  the pin quota. No process appends to another process's segment, publication never replaces an
+  existing name, pruning cannot select a non-grammar name or an unverified target, a crash-torn tail
+  is reported rather than rewritten, and every outcome is reconstructable from typed body-free
+  evidence.
   The documented residual same-user pathname race is a limit of Node's portable filesystem API,
   not permission to remove the bound.
 - Process lifecycle events (`process.started`/`process.heartbeat`/`process.exiting`) carry no

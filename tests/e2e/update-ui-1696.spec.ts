@@ -1873,12 +1873,16 @@ test("@real-bff-outage preserves accepted update progress and reconnects to dura
   const page = await context.newPage();
   try {
     expect(runOutageLifecycle(harness, "start")).toContain("Starting Keiko UI");
-    expect(readFileSync(join(harness.stateDir, "ui.log"), "utf8")).toContain(
-      "KEIKO_E2E_UPDATE_OUTAGE_BFF",
-    );
+    // #3532: `keiko start` no longer copies the UI process's raw output into `ui.log`. The started
+    // server proves it is the outage fixture through the fixture-only release-impact entry it
+    // injects, which no real catalog carries.
+    expect(existsSync(join(harness.stateDir, "ui.log"))).toBe(false);
     const offered = await fetchUpdatePreflight(harness.origin);
     expect(offered, `real-BFF preflight:\n${JSON.stringify(offered, undefined, 2)}`).toHaveProperty(
       "candidate",
+    );
+    expect(JSON.stringify(offered)).toContain(
+      "Exercises update recovery across a real local BFF outage.",
     );
 
     await seedSettingsWindow(page, {
