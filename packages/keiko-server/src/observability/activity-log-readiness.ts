@@ -15,8 +15,7 @@
 // written at all (catalog mismatch or an unwritable sink); anything else is `degraded`. An
 // explicitly injected test writer is reported as such, never as a production writer.
 
-import { accessSync, constants, lstatSync, statfsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   activityLogEvent,
   activityLogLossCounters,
@@ -39,10 +38,12 @@ import {
   type ActivityLogEventPersister,
 } from "./activity-log-persistence.js";
 import {
-  DEFAULT_LOG_CAPACITY_WARNING_BYTES,
+  activityLogStorageHealth,
   formatRegisteredServerLogLine,
   reportServerLogFailure,
   serverLogProcessIdentity,
+  type ActivityLogPressureState,
+  type ActivityLogStoreHealth,
   type ServerLogEvent,
 } from "./server-log.js";
 import {
@@ -104,75 +105,13 @@ const ACTIVITY_LOG_READINESS_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
-// Storage facts the readiness check consumes. The shape is the segment writer's storage-health
-// report; until that writer exists, `defaultActivityLogStorageHealth` answers from the directory
-// itself (writability and free space) and reports the documented capacity threshold as the budget.
-export type ActivityLogStoragePressure = "none" | "elevated" | "critical";
-
-export interface ActivityLogStorageHealth {
-  readonly writable: boolean;
-  readonly usedBytes: number;
-  readonly budgetBytes: number;
-  readonly pinQuotaBytes: number;
-  readonly pinnedBytes: number;
-  readonly freeBytes?: number | undefined;
-  readonly activeSegments: number;
-  readonly sealedSegments: number;
-  readonly pressure: ActivityLogStoragePressure;
-  readonly recoveredSegments: number;
-}
-
-export type ActivityLogStorageHealthProvider = (stateDir: string) => ActivityLogStorageHealth;
-
-// Below this much free space an append is likely to fail mid-incident; readiness says so before it
-// happens instead of after.
-export const ACTIVITY_LOG_MIN_FREE_BYTES = 64 * 1024 * 1024;
-
-function writableDirectory(directory: string): boolean | undefined {
-  try {
-    const stat = lstatSync(directory);
-    if (!stat.isDirectory()) return false;
-    accessSync(directory, constants.W_OK);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : false;
-  }
-}
-
-function freeBytesOf(directory: string): number | undefined {
-  try {
-    const stats = statfsSync(directory);
-    const free = Number(stats.bavail) * Number(stats.bsize);
-    return Number.isSafeInteger(free) && free >= 0 ? free : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * The storage-health answer available without the segment writer: whether the log directory (or,
- * before its first write, the state directory that will hold it) is a writable directory, and how
- * much space is free. Usage is not measured here, so no budget is reported as exceeded.
- */
-export function defaultActivityLogStorageHealth(stateDir: string): ActivityLogStorageHealth {
-  const directory = join(stateDir, "logs");
-  const logsWritable = writableDirectory(directory);
-  const writable = logsWritable ?? writableDirectory(stateDir) === true;
-  const freeBytes = freeBytesOf(logsWritable === undefined ? stateDir : directory);
-  return {
-    writable,
-    usedBytes: 0,
-    budgetBytes: DEFAULT_LOG_CAPACITY_WARNING_BYTES,
-    pinQuotaBytes: 0,
-    pinnedBytes: 0,
-    ...(freeBytes === undefined ? {} : { freeBytes }),
-    activeSegments: 0,
-    sealedSegments: 0,
-    pressure:
-      freeBytes !== undefined && freeBytes < ACTIVITY_LOG_MIN_FREE_BYTES ? "critical" : "none",
-    recoveredSegments: 0,
-  };
-}
+// The storage facts come from the segment store's own read-only health snapshot
+// (`activityLogStorageHealth`, server-log.ts) — one type, never a parallel shape. `pressureState`
+// names the exact condition; readiness maps it onto its closed reasons below.
+export type ActivityLogStorageHealthProvider = (
+  stateDir: string,
+  env: ServerLogEnv,
+) => ActivityLogStoreHealth;
 
 // The operations every production process must be able to emit. A registry built without one of
 // them (a skewed package set) cannot carry the lifecycle and loss evidence readiness promises.
@@ -243,21 +182,28 @@ interface ReadinessFacts {
   readonly writer: ActivityLogWriterKind;
   readonly catalogCoherent: boolean;
   readonly sink: SinkCondition;
-  readonly storage: ActivityLogStorageHealth | undefined;
+  readonly storage: ActivityLogStoreHealth | undefined;
   readonly threshold: ServerLogThreshold;
   readonly portsWired: boolean;
 }
 
-function storageReasons(
-  storage: ActivityLogStorageHealth | undefined,
-): ActivityLogReadinessReason[] {
-  if (storage === undefined) return [];
-  const reasons: ActivityLogReadinessReason[] = [];
-  if (storage.pressure !== "none") reasons.push("storage-pressure");
-  if (storage.usedBytes > storage.budgetBytes + storage.pinQuotaBytes) {
-    reasons.push("budget-exceeded");
-  }
-  return reasons;
+// Every standing or blocking storage condition degrades readiness; an exceeded byte budget is
+// named on its own, because it means retention can no longer hold the store.
+const PRESSURE_READINESS_REASONS: Readonly<
+  Record<ActivityLogPressureState, ActivityLogReadinessReason | undefined>
+> = {
+  none: undefined,
+  "low-disk-space": "storage-pressure",
+  "disk-full": "storage-pressure",
+  backpressure: "storage-pressure",
+  "retention-blocked": "storage-pressure",
+  "budget-exceeded": "budget-exceeded",
+};
+
+function storageReasons(storage: ActivityLogStoreHealth | undefined): ActivityLogReadinessReason[] {
+  const reason =
+    storage === undefined ? undefined : PRESSURE_READINESS_REASONS[storage.pressureState];
+  return reason === undefined ? [] : [reason];
 }
 
 function readinessReasons(facts: ReadinessFacts): readonly ActivityLogReadinessReason[] {
@@ -318,10 +264,28 @@ export interface ActivityLogReadinessOptions {
   readonly env?: ServerLogEnv | undefined;
   readonly storageHealth?: ActivityLogStorageHealthProvider | undefined;
   readonly persist?: ActivityLogEventPersister | undefined;
-  // False for a one-shot command that inspects a state directory it does not serve (`keiko support
-  // export --state-dir`): its own logger legitimately writes elsewhere, so port wiring is not a
-  // property of that directory. Defaults to true.
-  readonly validatePortWiring?: boolean | undefined;
+  // `process` (the default) evaluates the writer this process logs through. `directory` evaluates
+  // the Activity Log of `stateDir` itself, for a one-shot command that inspects a state directory
+  // it does not serve (`keiko support export --state-dir`): the probe writes through the production
+  // append path into that directory, port wiring is not a property of it, and the process's own
+  // readiness — the one `/api/health` reports — is left untouched.
+  readonly scope?: ActivityLogReadinessScope | undefined;
+}
+
+export type ActivityLogReadinessScope = "process" | "directory";
+
+function directoryScope(
+  options: ActivityLogReadinessOptions,
+): options is ActivityLogReadinessOptions & {
+  readonly stateDir: string;
+} {
+  return options.scope === "directory" && options.stateDir !== undefined;
+}
+
+function writerStateFor(options: ActivityLogReadinessOptions): ActivityLogWriterState {
+  return directoryScope(options)
+    ? { writer: "production-file", stateDir: options.stateDir }
+    : activityLogWriterState();
 }
 
 function portsWired(
@@ -338,16 +302,17 @@ function portWiringFact(
   state: ActivityLogWriterState,
   options: ActivityLogReadinessOptions,
 ): boolean {
-  if (options.validatePortWiring === false) return true;
+  if (directoryScope(options)) return true;
   return portsWired(state.writer, state.stateDir, options.stateDir ?? memory.expectedStateDir);
 }
 
 function collectFacts(options: ActivityLogReadinessOptions, sink: SinkCondition): ReadinessFacts {
-  const state = activityLogWriterState();
+  const state = writerStateFor(options);
   const stateDir = options.stateDir ?? state.stateDir;
   const production = state.writer !== "test-injected" && stateDir !== undefined;
+  const env = options.env ?? process.env;
   const storage = production
-    ? (options.storageHealth ?? defaultActivityLogStorageHealth)(stateDir)
+    ? (options.storageHealth ?? activityLogStorageHealth)(stateDir, env)
     : undefined;
   const storageSink: SinkCondition =
     storage === undefined || storage.writable ? sink : "unwritable";
@@ -356,7 +321,7 @@ function collectFacts(options: ActivityLogReadinessOptions, sink: SinkCondition)
     catalogCoherent: activityLogCatalogCoherent(),
     sink: state.writer === "unavailable" ? "unwritable" : storageSink,
     storage,
-    threshold: resolveServerLogThreshold(options.env ?? process.env),
+    threshold: resolveServerLogThreshold(env),
     portsWired: portWiringFact(state, options),
   };
 }
@@ -376,16 +341,20 @@ function remember(snapshot: ActivityLogReadinessSnapshot): ActivityLogReadinessS
 export function checkActivityLogReadiness(
   options: ActivityLogReadinessOptions = {},
 ): ActivityLogReadinessSnapshot {
-  memory.expectedStateDir = options.stateDir ?? memory.expectedStateDir;
+  const inspectOnly = directoryScope(options);
+  if (!inspectOnly) memory.expectedStateDir = options.stateDir ?? memory.expectedStateDir;
+  const record = inspectOnly
+    ? (snapshot: ActivityLogReadinessSnapshot): ActivityLogReadinessSnapshot => snapshot
+    : remember;
   const tentative = snapshotFrom(collectFacts(options, "writable"));
-  const stateDir = options.stateDir ?? activityLogWriterState().stateDir;
-  if (tentative.writer === "test-injected" || stateDir === undefined) return remember(tentative);
+  const stateDir = writerStateFor(options).stateDir;
+  if (tentative.writer === "test-injected" || stateDir === undefined) return record(tentative);
   const persisted = (options.persist ?? persistActivityLogEvents)(stateDir, [
     readinessEvent(tentative, "startup"),
   ]);
-  if (persisted) return remember(tentative);
+  if (persisted) return record(tentative);
   reportServerLogFailure(undefined, { op: "activity-log.readiness", loss: "event-dropped" });
-  return remember(snapshotFrom(collectFacts(options, "unwritable")));
+  return record(snapshotFrom(collectFacts(options, "unwritable")));
 }
 
 function sameReadiness(

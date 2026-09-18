@@ -5,7 +5,15 @@
 // test here calls the captured listener and then waits for the observable side effect (`err`/
 // `exit` being called) rather than awaiting a return value — the same way Node itself never waits.
 import { spawn } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 import {
   _resetInstalledProcessGuardsForTests,
   fatalProcessLine,
@@ -73,12 +81,23 @@ describe("installProcessGuards — registration", () => {
 });
 
 describe("installProcessGuards — real classifier (no injected loadServer)", () => {
+  // The handler races the classifier import against its 2s crash bound. A cold transform of the
+  // server graph inside this test worker can exceed that bound, which would test the fallback path
+  // instead of the real one; warming the module cache keeps these tests on the real classifier.
+  beforeAll(async () => {
+    await import("@oscharko-dev/keiko-server");
+  }, 60_000);
+
   // This is the regression this work item exists for: before the fix, the stderr line was built
   // from `${reason.name}: ${reason.message}` — a raw, unredacted string. Using the REAL keiko-server
   // dynamic import (not a fake) proves the actual production classifier, not a mock built to agree
   // with the assertion, is what keeps the message off stderr.
-  it("never lets a message reach stderr", async () => {
-    vi.stubEnv("KEIKO_STATE_DIR", ""); // no activity-log file write in this test
+  // #3532: the fatal lifecycle is ALWAYS persisted — `process.fatal` with safe frames only, then
+  // the process end `process.exiting` with reason `fatal-exception` — through the real production
+  // sink, and no line of it carries the thrown message.
+  it("never lets a message reach stderr or the persisted fatal lifecycle", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-fatal-lifecycle-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     const err = vi.fn();
     const exit = vi.fn();
     const { uncaught, cleanup } = installAndCapture({ err, exit });
@@ -98,13 +117,30 @@ describe("installProcessGuards — real classifier (no injected loadServer)", ()
       expect(line).not.toContain("secret-token-123");
       expect(line).toBe("keiko: fatal uncaught exception (Error). The process will exit.\n");
       expect(exit).toHaveBeenCalledWith(1);
+      const raw = readPersistedActivityLog(stateDir);
+      expect(raw).not.toContain("secret-token-123");
+      const [fatal] = persistedActivityLogLines(raw, "process.fatal");
+      expect(expectActivityLogProof("process.fatal.body-free", fatal ?? "")).toMatchObject({
+        kind: "uncaught-exception",
+        failureKind: "Error",
+      });
+      const [exiting] = persistedActivityLogLines(raw, "process.exiting");
+      expect(expectActivityLogProof("process.exiting.reason", exiting ?? "")).toMatchObject({
+        level: "error",
+        errorKind: "internal",
+        reason: "fatal-exception",
+      });
+      const [summary] = persistedActivityLogLines(raw, "activity-log.loss");
+      expect(summary).toBeDefined();
     } finally {
       cleanup();
+      rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
   it("never lets a rejection reason reach stderr, even a plain string", async () => {
-    vi.stubEnv("KEIKO_STATE_DIR", "");
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-fatal-rejection-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     const err = vi.fn();
     const exit = vi.fn();
     const { rejection, cleanup } = installAndCapture({ err, exit });
@@ -120,14 +156,18 @@ describe("installProcessGuards — real classifier (no injected loadServer)", ()
       expect(line).not.toContain("leaked-plain-reason");
       expect(line).toBe("keiko: fatal unhandled rejection (string). The process will exit.\n");
       expect(exit).toHaveBeenCalledWith(1);
+      expect(readPersistedActivityLog(stateDir)).not.toContain("leaked-plain-reason");
     } finally {
       cleanup();
+      rmSync(stateDir, { recursive: true, force: true });
     }
   });
 });
 
 // A fake module satisfying `FatalDiagnosticsModule`, recording every activity-log write it is
 // asked to perform so tests can assert on the exact event shape without touching a real file.
+const DEFAULT_RUNTIME_STATE_DIR = "/fake/cwd/.keiko";
+
 function fakeServerModule(described: {
   readonly errorClass: string;
   readonly code?: string;
@@ -136,31 +176,39 @@ function fakeServerModule(described: {
 }): {
   readonly module: FatalDiagnosticsModule;
   readonly writes: unknown[];
-  readonly createFileServerLogSink: ReturnType<typeof vi.fn>;
+  readonly createActivityLogSink: ReturnType<typeof vi.fn>;
+  readonly persistActivityLogLossSummary: ReturnType<typeof vi.fn>;
 } {
   const writes: unknown[] = [];
-  const createFileServerLogSink = vi.fn(() => ({
+  const createActivityLogSink = vi.fn(() => ({
     write: (event: unknown): void => {
       writes.push(event);
     },
     close: vi.fn(),
   }));
+  const persistActivityLogLossSummary = vi.fn(() => "persisted" as const);
   const module: FatalDiagnosticsModule = {
-    createFileServerLogSink,
+    createActivityLogSink,
     describeError: () => described,
+    persistActivityLogLossSummary,
+    resolveRuntimeStateDir: (env) => {
+      const configured = env.KEIKO_STATE_DIR;
+      return configured === undefined || configured === "" ? DEFAULT_RUNTIME_STATE_DIR : configured;
+    },
   };
-  return { module, writes, createFileServerLogSink };
+  return { module, writes, createActivityLogSink, persistActivityLogLossSummary };
 }
 
 describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", () => {
-  it("writes one process.fatal line before stderr with a classified code-first failureKind", async () => {
+  it("writes the fatal lifecycle before stderr with a classified code-first failureKind", async () => {
     vi.stubEnv("KEIKO_STATE_DIR", "/fake/state/dir");
-    const { module, writes, createFileServerLogSink } = fakeServerModule({
-      errorClass: "GatewayError",
-      code: "ECONNRESET",
-      frames: ["packages/keiko-cli/dist/run.js:12:4"],
-      causeChain: ["TypeError"],
-    });
+    const { module, writes, createActivityLogSink, persistActivityLogLossSummary } =
+      fakeServerModule({
+        errorClass: "GatewayError",
+        code: "ECONNRESET",
+        frames: ["packages/keiko-cli/dist/run.js:12:4"],
+        causeChain: ["TypeError"],
+      });
     const order: string[] = [];
     const err = vi.fn((): void => {
       order.push("err");
@@ -176,8 +224,16 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
         expect(err).toHaveBeenCalledTimes(1);
       });
 
-      expect(createFileServerLogSink).toHaveBeenCalledWith("/fake/state/dir");
-      expect(writes).toHaveLength(1);
+      expect(createActivityLogSink).toHaveBeenCalledWith("/fake/state/dir");
+      expect(persistActivityLogLossSummary).toHaveBeenCalledWith("exit");
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toMatchObject({
+        level: "error",
+        category: "process",
+        op: "process.exiting",
+        errorKind: "internal",
+        extra: { reason: "fatal-exception" },
+      });
       expect(writes[0]).toEqual({
         level: "error",
         category: "process",
@@ -214,7 +270,7 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
     try {
       uncaught?.(new TypeError("boom"));
       await vi.waitFor(() => {
-        expect(writes).toHaveLength(1);
+        expect(writes).toHaveLength(2);
       });
       const [event] = writes as [{ errorKind: string; extra: Record<string, unknown> }];
       expect(event.errorKind).toBe("internal");
@@ -244,7 +300,7 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
     try {
       rejection?.(new Error("boom"));
       await vi.waitFor(() => {
-        expect(writes).toHaveLength(1);
+        expect(writes).toHaveLength(2);
       });
       const [event] = writes as [{ errorKind: string; extra: Record<string, unknown> }];
       expect(event.errorKind).toBe("timeout");
@@ -256,9 +312,13 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
 });
 
 describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR unset", () => {
-  it("stays stderr-only: never constructs a file sink", async () => {
+  // #3532: a crash in a process started without KEIKO_STATE_DIR (keiko run, keiko memory, ...) used
+  // to stay stderr-only. It now lands in the runtime state directory the CLI itself defaults to.
+  it("writes the fatal lifecycle to the default runtime state directory", async () => {
     vi.stubEnv("KEIKO_STATE_DIR", "");
-    const { module, createFileServerLogSink } = fakeServerModule({ errorClass: "RangeError" });
+    const { module, writes, createActivityLogSink } = fakeServerModule({
+      errorClass: "RangeError",
+    });
     const err = vi.fn();
     const sink: ProcessGuardSink = {
       err,
@@ -271,7 +331,11 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR unset", 
       await vi.waitFor(() => {
         expect(err).toHaveBeenCalledTimes(1);
       });
-      expect(createFileServerLogSink).not.toHaveBeenCalled();
+      expect(createActivityLogSink).toHaveBeenCalledWith(DEFAULT_RUNTIME_STATE_DIR);
+      expect(writes.map((event) => (event as { op: string }).op)).toEqual([
+        "process.fatal",
+        "process.exiting",
+      ]);
       expect(err).toHaveBeenCalledWith(
         "keiko: fatal uncaught exception (RangeError). The process will exit.\n",
       );
@@ -323,7 +387,7 @@ describe("installProcessGuards — a hung classifier import never keeps the proc
         new Promise<FatalDiagnosticsModule>((resolve) => {
           releaseImport = (): void => {
             resolve({
-              createFileServerLogSink: vi.fn(() => ({
+              createActivityLogSink: vi.fn(() => ({
                 write: (): void => {
                   // No-op: this test only cares that `describeError` ran late, not what it logged.
                 },
@@ -332,6 +396,8 @@ describe("installProcessGuards — a hung classifier import never keeps the proc
                 describeErrorCalled = true;
                 return { errorClass: "TooLate" };
               },
+              persistActivityLogLossSummary: vi.fn(() => "persisted" as const),
+              resolveRuntimeStateDir: () => DEFAULT_RUNTIME_STATE_DIR,
             });
           };
         }),
@@ -432,8 +498,10 @@ describe("boundedSinkWrite — a never-settling sink must not block sink.exit (c
       exit,
       loadServer: (): Promise<FatalDiagnosticsModule> =>
         Promise.resolve({
-          createFileServerLogSink: vi.fn(() => ({ write: (): void => undefined })),
+          createActivityLogSink: vi.fn(() => ({ write: (): void => undefined })),
           describeError: (): { readonly errorClass: string } => ({ errorClass: "Error" }),
+          persistActivityLogLossSummary: vi.fn(() => "persisted" as const),
+          resolveRuntimeStateDir: (): string => DEFAULT_RUNTIME_STATE_DIR,
         } as unknown as FatalDiagnosticsModule),
     };
     const { uncaught, cleanup } = installAndCapture(sink);
@@ -517,10 +585,12 @@ describe("installProcessGuards — flushes the fatal line before exiting (KEIKO-
     });
     const loadServer = vi.fn((): Promise<FatalDiagnosticsModule> =>
       Promise.resolve({
-        createFileServerLogSink: (): { write: () => void; close: () => void } => ({
+        createActivityLogSink: (): { write: () => void; close: () => void } => ({
           write: (): void => undefined,
           close: (): void => undefined,
         }),
+        persistActivityLogLossSummary: (): "persisted" => "persisted",
+        resolveRuntimeStateDir: (): string => DEFAULT_RUNTIME_STATE_DIR,
         describeError: (): {
           readonly errorClass: string;
           readonly code?: string;

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 // KEIKO-0887 (GEN-TEST-FLAKE-001/002): keiko-cli is the repository's most subprocess-heavy
@@ -13,5 +14,9 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "**/dist/**"],
     testTimeout: 15_000,
     maxWorkers: 2,
+    // #3532: explicit Activity Log test-writer injection, identical to the root suite.
+    setupFiles: [
+      fileURLToPath(new URL("../../tests/support/activity-log-test-writer.ts", import.meta.url)),
+    ],
   },
 });

@@ -463,12 +463,10 @@ export {
 export {
   checkActivityLogReadiness,
   currentActivityLogReadiness,
-  defaultActivityLogStorageHealth,
   refreshActivityLogReadiness,
   type ActivityLogReadinessOptions,
-  type ActivityLogStorageHealth,
+  type ActivityLogReadinessScope,
   type ActivityLogStorageHealthProvider,
-  type ActivityLogStoragePressure,
 } from "./observability/activity-log-readiness.js";
 export {
   persistActivityLogLossSummary,

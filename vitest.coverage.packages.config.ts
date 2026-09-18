@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
@@ -16,6 +17,10 @@ export default defineConfig({
       "scripts/__tests__/**/*.test.mjs",
     ],
     exclude: ["**/node_modules/**", "tests/fixtures/**", "packages/keiko-ui/**"],
+    // #3532: explicit Activity Log test-writer injection, identical to the root suite.
+    setupFiles: [
+      fileURLToPath(new URL("./tests/support/activity-log-test-writer.ts", import.meta.url)),
+    ],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
     // GEN-TEST-FLAKE-002: coverage instrumentation is substantially more CPU-intensive than the
     // root suite. Keep the same bounded worker count so performance guardrails and subprocess-heavy

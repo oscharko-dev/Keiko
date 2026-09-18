@@ -1566,7 +1566,7 @@ async function reportSupportReadiness(stateDir: string, env: EnvSource, io: CliI
   const snapshot = (await loadServer()).checkActivityLogReadiness({
     stateDir,
     env,
-    validatePortWiring: false,
+    scope: "directory",
   });
   const reasons = snapshot.reasons.length === 0 ? "" : ` (${snapshot.reasons.join(", ")})`;
   io.out(`Diagnostic evidence: ${snapshot.readiness}${reasons}.\n`);

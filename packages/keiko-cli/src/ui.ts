@@ -963,8 +963,11 @@ function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessE
   // heartbeat-teardown failure never vanishes with the shutdown path that produced it.
   // Only the error's CLASS is recorded, never its message: a message is foreign free text, and
   // the producer side never reads one — the same rule every other instrumentation site follows.
-  const onShutdownErrorKind =
-    runShutdownHook(activity.onShutdown) ?? runShutdownHook(activity.beforeExitEvidence);
+  // Both hooks always run: a failing heartbeat stop must never skip the exit evidence (the BFF's
+  // trailing suppressed counts and the exit loss summary). The first failure's class is recorded.
+  const onShutdownError = runShutdownHook(activity.onShutdown);
+  const beforeExitError = runShutdownHook(activity.beforeExitEvidence);
+  const onShutdownErrorKind = onShutdownError ?? beforeExitError;
   const { activityLog, startedAt, closeActivityLog } = activity;
   if (activityLog === undefined || startedAt === undefined) {
     if (onShutdownErrorKind !== undefined) warnShutdownHookFailed(onShutdownErrorKind);
@@ -1095,17 +1098,18 @@ async function buildHandlerDepsOrReport(
     });
   } catch (error) {
     if (error instanceof UiStoreError) {
-      io.err(uiStoreRefusal(error.code));
+      io.err(uiStoreRefusal(error));
       return 2;
     }
     throw error;
   }
 }
 
-// A store refusal is reported by its closed code only: the process's stderr is an operator channel,
-// never a place for an error's free text (#3532).
-function uiStoreRefusal(code: string): string {
-  return `keiko ui: the UI store refused startup (${code}).\n`;
+// A store refusal names its closed code. Its message is part of the store's own code-authored
+// vocabulary (fixed sentences over code-owned labels such as "UI database path"), never foreign
+// error text or a path, so it stays as the operator's actionable explanation (#3532).
+function uiStoreRefusal(error: InstanceType<LoadedServerModule["UiStoreError"]>): string {
+  return `keiko ui: ${error.message} (${error.code})\n`;
 }
 
 export function createPortableHandoffShutdownTrigger(input: {
@@ -1139,7 +1143,7 @@ async function registerLaunchProjectOrReport(
     return null;
   } catch (error) {
     if (error instanceof UiStoreError) {
-      io.err(uiStoreRefusal(error.code));
+      io.err(uiStoreRefusal(error));
       return 2;
     }
     throw error;
@@ -1528,7 +1532,7 @@ interface ReportStartedInput {
 // Last-resort exit evidence: an exit that none of the shutdown branches observed (a
 // `process.exit` from elsewhere) still records `process.exiting` synchronously from Node's `exit`
 // event. The shared latch makes this a no-op after any ordinary shutdown.
-function armProcessExitFallback(activity: WaitForShutdownActivity): () => void {
+export function armProcessExitFallback(activity: WaitForShutdownActivity): () => void {
   const onExit = (): void => {
     writeProcessExiting(activity, "process-exit");
   };
