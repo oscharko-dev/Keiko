@@ -184,7 +184,7 @@ describe("keiko support query (#3531)", () => {
     const { io, out } = makeIo();
 
     const code = await runSupportCli(
-      ["query", "--state-dir", stateDir, "--incident", created.record.incidentId, "--json"],
+      ["query", "--state-dir", stateDir, "--incident", created.incidentId, "--json"],
       io,
       {},
     );
@@ -258,7 +258,7 @@ describe("keiko support query (#3531)", () => {
     const { io, out } = makeIo();
 
     const code = await runSupportCli(
-      ["query", "--state-dir", stateDir, "--incident", created.record.incidentId, "--json"],
+      ["query", "--state-dir", stateDir, "--incident", created.incidentId, "--json"],
       io,
       {},
     );
@@ -425,15 +425,7 @@ describe("keiko support export with a selector (#3531)", () => {
     const { io, err } = makeIo();
 
     const code = await runSupportCli(
-      [
-        "export",
-        "--state-dir",
-        stateDir,
-        "--incident",
-        created.record.incidentId,
-        "--out",
-        outPath,
-      ],
+      ["export", "--state-dir", stateDir, "--incident", created.incidentId, "--out", outPath],
       io,
       AUDIT_ENV,
       exportDeps(outDir),

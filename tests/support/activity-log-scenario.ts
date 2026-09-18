@@ -177,7 +177,7 @@ async function proveIncidentWindowCoversClosure(
   }
 
   const incidentResult = await queryEvents(stateDir, {
-    incidentId: creation.record.incidentId,
+    incidentId: creation.incidentId,
     filter: {},
   });
   expect(

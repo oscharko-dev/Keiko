@@ -563,8 +563,13 @@ function failureCorrelation(evidence: SupportIncidentFailureEvidence): SupportIn
 
 // ─── Candidate creation ────────────────────────────────────────────────────────────────────────
 
+// Both non-rejected outcomes name their incident the same way, whether or not its record is readable.
 export type SupportIncidentCreation =
-  | { readonly status: "created"; readonly record: SupportIncidentRecord }
+  | {
+      readonly status: "created";
+      readonly incidentId: string;
+      readonly record: SupportIncidentRecord;
+    }
   | {
       readonly status: "deduplicated";
       readonly incidentId: string;
@@ -835,7 +840,7 @@ function publishCandidate(
     return reject(context, draft, "store-unavailable", entries.length);
   }
   createdEvidence(context.stateDir, record, draft.evidenceCorrelationId, entries.length + 1);
-  return { status: "created", record };
+  return { status: "created", incidentId: record.incidentId, record };
 }
 
 type DedupOutcome =

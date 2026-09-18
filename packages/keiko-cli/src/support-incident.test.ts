@@ -187,7 +187,7 @@ describe("keiko support incident", () => {
       correlationId: "failed-export-1",
     });
     expect(recorded?.status).toBe("created");
-    const incidentId = recorded?.status === "created" ? recorded.record.incidentId : "";
+    const incidentId = recorded?.status === "created" ? recorded.incidentId : "";
     const shown = await run(["show", incidentId, "--state-dir", stateDir, "--json"]);
     expect(JSON.parse(shown.out)).toMatchObject({
       trigger: "registered-failure",
