@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f1f2e0a0610c70330291e21b24031c15278bd107512e3074b58a41cf24433400",
+    "catalogDigest": "6c35ba76f477fbaf57d2abba63b54c1190bf6fbba622c58d548f555c5918d223",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -217,8 +217,8 @@
         "failureClasses": ["activity-log-pin"],
         "proofIds": ["activity-log.pin.created.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1262",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1867"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1263",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1868"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -273,8 +273,8 @@
         "failureClasses": ["activity-log-pin"],
         "proofIds": ["activity-log.pin.expired.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1314",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1905"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1315",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1906"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -346,8 +346,8 @@
         "failureClasses": ["activity-log-pin"],
         "proofIds": ["activity-log.pin.quota-exhausted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1346",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1937"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1347",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1938"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -418,8 +418,8 @@
         "failureClasses": ["activity-log-pressure"],
         "proofIds": ["activity-log.pressure.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1221",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1807"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1222",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1808"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -575,8 +575,8 @@
         "failureClasses": ["activity-log-retention"],
         "proofIds": ["activity-log.retention.pruned.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1173",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1757"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1174",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1758"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -648,8 +648,8 @@
         "failureClasses": ["activity-log-segment"],
         "proofIds": ["activity-log.segment.recovered.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1123",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1722"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1124",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1723"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -727,8 +727,8 @@
         "failureClasses": ["activity-log-segment"],
         "proofIds": ["activity-log.segment.sealed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1091",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1665"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1092",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1666"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22633,8 +22633,8 @@
         "failureClasses": ["activity-log-contract"],
         "proofIds": ["server-log.line-dropped.registered-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:483",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:888"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:484",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:889"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22685,8 +22685,8 @@
         "failureClasses": ["activity-log-persistence"],
         "proofIds": ["server-log.safe-open.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1064",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1619"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1065",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1620"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22737,8 +22737,8 @@
         "failureClasses": ["activity-log-persistence"],
         "proofIds": ["server-log.target-mutated.registered-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:528",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1634"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:529",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1635"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22811,10 +22811,10 @@
         "failureClasses": ["activity-log-persistence", "activity-log-contract"],
         "proofIds": ["server-log.write-failed.stderr-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:427",
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:428",
         "emitterSites": [
-          "packages/keiko-server/src/observability/server-log.ts:680",
-          "packages/keiko-server/src/observability/server-log.ts:756"
+          "packages/keiko-server/src/observability/server-log.ts:681",
+          "packages/keiko-server/src/observability/server-log.ts:757"
         ]
       },
       {
@@ -23765,6 +23765,329 @@
           "packages/keiko-cli/src/support.ts:1168",
           "packages/keiko-cli/src/support.ts:1182"
         ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "support.incident.created",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "observability/support-incident.createdEvidence",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "incidentId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 32
+          },
+          "defectFingerprint": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "fingerprintAlgorithm": {
+            "type": "integer",
+            "dataClass": "safe-version",
+            "required": true
+          },
+          "descriptorSchemaVersion": {
+            "type": "integer",
+            "dataClass": "safe-version",
+            "required": true
+          },
+          "trigger": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["registered-failure", "user-report"]
+          },
+          "frameCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "pinStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["pinned", "quota-exceeded", "rejected"]
+          },
+          "pinnedSegmentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "pinnedBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "windowSeconds": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "expiresInSeconds": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "openIncidentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "start",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["support-incident"],
+        "proofIds": ["support.incident.created.emitted-line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/observability/support-incident.ts:112",
+        "emitterSites": ["packages/keiko-server/src/observability/support-incident.ts:277"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "support.incident.deduplicated",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "observability/support-incident.deduplicatedEvidence",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "incidentId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 32
+          },
+          "defectFingerprint": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "fingerprintAlgorithm": {
+            "type": "integer",
+            "dataClass": "safe-version",
+            "required": true
+          },
+          "trigger": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["registered-failure", "user-report"]
+          },
+          "openIncidentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["support-incident"],
+        "proofIds": ["support.incident.deduplicated.emitted-line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/observability/support-incident.ts:146",
+        "emitterSites": ["packages/keiko-server/src/observability/support-incident.ts:307"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "support.incident.dismissed",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "observability/support-incident.dismissedEvidence",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "incidentId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 32
+          },
+          "defectFingerprint": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "fingerprintAlgorithm": {
+            "type": "integer",
+            "dataClass": "safe-version",
+            "required": true
+          },
+          "trigger": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["registered-failure", "user-report"]
+          },
+          "incidentState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["candidate", "acknowledged", "reported"]
+          },
+          "openIncidentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["support-incident"],
+        "proofIds": ["support.incident.dismissed.emitted-line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/observability/support-incident.ts:195",
+        "emitterSites": ["packages/keiko-server/src/observability/support-incident.ts:371"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "support.incident.expired",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "observability/support-incident.expiredEvidence",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "incidentId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 32
+          },
+          "expiryReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["expired", "invalid-record"]
+          },
+          "removalStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["removed", "failed"]
+          },
+          "defectFingerprint": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "openIncidentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["support-incident"],
+        "proofIds": ["support.incident.expired.emitted-line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/observability/support-incident.ts:223",
+        "emitterSites": ["packages/keiko-server/src/observability/support-incident.ts:397"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "support.incident.rejected",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "observability/support-incident.rejectedEvidence",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "rejectionReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["quota-exhausted", "store-unavailable", "record-too-large"]
+          },
+          "defectFingerprint": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "fingerprintAlgorithm": {
+            "type": "integer",
+            "dataClass": "safe-version",
+            "required": true
+          },
+          "trigger": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["registered-failure", "user-report"]
+          },
+          "openIncidentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "loss",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["support-incident"],
+        "proofIds": ["support.incident.rejected.emitted-line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/observability/support-incident.ts:168",
+        "emitterSites": ["packages/keiko-server/src/observability/support-incident.ts:334"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33079,6 +33402,52 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "support-incident",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": ["support.incident.created"],
+          "state": ["support.incident.deduplicated"],
+          "end": ["support.incident.dismissed", "support.incident.expired"],
+          "failure": [],
+          "loss": ["support.incident.rejected"]
+        },
+        "requiredCausalOperations": [
+          "support.incident.created",
+          "support.incident.deduplicated",
+          "support.incident.dismissed",
+          "support.incident.expired",
+          "support.incident.rejected"
+        ],
+        "requiredLossOperations": ["support.incident.rejected"],
+        "requiredProofOperations": [
+          "support.incident.created",
+          "support.incident.deduplicated",
+          "support.incident.dismissed",
+          "support.incident.expired",
+          "support.incident.rejected"
+        ],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [
+          "support.incident.created",
+          "support.incident.deduplicated",
+          "support.incident.dismissed",
+          "support.incident.expired"
+        ],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "digest",
+          "loss-state",
+          "opaque-id",
+          "safe-version"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "support-publication",
         "requiredProductSurfaces": ["keiko-cli"],
         "requiredLifecycleOperations": {
@@ -34184,8 +34553,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 307,
-      "completeClassCount": 307,
+      "supportedClassCount": 308,
+      "completeClassCount": 308,
       "completeness": "complete",
       "classes": [
         {
@@ -60975,6 +61344,379 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "support-incident",
+          "requirementContract": "support-incident",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end", "loss", "start", "state"],
+          "lifecycleOperations": {
+            "start": ["support.incident.created"],
+            "state": ["support.incident.deduplicated"],
+            "end": ["support.incident.dismissed", "support.incident.expired"],
+            "failure": [],
+            "loss": ["support.incident.rejected"]
+          },
+          "causalEdges": [
+            {
+              "op": "support.incident.created",
+              "mode": "correlation"
+            },
+            {
+              "op": "support.incident.deduplicated",
+              "mode": "correlation"
+            },
+            {
+              "op": "support.incident.dismissed",
+              "mode": "correlation"
+            },
+            {
+              "op": "support.incident.expired",
+              "mode": "correlation"
+            },
+            {
+              "op": "support.incident.rejected",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": ["support.incident.rejected"],
+          "resourceSignals": [
+            "support.incident.created",
+            "support.incident.deduplicated",
+            "support.incident.dismissed",
+            "support.incident.expired"
+          ],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "support.incident.created",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "start",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "defectFingerprint",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "descriptorSchemaVersion",
+                  "type": "integer",
+                  "dataClass": "safe-version",
+                  "required": true
+                },
+                {
+                  "name": "expiresInSeconds",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "fingerprintAlgorithm",
+                  "type": "integer",
+                  "dataClass": "safe-version",
+                  "required": true
+                },
+                {
+                  "name": "frameCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "incidentId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "openIncidentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "pinStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "pinnedBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "pinnedSegmentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "trigger",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "windowSeconds",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state",
+                "opaque-id",
+                "safe-version"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.incident.created.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.incident.deduplicated",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "defectFingerprint",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "fingerprintAlgorithm",
+                  "type": "integer",
+                  "dataClass": "safe-version",
+                  "required": true
+                },
+                {
+                  "name": "incidentId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "openIncidentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "trigger",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state",
+                "opaque-id",
+                "safe-version"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.incident.deduplicated.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.incident.dismissed",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "defectFingerprint",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "fingerprintAlgorithm",
+                  "type": "integer",
+                  "dataClass": "safe-version",
+                  "required": true
+                },
+                {
+                  "name": "incidentId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "incidentState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "openIncidentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "trigger",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state",
+                "opaque-id",
+                "safe-version"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.incident.dismissed.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.incident.expired",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "defectFingerprint",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "expiryReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "incidentId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "openIncidentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "removalStatus",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.incident.expired.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.incident.rejected",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "loss",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "defectFingerprint",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "fingerprintAlgorithm",
+                  "type": "integer",
+                  "dataClass": "safe-version",
+                  "required": true
+                },
+                {
+                  "name": "openIncidentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "rejectionReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "trigger",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state",
+                "safe-version"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.incident.rejected.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "support-publication",
           "requirementContract": "support-publication",
           "productSurfaces": ["keiko-cli"],
@@ -64884,7 +65626,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 37,
+    "dynamicCount": 43,
     "unknownCategoryCount": 65,
     "authoritative": false
   },
@@ -66273,43 +67015,43 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1517",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1518",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2598",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2599",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2738",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2739",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2820",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2821",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2889",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2894",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:3062",
+      "site": "packages/keiko-server/src/observability/server-log.ts:3071",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:3087",
+      "site": "packages/keiko-server/src/observability/server-log.ts:3096",
       "package": "keiko-server"
     },
     {
@@ -66328,6 +67070,42 @@
       "op": "<dynamic>",
       "category": "unknown",
       "site": "packages/keiko-server/src/observability/server-logger.ts:247",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:461",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:546",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:730",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:780",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:819",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:843",
       "package": "keiko-server"
     },
     {
@@ -66520,25 +67298,25 @@
     {
       "op": "activity-log.pin.created",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1265",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1266",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.pin.expired",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1317",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1318",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.pin.quota-exhausted",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1349",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1350",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.pressure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1224",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1225",
       "package": "keiko-server"
     },
     {
@@ -66556,19 +67334,19 @@
     {
       "op": "activity-log.retention.pruned",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1176",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1177",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.segment.recovered",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1126",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1127",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.segment.sealed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1094",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1095",
       "package": "keiko-server"
     },
     {
@@ -68575,31 +69353,31 @@
     {
       "op": "server-log.line-dropped",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:486",
+      "site": "packages/keiko-server/src/observability/server-log.ts:487",
       "package": "keiko-server"
     },
     {
       "op": "server-log.safe-open",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1067",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1068",
       "package": "keiko-server"
     },
     {
       "op": "server-log.target-mutated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:531",
+      "site": "packages/keiko-server/src/observability/server-log.ts:532",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:430",
+      "site": "packages/keiko-server/src/observability/server-log.ts:431",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:664",
+      "site": "packages/keiko-server/src/observability/server-log.ts:665",
       "package": "keiko-server"
     },
     {
@@ -68681,6 +69459,36 @@
       "op": "store.opened",
       "category": "setup",
       "site": "packages/keiko-server/src/store/db.ts:130",
+      "package": "keiko-server"
+    },
+    {
+      "op": "support.incident.created",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:115",
+      "package": "keiko-server"
+    },
+    {
+      "op": "support.incident.deduplicated",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:149",
+      "package": "keiko-server"
+    },
+    {
+      "op": "support.incident.dismissed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:198",
+      "package": "keiko-server"
+    },
+    {
+      "op": "support.incident.expired",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:226",
+      "package": "keiko-server"
+    },
+    {
+      "op": "support.incident.rejected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/support-incident.ts:171",
       "package": "keiko-server"
     },
     {
@@ -69600,6 +70408,11 @@
     "store.opened",
     "support.analyze.classified",
     "support.export.publication",
+    "support.incident.created",
+    "support.incident.deduplicated",
+    "support.incident.dismissed",
+    "support.incident.expired",
+    "support.incident.rejected",
     "task-workspace.identity.creation-time-probe",
     "task-workspace.lifecycle",
     "task-workspace.reconcile.startup",

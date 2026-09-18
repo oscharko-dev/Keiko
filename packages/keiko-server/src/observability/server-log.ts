@@ -136,6 +136,7 @@ import {
 } from "./log-level.js";
 import type { ServerLogEnv, ServerLogLevel, ServerLogThreshold } from "./log-level.js";
 import { redactLogFields, redactLogLabel } from "./log-redaction.js";
+import { observeSupportIncidentTrigger } from "./support-incident.js";
 
 export {
   ACTIVITY_LOG_PIN_QUOTA_BYTES_ENV,
@@ -2859,7 +2860,7 @@ export function createFileServerLogSink(
   const env = options.env ?? process.env;
   const active = resolveActiveLog(directory, resolveActivityLogStorageConfig(env));
   const threshold = options.level ?? resolveServerLogThreshold(env);
-  return createFileSinkFacade(active, threshold);
+  return createFileSinkFacade(active, threshold, stateDir);
 }
 
 function failureLoss(error: unknown): "event-dropped" | "event-location-unknown" {
@@ -2867,7 +2868,11 @@ function failureLoss(error: unknown): "event-dropped" | "event-location-unknown"
 }
 
 // Split out so `createFileServerLogSink` stays inside the 50-line ceiling.
-function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold): ServerLogSink {
+function createFileSinkFacade(
+  active: ActiveLog,
+  threshold: ServerLogThreshold,
+  stateDir: string,
+): ServerLogSink {
   return {
     write(event: ServerLogEvent): void {
       // The threshold check comes before any formatting: a filtered event costs one comparison.
@@ -2891,7 +2896,11 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
           identity,
           loss: failureLoss(error),
         });
+        return;
       }
+      // #3533: a persisted, eligible failure becomes a local incident candidate. Never throws; a
+      // dropped line (above) never triggers, so a failing store cannot amplify its own failure.
+      observeSupportIncidentTrigger(stateDir, event);
     },
     flush(): void {
       // `writeSync` leaves nothing in user space, so a flush is already complete on return.
