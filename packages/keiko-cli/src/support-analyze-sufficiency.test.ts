@@ -5,11 +5,16 @@ import {
   DIAGNOSTIC_SUFFICIENCY_REASONS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { formatActivityLogProofLine } from "../../../tests/support/activity-log-proof.js";
+import { installLayoutOverrideActivityLogEvent } from "./install-layout.js";
 import {
   processExitingActivityLogEvent,
   processFatalActivityLogEvent,
 } from "./process-activity-log.js";
-import { analyzeLogText } from "./support-analyze.js";
+import {
+  analyzeLogText,
+  buildReproductionSeed,
+  renderHumanReproductionSeed,
+} from "./support-analyze.js";
 import {
   activityLogFailureClassesOf,
   projectActivityLogSufficiency,
@@ -274,6 +279,40 @@ describe("restrictActivityLogSufficiency", () => {
     );
   });
 });
+
+describe("reproduction seed sufficiency", () => {
+  it("narrows the artifact's projection to the seed timeline's classes", () => {
+    const correlationId = "corr-seed-sufficiency-0001";
+    const text = [
+      formatActivityLogProofLine(
+        installLayoutOverrideActivityLogEvent({
+          correlationId,
+          overriddenKinds: ["local-state-auditor"],
+        }),
+      ),
+      formatActivityLogProofLine(
+        processFatalActivityLogEvent({ kind: "uncaught-exception", failureKind: "TypeError" }),
+      ),
+    ].join("");
+    const seed = buildReproductionSeed(text, correlationId, new Date());
+    expect(seed?.sufficiency).toEqual(
+      restrictActivityLogSufficiency(
+        analyzeLogText(text).sufficiency,
+        activityLogFailureClassesOf(["cli.install-layout.normalized"]),
+      ),
+    );
+    expect(seed?.sufficiency.classes.map((entry) => entry.failureClass)).not.toContain(
+      "process-fatal",
+    );
+    expect(renderHumanReproductionSeed(seed ?? fail())).toContain(
+      `sufficiency: ${seed?.sufficiency.status ?? ""}`,
+    );
+  });
+});
+
+function fail(): never {
+  throw new Error("expected a reproduction seed");
+}
 
 describe("analyzeLogText sufficiency", () => {
   it("projects every class the production-persisted lines observed", () => {

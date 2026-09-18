@@ -1125,13 +1125,18 @@ export const createHandlePrDescriptionApply = (
       logApplyLifecycle(activityLog, correlationId, "blocked", { reason: "approval-invalid" });
       return errResult(409, "GIT_DELIVERY_PR_DESCRIPTION_UNKNOWN_PROPOSAL");
     }
-    const result = await service.executeApproved(value.proposalId, lease);
+    const result = await service
+      .executeApproved(value.proposalId, lease)
+      .catch((error: unknown) => {
+        // An apply that rejects instead of settling still closes its lifecycle before the top-level
+        // catch answers with the opaque 500, so its timeline never ends at `started`.
+        logApplyLifecycle(activityLog, correlationId, "failed");
+        throw error;
+      });
     if (result.outcome === "blocked") {
       logApplyLifecycle(activityLog, correlationId, "blocked", { reason: result.reason });
-    } else if (result.outcome === "observed") {
-      logApplyLifecycle(activityLog, correlationId, "succeeded", { state: result.status.state });
     } else {
-      logApplyLifecycle(activityLog, correlationId, "failed");
+      logApplyLifecycle(activityLog, correlationId, "succeeded", { state: result.status.state });
     }
     return { status: 200, body: deps.redactor(result) };
   };
