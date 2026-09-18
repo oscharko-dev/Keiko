@@ -13,18 +13,24 @@
 // an expected refusal, not a defect). Eligibility is therefore derived from the registry alone —
 // there is no UI- or caller-side list. This module's own operations are never candidates.
 //
-// DEDUPLICATION. At most one open registered-failure candidate exists per defectFingerprint: a
-// recurrence of the same defect is evidenced as `support.incident.deduplicated` on the existing
-// incident instead of pinning a second window. A process additionally suppresses re-evaluating a
-// fingerprint for SUPPORT_INCIDENT_SUPPRESSION_MS so a failure storm costs no filesystem work.
-// User reports are never merged: each explicit "Report a problem" is its own occurrence.
+// DEDUPLICATION. At most one open registered-failure candidate exists per defectFingerprint,
+// enforced atomically across every process sharing stateDir by an exclusive-create claim file keyed
+// by the fingerprint (#3533 review 4050606506): a recurrence of the same defect is evidenced as
+// `support.incident.deduplicated` on the existing incident instead of pinning a second window. A
+// process additionally suppresses re-evaluating a fingerprint for SUPPORT_INCIDENT_SUPPRESSION_MS
+// so a failure storm costs no filesystem work. User reports are never merged: each explicit "Report
+// a problem" is its own occurrence.
 //
 // QUOTAS AND EXPIRY. The store holds at most MAX_SUPPORT_INCIDENTS records (each at most
 // MAX_SUPPORT_INCIDENT_RECORD_BYTES), of which registered-failure candidates may occupy at most
-// MAX_REGISTERED_FAILURE_INCIDENTS so a failure flood can never block an explicit user report. A
+// MAX_REGISTERED_FAILURE_INCIDENTS so a failure flood can never block an explicit user report. Both
+// bounds hold atomically across processes too: every candidate claims one of a bounded pool of
+// exclusive-create quota-slot files before its record is written (automatics from slot 0 up,
+// reserving the top slots for user reports, exactly as the count-based reserve always intended). A
 // full store rejects the new candidate with body-free loss evidence; it never evicts a candidate the
 // user has not seen. Every candidate expires SUPPORT_INCIDENT_TTL_MS after creation; its pin expires
-// at the same instant, so an unreported incident releases its evidence predictably.
+// at the same instant, and its fingerprint and slot claims release with it, so an unreported incident
+// releases its evidence and its claims predictably.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -35,6 +41,7 @@ import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
+  SUPPORT_INCIDENT_SLOT_COUNT,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   activityLogErrorKindOr,
   activityLogEvent,
@@ -72,13 +79,21 @@ import {
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 import {
+  claimSupportIncidentFingerprint,
+  claimSupportIncidentSlot,
   ensureSupportIncidentDirectory,
+  listSupportIncidentClaims,
   listSupportIncidentEntries,
+  readSupportIncidentFingerprintClaim,
   readSupportIncidentRecord,
-  supportIncidentDirectory,
+  releaseSupportIncidentFingerprintClaim,
+  releaseSupportIncidentSlot,
+  removeSupportIncidentClaimFile,
   removeSupportIncidentRecord,
   serializeSupportIncidentRecord,
+  supportIncidentDirectory,
   writeSupportIncidentRecord,
+  type SupportIncidentClaimEntry,
   type SupportIncidentStoreEntry,
 } from "./support-incident-store.js";
 
@@ -91,8 +106,8 @@ export const SUPPORT_INCIDENT_TTL_MS = 14 * DAY_MS;
 export const SUPPORT_INCIDENT_WINDOW_BEFORE_MS = 15 * MINUTE_MS;
 /** … and this far after it, so segments sealed after the incident are retained too. */
 export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * MINUTE_MS;
-/** Records the store holds at most (count quota). */
-export const MAX_SUPPORT_INCIDENTS = 32;
+/** Records the store holds at most (count quota); also the quota-slot claim file grammar's bound. */
+export const MAX_SUPPORT_INCIDENTS = SUPPORT_INCIDENT_SLOT_COUNT;
 /** Of those, registered-failure candidates may occupy at most this many. */
 export const MAX_REGISTERED_FAILURE_INCIDENTS = 24;
 /** A process re-evaluates one defectFingerprint at most this often. */
@@ -618,11 +633,13 @@ function buildRecord(
   draft: CandidateDraft,
   context: CandidateContext,
   pin: SupportIncidentPin,
+  incidentId: string,
+  slotIndex: number,
 ): SupportIncidentRecord {
   const identity = serverLogProcessIdentity();
   return {
     schemaVersion: SUPPORT_INCIDENT_SCHEMA_VERSION,
-    incidentId: randomBytes(16).toString("hex"),
+    incidentId,
     trigger: draft.trigger,
     state: "candidate",
     fingerprint: {
@@ -637,19 +654,42 @@ function buildRecord(
     build: supportIncidentBuild(identity.productVersion, identity.platformClass),
     window: incidentWindow(context.nowMs),
     pin,
+    slotIndex,
     createdAtMs: context.nowMs,
     expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
   };
 }
 
-function quotaAllows(
-  entries: readonly SupportIncidentStoreEntry[],
+// Automatics claim ascending from slot 0 (0..MAX_REGISTERED_FAILURE_INCIDENTS-1); user reports
+// claim descending from the top (MAX_SUPPORT_INCIDENTS-1..0). Automatics never touch the top
+// MAX_SUPPORT_INCIDENTS-MAX_REGISTERED_FAILURE_INCIDENTS slots, so those stay available to a user
+// report even when automatics hold their full share -- reproducing quotaAllows's old count-based
+// reserve atomically, one exclusive-create attempt at a time instead of one racy directory count.
+function slotSearchOrder(trigger: SupportIncidentTrigger): readonly number[] {
+  if (trigger === "user-report") {
+    return Array.from(
+      { length: MAX_SUPPORT_INCIDENTS },
+      (_, index) => MAX_SUPPORT_INCIDENTS - 1 - index,
+    );
+  }
+  return Array.from({ length: MAX_REGISTERED_FAILURE_INCIDENTS }, (_, index) => index);
+}
+
+/**
+ * Atomically claims one quota slot for `incidentId`, or `undefined` when every slot this trigger
+ * may use is already held -- the store (or, for a registered failure, its 24-slot share) is full.
+ * Each attempt is one exclusive-create (#3533 review 4050606506): two processes racing the same
+ * free slot can never both win it, unlike a count read from a directory listing.
+ */
+function claimQuotaSlot(
+  stateDir: string,
   trigger: SupportIncidentTrigger,
-): boolean {
-  if (entries.length >= MAX_SUPPORT_INCIDENTS) return false;
-  if (trigger === "user-report") return true;
-  const automatic = entries.filter((entry) => entry.record?.trigger !== "user-report").length;
-  return automatic < MAX_REGISTERED_FAILURE_INCIDENTS;
+  incidentId: string,
+): number | undefined {
+  for (const slotIndex of slotSearchOrder(trigger)) {
+    if (claimSupportIncidentSlot(stateDir, slotIndex, incidentId)) return slotIndex;
+  }
+  return undefined;
 }
 
 // Releases a window pin a draft already published before dedup or quota was decided (the
@@ -733,11 +773,13 @@ function publishCandidate(
   draft: CandidateDraft,
   context: CandidateContext,
   entries: readonly SupportIncidentStoreEntry[],
+  incidentId: string,
+  slotIndex: number,
 ): SupportIncidentCreation {
   const pin =
     draft.prePinned ??
     pinIncidentWindow(context.stateDir, context.nowMs, draft.evidenceCorrelationId, context.env);
-  const record = buildRecord(draft, context, pin);
+  const record = buildRecord(draft, context, pin, incidentId, slotIndex);
   const payload = serializeSupportIncidentRecord(record);
   if (payload === undefined) return reject(context, draft, "record-too-large", entries.length);
   try {
@@ -758,17 +800,95 @@ function publishCandidate(
   return { status: "created", record };
 }
 
-function openDuplicate(
-  entries: readonly SupportIncidentStoreEntry[],
-  draft: CandidateDraft,
+type DedupOutcome =
+  | { readonly status: "claimed" }
+  | { readonly status: "duplicate"; readonly record: SupportIncidentRecord }
+  | { readonly status: "unavailable" };
+
+/**
+ * Atomically decides "is this fingerprint already open" (#3533 review 4050606506): exclusive-
+ * create on the fingerprint's own claim file can succeed for only one caller, so two processes
+ * racing the identical registered failure can never both believe they are first -- the exclusive
+ * create on the incident record's own random-id file name alone never protected the fingerprint
+ * itself, only the filename. The loser reads the winner's incidentId and deduplicates onto it. A
+ * claim whose referenced record is missing (a crash before it was written, or a cleanup pass that
+ * raced ahead of this read) is stale: it is removed and the attempt retried once before this
+ * gives up as unavailable rather than risk a second, indistinguishable publish.
+ */
+function claimOrFindDuplicate(
+  stateDir: string,
   defectFingerprint: string,
-): SupportIncidentRecord | undefined {
-  if (draft.trigger !== "registered-failure") return undefined;
-  return entries.find(
-    (entry) =>
-      entry.record?.trigger === "registered-failure" &&
-      entry.record.fingerprint.defectFingerprint === defectFingerprint,
-  )?.record;
+  incidentId: string,
+  correlationId: string,
+): DedupOutcome {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      if (claimSupportIncidentFingerprint(stateDir, defectFingerprint, incidentId)) {
+        return { status: "claimed" };
+      }
+      const holderId = readSupportIncidentFingerprintClaim(stateDir, defectFingerprint);
+      const holderRecord =
+        holderId === undefined ? undefined : readSupportIncidentRecord(stateDir, holderId);
+      if (holderRecord !== undefined) return { status: "duplicate", record: holderRecord };
+      releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint);
+    } catch (error) {
+      reportServerLogFailure(error, { op: SUPPORT_INCIDENT_CREATED_OPERATION.op, correlationId });
+      return { status: "unavailable" };
+    }
+  }
+  return { status: "unavailable" };
+}
+
+type SweptEntries =
+  | { readonly ok: true; readonly entries: readonly SupportIncidentStoreEntry[] }
+  | { readonly ok: false; readonly result: SupportIncidentCreation };
+
+function sweptEntriesOrReject(
+  stateDir: string,
+  context: CandidateContext,
+  draft: CandidateDraft,
+): SweptEntries {
+  try {
+    ensureSupportIncidentDirectory(stateDir);
+    const entries = sweepExpiredEntries(stateDir, context.nowMs, draft.evidenceCorrelationId);
+    return { ok: true, entries };
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
+      correlationId: draft.evidenceCorrelationId,
+    });
+    return { ok: false, result: reject(context, draft, "store-unavailable", 0) };
+  }
+}
+
+type DedupHandled =
+  { readonly done: true; readonly result: SupportIncidentCreation } | { readonly done: false };
+
+// Handles the two outcomes that end candidate creation before quota or publish is even reached;
+// "claimed" (the common case) falls through and lets createCandidate proceed.
+function handleDedup(
+  stateDir: string,
+  context: CandidateContext,
+  draft: CandidateDraft,
+  dedupFingerprint: string,
+  incidentId: string,
+  openIncidentCount: number,
+): DedupHandled {
+  const dedup = claimOrFindDuplicate(
+    stateDir,
+    dedupFingerprint,
+    incidentId,
+    draft.evidenceCorrelationId,
+  );
+  if (dedup.status === "unavailable") {
+    return { done: true, result: reject(context, draft, "store-unavailable", openIncidentCount) };
+  }
+  if (dedup.status === "duplicate") {
+    releasePrePinned(context, draft);
+    deduplicatedEvidence(stateDir, dedup.record, draft.evidenceCorrelationId, openIncidentCount);
+    return { done: true, result: { status: "deduplicated", record: dedup.record } };
+  }
+  return { done: false };
 }
 
 function createCandidate(
@@ -782,27 +902,36 @@ function createCandidate(
     env: options.env ?? process.env,
     defectFingerprint: computeDefectFingerprint(draft.input),
   };
-  let entries: readonly SupportIncidentStoreEntry[];
-  try {
-    ensureSupportIncidentDirectory(stateDir);
-    entries = sweepExpiredEntries(stateDir, context.nowMs, draft.evidenceCorrelationId);
-  } catch (error) {
-    reportServerLogFailure(error, {
-      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
-      correlationId: draft.evidenceCorrelationId,
-    });
-    return reject(context, draft, "store-unavailable", 0);
+  const swept = sweptEntriesOrReject(stateDir, context, draft);
+  if (!swept.ok) return swept.result;
+  const entries = swept.entries;
+
+  const incidentId = randomBytes(16).toString("hex");
+  const dedupFingerprint =
+    draft.trigger === "registered-failure" ? context.defectFingerprint : undefined;
+  if (dedupFingerprint !== undefined) {
+    const handled = handleDedup(
+      stateDir,
+      context,
+      draft,
+      dedupFingerprint,
+      incidentId,
+      entries.length,
+    );
+    if (handled.done) return handled.result;
   }
-  const duplicate = openDuplicate(entries, draft, context.defectFingerprint);
-  if (duplicate !== undefined) {
-    releasePrePinned(context, draft);
-    deduplicatedEvidence(stateDir, duplicate, draft.evidenceCorrelationId, entries.length);
-    return { status: "deduplicated", record: duplicate };
-  }
-  if (!quotaAllows(entries, draft.trigger)) {
+
+  const slotIndex = claimQuotaSlot(stateDir, draft.trigger, incidentId);
+  if (slotIndex === undefined) {
+    if (dedupFingerprint !== undefined) {
+      releaseSupportIncidentFingerprintClaim(stateDir, dedupFingerprint);
+    }
     return reject(context, draft, "quota-exhausted", entries.length);
   }
-  return publishCandidate(draft, context, entries);
+
+  const created = publishCandidate(draft, context, entries, incidentId, slotIndex);
+  if (created.status !== "created") releaseClaims(stateDir, dedupFingerprint, slotIndex);
+  return created;
 }
 
 function registeredFailureDraft(evidence: SupportIncidentFailureEvidence): CandidateDraft {
@@ -860,19 +989,74 @@ function expiredOrInvalid(entry: SupportIncidentStoreEntry, nowMs: number): bool
   return entry.record === undefined || entry.record.expiresAtMs <= nowMs;
 }
 
-function removeEntry(stateDir: string, incidentId: string): boolean {
+// Releases the quota-slot claim, and (for a registered failure) the fingerprint claim, that a
+// record's own existence depends on. Shared by dismissal and by the expiry sweep below, and by
+// createCandidate's own rollback when a claimed slot's record write ultimately fails.
+function releaseClaims(
+  stateDir: string,
+  defectFingerprint: string | undefined,
+  slotIndex: number,
+): void {
+  if (defectFingerprint !== undefined) {
+    releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint);
+  }
+  releaseSupportIncidentSlot(stateDir, slotIndex);
+}
+
+function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): void {
+  releaseClaims(
+    stateDir,
+    record.trigger === "registered-failure" ? record.fingerprint.defectFingerprint : undefined,
+    record.slotIndex,
+  );
+}
+
+function removeEntry(stateDir: string, entry: SupportIncidentStoreEntry): boolean {
   try {
-    removeSupportIncidentRecord(stateDir, incidentId);
-    return true;
+    removeSupportIncidentRecord(stateDir, entry.incidentId);
   } catch (error) {
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
     return false;
+  }
+  if (entry.record !== undefined) releaseRecordClaims(stateDir, entry.record);
+  return true;
+}
+
+// A claim whose referenced incidentId names no record right now is an orphan: a crash between
+// claiming and writing that record, or a record already removed by the loop above in this same
+// pass. Checks each claim against a FRESH read, never a pre-computed "open" set: entries/open is
+// a snapshot taken earlier in this same sweep, and a claim (with its record) can legitimately be
+// published by another process in the gap between that snapshot and this loop -- reusing the
+// stale snapshot here would delete a brand-new, perfectly live claim out from under its owner,
+// silently reopening the exact cross-process race this whole scheme exists to close. Best-effort
+// per claim (#3533 review 4050606506) so one bad removal never blocks the rest.
+function sweepOrphanedClaims(stateDir: string): void {
+  let claims: readonly SupportIncidentClaimEntry[];
+  try {
+    claims = listSupportIncidentClaims(stateDir);
+  } catch (error) {
+    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
+    return;
+  }
+  for (const claim of claims) {
+    if (
+      claim.incidentId !== undefined &&
+      readSupportIncidentRecord(stateDir, claim.incidentId) !== undefined
+    ) {
+      continue;
+    }
+    try {
+      removeSupportIncidentClaimFile(stateDir, claim.fileName);
+    } catch (error) {
+      reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
+    }
   }
 }
 
 /**
  * Removes every expired or unreadable record (predictable expiry and torn-record recovery), emits
- * one `support.incident.expired` line per removal, and returns the records that remain open.
+ * one `support.incident.expired` line per removal, sweeps orphaned dedup/quota claims, and returns
+ * the records that remain open.
  */
 function sweepExpiredEntries(
   stateDir: string,
@@ -883,9 +1067,10 @@ function sweepExpiredEntries(
   const open = entries.filter((entry) => !expiredOrInvalid(entry, nowMs));
   for (const entry of entries) {
     if (!expiredOrInvalid(entry, nowMs)) continue;
-    const removed = removeEntry(stateDir, entry.incidentId);
+    const removed = removeEntry(stateDir, entry);
     expiredEvidence(stateDir, { entry, removed, correlationId, openIncidentCount: open.length });
   }
+  sweepOrphanedClaims(stateDir);
   return open;
 }
 
@@ -989,6 +1174,7 @@ export function dismissSupportIncident(
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op, correlationId });
     return "failed";
   }
+  releaseRecordClaims(stateDir, record);
   const pinRelease = releaseIncidentPin(stateDir, record, {
     correlationId,
     env: options.env ?? process.env,

@@ -101,8 +101,20 @@ export const MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS = 8;
 export const MAX_SUPPORT_INCIDENT_RECORD_BYTES = 4096;
 
 const INCIDENT_FILE_PATTERN = /^incident-([a-f0-9]{32})\.json$/u;
+const FINGERPRINT_CLAIM_FILE_PATTERN = /^fingerprint-([a-f0-9]{64})\.claim$/u;
+const SLOT_CLAIM_FILE_PATTERN = /^slot-([0-9]{2})\.claim$/u;
 const OPERATION_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*$/u;
 const MAX_OPERATION_LENGTH = 96;
+
+/**
+ * The bounded pool of quota-slot claim files (#3533 review 4050606506): `slot-00.claim` through
+ * `slot-<N-1>.claim`. Every candidate -- automatic or user-initiated -- atomically claims exactly
+ * one slot (exclusive-create, content the owning incidentId) before its record is written, so the
+ * store's total-count quota (`MAX_SUPPORT_INCIDENTS` in keiko-server) holds across processes with
+ * no read-then-write race. keiko-server imports this constant rather than repeating the number, so
+ * the two can never drift apart.
+ */
+export const SUPPORT_INCIDENT_SLOT_COUNT = 32;
 
 export function supportIncidentFileName(incidentId: string): string {
   if (!SUPPORT_INCIDENT_ID_PATTERN.test(incidentId)) {
@@ -111,9 +123,56 @@ export function supportIncidentFileName(incidentId: string): string {
   return `incident-${incidentId}.json`;
 }
 
-/** The incident id a closed-grammar store file name carries, else `undefined`. */
+export function supportIncidentSlotClaimFileName(slotIndex: number): string {
+  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= SUPPORT_INCIDENT_SLOT_COUNT) {
+    throw new RangeError("invalid SupportIncident quota slot index");
+  }
+  return `slot-${String(slotIndex).padStart(2, "0")}.claim`;
+}
+
+/** The slot index a closed-grammar slot-claim file name carries, else `undefined`. */
+export function parseSupportIncidentSlotClaimFileName(name: string): number | undefined {
+  const match = SLOT_CLAIM_FILE_PATTERN.exec(name);
+  if (match === null) return undefined;
+  const slotIndex = Number(match[1]);
+  return slotIndex < SUPPORT_INCIDENT_SLOT_COUNT ? slotIndex : undefined;
+}
+
+/**
+ * A defectFingerprint's dedup claim file: `fingerprint-<64 hex>.claim`. Exclusive-create with the
+ * owning incidentId as its whole content makes "at most one open registered-failure candidate per
+ * defectFingerprint" hold atomically across processes (#3533 review 4050606506) -- the exclusive
+ * create on the random incident-id file alone only ever protected the filename, never the
+ * fingerprint two processes could compute identically from the same failure.
+ */
+export function supportIncidentFingerprintClaimFileName(defectFingerprint: string): string {
+  if (!isDefectFingerprint(defectFingerprint)) {
+    throw new RangeError("invalid defectFingerprint");
+  }
+  return `fingerprint-${defectFingerprint}.claim`;
+}
+
+/** The fingerprint a closed-grammar fingerprint-claim file name carries, else `undefined`. */
+export function parseSupportIncidentFingerprintClaimFileName(name: string): string | undefined {
+  return FINGERPRINT_CLAIM_FILE_PATTERN.exec(name)?.[1];
+}
+
+/**
+ * A closed-grammar identifier this store file name carries: the incident id for an
+ * `incident-<id>.json` record, the defectFingerprint for a `fingerprint-<fp>.claim` dedup claim, or
+ * the slot index (as a decimal string) for a `slot-<NN>.claim` quota claim -- `undefined` for
+ * anything outside the grammar. This is the one function the repair/uninstall ownership predicate
+ * calls (`state-paths.ts`), so every file kind this store ever creates must stay recognized here;
+ * a caller that needs a real incident id specifically must also confirm it with
+ * `isSupportIncidentId`, since a fingerprint or a slot index is never one.
+ */
 export function parseSupportIncidentFileName(name: string): string | undefined {
-  return INCIDENT_FILE_PATTERN.exec(name)?.[1];
+  const incidentId = INCIDENT_FILE_PATTERN.exec(name)?.[1];
+  if (incidentId !== undefined) return incidentId;
+  const fingerprint = FINGERPRINT_CLAIM_FILE_PATTERN.exec(name)?.[1];
+  if (fingerprint !== undefined) return fingerprint;
+  const slotIndex = parseSupportIncidentSlotClaimFileName(name);
+  return slotIndex === undefined ? undefined : String(slotIndex);
 }
 
 export function isSupportIncidentId(value: unknown): value is string {
@@ -267,6 +326,9 @@ export interface SupportIncidentRecord {
   readonly build: SupportIncidentBuild;
   readonly window: SupportIncidentWindow;
   readonly pin: SupportIncidentPin;
+  // The quota-slot claim (#3533 review 4050606506) this record's existence depends on; dismissal
+  // and expiry release `slot-<NN>.claim` through it so the slot returns to the free pool.
+  readonly slotIndex: number;
   readonly createdAtMs: number;
   readonly expiresAtMs: number;
 }
@@ -419,6 +481,7 @@ const RECORD_KEYS = [
   "build",
   "window",
   "pin",
+  "slotIndex",
   "createdAtMs",
   "expiresAtMs",
 ] as const;
@@ -430,6 +493,8 @@ function validRecordHeader(value: PlainObject): boolean {
     isSupportIncidentId(value.incidentId) &&
     isOneOf(SUPPORT_INCIDENT_TRIGGERS, value.trigger) &&
     isOneOf(SUPPORT_INCIDENT_STATES, value.state) &&
+    isCount(value.slotIndex) &&
+    value.slotIndex < SUPPORT_INCIDENT_SLOT_COUNT &&
     isCount(value.createdAtMs) &&
     isCount(value.expiresAtMs) &&
     value.expiresAtMs > value.createdAtMs

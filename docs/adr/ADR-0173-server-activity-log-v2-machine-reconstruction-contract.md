@@ -1068,8 +1068,21 @@ to its inputs or algorithm bumps the algorithm version; a golden-value test enfo
 The descriptor has a strict public projection and a richer, still body-free private projection from
 the same record; both expose the sufficiency status, and only the private one carries reasons and
 coverage. The store is owner-private, closed-grammar and quota-bounded (32 open candidates, 8 of them
-reserved for explicit reports, 4 KiB each), and candidates expire after 14 days. Acknowledge, dismiss
-and report remain explicit human actions; nothing is disclosed automatically.
+reserved for explicit reports, 4 KiB each), and candidates expire after 14 days.
+
+Both the defectFingerprint dedup rule and the count quotas hold atomically across every process
+sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
+processes could each read as "still free": a registered failure claims its fingerprint's own
+`fingerprint-<64 hex>.claim` file by exclusive-create before it decides duplicate-or-new, and every
+candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics from slot 0 up, user
+reports from the top down, so the reserve holds without a shared counter) before its record is
+written. Both claim grammars are recognized by the same `parseSupportIncidentFileName` the
+repair/uninstall ownership predicate already calls, so state-paths.ts needed no change to own them.
+A claim releases with its record on dismissal or expiry; one whose record was never written (a crash
+between the two) is swept as an orphan against a fresh, per-claim read taken at sweep time, never a
+snapshot taken earlier in the same pass, so a claim another process just published is never mistaken
+for one that failed to publish. Acknowledge, dismiss and report remain explicit human actions;
+nothing is disclosed automatically.
 
 ### D16 — Queries select whole causal closures through derived segment manifests
 

@@ -658,6 +658,12 @@ or window not resolvable, `2` usage error.
   so explicit reports always have room. A full store rejects the new candidate
   (`support.incident.rejected`) and never evicts an existing one. Candidates expire after 14 days
   (`support.incident.expired`).
+- **Cross-process dedup and quotas.** The store also holds `fingerprint-<64 hex>.claim` and
+  `slot-<NN>.claim` files: exclusive-create claims that make "one open automatic candidate per
+  defectFingerprint" and the count quotas hold even when two processes hit the identical failure at
+  once, not just within one process. Both are released when their incident is dismissed or expires,
+  and a claim orphaned by a crash between claiming and writing its record is swept the same way a
+  torn record is.
 
 ## Querying the log and selective export
 
