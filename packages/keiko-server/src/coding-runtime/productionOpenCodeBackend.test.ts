@@ -13,6 +13,10 @@ afterEach(() => vi.restoreAllMocks());
 
 import { createOpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import {

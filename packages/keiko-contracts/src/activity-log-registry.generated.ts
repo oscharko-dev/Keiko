@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a319067460b946d18308ed52d63b34715b1a7c72c7f3eed03f3b4219f1562dff" as const;
+  "d1793ce63a07191de6ebefbeecdca732d11b80f39451bcc4caca9d749ea83be6" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -41739,13 +41739,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "reason",

@@ -237,7 +237,12 @@ describe("logWorkspaceIdentityProbe", () => {
     expect(line?.op).toBe("task-workspace.identity.creation-time-probe");
     expect(line?.level).toBe("info");
     expect(line?.correlationId).toBe("req-identity-probe-1");
-    expect(line?.extra).toEqual({ managedRoot: "durable", repository: "durable" });
+    expect(line?.extra).toEqual({
+      managedRoot: "durable",
+      repository: "durable",
+      completeness: "complete",
+      loss: "none",
+    });
     const proven = expectActivityLogProof(
       "task-workspace.identity.creation-time-probe.line",
       formatActivityLogProofLine(line ?? {}),
@@ -256,6 +261,11 @@ describe("logWorkspaceIdentityProbe", () => {
     );
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.extra).toEqual({ managedRoot: "inconclusive", repository: "same-volume" });
+    expect(line?.extra).toEqual({
+      managedRoot: "inconclusive",
+      repository: "same-volume",
+      completeness: "complete",
+      loss: "none",
+    });
   });
 });
