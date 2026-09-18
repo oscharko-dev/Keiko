@@ -450,11 +450,13 @@ export {
 export { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
 // #3533 — local SupportIncident candidates. `keiko support incident` lists, resolves, previews,
-// records (Report a problem), and dismisses them through these; the automatic registered-failure
-// trigger runs inside the Activity Log file sink and is not exported.
+// records (Report a problem), and dismisses them through these. The automatic trigger runs inside
+// the Activity Log file sink; `recordRegisteredFailureIncident` is its entry for a caller that
+// holds one registered failure event's body-free facts.
 export {
   dismissSupportIncident,
   listSupportIncidents,
+  recordRegisteredFailureIncident,
   recordUserReportedIncident,
   supportIncidentSegmentFiles,
   type SupportIncidentCreation,
