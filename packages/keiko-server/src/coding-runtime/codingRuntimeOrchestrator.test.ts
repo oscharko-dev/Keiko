@@ -62,6 +62,10 @@ import {
   draftDeliveryLineageRecord,
   sameDraftRecoveryTask,
 } from "./codingRuntimeDraftDeliverySource.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 type OptionalOrchestratorDeps = Pick<
   Parameters<typeof createCodingRuntimeOrchestrator>[0],
@@ -156,8 +160,13 @@ function expectProjectMemoryLog(
   expected: Record<string, unknown>,
 ): void {
   const event = records.find((record) => record.op === "coding-runtime.project-memory.context");
-  expect(event).toBeDefined();
-  expect(event?.extra).toMatchObject(expected);
+  if (event === undefined)
+    throw new Error("expected coding runtime project-memory activity log line");
+  const persisted = expectActivityLogProof(
+    "coding-runtime.project-memory.context.emitted-line",
+    formatActivityLogProofLine(event),
+  );
+  expect(persisted).toMatchObject(expected);
 }
 
 // #3417: the operator's view of the approved skills, as the composed runtime host answers it.
@@ -470,9 +479,21 @@ function captureActivityLog(): {
   };
 }
 
+// Narrows a `.find()`/array-destructure result to a defined event for a proof call, without
+// adding a branch to the caller's own cyclomatic complexity (the ESLint-counted `if` lives here).
+function requireLoggedEvent(event: ServerLogEvent | undefined, message: string): ServerLogEvent {
+  if (event === undefined) throw new Error(message);
+  return event;
+}
+
 function expectRuntimeStartedEvent(records: readonly ServerLogEvent[]): void {
   const event = records.find((candidate) => candidate.op === "coding-runtime.run.started");
   if (event === undefined) throw new Error("expected coding runtime start log");
+  const persisted = expectActivityLogProof(
+    "coding-runtime.run.started.emitted-line",
+    formatActivityLogProofLine(event),
+  );
+  expect(persisted).toMatchObject({ runId: "run-1", state: "starting" });
   const extra = event.extra;
   if (extra === undefined) throw new Error("expected coding runtime start fields");
   expect(event.category).toBe("process");
@@ -492,6 +513,11 @@ function expectRuntimeStartedEvent(records: readonly ServerLogEvent[]): void {
 function expectRuntimeSettledEvent(records: readonly ServerLogEvent[]): void {
   const event = records.find((candidate) => candidate.op === "coding-runtime.run.settled");
   if (event === undefined) throw new Error("expected coding runtime settlement log");
+  const persisted = expectActivityLogProof(
+    "coding-runtime.run.settled.emitted-line",
+    formatActivityLogProofLine(event),
+  );
+  expect(persisted).toMatchObject({ runId: "run-1", state: "cancelled" });
   const extra = event.extra;
   if (extra === undefined) throw new Error("expected coding runtime settlement fields");
   expect(event.category).toBe("process");
@@ -1033,6 +1059,13 @@ describe("CodingRuntimeOrchestrator", () => {
       category: "process",
       extra: { runId: "run-1", reason: "server-shutdown", outcome: "ended" },
     });
+    if (shutdown === undefined) throw new Error("expected run.shutdown line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.shutdown.emitted-line",
+        formatActivityLogProofLine(shutdown),
+      ),
+    ).toMatchObject({ runId: "run-1", outcome: "ended" });
     // Same correlation id as the run's terminal line, so one `--correlation-id <run>` timeline holds
     // the ending and its cause. The cause is written AFTER the attempt on purpose: written before,
     // it asserted an ending the orchestrator had not performed (owner review, PR #3452).
@@ -1040,7 +1073,7 @@ describe("CodingRuntimeOrchestrator", () => {
       (candidate) => candidate.op === "coding-runtime.run.settled",
     );
     expect(settledIndex).toBeGreaterThanOrEqual(0);
-    expect(shutdown?.correlationId).toBe(captured.records[settledIndex]?.correlationId);
+    expect(shutdown.correlationId).toBe(captured.records[settledIndex]?.correlationId);
     expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
   });
 
@@ -1243,7 +1276,8 @@ describe("CodingRuntimeOrchestrator", () => {
       requestId: "delivery-continuation-1",
       taskIntent: DELIVERY_CONTINUATION_INTENT,
     });
-    expect(linesWithOp(captured, "coding-runtime.run.delivery-continued")).toEqual([
+    const continuedLines = linesWithOp(captured, "coding-runtime.run.delivery-continued");
+    expect(continuedLines).toEqual([
       expect.objectContaining({
         level: "info",
         extra: expect.objectContaining({
@@ -1253,6 +1287,14 @@ describe("CodingRuntimeOrchestrator", () => {
         }) as unknown,
       }),
     ]);
+    const [continuedLine] = continuedLines;
+    if (continuedLine === undefined) throw new Error("expected delivery-continued line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.delivery-continued.emitted-line",
+        formatActivityLogProofLine(continuedLine),
+      ),
+    ).toMatchObject({ runId: "run-1", attempt: 1 });
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
     expect(f.manager.stop).not.toHaveBeenCalled();
 
@@ -1287,11 +1329,20 @@ describe("CodingRuntimeOrchestrator", () => {
         (line) => (line.extra as { readonly attempt?: number } | undefined)?.attempt,
       ),
     ).toEqual([1, 2]);
-    expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([
+    const unevidencedLines = linesWithOp(captured, "coding-runtime.run.delivery-unevidenced");
+    expect(unevidencedLines).toEqual([
       expect.objectContaining({
         extra: expect.objectContaining({ continuations: DELIVERY_CONTINUATION_MAX }) as unknown,
       }),
     ]);
+    const [unevidencedLine] = unevidencedLines;
+    if (unevidencedLine === undefined) throw new Error("expected delivery-unevidenced line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.delivery-unevidenced.emitted-line",
+        formatActivityLogProofLine(unevidencedLine),
+      ),
+    ).toMatchObject({ continuations: DELIVERY_CONTINUATION_MAX });
   });
 
   it("settles at once when the continuation dispatch is refused", async () => {
@@ -1304,12 +1355,21 @@ describe("CodingRuntimeOrchestrator", () => {
       expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
     });
     expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
-    expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+    const refusedLines = linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused");
+    expect(refusedLines).toEqual([
       expect.objectContaining({
         level: "warn",
         extra: expect.objectContaining({ attempt: 1, reason: "dispatch-refused" }) as unknown,
       }),
     ]);
+    const [refusedLine] = refusedLines;
+    if (refusedLine === undefined) throw new Error("expected delivery-continuation-refused line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.delivery-continuation-refused.emitted-line",
+        formatActivityLogProofLine(refusedLine),
+      ),
+    ).toMatchObject({ attempt: 1, reason: "dispatch-refused" });
     expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([
       expect.objectContaining({
         extra: expect.objectContaining({ continuations: 0 }) as unknown,
@@ -1353,13 +1413,25 @@ describe("CodingRuntimeOrchestrator", () => {
         extra: expect.objectContaining({ attempt: 1, reason: "evidence-unreadable" }) as unknown,
       }),
     ]);
-    expect(linesWithOp(captured, "coding-runtime.run.delivery-evidence-unreadable")).toEqual([
+    const unreadableLines = linesWithOp(
+      captured,
+      "coding-runtime.run.delivery-evidence-unreadable",
+    );
+    expect(unreadableLines).toEqual([
       expect.objectContaining({
         level: "warn",
         errorKind: "unavailable",
         extra: expect.objectContaining({ runId: "run-1" }) as unknown,
       }),
     ]);
+    const [unreadableLine] = unreadableLines;
+    if (unreadableLine === undefined) throw new Error("expected delivery-evidence-unreadable line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.delivery-evidence-unreadable.emitted-line",
+        formatActivityLogProofLine(unreadableLine),
+      ),
+    ).toMatchObject({ runId: "run-1" });
   });
 
   it("names the failure kind when the continuation dispatch throws", async () => {
@@ -1461,6 +1533,13 @@ describe("CodingRuntimeOrchestrator", () => {
     const lines = captured.records.filter(
       (candidate) => candidate.op === "coding-runtime.run.operator-decision",
     );
+    const waitingLine = requireLoggedEvent(lines[0], "expected operator-decision waiting line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.operator-decision.emitted-line",
+        formatActivityLogProofLine(waitingLine),
+      ),
+    ).toMatchObject({ runId: "run-1", decision: "workspace-script-trust" });
     expect(lines.map((line) => line.extra?.state)).toEqual(["waiting", "settled"]);
     expect(lines[0]?.extra).toMatchObject({ runId: "run-1", decision: "workspace-script-trust" });
     expect(lines[1]?.extra).toMatchObject({ outcome: "accepted" });
@@ -1534,9 +1613,10 @@ describe("CodingRuntimeOrchestrator", () => {
       runId: "run-foreign",
     });
     expect(refused).toMatchObject({ ok: false, failureCode: "invalid-intent" });
-    expect(
-      captured.records.find((candidate) => candidate.op === "coding-runtime.event.dropped"),
-    ).toMatchObject({
+    const dropped = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.event.dropped",
+    );
+    expect(dropped).toMatchObject({
       level: "warn",
       errorKind: "conflict",
       extra: {
@@ -1546,6 +1626,13 @@ describe("CodingRuntimeOrchestrator", () => {
         reason: "run-mismatch",
       },
     });
+    if (dropped === undefined) throw new Error("expected event.dropped line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.event.dropped.emitted-line",
+        formatActivityLogProofLine(dropped),
+      ),
+    ).toMatchObject({ eventKind: "operator-decision", reason: "run-mismatch" });
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
   });
 
@@ -2175,9 +2262,10 @@ describe("CodingRuntimeOrchestrator", () => {
       });
     }
 
-    expect(
-      captured.records.filter((event) => event.op === "coding-runtime.verification-summarized"),
-    ).toEqual([
+    const verificationLines = captured.records.filter(
+      (event) => event.op === "coding-runtime.verification-summarized",
+    );
+    expect(verificationLines).toEqual([
       {
         category: "process",
         op: "coding-runtime.verification-summarized",
@@ -2218,6 +2306,15 @@ describe("CodingRuntimeOrchestrator", () => {
         },
       },
     ]);
+    const [firstVerificationLine] = verificationLines;
+    if (firstVerificationLine === undefined)
+      throw new Error("expected verification-summarized line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification-summarized.emitted-line",
+        formatActivityLogProofLine(firstVerificationLine),
+      ),
+    ).toMatchObject({ runId, verificationStatus: "failed" });
   });
 
   it("binds approval to its pending revision and consumes it once", async () => {
@@ -2321,6 +2418,12 @@ describe("CodingRuntimeOrchestrator", () => {
       (candidate) => candidate.op === "coding-runtime.approval.waiting",
     );
     if (event === undefined) throw new Error("expected CI consent wait activity");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.approval.waiting.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ runId: "run-1", requestId: "permission-7" });
     expect(event.category).toBe("process");
     expect(event.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(event.extra).toEqual({
@@ -2801,6 +2904,13 @@ describe("CodingRuntimeOrchestrator", () => {
       correlationId: UNKNOWN_CORRELATION_ID,
       extra: { runId: "run-1", revision: afterRevision },
     });
+    if (line === undefined) throw new Error("expected recovery-acknowledged line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.recovery-acknowledged.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ runId: "run-1", revision: afterRevision });
     // Body-free: no task, prompt, or process content ever reaches this line.
     expect(JSON.stringify(line)).not.toContain(start.taskIntent);
   });
@@ -4084,6 +4194,13 @@ describe("issue-bound runs (#3385)", () => {
         byteCount: 96,
       },
     });
+    if (attached === undefined) throw new Error("expected issue-context-attached line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.issue-context-attached.emitted-line",
+        formatActivityLogProofLine(attached),
+      ),
+    ).toMatchObject({ runId: "run-1", issueNumber: 3385 });
     // Transient: the issue's text reaches the model turn and nothing else.
     const persisted = JSON.stringify([...f.rows.values()]);
     const logged = JSON.stringify(captured.records);
@@ -5045,6 +5162,13 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
       correlationId: "run-00000001",
       extra: { runId: "run-00000001", event: "dispatched" },
     });
+    if (dispatched === undefined) throw new Error("expected coding-runtime.description line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.description.emitted-line",
+        formatActivityLogProofLine(dispatched),
+      ),
+    ).toMatchObject({ runId: "run-00000001", event: "dispatched" });
     // #3401 review finding F2: the settle line must carry the precise generation `reason`
     // (`partial-generated`), not only the coarse `generated` op-event bucket, so the epic's
     // outcome vocabulary can be reconstructed from the log alone.

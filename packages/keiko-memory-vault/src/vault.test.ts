@@ -35,6 +35,10 @@ import {
   type MemoryVaultStore,
 } from "./index.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // Deterministic injected key so the vault tests never touch the OS keychain or write a keyfile,
 // and so encrypted-at-rest reads are reproducible across the suite (ADR-0035).
@@ -1322,6 +1326,11 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
       loss: "none",
     });
     expect(typeof opened[0]?.durationMs).toBe("number");
+    const persisted = expectActivityLogProof(
+      "memory-vault.store.opened.key-source",
+      formatActivityLogProofLine(opened[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ keySource: "env" });
     v.close();
   });
 

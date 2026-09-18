@@ -14,6 +14,10 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const capability: ModelCapability = {
   id: "spend-fixture",
@@ -70,7 +74,7 @@ function budget(
   return result;
 }
 
-function expectStructuredRejection(reason: string): void {
+function expectStructuredRejection(reason: string, correlationId: string): void {
   const event = events.at(-1);
   expect(event?.op).toBe("gateway.spend.rejected");
   expect(event?.extra?.reason).toBe(reason);
@@ -79,6 +83,11 @@ function expectStructuredRejection(reason: string): void {
   if (!Array.isArray(frames)) throw new TypeError("expected rejection frames");
   expect(frames.length).toBeGreaterThan(0);
   expect(Array.isArray(event?.extra?.causeChain)).toBe(true);
+  const persisted = expectActivityLogProof(
+    "gateway.spend.rejected.line",
+    formatActivityLogProofLine(event ?? {}),
+  );
+  expect(persisted).toMatchObject({ correlationId, reason });
 }
 
 function incompleteUsageToolCallStream(): Response {
@@ -139,12 +148,12 @@ describe("shared persistent model spend admission", () => {
     expect(() =>
       budget().reserve({ ...capability, pricing: undefined }, request, "pricing-rejection"),
     ).toThrow("spend-pricing-unavailable");
-    expectStructuredRejection("spend-pricing-unavailable");
+    expectStructuredRejection("spend-pricing-unavailable", "pricing-rejection");
 
     expect(() => budget("0").reserve(capability, request, "budget-rejection")).toThrow(
       "spend-budget-exceeded",
     );
-    expectStructuredRejection("spend-budget-exceeded");
+    expectStructuredRejection("spend-budget-exceeded", "budget-rejection");
   });
 
   it("admits zero output only for a validated embedding capability", () => {

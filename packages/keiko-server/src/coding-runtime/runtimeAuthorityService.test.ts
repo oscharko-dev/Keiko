@@ -10,6 +10,10 @@ import {
   validateCodingWorkbenchRuntimeAuthorityFacts,
   validateCodingWorkbenchRuntimeState,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import {
@@ -367,6 +371,14 @@ describe("CodingRuntimeAuthorityService", () => {
         maxPromptTokens: trusted.budget.maxPromptTokens,
       },
     });
+    const mintedEvent = activity.find((event) => event.op === "coding-runtime.authority.minted");
+    if (mintedEvent === undefined) throw new Error("expected authority.minted line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.authority.minted.emitted-line",
+        formatActivityLogProofLine(mintedEvent),
+      ),
+    ).toMatchObject({ runId: "run-0001", effectiveMode: "supervised-coding" });
   });
 
   it("atomically charges the exact prompt budget and fails closed after exhaustion", async () => {
@@ -946,9 +958,10 @@ describe("CodingRuntimeAuthorityService", () => {
       ok: false,
       reason: "authority-resolution-failed",
     });
-    expect(
-      activity.filter((event) => event.op === "coding-runtime.authority.revalidation-refused"),
-    ).toEqual([
+    const revalidationRefusals = activity.filter(
+      (event) => event.op === "coding-runtime.authority.revalidation-refused",
+    );
+    expect(revalidationRefusals).toEqual([
       expect.objectContaining({
         level: "warn",
         errorKind: "authority-denied",
@@ -962,6 +975,16 @@ describe("CodingRuntimeAuthorityService", () => {
         },
       }),
     ]);
+    const [refusedRevalidation] = revalidationRefusals;
+    if (refusedRevalidation === undefined) {
+      throw new Error("expected authority.revalidation-refused line");
+    }
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.authority.revalidation-refused.emitted-line",
+        formatActivityLogProofLine(refusedRevalidation),
+      ),
+    ).toMatchObject({ condition: "state-not-admissible", runtimeState: "paused" });
     // The operator-admission variant admits the paused run and therefore writes nothing.
     expect(authority.revalidateCapabilityForOperatorAdmission(recheck)).toMatchObject({ ok: true });
     expect(
@@ -1655,6 +1678,14 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
         errorKind: "authority-denied",
       },
     ]);
+    const [firstFailure] = events;
+    if (firstFailure === undefined) throw new Error("expected authority.mint-failed line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.authority.mint-failed.emitted-line",
+        formatActivityLogProofLine(firstFailure),
+      ),
+    ).toMatchObject({ stage: "intent-binding", reason: "model-source-mismatch" });
   });
 
   it("rejects a tampered one-use mint confirmation", () => {

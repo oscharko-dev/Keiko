@@ -38,6 +38,10 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const connectHandler = handleGitChangeConnect;
 const refreshHandler = handleGitChangeRefresh;
@@ -608,6 +612,23 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
         },
       }),
     );
+    const blockedEvent = events.find((event) => event.op === "git-change.chat.blocked");
+    if (blockedEvent === undefined) throw new Error("expected a blocked event");
+    const persistedBlocked = expectActivityLogProof(
+      "git-change.chat.blocked.reason",
+      formatActivityLogProofLine(blockedEvent),
+    );
+    expect(persistedBlocked).toMatchObject({ reason: "GIT_CHANGE_SCOPE_LIMIT_REACHED" });
+
+    // Every one of the 8 successful connects above also left `git-change.chat.connected`
+    // evidence — the counterpart this same fixture is well placed to prove alongside the block.
+    const connectedEvent = events.find((event) => event.op === "git-change.chat.connected");
+    if (connectedEvent === undefined) throw new Error("expected a connected event");
+    const persistedConnected = expectActivityLogProof(
+      "git-change.chat.connected.scope",
+      formatActivityLogProofLine(connectedEvent),
+    );
+    expect(persistedConnected).toMatchObject({ hasPullRequest: false });
   });
 
   it("logs a blocked event when connect targets a chat that does not exist (logging-contract-1)", async () => {
@@ -777,14 +798,26 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     const snapshot = fixtureSnapshot();
     const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot, snapshot] });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const events: ServerLogEvent[] = [];
+    const wiredDeps = {
+      ...deps,
+      activityLog: { write: (event): void => void events.push(event) },
+    } satisfies UiHandlerDeps;
     const connected = asRouteResult(
-      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), wiredDeps),
     );
     const relationshipId = (connected.body as GitChangeScopeBody).scope?.relationshipId ?? "";
 
     const refreshCtx = makeCtx({ schemaVersion: "1", chatId: chat.id, relationshipId });
-    const refreshed = asRouteResult(await refreshHandler(refreshCtx, deps));
+    const refreshed = asRouteResult(await refreshHandler(refreshCtx, wiredDeps));
     expect(refreshed.body).toMatchObject({ status: "current" });
+    const refreshedEvent = events.find((event) => event.op === "git-change.chat.refreshed");
+    if (refreshedEvent === undefined) throw new Error("expected a refreshed event");
+    const persistedRefreshed = expectActivityLogProof(
+      "git-change.chat.refreshed.scope",
+      formatActivityLogProofLine(refreshedEvent),
+    );
+    expect(persistedRefreshed).toMatchObject({ relationshipId });
   });
 
   it("archives the stale relationship and creates a new one when the head moved", async () => {
@@ -795,8 +828,13 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     });
     const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [original, moved] });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const events: ServerLogEvent[] = [];
+    const wiredDeps = {
+      ...deps,
+      activityLog: { write: (event): void => void events.push(event) },
+    } satisfies UiHandlerDeps;
     const connected = asRouteResult(
-      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), wiredDeps),
     );
     const oldRelationshipId = requireDefined(
       (connected.body as GitChangeScopeBody).scope,
@@ -808,7 +846,7 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
       chatId: chat.id,
       relationshipId: oldRelationshipId,
     });
-    const refreshed = asRouteResult(await refreshHandler(refreshCtx, deps));
+    const refreshed = asRouteResult(await refreshHandler(refreshCtx, wiredDeps));
     const body = refreshed.body as GitChangeScopeBody;
     expect(body.status).toBe("stale");
     const staleScope = requireDefined(body.scope, "refresh response scope");
@@ -829,6 +867,13 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     expect(requireDefined(scopes[0], "refreshed persisted scope").relationshipId).toBe(
       staleScope.relationshipId,
     );
+    const staleEvent = events.find((event) => event.op === "git-change.chat.stale");
+    if (staleEvent === undefined) throw new Error("expected a stale event");
+    const persistedStale = expectActivityLogProof(
+      "git-change.chat.stale.scope",
+      formatActivityLogProofLine(staleEvent),
+    );
+    expect(persistedStale).toMatchObject({ relationshipId: staleScope.relationshipId });
   });
 
   // Owner audit b3-8 — `persistStaleScope` used to archive the old relationship, THEN create the

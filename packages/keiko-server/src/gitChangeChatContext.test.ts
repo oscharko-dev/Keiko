@@ -15,6 +15,10 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { ChatGitChangeScope } from "./store/index.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const NOW = Date.parse("2026-09-05T12:00:00.000Z");
 let root: string;
@@ -201,6 +205,12 @@ describe("Git-change Chat shared description core", () => {
       outcome: "complete",
       requestCount: 1,
     });
+    if (event === undefined) throw new Error("expected a generated event");
+    const persistedGenerated = expectActivityLogProof(
+      "pr-description.chat.generated.outcome",
+      formatActivityLogProofLine(event),
+    );
+    expect(persistedGenerated).toMatchObject({ outcome: "complete", requestCount: 1 });
     expect(JSON.stringify(setup.events)).not.toContain("Emphasize the behavior change");
     expect(JSON.stringify(setup.events)).not.toContain("Earlier draft");
   });
@@ -221,12 +231,19 @@ describe("Git-change Chat shared description core", () => {
     });
     expect(result).toEqual({ status: "unavailable", reason: "snapshot-unavailable" });
     expect(setup.chat).not.toHaveBeenCalled();
-    expect(
-      setup.events.find((entry) => entry.op === "pr-description.chat.unavailable"),
-    ).toMatchObject({
+    const unavailableEvent = setup.events.find(
+      (entry) => entry.op === "pr-description.chat.unavailable",
+    );
+    expect(unavailableEvent).toMatchObject({
       errorKind: "unavailable",
       extra: { reason: "snapshot-unavailable" },
     });
+    if (unavailableEvent === undefined) throw new Error("expected an unavailable event");
+    const persistedUnavailable = expectActivityLogProof(
+      "pr-description.chat.unavailable.reason",
+      formatActivityLogProofLine(unavailableEvent),
+    );
+    expect(persistedUnavailable).toMatchObject({ reason: "snapshot-unavailable" });
   });
 
   it("discards a provider response when exact authority narrows during the call", async () => {

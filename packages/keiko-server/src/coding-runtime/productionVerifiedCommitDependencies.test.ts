@@ -14,6 +14,10 @@ import {
   verifiedCommitBuffersClean,
   type VerifiedCommitCompositionDeps,
 } from "./productionVerifiedCommitDependencies.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 function workspaceInfo(workspaceRoot: string): WorkspaceInfo {
   return {
@@ -103,6 +107,17 @@ describe("production verified commit dependencies", () => {
       correlationId: UNKNOWN_CORRELATION_ID,
       level: "warn",
       extra: { state: "blocked", editorSessionCount: 1, dirtySessionCount: 1 },
+    });
+    const checkedEvent = events.at(-1);
+    if (checkedEvent === undefined) throw new Error("expected a buffers-checked event");
+    const persistedChecked = expectActivityLogProof(
+      "git.delivery.buffers.checked.emitted-line",
+      formatActivityLogProofLine(checkedEvent),
+    );
+    expect(persistedChecked).toMatchObject({
+      state: "blocked",
+      editorSessionCount: 1,
+      dirtySessionCount: 1,
     });
     expect(JSON.stringify(events)).not.toContain(root);
     expect(JSON.stringify(events)).not.toContain("code.ts");

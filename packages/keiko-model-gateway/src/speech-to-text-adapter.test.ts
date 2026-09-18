@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { requestSpeechToText } from "./speech-to-text-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // A recognizable ASCII audio marker so we can locate the binary `file` part inside the multipart
 // body the adapter builds, without depending on real audio bytes.
@@ -128,6 +132,18 @@ describe("requestSpeechToText", () => {
         },
       },
     ]);
+
+    // Activity Log proof (#3532): the normalization line as the production file sink would
+    // persist it.
+    const persisted = expectActivityLogProof(
+      "speech.stt.language.normalized.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      declaredSubtagCount: 2,
+      resolvedSubtagCount: 1,
+      primaryLanguagePreserved: true,
+    });
   });
 
   it("preserves a primary language tag without emitting a normalization event", async () => {

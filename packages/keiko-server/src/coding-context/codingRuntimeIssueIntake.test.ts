@@ -28,6 +28,10 @@ import {
   resolvedLinkedIssueNumbers,
 } from "./codingRuntimeIssueIntake.js";
 import type { GitHubIssueResolutionDeps } from "./githubIssueResolution.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // Forces the shared mode/resource/risk matrix to answer `denied` for one test only, so the
 // "connector scope withheld" branch of `connectorScopesFor` is exercised even though no mode in
@@ -183,6 +187,11 @@ describe("production coding-runtime issue-context attachment (epic #3384 correct
     expect(line?.extra?.blockedReasons).toEqual(["missing-scope"]);
     // Body-free: never the issue title, body, or URL.
     expect(JSON.stringify(line)).not.toContain("Issue context attachment");
+    const persisted = expectActivityLogProof(
+      "coding-context.pack.line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(persisted).toMatchObject({ status: "blocked", blockedReasons: ["missing-scope"] });
   });
 
   // Review 3941762925: `buildCodeContextPack`'s sanitisation evidence
@@ -338,5 +347,14 @@ describe("resolvedLinkedIssueNumbers (epic children resolved through the authori
     expect(skip?.extra?.failure).toBe("issue-unavailable");
     // Body-free: never the issue title or body text.
     expect(JSON.stringify(skip)).not.toContain("Epic");
+    const persisted = expectActivityLogProof(
+      "coding-context.linked-issue-skipped.line",
+      formatActivityLogProofLine(skip ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      runId: "run-linked",
+      issueNumber: 44,
+      failure: "issue-unavailable",
+    });
   });
 });

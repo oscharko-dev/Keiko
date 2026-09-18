@@ -13,6 +13,10 @@ import {
   type RuntimeGitPreparation,
 } from "./productionRuntimeGitPreparation.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 let root: string;
 let now: number;
@@ -152,6 +156,15 @@ describe("repository identity before runtime confirmation", () => {
         },
       }),
     );
+    const consumedEvent = events.find(
+      (event) => event.op === "git.runtime-identity" && event.extra?.state === "consumed",
+    );
+    if (consumedEvent === undefined) throw new Error("expected a consumed event");
+    const persistedConsumed = expectActivityLogProof(
+      "git.runtime-identity.emitted-line",
+      formatActivityLogProofLine(consumedEvent),
+    );
+    expect(persistedConsumed).toMatchObject({ state: "consumed", runId: "run-1" });
     expect(JSON.stringify(events)).not.toMatch(
       /Owner|Repository|private task|git@|fixture@example/u,
     );

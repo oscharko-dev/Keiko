@@ -16,6 +16,10 @@ import {
   type ModelGatewayLogLevel,
   type ModelGatewayLogSink,
 } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 describe("resolveLogSink", () => {
   it("falls back to the shared no-op sink when the caller wired nothing", () => {
@@ -387,6 +391,35 @@ describe("a caller-supplied sink is foreign code", () => {
     }
     // Five dropped lines, exactly one report.
     expect(attempts.filter((op) => op === "gateway.log.sink-failed")).toHaveLength(1);
+  });
+
+  // The report is written back through the SAME raw sink that dropped the original line (never
+  // into the isolated wrapper, and never into a second sink) — see reportFailedLogSink in
+  // observability.ts. A raw sink that accepts only its own report shape, and refuses everything
+  // else, lets this test observe that written-back line instead of only counting attempts.
+  it("proves the gateway.log.sink-failed line the report writes back through the same raw sink", () => {
+    const attempts: ModelGatewayLogEvent[] = [];
+    const rawSink: ModelGatewayLogSink = {
+      write(event): void {
+        attempts.push(event);
+        if (event.op !== "gateway.log.sink-failed") {
+          throw new Error("sink is down");
+        }
+      },
+    };
+    resolveLogSink(rawSink).write({
+      level: "info",
+      category: "gateway",
+      op: "gateway.chat.started",
+    });
+    const failure = attempts.find((event) => event.op === "gateway.log.sink-failed");
+    expect(failure?.level).toBe("error");
+    expect(failure?.extra).toMatchObject({ droppedOp: "gateway.chat.started" });
+    const persisted = expectActivityLogProof(
+      "gateway.log.sink-failed.emitted-line",
+      formatActivityLogProofLine(failure ?? {}),
+    );
+    expect(persisted).toMatchObject({ droppedOp: "gateway.chat.started" });
   });
 
   // #3532: the report is once per sink, but the process loss ledger counts every dropped line.

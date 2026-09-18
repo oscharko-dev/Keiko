@@ -73,19 +73,27 @@ const CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION = {
   releaseImpact: "patch",
 } as const;
 
+// `frames`/`causeChain` are declared OPTIONAL, matching every other diagnostic-trace field pair in
+// this package (e.g. `CODING_RUNTIME_OPTIONAL_DIAGNOSTIC_FIELDS` in codingRuntimeOrchestrator.ts):
+// the shared redaction pipeline (`redactAcceptedField` in observability/log-redaction.ts) always
+// drops an empty guarded array outright rather than persisting `[]`, and both fields are routinely
+// empty on a genuine transport failure -- `causeChain` whenever the thrown error carries no
+// `.cause` (the common case), `frames` whenever none of the error's stack frames anchor to a known
+// workspace package. A `required: true` here would demand a field the production sink itself omits
+// whenever there is nothing to report, so a persisted line could never satisfy its own contract.
 const CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS = {
   runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
   frames: {
     type: "string-array",
     dataClass: "opaque-id",
-    required: true,
+    required: false,
     maxLength: 512,
     maxItems: 8,
   },
   causeChain: {
     type: "string-array",
     dataClass: "error-kind",
-    required: true,
+    required: false,
     maxLength: 128,
     maxItems: 5,
   },

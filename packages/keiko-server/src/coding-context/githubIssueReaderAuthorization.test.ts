@@ -12,6 +12,10 @@ import {
   githubRemoteOwnerAndRepoFor,
   isGitHubIssueReaderAuthorized,
 } from "./githubIssueReaderAuthorization.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 function capturingLog(): { readonly sink: ServerLogSink; readonly events: ServerLogEvent[] } {
   const events: ServerLogEvent[] = [];
@@ -194,6 +198,11 @@ describe("isGitHubIssueReaderAuthorized (#3385)", () => {
       // The revision names WHICH stored grant was evaluated; it is present exactly when a row was
       // read, so the JSDoc's claim and the line agree.
       expect((events[0]?.extra as { revision?: number } | undefined)?.revision).toBe(revision);
+      const persisted = expectActivityLogProof(
+        "coding-context.github-authorization.evaluated.line",
+        formatActivityLogProofLine(events[0] ?? {}),
+      );
+      expect(persisted).toMatchObject({ decision, authorized });
     },
   );
 
@@ -369,6 +378,11 @@ describe("githubRemoteOwnerAndRepoFor — emitted evidence (#3385)", () => {
       correlationId: "corr-resolved",
       extra: { outcome: "resolved" },
     });
+    const persisted = expectActivityLogProof(
+      "coding-context.github-remote.evaluated.line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "resolved" });
   });
 
   // The distinction the finding asked for: a remote that is simply not GitHub is expected, so it is

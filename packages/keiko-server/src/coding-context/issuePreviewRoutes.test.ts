@@ -18,6 +18,10 @@ import type { RouteContext } from "../routes.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import type { GitHubIssueResolver } from "./githubIssueResolution.js";
 import { createCodingWorkbenchIssuePreviewHandler } from "./issuePreviewRoutes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -123,6 +127,12 @@ describe("issue preview request lifecycle", () => {
         },
       }),
     );
+    const line = f.activity.events.find((event) => event.op === "coding-workbench.issue.previewed");
+    const persisted = expectActivityLogProof(
+      "coding-workbench.issue.previewed.line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "unknown-repository", status: 409 });
   });
 
   it("reports an upstream exception with correlated redacted diagnostics and disposes listeners", async () => {

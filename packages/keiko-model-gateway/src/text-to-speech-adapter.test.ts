@@ -6,6 +6,10 @@ import {
 } from "./text-to-speech-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // A recognizable audio byte marker so a test can assert the adapter returns the provider body verbatim
 // without depending on real audio.
@@ -284,6 +288,14 @@ describe("requestTextToSpeech", () => {
         },
       },
     ]);
+
+    // Activity Log proof (#3532): the MIME-correction line as the production file sink would
+    // persist it.
+    const persisted = expectActivityLogProof(
+      "speech.tts.mime.corrected.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ declaredMimeClass: "mp3", resolvedMimeClass: "opus" });
   });
 
   it.each([
@@ -571,6 +583,15 @@ describe("requestTextToSpeechStream", () => {
     });
     expect(JSON.stringify(events)).not.toContain(ANSWER);
     expect(JSON.stringify(events)).not.toContain(SECRET_API_KEY);
+
+    // Activity Log proof (#3532): the peek-failure line as the production file sink would
+    // persist it.
+    const peekFailed = events.find((event) => event.op === "speech.tts.stream.peek.failed");
+    const persisted = expectActivityLogProof(
+      "speech.tts.stream.peek.failed.emitted-line",
+      formatActivityLogProofLine(peekFailed ?? {}),
+    );
+    expect(persisted).toMatchObject({ phase: "response-prefix", outcomeKind: "transport" });
   });
 
   it("fails closed when a successful streaming response contains zero audio bytes", async () => {

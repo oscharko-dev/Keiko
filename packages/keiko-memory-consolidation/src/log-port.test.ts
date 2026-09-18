@@ -21,6 +21,10 @@ import {
   type ConsolidationLogEvent,
   type ConsolidationLogSink,
 } from "./log-port.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // The specs below replace `process.emitWarning`. A spy restored on the last line of its own test
 // is only restored when that test PASSES: an assertion that throws first leaves the platform
@@ -183,6 +187,14 @@ describe("emitConsolidationLogEvent", () => {
         failureKind: "ENOSPC",
         loss: "none",
       },
+    });
+    const persisted = expectActivityLogProof(
+      "consolidation.log.sink-failed.body-free",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      droppedOpDigest: "84515d8cbae7dcba",
+      failureKind: "ENOSPC",
     });
   });
 

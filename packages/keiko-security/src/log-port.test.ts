@@ -26,6 +26,10 @@ import {
   type SecurityLogEvent,
   type SecurityLogSink,
 } from "./log-port.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const CORRELATION_WRAPPER_FIXTURE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -237,6 +241,14 @@ describe("emitSecurityLogEvent", () => {
         droppedOpDigest: "764c7a89e99dae45",
         failureKind: "ENOSPC",
       },
+    });
+    const persisted = expectActivityLogProof(
+      "security.log.sink-failed.body-free",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      droppedOpDigest: "764c7a89e99dae45",
+      failureKind: "ENOSPC",
     });
   });
 

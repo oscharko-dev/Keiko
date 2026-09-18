@@ -6,7 +6,9 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+import { isActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { API_ROUTES, isApiPath, matchRoute, STREAMING, type RouteContext } from "./routes.js";
+import { currentActivityLogReadiness } from "./observability/activity-log-readiness.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type ChatGitChangeScope } from "./store/index.js";
 
@@ -638,11 +640,20 @@ describe("matchRoute", () => {
 });
 
 describe("health handler", () => {
-  it("returns ok with the SDK version", async () => {
+  // The body gained a closed, body-free `diagnostics` block (#3532): the readiness snapshot this
+  // process evaluated, taken from the production function rather than restated here.
+  it("returns ok with the SDK version and the diagnostic readiness snapshot", async () => {
     const route = API_ROUTES.find((r) => r.pattern === "/api/health");
     expect(route).toBeDefined();
     const result = await route?.handler(emptyCtx, stubDeps);
-    expect(result).toEqual({ status: 200, body: { status: "ok", version: SDK_VERSION } });
+    expect(result).toEqual({
+      status: 200,
+      body: { status: "ok", version: SDK_VERSION, diagnostics: currentActivityLogReadiness() },
+    });
+    if (result === undefined || result === STREAMING) throw new Error("expected a RouteResult");
+    expect(isActivityLogReadinessSnapshot(Reflect.get(result.body as object, "diagnostics"))).toBe(
+      true,
+    );
   });
 });
 
