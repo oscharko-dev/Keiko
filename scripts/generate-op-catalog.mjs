@@ -1074,6 +1074,26 @@ function addMissingEmitterViolations(context) {
   }
 }
 
+// An operation is emitted only inside its owner package, which reaches the log through its own
+// port. An emission from any other package bypasses that owning port, whatever it imports.
+function addOwnerBypassViolations(context) {
+  for (const operation of context.operations) {
+    const ownerRoot = `packages/${operation.owner}/`;
+    for (const site of operation.emitterSites) {
+      if (site.startsWith(ownerRoot)) continue;
+      context.violations.push({
+        ...registryViolation(
+          "emission-outside-owner",
+          site,
+          "Emit the operation inside its owner package through that package's log port, or move " +
+            "the registration to the package that emits it.",
+        ),
+        detail: operation.op,
+      });
+    }
+  }
+}
+
 function operationContextFields(operation) {
   return Object.entries(operation.fields)
     .filter(([name]) => name !== "completeness" && name !== "loss")
@@ -1549,6 +1569,7 @@ export function generateTypedActivityLogRegistry(
   collectTypedSites(context, sourceFiles, collectTypedEmission);
   addDuplicateRegistrationViolations(context);
   addMissingEmitterViolations(context);
+  addOwnerBypassViolations(context);
 
   const sortedOperations = operations.toSorted((left, right) =>
     compareCodepoints(left.op, right.op),

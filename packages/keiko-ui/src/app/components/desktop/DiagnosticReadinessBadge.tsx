@@ -27,6 +27,7 @@ const READINESS_REASON_MESSAGES: Readonly<Record<ActivityLogReadinessReason, Mes
   "budget-exceeded": "footer.diagnosticsReasonBudgetExceeded",
   "port-unwired": "footer.diagnosticsReasonPortUnwired",
   "level-silent": "footer.diagnosticsReasonLevelSilent",
+  "storage-check-failed": "footer.diagnosticsReasonStorageCheckFailed",
 };
 
 interface DiagnosticReadinessBadgeProps {

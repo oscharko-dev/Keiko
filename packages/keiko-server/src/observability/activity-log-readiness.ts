@@ -11,6 +11,8 @@
 //   * the process-wide logger — the port every domain package writes through — is wired to the
 //     same state directory the launch validated;
 //   * the configured level does not silence the log.
+// A storage check that throws is reduced to `storage-check-failed`: its error can carry the state
+// directory's path, and it must neither freeze the last snapshot nor reach `/api/health`.
 // Any failed check names a closed reason. `unavailable` means no trustworthy evidence can be
 // written at all (catalog mismatch or an unwritable sink); anything else is `degraded`. An
 // explicitly injected test writer is reported as such, never as a production writer.
@@ -74,7 +76,7 @@ const ACTIVITY_LOG_READINESS_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "closed-enum",
       required: true,
-      maxItems: 6,
+      maxItems: 7,
       values: [
         "catalog-mismatch",
         "sink-unwritable",
@@ -82,6 +84,7 @@ const ACTIVITY_LOG_READINESS_OPERATION = defineActivityLogOperation({
         "budget-exceeded",
         "port-unwired",
         "level-silent",
+        "storage-check-failed",
       ],
     },
     writer: {
@@ -184,6 +187,7 @@ interface ReadinessFacts {
   readonly catalogCoherent: boolean;
   readonly sink: SinkCondition;
   readonly storage: ActivityLogStoreHealth | undefined;
+  readonly storageCheckFailed: boolean;
   readonly threshold: ServerLogThreshold;
   readonly portsWired: boolean;
 }
@@ -212,6 +216,7 @@ function readinessReasons(facts: ReadinessFacts): readonly ActivityLogReadinessR
   if (!facts.catalogCoherent) reasons.push("catalog-mismatch");
   if (facts.sink !== "writable") reasons.push("sink-unwritable");
   reasons.push(...storageReasons(facts.storage));
+  if (facts.storageCheckFailed) reasons.push("storage-check-failed");
   if (!facts.portsWired) reasons.push("port-unwired");
   if (facts.threshold === "silent") reasons.push("level-silent");
   return reasons;
@@ -307,14 +312,36 @@ function portWiringFact(
   return portsWired(state.writer, state.stateDir, options.stateDir ?? memory.expectedStateDir);
 }
 
+type StorageCheck =
+  | { readonly kind: "inspected"; readonly health: ActivityLogStoreHealth }
+  | { readonly kind: "failed" }
+  | { readonly kind: "skipped" };
+
+// The storage snapshot, or `failed` when it throws (e.g. EACCES on an unlistable log directory).
+// The error is dropped on purpose: its message names the directory, and the closed
+// `storage-check-failed` reason is the evidence the readiness line persists.
+function storageCheck(
+  options: ActivityLogReadinessOptions,
+  stateDir: string,
+  env: ServerLogEnv,
+): StorageCheck {
+  try {
+    return {
+      kind: "inspected",
+      health: (options.storageHealth ?? activityLogStorageHealth)(stateDir, env),
+    };
+  } catch {
+    return { kind: "failed" };
+  }
+}
+
 function collectFacts(options: ActivityLogReadinessOptions, sink: SinkCondition): ReadinessFacts {
   const state = writerStateFor(options);
   const stateDir = options.stateDir ?? state.stateDir;
   const production = state.writer !== "test-injected" && stateDir !== undefined;
   const env = options.env ?? process.env;
-  const storage = production
-    ? (options.storageHealth ?? activityLogStorageHealth)(stateDir, env)
-    : undefined;
+  const check = production ? storageCheck(options, stateDir, env) : { kind: "skipped" as const };
+  const storage = check.kind === "inspected" ? check.health : undefined;
   const storageSink: SinkCondition =
     storage === undefined || storage.writable ? sink : "unwritable";
   return {
@@ -322,6 +349,7 @@ function collectFacts(options: ActivityLogReadinessOptions, sink: SinkCondition)
     catalogCoherent: activityLogCatalogCoherent(),
     sink: state.writer === "unavailable" ? "unwritable" : storageSink,
     storage,
+    storageCheckFailed: check.kind === "failed",
     threshold: resolveServerLogThreshold(env),
     portsWired: portWiringFact(state, options),
   };

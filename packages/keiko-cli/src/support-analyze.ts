@@ -1357,7 +1357,7 @@ function latestObservation(lines: readonly ParsedLine[]): LatestObservation {
   return { latestTimestamp, latestInstanceId };
 }
 
-// Parses `text` (the full content of a raw server.log OR a support bundle), groups every line
+// Parses `text` (the full content of a raw Activity Log file OR a support bundle), groups every line
 // that carries a correlationId into one LogTimeline per id (first-occurrence order), and counts
 // every line that could not be read as a log record. A line with no correlationId at all
 // (`process.*` lines, a first-ever request before any id was assigned) belongs to no timeline and
@@ -1652,7 +1652,7 @@ export function renderHumanAllTimelines(result: AnalyzeAllResult): string {
 // (scanning `gateway.chat.*`/`gateway.stream.*`/`gateway.retry.*` lines for the httpStatus/
 // retryAfterMs/finishReason/usage/firstTokenMs fields ADR-0173 Wave 3 added), an `httpRequest`
 // (the timeline's `http`/`request` and `http`/`sse.stream.closed` lines), a `storeFingerprint`
-// (the bundle manifest's `storeFingerprints`, Wave 4a — undefined for a raw server.log, which
+// (the bundle manifest's `storeFingerprints`, Wave 4a — undefined for a raw Activity Log file, which
 // carries no manifest), an `indexingJob` (the timeline's `indexing.job.started` line, Wave 4a),
 // `stackFrames`/`causeChain` (straight off the timeline), and a `warnings` field naming exactly
 // what could not be reconstructed and why — never silently omitted.
@@ -2103,7 +2103,7 @@ function issueToPrJourneyWarning(journey: IssueToPrJourneyView | undefined): str
 // exporter is Wave-4a-or-later. `classifyLine` treats it as bundle metadata and never parses its
 // content, so this reads it directly, independent of `analyzeLogText`. Every candidate is
 // re-validated with the contract's own `isStoreFingerprint` guard (never trusted merely because it
-// parsed as JSON) — a raw server.log, which has no manifest line at all, always returns undefined.
+// parsed as JSON) — a raw Activity Log file, which has no manifest line at all, always returns undefined.
 function extractManifestStoreFingerprints(
   firstLine: string | undefined,
 ): readonly StoreFingerprint[] | undefined {
@@ -2192,7 +2192,7 @@ function storeFingerprintWarning(
 ): string | undefined {
   if (fingerprints !== undefined) return undefined;
   return kind === "raw-log"
-    ? "a raw server.log carries no store fingerprints — export a support bundle " +
+    ? "a raw Activity Log file carries no store fingerprints — export a support bundle " +
         "(`keiko support export`) to include them"
     : "no store fingerprints found in this bundle's manifest — either the exporter predates " +
         "Wave 4a, or every store was unavailable at export time";
@@ -2297,7 +2297,7 @@ export interface ReproductionSeedSource {
   readonly firstLine: string | undefined;
 }
 
-// Assembles a full `ReproductionSeed` for one correlationId out of `text` (a raw server.log or a
+// Assembles a full `ReproductionSeed` for one correlationId out of `text` (a raw Activity Log file or a
 // support bundle — auto-detected, same as `analyzeLogText`). Undefined when no timeline exists for
 // `correlationId`, mirroring `findTimeline`. `generatedAt` is caller-supplied (never `new Date()`
 // read here) so this stays pure and deterministic, like every other export in this file.

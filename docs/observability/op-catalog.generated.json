@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b32b03405004f5d2ba1a0348966d32a3779df5bf869e8b1c01b942b27b91bc32",
+    "catalogDigest": "98b5c28d4cdd4e5267f0a77c41bf8c6103ca2c4ce89966c6defb0cdce21f2192",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -449,14 +449,15 @@
             "type": "string-array",
             "dataClass": "closed-enum",
             "required": true,
-            "maxItems": 6,
+            "maxItems": 7,
             "values": [
               "catalog-mismatch",
               "sink-unwritable",
               "storage-pressure",
               "budget-exceeded",
               "port-unwired",
-              "level-silent"
+              "level-silent",
+              "storage-check-failed"
             ]
           },
           "writer": {
@@ -486,8 +487,8 @@
           "activity-log.readiness.transition-line"
         ],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/observability/activity-log-readiness.ts:59",
-        "emitterSites": ["packages/keiko-server/src/observability/activity-log-readiness.ts:137"]
+        "registrationSite": "packages/keiko-server/src/observability/activity-log-readiness.ts:61",
+        "emitterSites": ["packages/keiko-server/src/observability/activity-log-readiness.ts:140"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -68039,13 +68040,13 @@
     {
       "op": "activity-log.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/activity-log-readiness.ts:357",
+      "site": "packages/keiko-server/src/observability/activity-log-readiness.ts:385",
       "package": "keiko-server"
     },
     {
       "op": "activity-log.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/activity-log-readiness.ts:62",
+      "site": "packages/keiko-server/src/observability/activity-log-readiness.ts:64",
       "package": "keiko-server"
     },
     {

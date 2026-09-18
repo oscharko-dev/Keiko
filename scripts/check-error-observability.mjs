@@ -362,6 +362,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
   ],
   [
+    "packages/keiko-server/src/observability/activity-log-readiness.ts:storageCheck",
+    "A throwing storage check becomes the closed storage-check-failed reason the readiness line persists.",
+  ],
+  [
     "packages/keiko-server/src/observability/server-log.ts:listingOrUndefined",
     "An unlistable directory becomes a storage-unavailable outcome the registered pin events persist.",
   ],

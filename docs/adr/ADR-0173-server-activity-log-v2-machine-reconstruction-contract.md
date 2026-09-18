@@ -480,7 +480,9 @@ produce reconstruction evidence. The result is one of three states: `ready`, `de
 `unavailable`. It carries three more facts:
 
 - the closed reasons: `catalog-mismatch`, `sink-unwritable`, `storage-pressure`,
-  `budget-exceeded`, `port-unwired` and `level-silent`;
+  `budget-exceeded`, `port-unwired`, `level-silent` and `storage-check-failed` (a storage check that
+  throws is reduced to this reason and its error is dropped, so readiness never freezes on a stale
+  state and never carries a path);
 - the writer kind: `production-file`, `test-injected` or `unavailable`;
 - the lost-event total.
 
