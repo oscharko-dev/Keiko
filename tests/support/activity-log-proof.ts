@@ -33,7 +33,12 @@ import {
   validateActivityLogOperationFields,
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { listActivityLogFiles } from "@oscharko-dev/keiko-server/observability/server-log";
+import {
+  formatRegisteredServerLogLine,
+  listActivityLogFiles,
+  serverLogProcessIdentity,
+  type ServerLogEvent,
+} from "@oscharko-dev/keiko-server/observability/server-log";
 
 // Envelope and identity members of a persisted line; everything else is a registered field.
 const PERSISTED_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
@@ -135,6 +140,24 @@ export function expectActivityLogProof(proofId: string, line: string): Record<st
     );
   }, `${context}: registered fields`).not.toThrow();
   return record;
+}
+
+let proofLineSeq = 0;
+
+/**
+ * Serializes one event exactly as the production file sink does: `formatRegisteredServerLogLine`
+ * revalidates the event's typed registration, its closed and bounded fields, and the complete v2
+ * identity of this build before it formats a line. An event the real sink would refuse — an
+ * unregistered plain object, a rejected field set, a registration that drifted from the generated
+ * registry — throws here instead of becoming a proof line, so a package whose log port only hands
+ * the test a captured event still proves what its production writer persists.
+ */
+export function formatActivityLogProofLine(event: object): string {
+  proofLineSeq += 1;
+  return formatRegisteredServerLogLine(event as ServerLogEvent, new Date(), {
+    ...serverLogProcessIdentity(),
+    seq: proofLineSeq,
+  });
 }
 
 /**

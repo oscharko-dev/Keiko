@@ -19,6 +19,7 @@ import {
 } from "@oscharko-dev/keiko-server";
 import { redactLogFields } from "@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle";
 import { formatServerLogLine } from "../../keiko-server/src/observability/server-log.js";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 
 import {
   analyzeLogText,
@@ -122,7 +123,7 @@ function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => v
   try {
     write(fixtureSink);
     fileSink.close?.();
-    return `${readFileSync(join(stateDir, "logs", "server.log"), "utf8")}${fixtureLines.join("")}`;
+    return `${readPersistedActivityLog(stateDir)}${fixtureLines.join("")}`;
   } finally {
     fileSink.close?.();
     rmSync(stateDir, { recursive: true, force: true });
@@ -940,15 +941,21 @@ describe("support timeline contract — the #3347 workspace-authority security o
 
     const result = analyzeLogText(serialized);
 
+    // The writer's own storage lifecycle lines use the same sanctioned fallback: the segment opened
+    // (safe-open) and sealed on close with no request correlation in scope (#3530).
     expect(result.timelines).toEqual([
       expect.objectContaining({
         correlationId: "unknown-correlation-id",
-        lines: [expect.objectContaining({ op: "server-log.safe-open" })],
+        lines: [
+          expect.objectContaining({ op: "server-log.safe-open" }),
+          expect.objectContaining({ op: "activity-log.segment.sealed" }),
+        ],
       }),
     ]);
     expect(result.malformedLineCount).toBe(0);
     expect(result.clusters.map((cluster) => cluster.op)).toEqual([
       "server-log.safe-open",
+      "activity-log.segment.sealed",
       WATCH_AUTHORITY_REVOKED,
     ]);
   });
