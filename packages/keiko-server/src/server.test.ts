@@ -13,6 +13,8 @@ import type {
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+import { isActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { currentActivityLogReadiness } from "./observability/activity-log-readiness.js";
 import {
   buildRedactor,
   createInMemoryUiStore,
@@ -149,10 +151,17 @@ afterEach(async () => {
 });
 
 describe("GET /api/health", () => {
-  it("returns ok with the version and no-store cache control", async () => {
+  it("returns ok with the version, the readiness snapshot and no-store cache control", async () => {
     const res = await fetchRaw("/api/health");
     expect(res.status).toBe(200);
-    expect(JSON.parse(res.text)).toEqual({ status: "ok", version: SDK_VERSION });
+    const body: unknown = JSON.parse(res.text);
+    // The in-process server answers from the same readiness module the test reads.
+    expect(body).toEqual({
+      status: "ok",
+      version: SDK_VERSION,
+      diagnostics: currentActivityLogReadiness(),
+    });
+    expect(isActivityLogReadinessSnapshot(Reflect.get(body as object, "diagnostics"))).toBe(true);
     expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
