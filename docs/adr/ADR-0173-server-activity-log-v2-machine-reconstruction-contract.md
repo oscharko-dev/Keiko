@@ -407,7 +407,8 @@ operation schema or reduce a supported class's sufficiency requirement.
 **One command enforces the contract permanently.** `npm run check:activity-log` builds the packages
 and then evaluates the complete registered inventory on every run by composing the checks that own
 each rule: `check:op-catalog` (registry, exemptions, failure-class coverage, failure-surface
-inventory, proof and scenario resolution), `check:error-observability`, `arch:check` with
+inventory, proof and scenario resolution), `test:activity-log-scenarios` (executes the curated
+scenario matrix the inventory resolves), `check:error-observability`, `arch:check` with
 `arch:check:negative`, and `check:release-impact`. Required CI runs that exact command. It takes no
 changed-file input, so diff awareness can never narrow what it proves. The exemption validator also
 requires the record's owner to be the operation's owning package and its expiry to lie at most 180

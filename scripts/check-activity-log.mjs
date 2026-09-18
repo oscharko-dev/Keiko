@@ -38,6 +38,16 @@ export const ACTIVITY_LOG_GATE_CHECKS = Object.freeze([
       "and commit the regenerated files.",
   }),
   Object.freeze({
+    id: "scenarios",
+    script: "test:activity-log-scenarios",
+    proves:
+      "every curated end-to-end scenario the inventory resolves drives its production path to a " +
+      "complete support-analyze report",
+    remediation:
+      "Repair the failing scenario's production path; never weaken the scenario's expected " +
+      "operations or its complete-sufficiency assertion.",
+  }),
+  Object.freeze({
     id: "failure-paths",
     script: "check:error-observability",
     proves: "production failure paths carry a correlation id to the owning diagnostic sink",

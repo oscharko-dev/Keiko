@@ -49,8 +49,10 @@ const read = (path) => readFileSync(join(repoRoot, path), "utf8");
 // Harness deadline for the one fixture registry program this suite compiles, not a product budget.
 const FIXTURE_PROGRAM_TIMEOUT_MS = 2 * 60_000;
 const GATE_COMMAND = "npm run check:activity-log";
+const STEP_COUNT = ACTIVITY_LOG_GATE_STEPS.length;
 const REQUIRED_CONSTITUENTS = [
   "check:op-catalog",
+  "test:activity-log-scenarios",
   "check:error-observability",
   "arch:check",
   "arch:check:negative",
@@ -86,7 +88,7 @@ describe("the Activity Log gate command", () => {
     expect(result.passed).toBe(true);
     expect(result.results.every((entry) => entry.passed)).toBe(true);
     expect(lines.at(-1)).toBe(
-      "check:activity-log PASS — 6 checks over the full registered inventory in 1.3 s.",
+      `check:activity-log PASS — ${String(STEP_COUNT)} checks over the full registered inventory in 1.5 s.`,
     );
   });
 
@@ -106,14 +108,24 @@ describe("the Activity Log gate command", () => {
     expect(lines).toContain(
       `check:activity-log: release-impact failed — ${releaseImpact.remediation}`,
     );
-    expect(lines.at(-1)).toMatch(/^check:activity-log FAIL — 2 failed and 0 not run of 6 checks/u);
+    expect(lines.at(-1)).toMatch(
+      new RegExp(
+        `^check:activity-log FAIL — 2 failed and 0 not run of ${String(STEP_COUNT)} checks`,
+        "u",
+      ),
+    );
   });
 
   it("stops after a failed build so that no check judges stale output", () => {
     const { ran, lines, result } = recordGateRun(["build:packages"]);
     expect(ran).toEqual(["build:packages"]);
     expect(result.passed).toBe(false);
-    expect(lines.at(-1)).toMatch(/^check:activity-log FAIL — 1 failed and 5 not run of 6 checks/u);
+    expect(lines.at(-1)).toMatch(
+      new RegExp(
+        `^check:activity-log FAIL — 1 failed and ${String(STEP_COUNT - 1)} not run of ${String(STEP_COUNT)} checks`,
+        "u",
+      ),
+    );
   });
 
   it("fails closed when a constituent reports anything but success", () => {
@@ -125,8 +137,9 @@ describe("the Activity Log gate command", () => {
 
   it("measures every step and the whole run", () => {
     const { lines, result } = recordGateRun();
-    expect(result.results.map((entry) => entry.durationMs)).toEqual([100, 100, 100, 100, 100, 100]);
-    expect(result.durationMs).toBe(1300);
+    expect(result.results.map((entry) => entry.durationMs)).toEqual(Array(STEP_COUNT).fill(100));
+    // One clock read opens the run, two bracket each step, and one closes it.
+    expect(result.durationMs).toBe(100 + 200 * STEP_COUNT);
     expect(lines[0]).toBe("check:activity-log: build (npm run build:packages) PASS in 0.1 s");
   });
 
