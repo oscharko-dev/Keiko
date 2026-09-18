@@ -705,16 +705,75 @@ function consultedManifests(state: EngineState): readonly SegmentManifest[] {
   return manifests;
 }
 
+// A manifest is deliberately self-contained (rebuildable from its own sealed segment alone), so its
+// own `sequenceAnomalies` can only ever see anomalies WITHIN that one segment. A duplicate,
+// decreasing, or reset `seq` for one (pid, instanceId) that lands exactly on a segment boundary —
+// the segment that observed it ends, and the next one that continues its lifetime begins — is
+// invisible to either manifest alone. Reconcile it here, across the manifests THIS query actually
+// consulted, in their existing logical-log order, using only the boundary values every manifest
+// already carries per process (`firstSeq`/`lastSeq`) — never reopening a segment body. A gap at a
+// boundary stays tolerated, exactly as within one segment's own scan (an active segment is still
+// growing, and `seq` is allocated process-wide, so a gap alone can be a write elsewhere).
+type BoundaryAnomalyKind = Exclude<ProcessSequenceAnomaly["kind"], "gap">;
+
+interface BoundaryAnomalies {
+  readonly count: number;
+  readonly kinds: ReadonlySet<BoundaryAnomalyKind>;
+}
+
+function processKey(pid: number, instanceId: string): string {
+  return `${String(pid)}:${instanceId}`;
+}
+
+function boundaryAnomalyKinds(
+  previousLastSeq: number,
+  firstSeq: number,
+): readonly BoundaryAnomalyKind[] {
+  const kinds: BoundaryAnomalyKind[] = [];
+  if (firstSeq === 1 && previousLastSeq > 1) kinds.push("reset");
+  if (firstSeq < previousLastSeq) kinds.push("decreasing");
+  if (firstSeq === previousLastSeq) kinds.push("duplicate");
+  return kinds;
+}
+
+function processBoundaryAnomalies(manifests: readonly SegmentManifest[]): BoundaryAnomalies {
+  const lastSeqByProcess = new Map<string, number>();
+  const kinds = new Set<BoundaryAnomalyKind>();
+  let count = 0;
+  for (const manifest of manifests) {
+    // An overflowed process list (more than the manifest's per-segment cap) carries no boundary
+    // values at all: never guess continuity from an incomplete list.
+    if (!manifest.processes.complete) continue;
+    for (const process of manifest.processes.entries) {
+      const key = processKey(process.pid, process.instanceId);
+      const previousLastSeq = lastSeqByProcess.get(key);
+      if (previousLastSeq !== undefined) {
+        for (const kind of boundaryAnomalyKinds(previousLastSeq, process.firstSeq)) {
+          kinds.add(kind);
+          count += 1;
+        }
+      }
+      lastSeqByProcess.set(key, process.lastSeq);
+    }
+  }
+  return { count, kinds };
+}
+
 function aggregateIntegrity(state: EngineState): IntegrityAggregate {
   const manifests = consultedManifests(state);
   const counts = emptyEvidenceCounts();
   for (const manifest of manifests) addCounts(counts, manifest);
-  const anomalies = anomalyKinds(manifests);
+  const boundary = processBoundaryAnomalies(manifests);
+  const anomalies = [
+    ...anomalyKinds(manifests),
+    ...[...boundary.kinds].map(representativeAnomaly),
+  ];
   const classification = evidenceSummary(counts, anomalies).classification;
-  const anomalyCount = manifests.reduce((sum, manifest) => {
-    const { gap, duplicate, decreasing, reset } = manifest.evidence.sequenceAnomalies;
-    return sum + gap + duplicate + decreasing + reset;
-  }, 0);
+  const anomalyCount =
+    manifests.reduce((sum, manifest) => {
+      const { gap, duplicate, decreasing, reset } = manifest.evidence.sequenceAnomalies;
+      return sum + gap + duplicate + decreasing + reset;
+    }, 0) + boundary.count;
   return {
     summary: {
       classification,

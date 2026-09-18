@@ -18,6 +18,7 @@ import {
   listActivityLogStoreFiles,
   type ActivityLogStoreFile,
 } from "./support-segment-scan.js";
+import type { SegmentManifestSequenceAnomalies } from "./support-segment-manifest.js";
 import {
   fixtureLine,
   fixtureProcess,
@@ -503,5 +504,169 @@ describe("support query result projections (#3531)", () => {
     expect(parsed.events.map((event) => event.record.op)).toEqual(
       result.events.map((event) => event.parsed.view.op),
     );
+  });
+});
+
+// Audit (#3531): a segment manifest is self-contained by construction (rebuildable from its own
+// sealed segment alone), so a duplicate/decreasing/reset `seq` for one (pid, instanceId) that lands
+// exactly across two segments — the segment that observed the process last ends, the next one that
+// continues its lifetime begins — was invisible to both manifests and to every query aggregate: each
+// manifest's own `sequenceAnomalies` only ever sees its own segment. A gap at a boundary stays
+// tolerated, exactly as within one segment's own scan.
+describe("support query sequence anomalies at a segment boundary (#3531 audit)", () => {
+  const BOUNDARY_T0 = Date.UTC(2026, 8, 19, 9, 0, 0);
+  const eventFilter: SupportQuerySelection = {
+    kind: "events",
+    queryClass: "operation",
+    filter: { op: DIAGNOSTIC },
+  };
+
+  // Writes one process's first segment (seq 1..3, via three real lines) and lets the caller mutate
+  // the fixture's own seq counter before the second segment's first line — exactly how a real
+  // writer's counter would misbehave (a crash-and-restart reset, a corrupted counter going
+  // backwards, or two writers sharing an identity) without needing a second, made-up process.
+  function writeBoundaryFixture(
+    boundaryStateDir: string,
+    beforeSecondSegment: (process: FixtureProcess) => void,
+  ): FixtureProcess {
+    const process = fixtureProcess(9301, "b0ad0001");
+    writeFixtureSegment(boundaryStateDir, segmentIdentity(process, BOUNDARY_T0, 1), [
+      diagnostic(process, BOUNDARY_T0, "corr-boundary-01"),
+      diagnostic(process, BOUNDARY_T0 + 1, "corr-boundary-02"),
+      diagnostic(process, BOUNDARY_T0 + 2, "corr-boundary-03"),
+    ]);
+    beforeSecondSegment(process);
+    writeFixtureSegment(boundaryStateDir, segmentIdentity(process, BOUNDARY_T0 + 10_000, 2), [
+      diagnostic(process, BOUNDARY_T0 + 10_000, "corr-boundary-04"),
+      diagnostic(process, BOUNDARY_T0 + 10_001, "corr-boundary-05"),
+    ]);
+    return process;
+  }
+
+  function segmentManifestEvidence(
+    boundaryStateDir: string,
+    segmentIndex: 1 | 2,
+  ): SegmentManifestSequenceAnomalies {
+    const files = listActivityLogStoreFiles(boundaryStateDir);
+    const pass = ensureSegmentManifests(
+      boundaryStateDir,
+      files,
+      new ActivityLogScanner(boundaryStateDir),
+      { trigger: "query", persist: false, rebuild: false },
+    );
+    // Segment 1 is written first, so it is the store's first (order 0) file; segment 2 the second.
+    const target = files.find((entry) => entry.order === segmentIndex - 1);
+    const manifest = target === undefined ? undefined : pass.manifests.get(target.name)?.manifest;
+    if (manifest === undefined) throw new Error("expected a manifest for the fixture segment");
+    return manifest.evidence.sequenceAnomalies;
+  }
+
+  function sumAnomalies(anomalies: SegmentManifestSequenceAnomalies): number {
+    return anomalies.gap + anomalies.duplicate + anomalies.decreasing + anomalies.reset;
+  }
+
+  // A segment's OWN manifest builder always starts from `previous: 0` (it never knows what the
+  // prior segment last saw), so a second segment's first real line almost always looks like a
+  // "gap" from `previous` — even on a perfectly healthy handoff. That per-segment gap is pre-existing,
+  // tolerated behavior (unaffected by this audit's fix) and every test below accounts for it
+  // explicitly, so the boundary-specific assertions are never contaminated by it.
+
+  it("adds no boundary anomaly when a process's seq continues cleanly across the boundary", () => {
+    writeBoundaryFixture(stateDir, () => {
+      // No mutation: the fixture's own counter just keeps incrementing (3 -> 4 -> 5), exactly as a
+      // healthy writer moving from one sealed segment into the next behaves.
+    });
+    const ownGapTotal =
+      sumAnomalies(segmentManifestEvidence(stateDir, 1)) +
+      sumAnomalies(segmentManifestEvidence(stateDir, 2));
+    expect(ownGapTotal).toBe(1); // segment 2's own "seq 4 after its own previous 0" gap.
+
+    const { result } = query(stateDir, eventFilter);
+
+    expect(result.events).toHaveLength(5);
+    expect(result.integrity.classification).toBe("supported");
+    // The boundary reconciliation adds nothing beyond what each segment's own manifest already
+    // reported: no false positive from a clean handoff.
+    expect(result.integrity.sequenceAnomalyCount).toBe(ownGapTotal);
+  });
+
+  it("detects a decreasing seq across a segment boundary that neither manifest alone can see", () => {
+    writeBoundaryFixture(stateDir, (proc) => {
+      proc.seq = 1; // the next line becomes seq 2: less than segment 1's lastSeq (3), not a reset.
+    });
+
+    // Neither manifest, built from its own segment alone, sees anything but a plain gap: segment 1
+    // ends cleanly at 3, and segment 2 only knows its own first line looks like a gap from ITS OWN
+    // previous (0) — never that 2 is actually LESS than segment 1's last value.
+    expect(segmentManifestEvidence(stateDir, 1)).toMatchObject({
+      gap: 0,
+      decreasing: 0,
+      duplicate: 0,
+      reset: 0,
+    });
+    expect(segmentManifestEvidence(stateDir, 2)).toMatchObject({
+      gap: 1,
+      decreasing: 0,
+      duplicate: 0,
+      reset: 0,
+    });
+
+    const { result } = query(stateDir, eventFilter);
+
+    // 1 pre-existing per-segment gap (segment 2's own) + 1 new boundary "decreasing", found only by
+    // reconciling segment 1's lastSeq (3) against segment 2's firstSeq (2) across the two manifests.
+    expect(result.integrity).toMatchObject({
+      classification: "incomplete",
+      sequenceAnomalyCount: 2,
+    });
+    expect(result.diagnosticSufficiency.status).not.toBe("complete");
+  });
+
+  it("detects a duplicate seq across a segment boundary", () => {
+    writeBoundaryFixture(stateDir, (proc) => {
+      proc.seq = 2; // the next line becomes seq 3: exactly segment 1's lastSeq.
+    });
+
+    expect(segmentManifestEvidence(stateDir, 2)).toMatchObject({
+      gap: 1, // segment 2's own "seq 3 after its own previous 0" gap — never "duplicate" on its own.
+      decreasing: 0,
+      duplicate: 0,
+      reset: 0,
+    });
+
+    const { result } = query(stateDir, eventFilter);
+
+    // 1 pre-existing per-segment gap + 1 new boundary "duplicate" (segment 2's firstSeq exactly
+    // repeats segment 1's lastSeq).
+    expect(result.integrity).toMatchObject({
+      classification: "incomplete",
+      sequenceAnomalyCount: 2,
+    });
+  });
+
+  it("detects a reset seq across a segment boundary", () => {
+    writeBoundaryFixture(stateDir, (proc) => {
+      proc.seq = 0; // the next line becomes seq 1: a reset (and, by the same values, decreasing).
+    });
+
+    // seq 1 is exactly what segment 2's OWN builder expects as its very first line (previous 0 + 1),
+    // so this is the one case where segment 2 contributes no gap of its own: the entire finding
+    // comes from the boundary reconciliation.
+    expect(segmentManifestEvidence(stateDir, 2)).toMatchObject({
+      gap: 0,
+      decreasing: 0,
+      duplicate: 0,
+      reset: 0,
+    });
+
+    const { result } = query(stateDir, eventFilter);
+
+    // seq 1 after lastSeq 3 satisfies both the reset and the decreasing condition, exactly as the
+    // same single line would when analyzed whole (analyzeLogLines' lineSequenceAnomalies) — two
+    // distinct anomaly kinds, one boundary transition, zero pre-existing per-segment gap this time.
+    expect(result.integrity).toMatchObject({
+      classification: "incomplete",
+      sequenceAnomalyCount: 2,
+    });
   });
 });
