@@ -69,9 +69,16 @@ jobs:
           client-id: ${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}
           private-key: ${{ secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY }}
           permission-contents: write
-      - name: Point the release tag at this commit
-        # Fails when this commit cannot be released (unapproved, already published, or a publish of
-        # the tag is still running), so a successful request is always a releasable one.
+          # Opens the version-bump pull request (scripts/lib/release-version-bump.mjs) when the
+          # current version is already published; unused otherwise. That PR's own identity is what
+          # release-candidate.mjs and release-automation.mjs later trust, so this App is the only
+          # thing that may ever open one from the reserved release/bump-* branch prefix.
+          permission-pull-requests: write
+      - name: Point the release tag at this commit, or prepare the next reviewed version
+        # Fails when this commit cannot be released (unapproved, or a publish of the tag is still
+        # running), so a successful request is always a releasable one -- unless the current version
+        # is already published, when this opens a version-bump pull request and arms auto-merge
+        # instead of failing.
         env:
           CANDIDATE_SHA: ${{ github.sha }}
           GITHUB_TOKEN: ${{ github.token }}

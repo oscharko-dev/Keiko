@@ -54,6 +54,7 @@ import {
   CODING_PERFORMANCE_PROCEDURE,
 } from "./coding-runtime-performance-evidence.mjs";
 import { loadToolCatalogProducer } from "./check-tool-catalog-conformance.mjs";
+import { normalizedLockfileText } from "./lib/set-version.mjs";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 export const TOOL_CATALOG_PERFORMANCE_PROCEDURE = Object.freeze({
@@ -360,7 +361,7 @@ export function toolCatalogPerformanceSubject(root = process.cwd()) {
   return {
     sourceTreeSha256: producerShippedSourceSha256(root),
     lockfileSha256: createHash("sha256")
-      .update(readFileSync(join(root, "package-lock.json")))
+      .update(normalizedLockfileText(readFileSync(join(root, "package-lock.json"), "utf8")))
       .digest("hex"),
   };
 }

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applySetVersion,
+  normalizedLockfileText,
   requireVersion,
   setVersionMain,
   versionedManifest,
@@ -276,5 +277,90 @@ describe("setVersionMain", () => {
 
     expect(code).toBe(1);
     expect(written).toStrictEqual([["stderr", "set-version: disk gone\n"]]);
+  });
+});
+
+// A version bump rewrites every workspace package's own version and every dependency pin ON a
+// workspace package -- 324 lines on the 1.0.5 to 1.0.6 lockfile alone. None of that is reachable
+// from the compiled tool-catalog producer check:tool-catalog-performance measures, so it must never
+// move that gate's subject hash; a real dependency change (added, removed, re-resolved, third-party
+// bumped) must. It also underpins release-version-bump.mjs's content verification of a version-bump
+// pull request: a lockfile that normalizes identically to its parent changed only the way a version
+// bump changes it.
+describe("normalizedLockfileText", () => {
+  const baseLockfile = {
+    version: "1.0.5",
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "@oscharko-dev/keiko", version: "1.0.5", dependencies: {} },
+      "packages/keiko-contracts": { name: "@oscharko-dev/keiko-contracts", version: "1.0.5" },
+      "packages/keiko-server": {
+        name: "@oscharko-dev/keiko-server",
+        version: "1.0.5",
+        dependencies: { "@oscharko-dev/keiko-contracts": "1.0.5", zod: "^3.23.0" },
+      },
+      "node_modules/zod": { version: "3.23.0", resolved: "https://registry/zod", integrity: "x" },
+    },
+  };
+
+  it("is unchanged by a version bump across every workspace field", () => {
+    const bumped = structuredClone(baseLockfile);
+    bumped.version = "1.0.6";
+    bumped.packages[""].version = "1.0.6";
+    bumped.packages["packages/keiko-contracts"].version = "1.0.6";
+    bumped.packages["packages/keiko-server"].version = "1.0.6";
+    bumped.packages["packages/keiko-server"].dependencies["@oscharko-dev/keiko-contracts"] =
+      "1.0.6";
+    expect(normalizedLockfileText(JSON.stringify(bumped))).toBe(
+      normalizedLockfileText(JSON.stringify(baseLockfile)),
+    );
+  });
+
+  it("still moves on a real third-party dependency change", () => {
+    const changed = structuredClone(baseLockfile);
+    changed.packages["node_modules/zod"].integrity = "y";
+    expect(normalizedLockfileText(JSON.stringify(changed))).not.toBe(
+      normalizedLockfileText(JSON.stringify(baseLockfile)),
+    );
+  });
+
+  it("still moves when a workspace package's dependency set actually changes", () => {
+    const changed = structuredClone(baseLockfile);
+    changed.packages["packages/keiko-server"].dependencies.lodash = "^4.17.21";
+    expect(normalizedLockfileText(JSON.stringify(changed))).not.toBe(
+      normalizedLockfileText(JSON.stringify(baseLockfile)),
+    );
+  });
+
+  it("leaves a non-workspace package's own version untouched", () => {
+    const parsed = JSON.parse(normalizedLockfileText(JSON.stringify(baseLockfile)));
+    expect(parsed.packages["node_modules/zod"].version).toBe("3.23.0");
+  });
+
+  // #3555 review: npm can emit a bundled node_modules/* entry with `inBundle: true` and no
+  // `resolved` -- the same shape a workspace entry has. Classifying by "no resolved field" would
+  // misclassify it as workspace noise and normalize its real version change away; classifying by
+  // lockfile path (root or packages/*) does not.
+  it("still moves on a bundled node_modules entry with no resolved field", () => {
+    const withBundled = structuredClone(baseLockfile);
+    withBundled.packages["node_modules/bundled-thing"] = { version: "1.0.0", inBundle: true };
+    const changed = structuredClone(withBundled);
+    changed.packages["node_modules/bundled-thing"].version = "1.0.1";
+    expect(normalizedLockfileText(JSON.stringify(changed))).not.toBe(
+      normalizedLockfileText(JSON.stringify(withBundled)),
+    );
+  });
+
+  it("refuses malformed JSON instead of silently returning it unnormalized", () => {
+    expect(() => normalizedLockfileText("{not json")).toThrow();
+  });
+
+  it.each([
+    ["omitted", {}],
+    ["null", { packages: null }],
+    ["a string", { packages: "not an object" }],
+  ])("returns the input unchanged when packages is %s", (_label, overrides) => {
+    const lockfile = JSON.stringify({ version: "1.0.5", ...overrides });
+    expect(normalizedLockfileText(lockfile)).toBe(lockfile);
   });
 });

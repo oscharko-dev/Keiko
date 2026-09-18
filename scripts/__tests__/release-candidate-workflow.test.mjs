@@ -139,6 +139,9 @@ describe("release button", () => {
     expect(request.steps[mint].with).toStrictEqual({
       "client-id": "${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}",
       "permission-contents": "write",
+      // The version-bump pull request (scripts/lib/release-version-bump.mjs) needs this when the
+      // current version is already published; every other request path leaves it unused.
+      "permission-pull-requests": "write",
       "private-key": "${{ secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY }}",
     });
     expect(mint).toBe(request.steps.length - 2);
