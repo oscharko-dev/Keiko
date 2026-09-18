@@ -29,6 +29,8 @@ export interface LiveRuntimeFixture {
   readonly requestMode: (label: RegExp) => Promise<void>;
   readonly workbench: ReturnType<Page["locator"]>;
   readonly autonomySettings: ReturnType<Page["locator"]>;
+  readonly approvalDecisionCount: () => number;
+  readonly editorSnapshotRegistrationCount: () => number;
   readonly streamConnectionCount: () => number;
   readonly assertValidRequests: () => void;
 }
@@ -87,6 +89,8 @@ export async function installLiveCodingWorkbenchRuntime(
     },
     autonomySettings: page.locator('section[aria-labelledby="settings-autonomy-title"]'),
     workbench: page.locator('section[aria-label="Coding Workbench"][data-state]'),
+    approvalDecisionCount: () => fixture.approvalDecisions,
+    editorSnapshotRegistrationCount: () => fixture.editorSnapshotRegistrations,
     streamConnectionCount: () => fixture.streamConnections,
     assertValidRequests: (): void => {
       expect(fixture.validationErrors).toEqual([]);

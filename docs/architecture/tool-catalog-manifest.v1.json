@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "catalogRevision": "bbdabf1a244c23d084686d7ea2f5224dd326054c26674a3e86825020b6b3f025",
+  "catalogRevision": "89f13162002a4883fc57721d3e563722b71e34234abe3889b30568cd980229e1",
   "profile": {
     "id": "legacy-native",
     "version": 1
   },
-  "projectionDigest": "d84b049cd8e6e2c553c643385b1caaf88bcf80d8f994bb960e621bd7f007f5ac",
+  "projectionDigest": "8601528f41f9eba087444615d4fba7e0cdec98aeac6dcc609de75378e6197ebe",
   "toolRefs": [
     {
       "canonicalId": "keiko.command.run",

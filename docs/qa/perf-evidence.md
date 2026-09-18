@@ -122,6 +122,18 @@ could not reproduce that subject.
 npm run perf:evidence:regen:tool-catalog
 ```
 
+When a reviewed producer-only change intentionally changes the catalog revision or projection
+digest without changing the measurement ruler, reference environment, case inventory, or tool
+counts, use the explicit case-identity rebind mode:
+
+```bash
+npm run perf:evidence:regen:tool-catalog -- --rebind-case-identity
+```
+
+The rebind refuses ruler, environment, and tool-count drift. It writes a fresh calibration and an
+independent candidate while carrying every existing numeric maximum and ceiling forward exactly.
+It also refuses a no-op rebind so routine changes continue to use candidate measurement mode.
+
 If and only if the measurement ruler itself intentionally changes, use the explicit recalibration
 mode in the reviewed change:
 

@@ -2116,6 +2116,62 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.4",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.4",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-18-keiko-1.0.4-release-and-update-hardening",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 1.0.4 hardens installation and update handling and repairs the governed release pipeline. Commands now normalize current-install paths before use across launcher, UI, support, repair, audit, uninstall and portable flows. Audit stays read-only for the selected tree, uninstall validates package metadata before any destructive step, and Homebrew command execution validates the shared Cellar ancestry before launching a private descriptor-backed snapshot. Settings keeps model actions available while the catalog refreshes. Release publication now verifies exact registry state with bounded retries and timeouts, while Windows, mutation, coverage, Sonar and performance evidence remain strict release gates.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Update recovery uses the active packaged installation across launcher, UI, support, repair, audit, uninstall and portable commands instead of trusting stale inherited paths.",
+        "Audit remains read-only for the selected state tree, and uninstall validates package scripts before stopping the UI, killing processes, removing launchers or changing state.",
+        "Homebrew launches verify the shared Cellar parent and the complete executable ancestry, then execute a private snapshot copied from a no-follow, revalidated file descriptor.",
+        "Model actions remain available while Settings refreshes the model catalog in the background.",
+        "Stable publication verifies exact npm version visibility and dist-tag convergence with bounded retries and hard network timeouts; registry uncertainty fails closed.",
+        "Release quality keeps full Windows proof, strict mutation results, at least 85% new-code coverage, SonarCloud analysis and reviewed performance evidence as mandatory gates."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-18",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3519#5722852190",
+        "rationale": "The release owner directed the complete repair of issues #3467, #3474, #3494, #3519 and #3520, accepted protected integration through PR #3521, and explicitly requested a 1.0.4 release after dev became green. PR #3521 completed every required exact-head check with zero unresolved conversations and merged through native auto-merge. Its exact dev integration commit 672387e255a36f6f5cd21fe6924de6500330906c then passed CI, CodeQL, Code Quality, workflow hygiene, SonarCloud, all three platform smokes, Node 26 compatibility and the portable release rehearsal before this release cut began.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }
