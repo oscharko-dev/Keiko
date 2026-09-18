@@ -739,12 +739,13 @@ the product operation that triggered the write.
 and a filesystem without hard links offers no portable no-replace rename. The rename fallback
 therefore first claims the dated name with an exclusive no-follow create: a concurrent rotation that
 loses the claim preserves the winner's archive, and the winner's rename can replace only its own
-empty claim. Every unlink carries the device/inode of a descriptor its caller holds open until the
-helper returns, and the mutation helper removes the name only while it still has that identity. The
-held descriptor keeps the inode allocated: Linux file systems hand a freed inode number to the next
-file at once, so an identity without a holder could match the replacement. A process that finalizes
-a peer's hard-link winner can therefore never delete the `server.log` a concurrent writer has just
-recreated. A process
+empty claim. Every link, rename, and unlink carries the device/inode of a source descriptor its
+caller holds open until the helper returns, and the mutation helper acts on the name only while it
+still has that identity. The held descriptor keeps the inode allocated: Linux file systems hand a
+freed inode number to the next file at once, so an identity without a holder could match the
+replacement. A process that finalizes a peer's hard-link winner can therefore never delete the
+`server.log` a concurrent writer has just recreated, and no link or rename publishes a file that
+replaced the verified one. A process
 already executing as the same OS user can still act in the narrow interval between pathname checks.
 Owner-private directories, held descriptors, pre/post identity checks, the hard-link winner, closed
 names, and target-handle verification narrow and detect that interval; they do not claim to

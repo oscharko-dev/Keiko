@@ -11,9 +11,9 @@ export interface SafeArtifactDirectoryMutationRequest {
   readonly expectedIno: string;
   readonly source: string;
   readonly target?: string;
-  /** Required for unlink: the entry is removed only while its name still has this identity. */
-  readonly expectedEntryDev?: string;
-  readonly expectedEntryIno?: string;
+  /** The source is mutated only while its name still has this identity, held open by the caller. */
+  readonly expectedEntryDev: string;
+  readonly expectedEntryIno: string;
 }
 
 export const SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT = {

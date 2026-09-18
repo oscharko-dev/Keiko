@@ -51,11 +51,12 @@ The filesystem boundary is the operating-system user. The selected state and log
 be owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected owner's inherited
 ACL on Windows). Keiko rechecks their device/inode identity around every link, rename, and unlink.
 Before retention removes an archive, an opened handle must prove that the target is a regular,
-owner-matched, private, single-link file and still names the checked pathname. Every unlink also
-carries that file's device/inode, taken from a descriptor held open until the unlink returns: the
-mutation helper removes the name only while it still has that identity, so a process can never
-delete a `server.log` that a concurrent writer recreated. Holding the descriptor matters because
-Linux reuses a freed inode number immediately.
+owner-matched, private, single-link file and still names the checked pathname. Every link, rename,
+and unlink also carries its source file's device/inode, taken from a descriptor held open until the
+mutation returns: the mutation helper acts on the name only while it still has that identity, so a
+process can never delete a `server.log` that a concurrent writer recreated, nor publish a file that
+replaced the verified one. Holding the descriptor matters because Linux reuses a freed inode number
+immediately.
 
 Cross-process rotation uses a hard link to publish the dated destination without replacement:
 `EEXIST` means another process won, and the loser preserves that archive. Only errors that state the

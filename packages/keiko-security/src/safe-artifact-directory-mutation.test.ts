@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
   closeSync,
+  existsSync,
   lstatSync,
   mkdtempSync,
   openSync,
@@ -72,8 +73,8 @@ function request(
     expectedDev: stat.dev.toString(),
     expectedIno: stat.ino.toString(),
     source,
+    ...entryIdentity(join(cwd, source)),
   };
-  if (operation === "unlink") return { ...common, ...entryIdentity(join(cwd, source)) };
   return target === undefined ? common : { ...common, target };
 }
 
@@ -95,8 +96,14 @@ function runtimeRequest(
   source = "source",
   target?: string,
 ): SafeArtifactDirectoryMutationRequest {
-  const common = { operation, expectedDev: "1", expectedIno: "2", source };
-  if (operation === "unlink") return { ...common, expectedEntryDev: "3", expectedEntryIno: "4" };
+  const common = {
+    operation,
+    expectedDev: "1",
+    expectedIno: "2",
+    source,
+    expectedEntryDev: "3",
+    expectedEntryIno: "4",
+  };
   return target === undefined ? common : { ...common, target };
 }
 
@@ -173,6 +180,29 @@ describe("safe artifact directory mutation helper", () => {
       closeSync(held);
     }
   });
+
+  it.each(["link", "rename"] as const)(
+    "refuses to %s a source that was replaced after the caller verified it",
+    (operation) => {
+      const cwd = freshDirectory();
+      const source = join(cwd, "stage");
+      writeFileSync(source, "verified");
+      const held = openSync(source, "r");
+      try {
+        const verified = request(cwd, operation, "stage", "published");
+        unlinkSync(source);
+        writeFileSync(source, "replaced by another writer");
+
+        expect(runHelper(cwd, JSON.stringify(verified)).status).toBe(
+          SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch,
+        );
+        expect(existsSync(join(cwd, "published"))).toBe(false);
+        expect(readFileSync(source, "utf8")).toBe("replaced by another writer");
+      } finally {
+        closeSync(held);
+      }
+    },
+  );
 });
 
 describe("safe artifact directory mutation runtime", () => {
@@ -197,7 +227,8 @@ describe("safe artifact directory mutation runtime", () => {
     { operation: "unlink", expectedDev: "1", expectedIno: "2", source: "source" },
     { ...runtimeRequest("unlink"), expectedEntryDev: "01" },
     { ...runtimeRequest("unlink"), expectedEntryIno: 4 },
-    { ...runtimeRequest("link", "source", "target"), expectedEntryDev: "3" },
+    { operation: "link", expectedDev: "1", expectedIno: "2", source: "source", target: "target" },
+    { operation: "rename", expectedDev: "1", expectedIno: "2", source: "source", target: "target" },
   ])("rejects an invalid request without touching the directory", (value) => {
     const directoryMatches = vi.fn(() => true);
     expect(runSafeArtifactDirectoryMutation(value, runtimeIo({ directoryMatches }))).toBe(
@@ -244,19 +275,26 @@ describe("safe artifact directory mutation runtime", () => {
     ).toBe(SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.directoryMismatch);
   });
 
-  it("refuses an unlink whose entry no longer has the verified identity", () => {
-    const unlink = vi.fn();
-    const entryMatches = vi.fn(() => false);
+  it.each(["link", "rename", "unlink"] as const)(
+    "refuses a %s whose source no longer has the verified identity",
+    (operation) => {
+      const mutate = vi.fn();
+      const entryMatches = vi.fn(() => false);
+      const value =
+        operation === "unlink"
+          ? runtimeRequest(operation)
+          : runtimeRequest(operation, "source", "target");
 
-    expect(
-      runSafeArtifactDirectoryMutation(
-        runtimeRequest("unlink"),
-        runtimeIo({ entryMatches, unlink }),
-      ),
-    ).toBe(SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch);
-    expect(entryMatches).toHaveBeenCalledWith("source", 3n, 4n);
-    expect(unlink).not.toHaveBeenCalled();
-  });
+      expect(
+        runSafeArtifactDirectoryMutation(
+          value,
+          runtimeIo({ entryMatches, link: mutate, rename: mutate, unlink: mutate }),
+        ),
+      ).toBe(SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch);
+      expect(entryMatches).toHaveBeenCalledWith("source", 3n, 4n);
+      expect(mutate).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["link", mutationError("EEXIST"), SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.targetExists],

@@ -82,18 +82,19 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type MutationRequestCommon = Pick<
-  SafeArtifactDirectoryMutationRequest,
-  "operation" | "expectedDev" | "expectedIno" | "source"
->;
+type MutationRequestCommon = Omit<SafeArtifactDirectoryMutationRequest, "target">;
 
 function parsedCommon(value: Readonly<Record<string, unknown>>): MutationRequestCommon | undefined {
   const expectedDev = parseExpectedIdentity(value.expectedDev);
   const expectedIno = parseExpectedIdentity(value.expectedIno);
+  const entryDev = parseExpectedIdentity(value.expectedEntryDev);
+  const entryIno = parseExpectedIdentity(value.expectedEntryIno);
   if (
     !isMutationOperation(value.operation) ||
     expectedDev === undefined ||
     expectedIno === undefined ||
+    entryDev === undefined ||
+    entryIno === undefined ||
     !isSafeBasename(value.source)
   ) {
     return undefined;
@@ -103,30 +104,6 @@ function parsedCommon(value: Readonly<Record<string, unknown>>): MutationRequest
     expectedDev: expectedDev.toString(),
     expectedIno: expectedIno.toString(),
     source: value.source,
-  };
-}
-
-function parsedLinkOrRename(
-  value: Readonly<Record<string, unknown>>,
-  common: MutationRequestCommon,
-): SafeArtifactDirectoryMutationRequest | undefined {
-  const hasEntryIdentity =
-    value.expectedEntryDev !== undefined || value.expectedEntryIno !== undefined;
-  if (!isSafeBasename(value.target) || hasEntryIdentity) return undefined;
-  return { ...common, target: value.target };
-}
-
-function parsedUnlink(
-  value: Readonly<Record<string, unknown>>,
-  common: MutationRequestCommon,
-): SafeArtifactDirectoryMutationRequest | undefined {
-  const entryDev = parseExpectedIdentity(value.expectedEntryDev);
-  const entryIno = parseExpectedIdentity(value.expectedEntryIno);
-  if (value.target !== undefined || entryDev === undefined || entryIno === undefined) {
-    return undefined;
-  }
-  return {
-    ...common,
     expectedEntryDev: entryDev.toString(),
     expectedEntryIno: entryIno.toString(),
   };
@@ -136,21 +113,17 @@ function parsedRequest(value: unknown): SafeArtifactDirectoryMutationRequest | u
   if (!isRecord(value)) return undefined;
   const common = parsedCommon(value);
   if (common === undefined) return undefined;
-  return common.operation === "unlink"
-    ? parsedUnlink(value, common)
-    : parsedLinkOrRename(value, common);
+  if (common.operation === "unlink") return value.target === undefined ? common : undefined;
+  return isSafeBasename(value.target) ? { ...common, target: value.target } : undefined;
 }
 
-// Unlink is the one mutation that can destroy data a concurrent writer just created under the same
-// name, so it runs only while the name still has the identity the caller verified.
+// Every mutation runs only while its source still has the identity the caller verified and holds
+// open. An unlink could otherwise destroy a file a concurrent writer just created under the same
+// name, and a link or rename could publish a file that replaced the verified one.
 function entryStillExpected(
   io: SafeArtifactDirectoryMutationIo,
   request: SafeArtifactDirectoryMutationRequest,
 ): boolean {
-  if (request.operation !== "unlink") return true;
-  if (request.expectedEntryDev === undefined || request.expectedEntryIno === undefined) {
-    return false;
-  }
   return io.entryMatches(
     request.source,
     BigInt(request.expectedEntryDev),

@@ -185,7 +185,7 @@ type GuardedDirectoryMutationResult =
   "success" | "target-exists" | "unsupported" | "entry-mismatch" | "failed";
 type DirectoryGuardAuthority = "owner-only-mutation" | "standard";
 
-/** The device/inode an unlink must still find at its name; BigIntStats satisfies it. */
+/** The device/inode the helper must still find at the source name; BigIntStats satisfies it. */
 interface EntryIdentity {
   readonly dev: bigint;
   readonly ino: bigint;
@@ -230,33 +230,42 @@ function mutationExitResult(status: number | null): GuardedDirectoryMutationResu
   return "failed";
 }
 
+function mutationFailureKind(result: GuardedDirectoryMutationResult): SafeArtifactFileFailureKind {
+  if (result === "entry-mismatch") return "target-mutated";
+  return result === "unsupported" ? "publish-unsupported" : "publish-failed";
+}
+
 function directoryMutationRequest(
   operation: SafeArtifactDirectoryMutationOperation,
   guard: DirectoryGuard,
   path: string,
   targetPath: string | undefined,
-  entry: EntryIdentity | undefined,
+  entry: EntryIdentity,
 ): SafeArtifactDirectoryMutationRequest {
   const common = {
     operation,
     expectedDev: guard.dev.toString(),
     expectedIno: guard.ino.toString(),
     source: basename(path),
-    ...(entry === undefined
-      ? {}
-      : { expectedEntryDev: entry.dev.toString(), expectedEntryIno: entry.ino.toString() }),
+    expectedEntryDev: entry.dev.toString(),
+    expectedEntryIno: entry.ino.toString(),
   };
   return targetPath === undefined ? common : { ...common, target: basename(targetPath) };
 }
 
+// Mutates the name at `path` only while it still names the inode behind `held`. Between the
+// caller's check and the helper's syscall, a concurrent process may have replaced the name: an
+// unlink would then delete the new file, and a link or rename would publish it. The caller keeps
+// `held` open until this returns, so the inode stays allocated and its number cannot be recycled
+// for the replacement; Linux file systems reuse a freed inode number at once.
 function runGuardedDirectoryMutation(
   operation: SafeArtifactDirectoryMutationOperation,
   path: string,
+  held: number,
   trustedRoot: string,
   artifactClass: SafeArtifactClass,
   targetPath?: string,
   authority: DirectoryGuardAuthority = "standard",
-  entry?: EntryIdentity,
 ): GuardedDirectoryMutationResult {
   const parent = dirname(resolve(path));
   if (targetPath !== undefined && dirname(resolve(targetPath)) !== parent) {
@@ -268,7 +277,8 @@ function runGuardedDirectoryMutation(
     if (!directoryGuardsStillAuthorized(guards, trustedRoot, path, authority)) {
       throw safeFileError(artifactClass, "target-mutated");
     }
-    const request = directoryMutationRequest(operation, guard, path, targetPath, entry);
+    const source = fstatSync(held, { bigint: true });
+    const request = directoryMutationRequest(operation, guard, path, targetPath, source);
     // The child validates the OS-established cwd identity, then mutates only relative basenames.
     // Keep those names off argv and suppress child output so no path value reaches diagnostics.
     const child = spawnSync(process.execPath, [directoryMutationHelperPath()], {
@@ -288,11 +298,8 @@ function runGuardedDirectoryMutation(
   }
 }
 
-// Removes the name only while it still names the inode behind `held`. Between the caller's check
-// and the helper's unlink, a concurrent Keiko process may have replaced a shared name such as
-// server.log; a pathname-only unlink would then delete the new file and the lines in it. The
-// caller keeps `held` open until this returns, so the inode stays allocated and its number cannot
-// be recycled for the replacement; Linux file systems reuse a freed inode number at once.
+// A concurrent Keiko process may have recreated a shared name such as server.log; the guarded
+// unlink then refuses instead of deleting the new file and the lines in it.
 function unlinkGuardedPath(
   path: string,
   held: number,
@@ -303,17 +310,13 @@ function unlinkGuardedPath(
   const result = runGuardedDirectoryMutation(
     "unlink",
     path,
+    held,
     trustedRoot,
     artifactClass,
     undefined,
     authority,
-    fstatSync(held, { bigint: true }),
   );
-  if (result === "success") return;
-  throw safeFileError(
-    artifactClass,
-    result === "entry-mismatch" ? "target-mutated" : "publish-failed",
-  );
+  if (result !== "success") throw safeFileError(artifactClass, mutationFailureKind(result));
 }
 
 function archiveDescriptor(
@@ -452,6 +455,7 @@ export function archiveSafeArtifactFile(
     const linked = runGuardedDirectoryMutation(
       "link",
       source,
+      descriptor,
       options.trustedRoot,
       options.artifactClass,
       target,
@@ -468,7 +472,7 @@ export function archiveSafeArtifactFile(
       return "archive-exists";
     }
     if (linked !== "unsupported") {
-      throw safeFileError(options.artifactClass, "publish-failed");
+      throw safeFileError(options.artifactClass, mutationFailureKind(linked));
     }
     return renameIntoClaimedArchive(descriptor, source, target, options);
   } finally {
@@ -490,6 +494,7 @@ function renameIntoClaimedArchive(
   const renamed = runGuardedDirectoryMutation(
     "rename",
     source,
+    descriptor,
     options.trustedRoot,
     options.artifactClass,
     target,
@@ -497,7 +502,7 @@ function renameIntoClaimedArchive(
   );
   if (renamed !== "success") {
     releaseArchiveClaim(target, claim, options);
-    throw safeFileError(options.artifactClass, "publish-failed");
+    throw safeFileError(options.artifactClass, mutationFailureKind(renamed));
   }
   if (!movedArchiveMatches(descriptor, target)) {
     throw safeFileError(options.artifactClass, "publish-failed");
@@ -1831,23 +1836,39 @@ function acceptRecoveredTarget(entry: PreparedPublicationEntry, recovering: bool
   }
 }
 
+// Links `source` to `target` while holding `source` open, so the helper publishes only that inode.
+function linkHeldEntry(
+  source: string,
+  target: string,
+  entry: PreparedPublicationEntry,
+): GuardedDirectoryMutationResult {
+  const held = openSafeArtifactFile(source, {
+    artifactClass: entry.artifactClass,
+    mode: "read",
+    trustedRoot: entry.trustedRoot,
+  });
+  try {
+    return runGuardedDirectoryMutation(
+      "link",
+      source,
+      held,
+      entry.trustedRoot,
+      entry.artifactClass,
+      target,
+    );
+  } finally {
+    closeDescriptorIgnoringErrors(held);
+  }
+}
+
 function linkPreparedEntry(entry: PreparedPublicationEntry, recovering: boolean): boolean {
-  const result = runGuardedDirectoryMutation(
-    "link",
-    entry.stagePath,
-    entry.trustedRoot,
-    entry.artifactClass,
-    entry.path,
-  );
+  const result = linkHeldEntry(entry.stagePath, entry.path, entry);
   if (result === "success") return true;
   if (result === "target-exists") {
     acceptRecoveredTarget(entry, recovering);
     return false;
   }
-  throw safeFileError(
-    entry.artifactClass,
-    result === "unsupported" ? "publish-unsupported" : "publish-failed",
-  );
+  throw safeFileError(entry.artifactClass, mutationFailureKind(result));
 }
 
 function publishPreparedEntry(entry: PreparedPublicationEntry, recovering: boolean): void {
@@ -1902,13 +1923,7 @@ function cleanupPublishedStage(entry: PreparedPublicationEntry): void {
 
 function restoreRecoveryMarker(entry: PreparedPublicationEntry, parent: string): void {
   if (pathExists(entry.stagePath, entry.artifactClass)) return;
-  const result = runGuardedDirectoryMutation(
-    "link",
-    entry.path,
-    entry.trustedRoot,
-    entry.artifactClass,
-    entry.stagePath,
-  );
+  const result = linkHeldEntry(entry.path, entry.stagePath, entry);
   if (result !== "success" && result !== "target-exists") {
     throw safeFileError(entry.artifactClass, "durability-failed");
   }
