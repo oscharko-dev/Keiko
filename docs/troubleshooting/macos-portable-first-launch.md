@@ -13,7 +13,7 @@ One of three first-launch dead ends on macOS, all fixed for artifacts staged aft
 1. Finder shows `"Keiko" is damaged and can't be opened. You should move it to the Trash.` and
    System Settings offers no "Open Anyway" button.
 2. After approving the app, a double-click appears to do nothing: no window, no dialog, and no
-   process. `.keiko/ui.log` under the state directory is never created.
+   process. No Activity Log segment appears under `.keiko/logs/` in the state directory.
 3. A native alert reports `keiko portable setup: existing same-path managed install root is not
 attested` after the bundle was moved to `/Applications` by hand before the first start.
 

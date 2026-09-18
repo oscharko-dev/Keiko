@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f0ac08de6dff7b58343cb7167bd3f748130d14e99e9c329463f05e71d579ea56" as const;
+  "67ff50d56ea3f5266a775aa3203d11da5fff8e6247ff4d55f56e6ed39ede9fe1" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -442,7 +442,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["startup", "heartbeat", "transition"],
+        values: ["startup", "transition"],
       },
       lostEvents: {
         type: "integer",

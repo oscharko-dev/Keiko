@@ -80,7 +80,8 @@ Get-Item .\runtime\node\node.exe, .\app\dist\cli\index.js | Format-List FullName
 
 # 4) What did the managed install record?
 Get-Content $env:USERPROFILE\.keiko\portable-install-state.json
-Get-Content $env:USERPROFILE\.keiko\ui.log -Tail 200
+keiko support export --state-dir $env:USERPROFILE\.keiko --out $env:TEMP\keiko-support.jsonl
+keiko support analyze $env:TEMP\keiko-support.jsonl --clusters
 ```
 
 If step 1 reports a version below 0.3.6, the flash-and-exit is the known launcher defect (entry 1),
