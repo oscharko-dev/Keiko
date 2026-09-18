@@ -25,11 +25,9 @@ function installGuards(sink: ProcessGuardSink): {
   const onSpy = vi.spyOn(process, "on");
   installProcessGuards(sink);
   const uncaught = onSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1] as
-    | FatalListener
-    | undefined;
+    FatalListener | undefined;
   const rejection = onSpy.mock.calls.find(([event]) => event === "unhandledRejection")?.[1] as
-    | FatalListener
-    | undefined;
+    FatalListener | undefined;
   return {
     uncaught,
     cleanup: (): void => {
