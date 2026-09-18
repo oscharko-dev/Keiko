@@ -56,14 +56,14 @@ const GATEWAY_SPEND_OPERATION_OWNERSHIP = {
 const REJECTION_FRAMES_FIELD_CONTRACT = {
   type: "string-array",
   dataClass: "safe-platform-class",
-  required: true,
+  required: false,
   maxLength: 512,
   maxItems: 8,
 } as const satisfies ActivityLogFieldContract;
 const REJECTION_CAUSE_CHAIN_FIELD_CONTRACT = {
   type: "string-array",
   dataClass: "error-kind",
-  required: true,
+  required: false,
   maxLength: 128,
   maxItems: 5,
 } as const satisfies ActivityLogFieldContract;
