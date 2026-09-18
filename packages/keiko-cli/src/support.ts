@@ -20,6 +20,8 @@ import {
   type ActivityLogErrorKind,
   type ActivityLogFields,
   ACTIVITY_LOG_DIRECTORY_NAME,
+  DIAGNOSTIC_SUFFICIENCY_REASONS,
+  DIAGNOSTIC_SUFFICIENCY_STATUSES,
   parseActivityLogFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
@@ -70,6 +72,7 @@ import {
   renderHumanClusters,
   renderHumanReproductionSeed,
   renderHumanTimeline,
+  timelineSufficiency,
   type AnalyzeAllResult,
   type ProcessSummary,
   type SourceKind,
@@ -950,6 +953,23 @@ const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
     incompleteLineCount: { type: "integer", dataClass: "count", required: true },
     sequenceAnomalyCount: { type: "integer", dataClass: "count", required: true },
     malformedLineCount: { type: "integer", dataClass: "count", required: true },
+    // #3532: the per-failure-class sufficiency projection of the analyzed artifact.
+    sufficiency: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...DIAGNOSTIC_SUFFICIENCY_STATUSES],
+    },
+    sufficiencyReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 13,
+      values: [...DIAGNOSTIC_SUFFICIENCY_REASONS],
+    },
+    completeClassCount: { type: "integer", dataClass: "count", required: true },
+    degradedClassCount: { type: "integer", dataClass: "count", required: true },
+    insufficientClassCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1082,6 +1102,13 @@ function emitSupportAnalysisEvidence(
           incompleteLineCount: result.evidence.incompleteLineCount,
           sequenceAnomalyCount: result.evidence.sequenceAnomalies.length,
           malformedLineCount: result.malformedLineCount,
+          sufficiency: result.sufficiency.status,
+          ...(result.sufficiency.reasons.length === 0
+            ? {}
+            : { sufficiencyReasons: result.sufficiency.reasons }),
+          completeClassCount: result.sufficiency.coverage.completeClassCount,
+          degradedClassCount: result.sufficiency.coverage.degradedClassCount,
+          insufficientClassCount: result.sufficiency.coverage.insufficientClassCount,
           ...ACTIVITY_LOG_EVIDENCE_INTEGRITY[result.evidence.classification],
         },
       ),
@@ -1718,13 +1745,17 @@ function renderAnalysisContext(context: SupportAnalysisContext): string {
 
 function emitSingleTimeline(
   timeline: LogTimeline,
-  malformedLineCount: number,
+  result: AnalyzeAllResult,
   context: SupportAnalysisContext,
   json: boolean,
   io: CliIo,
 ): number {
   if (json) {
-    io.out(`${JSON.stringify({ ...timeline, malformedLineCount, analysisContext: context })}\n`);
+    const malformedLineCount = result.malformedLineCount;
+    const sufficiency = timelineSufficiency(result, timeline);
+    io.out(
+      `${JSON.stringify({ ...timeline, malformedLineCount, sufficiency, analysisContext: context })}\n`,
+    );
   } else {
     io.out(`${renderAnalysisContext(context)}${renderHumanTimeline(timeline)}`);
   }
@@ -1972,7 +2003,7 @@ async function emitAnalyzedSupportResult(
   }
   return emitSingleTimeline(
     timeline,
-    result.malformedLineCount,
+    result,
     report.analysisContext,
     context.args.json,
     context.io,

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
@@ -601,6 +605,14 @@ describe("bounded coding safe-activity projection", () => {
         activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
       ),
     ).toMatchObject({ op: "coding-runtime.safe-activity" });
+    const [droppedLine] = activityLog.events;
+    if (droppedLine === undefined) throw new Error("expected safe-activity dropped line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.safe-activity.emitted-line",
+        formatActivityLogProofLine(droppedLine),
+      ),
+    ).toMatchObject({ event: "dropped", reason: "capacity-rejected" });
     // F49: designed truncation is recorded by that line alone, never as an error diagnostic.
     expect(
       records.filter((record) => record.code === "CODING_SAFE_ACTIVITY_EVENT_DROPPED"),

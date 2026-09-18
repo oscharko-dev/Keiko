@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9c2e50d535ccae5f618b00cb74a92b6e0ec817a98375c3fe87684f18433845ce" as const;
+  "8732228b572564a8e195cea73443c7e2333ee23d46a008115c1c36dda39e4df3" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3954,14 +3954,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -4012,14 +4012,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -5413,14 +5413,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -19532,14 +19532,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -22505,6 +22505,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       malformedLineCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      sufficiency: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["complete", "degraded", "insufficient"],
+      },
+      sufficiencyReasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 13,
+        values: [
+          "no-registered-evidence",
+          "no-registered-failure",
+          "corrupt-evidence",
+          "parent-correlation-missing",
+          "lifecycle-start-missing",
+          "truncated-evidence",
+          "unsupported-evidence",
+          "incomplete-evidence",
+          "sequence-anomaly",
+          "activity-log-loss",
+          "events-dropped",
+          "correlation-unknown",
+          "evidence-partial",
+        ],
+      },
+      completeClassCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      degradedClassCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      insufficientClassCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -30189,13 +30231,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "phase",
@@ -31030,13 +31072,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "optionalTool",
@@ -49305,7 +49347,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "childRunId",
@@ -49317,7 +49359,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "reasonCode",
@@ -49574,7 +49616,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "diagnosticKind",
@@ -49592,7 +49634,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
           ],
           evidenceClasses: [
@@ -51545,7 +51587,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "capability",
           safeContextFields: [
             {
+              name: "completeClassCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
               name: "corruptLineCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "degradedClassCount",
               type: "integer",
               dataClass: "count",
               required: true,
@@ -51558,6 +51612,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "incompleteLineCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "insufficientClassCount",
               type: "integer",
               dataClass: "count",
               required: true,
@@ -51585,6 +51645,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "sufficiency",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "sufficiencyReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "supportedLineCount",

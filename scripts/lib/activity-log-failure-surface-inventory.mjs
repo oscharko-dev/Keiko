@@ -134,7 +134,9 @@ function proofCallViolations(operations, calls) {
             "Use a proof id a registered operation declares, or register the proof id.",
           ),
         ];
-      return call.file.startsWith(`packages/${owner}/`)
+      // A call in ANOTHER package is a misplaced proof. The cross-package root suite (tests/,
+      // e.g. the scenario matrix) may assert persisted lines too; it just never resolves a proof.
+      return call.file.startsWith(`packages/${owner}/`) || !call.file.startsWith("packages/")
         ? []
         : [
             violation(

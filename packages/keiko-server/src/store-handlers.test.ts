@@ -3,6 +3,10 @@
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
 import { EventEmitter } from "node:events";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   mkdtempSync,
@@ -798,6 +802,41 @@ describe("PATCH /api/projects", () => {
         }),
       );
       expect(JSON.stringify(sink.events)).not.toContain(projDir);
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  // Registry-linked executable proof (#3532): the same reconnect event above, read back through the
+  // real formatter/registry path so `project.workspace.reconnect.outcome` resolves against a
+  // production-computed event (this task's rule 1: no hand-built event or registration object).
+  it("persists project.workspace.reconnect as a registered Activity Log proof line", async () => {
+    store.createProject(projDir, "existing");
+    const oldRoot = join(tmp, "replaced-project-root-proof");
+    renameSync(projDir, oldRoot);
+    mkdirSync(projDir);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: "{}",
+      });
+      expect(res.status).toBe(200);
+
+      const event = sink.events.find((entry) => entry.op === "project.workspace.reconnect");
+      if (event === undefined) throw new Error("expected a reconnect event");
+      const line = formatActivityLogProofLine(event);
+      const persisted = expectActivityLogProof("project.workspace.reconnect.outcome", line);
+      expect(persisted).toMatchObject({
+        category: "setup",
+        status: 200,
+        outcome: "available",
+        completeness: "complete",
+        loss: "none",
+      });
     } finally {
       resetServerLogger();
     }

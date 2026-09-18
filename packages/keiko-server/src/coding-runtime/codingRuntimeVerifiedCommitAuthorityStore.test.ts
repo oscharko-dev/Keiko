@@ -10,6 +10,10 @@ import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { redactLogFields } from "../observability/log-redaction.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { MIGRATIONS, runMigrations } from "../store/schema.js";
 import {
   createCodingRuntimeSnapshotStore,
@@ -194,6 +198,16 @@ describe("retained verified HEAD authority", () => {
         },
       }),
     );
+    const retainedLine = log.mock.calls[0]?.[0];
+    if (retainedLine === undefined) {
+      throw new Error("expected verified-commit.authority retained line");
+    }
+    expect(
+      expectActivityLogProof(
+        "git.verified-commit.authority.emitted-line",
+        formatActivityLogProofLine(retainedLine),
+      ),
+    ).toMatchObject({ phase: "retained", runId: "run-1" });
     db.prepare("UPDATE coding_runtime_snapshots SET last_successful_verified_commit = ?").run(
       JSON.stringify({ ...receipt(), message: "private fixture" }),
     );

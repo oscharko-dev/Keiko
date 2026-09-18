@@ -1,6 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   readBoundedRequestBody,
@@ -553,6 +557,118 @@ describe("readJsonRequestBody", () => {
     expect(result).toEqual({
       status: 400,
       body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+    });
+  });
+});
+
+// Registry-linked executable proofs (#3532) for the four Activity Log operations this reader
+// emits. Each reuses `captureServerLog` above to obtain a production-computed event, then reads it
+// back through `formatActivityLogProofLine` / `expectActivityLogProof` (this task's rule 1: no
+// hand-built event or registration object).
+describe("bounded request body Activity Log proofs (#3532)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("http.request.body.rejected — persists the oversized-body rejection", async () => {
+    const sink = captureServerLog("info");
+    const stream = new PassThrough();
+    const outcome = readBoundedRequestBody(asRequest(stream), 4, undefined, "corr-proof-rejected");
+
+    stream.write(Buffer.from("12345"));
+
+    await expect(outcome).rejects.toBeInstanceOf(RequestBodyTooLargeError);
+    const [event] = sink.events;
+    if (event === undefined) throw new Error("expected a rejected-body event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("http.request.body.rejected.line", line);
+    expect(persisted).toMatchObject({
+      category: "http",
+      correlationId: "corr-proof-rejected",
+      errorKind: "invalid-request",
+      maxBytes: 4,
+      receivedBytes: 5,
+      reason: "limit-exceeded",
+    });
+    stream.end();
+  });
+
+  it("http.request.body.cancelled — persists an aborted read", async () => {
+    const sink = captureServerLog("debug");
+    const controller = new AbortController();
+    controller.abort("client disconnected");
+
+    await expect(
+      readBoundedRequestBody(
+        asRequest(new PassThrough()),
+        128_000,
+        controller.signal,
+        "corr-proof-cancelled",
+      ),
+    ).rejects.toBeInstanceOf(RequestBodyCancelledError);
+
+    const [event] = sink.events;
+    if (event === undefined) throw new Error("expected a cancelled-body event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("http.request.body.cancelled.line", line);
+    expect(persisted).toMatchObject({
+      category: "http",
+      correlationId: "corr-proof-cancelled",
+      errorKind: "cancelled",
+      maxBytes: 128_000,
+      receivedBytes: 0,
+    });
+  });
+
+  it("http.request.body.failed — persists a classified stream failure", async () => {
+    const sink = captureServerLog("info");
+    const stream = new PassThrough();
+    const failure = Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    const outcome = readBoundedRequestBody(
+      asRequest(stream),
+      128_000,
+      undefined,
+      "corr-proof-failed",
+    );
+
+    stream.emit("error", failure);
+
+    await expect(outcome).rejects.toBe(failure);
+    const [event] = sink.events;
+    if (event === undefined) throw new Error("expected a failed-body event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("http.request.body.failed.line", line);
+    expect(persisted).toMatchObject({
+      category: "http",
+      correlationId: "corr-proof-failed",
+      errorKind: "internal",
+      failureKind: "ECONNRESET",
+    });
+    stream.destroy();
+  });
+
+  it("http.request.body.received — persists a successful bounded read", async () => {
+    const sink = captureServerLog("debug");
+    const stream = new PassThrough();
+    const req = asRequest(stream);
+    Object.defineProperty(req, "headers", {
+      configurable: true,
+      value: { "content-type": "application/json" },
+    });
+    const outcome = readBoundedRequestBody(req, 128_000, undefined, "corr-proof-received");
+
+    stream.end(Buffer.from("hello"));
+
+    await expect(outcome).resolves.toBe("hello");
+    const [event] = sink.events;
+    if (event === undefined) throw new Error("expected a received-body event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("http.request.body.received.line", line);
+    expect(persisted).toMatchObject({
+      category: "http",
+      correlationId: "corr-proof-received",
+      contentType: "application/json",
+      receivedBytes: 5,
     });
   });
 });

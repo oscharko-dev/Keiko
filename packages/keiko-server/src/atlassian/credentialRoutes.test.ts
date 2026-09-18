@@ -24,6 +24,10 @@ import {
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
 import { createRunRegistry } from "../runs.js";
@@ -360,6 +364,59 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     });
     // Nothing about the request body — mirror the response-body no-secret check on the sink.
     expectNoSecretBytes(JSON.stringify(activityEvents));
+  });
+
+  // Registry-linked executable proof (#3532): the SAME body-free rejection event above, read back
+  // through the real formatter/registry path rather than only asserted field-by-field, so the
+  // `atlassian.credential.rejected.reason` proof id resolves against a production-computed event —
+  // never a hand-built one (this task's rule 1).
+  it("persists atlassian.credential.rejected as a registered Activity Log proof line", async () => {
+    const stubCustody: AtlassianCredentialCustody = {
+      create: (): never => {
+        throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
+      },
+      getMetadata: (): undefined => undefined,
+      list: (): readonly AtlassianCredentialMetadata[] => [],
+      delete: (): boolean => false,
+    };
+    const stubHttpPort: AtlassianHttpPort = (): Promise<AtlassianHttpResult> =>
+      Promise.resolve({ kind: "response", status: 200 });
+    const stubHttpBodyPort: AtlassianHttpBodyPort = (): Promise<AtlassianHttpBodyResult> =>
+      Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText: "",
+        bodyBytes: 0,
+        truncated: false,
+      });
+    const activityEvents: ServerLogEvent[] = [];
+    const activityLog: ServerLogSink = {
+      write: (event) => activityEvents.push(event),
+    };
+    await rebuild({
+      custody: stubCustody,
+      httpPortFactory: (): AtlassianHttpPort => stubHttpPort,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => stubHttpBodyPort,
+      activityLog,
+    });
+
+    const res = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: createBody(),
+    });
+    expect(res.status).toBe(429);
+
+    const rejection = activityEvents.find((e) => e.op === "atlassian.credential.rejected");
+    if (rejection === undefined) throw new Error("expected a rejection event");
+    const line = formatActivityLogProofLine(rejection);
+    const persisted = expectActivityLogProof("atlassian.credential.rejected.reason", line);
+    expect(persisted).toMatchObject({
+      category: "security",
+      errorKind: "rate-limited",
+      status: 429,
+      reason: "credential-limit-exceeded",
+    });
   });
 
   it("answers 503 when custody is not configured", async () => {

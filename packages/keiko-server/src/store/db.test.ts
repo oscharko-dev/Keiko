@@ -18,6 +18,10 @@ import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contr
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
   buildUiStoreOverDatabase,
   createInMemoryUiStore,
   createNodeUiStore,
@@ -1277,6 +1281,35 @@ describe("openNodeUiDatabase — store.opened activity log (Wave 4a, epic #3233 
       // This store is never encrypted, so no key is ever resolved — `keySource` must be absent,
       // not merely `undefined`, on the emitted event.
       expect(event.extra !== undefined && "keySource" in event.extra).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  // Registry-linked executable proof (#3532): the same store-opened event above, read back through
+  // the real formatter/registry path so `store.opened.identity` resolves against a
+  // production-computed event (this task's rule 1: no hand-built event or registration object).
+  it("persists store.opened as a registered Activity Log proof line", () => {
+    const dbPath = join(tmpDir, "opened-proof.db");
+    const events: ServerLogEvent[] = [];
+    const sink: ServerLogSink = {
+      write: (event) => {
+        events.push(event);
+      },
+    };
+    const db = openNodeUiDatabase(dbPath, sink);
+    try {
+      const event = events.find((candidate) => candidate.op === "store.opened");
+      if (event === undefined) throw new Error("expected a store-opened event");
+      const line = formatActivityLogProofLine(event);
+      const persisted = expectActivityLogProof("store.opened.identity", line);
+      expect(persisted).toMatchObject({
+        category: "setup",
+        store: "ui",
+        storeSchemaVersion: SCHEMA_VERSION,
+        quickCheckOk: true,
+        encryptionMode: "plaintext",
+      });
     } finally {
       db.close();
     }
