@@ -373,3 +373,48 @@ describe("API BFF boundary helpers", () => {
     ).rejects.toMatchObject({ code: "STREAMING_UNSUPPORTED", message: "Response body was null." });
   });
 });
+
+// #3532: `/api/health` carries the Activity Log readiness. The UI keeps a snapshot only when it
+// passes the closed contract, so a malformed one can never be rendered as a real state.
+describe("fetchHealth diagnostic readiness", () => {
+  const degraded = {
+    readiness: "degraded",
+    reasons: ["storage-pressure"],
+    writer: "production-file",
+    lostEvents: 3,
+  };
+
+  function stubHealth(diagnostics: unknown): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse({ status: "ok", version: "1.0.0", diagnostics }))),
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps a readiness snapshot that passes the closed contract", async () => {
+    stubHealth(degraded);
+
+    await expect(fetchHealth()).resolves.toEqual({
+      status: "ok",
+      version: "1.0.0",
+      diagnostics: degraded,
+    });
+  });
+
+  it.each([
+    ["an unknown state", { ...degraded, readiness: "fine" }],
+    ["an unknown reason", { ...degraded, reasons: ["disk-on-fire"] }],
+    ["a degraded state without a reason", { ...degraded, reasons: [] }],
+    ["a ready state that names a reason", { ...degraded, readiness: "ready" }],
+    ["a negative lost-event count", { ...degraded, lostEvents: -1 }],
+    ["a string", "degraded"],
+  ])("drops %s and keeps the version", async (_label, diagnostics) => {
+    stubHealth(diagnostics);
+
+    await expect(fetchHealth()).resolves.toEqual({ status: "ok", version: "1.0.0" });
+  });
+});

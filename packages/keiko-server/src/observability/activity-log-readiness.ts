@@ -362,8 +362,7 @@ function sameReadiness(
   right: ActivityLogReadinessSnapshot,
 ): boolean {
   return (
-    left !== undefined &&
-    left.readiness === right.readiness &&
+    left?.readiness === right.readiness &&
     left.writer === right.writer &&
     left.reasons.length === right.reasons.length &&
     left.reasons.every((reason, index) => reason === right.reasons[index])

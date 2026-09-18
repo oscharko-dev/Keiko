@@ -161,6 +161,10 @@ import type {
   GatewayUnsupportedDiscoveredModel,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  isActivityLogReadinessSnapshot,
+  type HealthResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { validateGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
 import {
   validateGitRemotesResponse,
@@ -407,8 +411,20 @@ async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array
 // Route 1 — health
 // ---------------------------------------------------------------------------
 
-export async function fetchHealth(): Promise<{ status: "ok"; version: string }> {
-  return fetchJson("/api/health");
+/**
+ * `GET /api/health` as the UI trusts it. `diagnostics` is kept only when it passes the closed
+ * readiness contract (#3532); anything else is dropped rather than rendered, so the footer never
+ * shows a readiness the server did not report.
+ */
+export type HealthSnapshot = Omit<HealthResponse, "diagnostics"> & {
+  readonly diagnostics?: HealthResponse["diagnostics"];
+};
+
+export async function fetchHealth(): Promise<HealthSnapshot> {
+  const { diagnostics, ...health } = await fetchJson<
+    Omit<HealthResponse, "diagnostics"> & { readonly diagnostics?: unknown }
+  >("/api/health");
+  return isActivityLogReadinessSnapshot(diagnostics) ? { ...health, diagnostics } : health;
 }
 
 // The Coding Workbench provider profile fetchers (sidecar gateway + Codex subscription) used

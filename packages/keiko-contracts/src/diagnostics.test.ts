@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACTIVITY_LOG_READINESS_REASONS,
+  ACTIVITY_LOG_READINESS_STATES,
+  ACTIVITY_LOG_WRITER_KINDS,
   CLIENT_DIAGNOSTIC_KINDS,
+  CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
+  CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_DIAGNOSTIC_READY_STATES,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
+  isActivityLogReadinessSnapshot,
   isClientDiagnosticIngestRequest,
   isClientDiagnosticKind,
+  isClientDiagnosticLossCount,
   isLinuxGatewayDiagnosticKind,
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
@@ -173,6 +180,83 @@ describe("isClientDiagnosticIngestRequest", () => {
     expect(
       isClientDiagnosticIngestRequest({ ...validRequest(), correlationId: "not valid!!" }),
     ).toBe(true);
+  });
+});
+
+// #3532: the browser reports its own delivery loss as bounded counts, never content. The block is
+// closed on both axes, so the server never decides which part of a malformed block to believe.
+describe("client diagnostic loss counts", () => {
+  it("accepts every closed key at both ends of its range, and an explicit undefined", () => {
+    for (const key of CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS) {
+      for (const count of [0, CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX, undefined]) {
+        expect(isClientDiagnosticIngestRequest({ ...validRequest(), loss: { [key]: count } })).toBe(
+          true,
+        );
+      }
+    }
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), loss: {} })).toBe(true);
+  });
+
+  it.each([
+    ["an unknown key", { droppedSecrets: 1 }],
+    ["a count above the ceiling", { bufferEvicted: CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX + 1 }],
+    ["a negative count", { postsFailed: -1 }],
+    ["a fractional count", { postsThrottled: 1.5 }],
+    ["a numeric string", { errorsSuppressed: "3" }],
+    ["a non-object block", 3],
+    ["a null block", null],
+  ])("refuses the whole report for %s", (_label, loss) => {
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), loss })).toBe(false);
+  });
+
+  it("bounds a single count by the same ceiling", () => {
+    expect(isClientDiagnosticLossCount(0)).toBe(true);
+    expect(isClientDiagnosticLossCount(CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX)).toBe(true);
+    expect(isClientDiagnosticLossCount(CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX + 1)).toBe(false);
+    expect(isClientDiagnosticLossCount(Number.NaN)).toBe(false);
+  });
+});
+
+// #3532: the readiness `/api/health` reports and `keiko status` prints.
+describe("isActivityLogReadinessSnapshot", () => {
+  const ready = { readiness: "ready", reasons: [], writer: "production-file", lostEvents: 0 };
+
+  it("accepts every closed state, reason and writer in a coherent combination", () => {
+    for (const writer of ACTIVITY_LOG_WRITER_KINDS) {
+      expect(isActivityLogReadinessSnapshot({ ...ready, writer })).toBe(true);
+    }
+    for (const readiness of ACTIVITY_LOG_READINESS_STATES.filter((state) => state !== "ready")) {
+      for (const reason of ACTIVITY_LOG_READINESS_REASONS) {
+        expect(isActivityLogReadinessSnapshot({ ...ready, readiness, reasons: [reason] })).toBe(
+          true,
+        );
+      }
+    }
+    expect(
+      isActivityLogReadinessSnapshot({
+        ...ready,
+        readiness: "unavailable",
+        reasons: [...ACTIVITY_LOG_READINESS_REASONS],
+        lostEvents: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["a non-object", "ready"],
+    ["an unknown state", { ...ready, readiness: "fine" }],
+    ["an unknown reason", { ...ready, readiness: "degraded", reasons: ["disk-on-fire"] }],
+    [
+      "a repeated reason",
+      { ...ready, readiness: "degraded", reasons: ["level-silent", "level-silent"] },
+    ],
+    ["a failed state without a reason", { ...ready, readiness: "unavailable" }],
+    ["a ready state that names a reason", { ...ready, reasons: ["level-silent"] }],
+    ["an unknown writer", { ...ready, writer: "stdout" }],
+    ["a negative lost-event count", { ...ready, lostEvents: -1 }],
+    ["a fractional lost-event count", { ...ready, lostEvents: 0.5 }],
+  ])("refuses %s", (_label, value) => {
+    expect(isActivityLogReadinessSnapshot(value)).toBe(false);
   });
 });
 
