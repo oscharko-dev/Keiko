@@ -65,6 +65,11 @@ import {
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
+import {
+  projectActivityLogSufficiency,
+  type ActivityLogSufficiency,
+  type ActivityLogSufficiencyLine,
+} from "./support-analyze-sufficiency.js";
 
 export interface SupportAnalyzeOptions {
   readonly toolLifecycleValidator?: ToolLifecycleValidator;
@@ -209,6 +214,9 @@ export interface AnalyzeAllResult {
   // originating HTTP request correlation. This projection joins only explicit candidate/session
   // identity fields emitted by production; it never guesses from target version or timestamps.
   readonly updateAttempts: readonly UpdateAttemptTimeline[];
+  // #3532: every observed failure class projected to complete/degraded/insufficient with closed
+  // reasons, derived from the registry's failure-class contracts (support-analyze-sufficiency.ts).
+  readonly sufficiency: ActivityLogSufficiency;
 }
 
 export type SourceKind = "bundle" | "raw-log";
@@ -1408,6 +1416,7 @@ export function analyzeLogText(
   const clusters = buildOpClusters(parsedLines);
   const updateAttempts = buildUpdateAttempts(parsedLines);
   const observation = latestObservation(parsedLines);
+  const sufficiency = projectActivityLogSufficiency(parsedLines.map(sufficiencyLine), evidence);
   return {
     sourceKind: kind,
     ...observation,
@@ -1419,6 +1428,18 @@ export function analyzeLogText(
     warnings,
     clusters,
     updateAttempts,
+    sufficiency,
+  };
+}
+
+function sufficiencyLine(line: ParsedLine): ActivityLogSufficiencyLine {
+  return {
+    op: line.view.op,
+    correlationId: line.correlationId,
+    parentCorrelationId: line.view.parentCorrelationId,
+    pid: line.view.pid,
+    instanceId: line.view.instanceId,
+    fields: line.view.extra,
   };
 }
 

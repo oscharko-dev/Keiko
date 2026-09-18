@@ -26,8 +26,11 @@ import { containsAbsolutePath } from "./text-safety.js";
 export {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
+  ACTIVITY_LOG_FAILURE_SURFACES,
+  ACTIVITY_LOG_OPERATION_SURFACES,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  type ActivityLogFailureSurface,
 } from "./activity-log-registry.generated.js";
 export { ACTIVITY_LOG_OPERATION_REGISTRY };
 // The Activity Log directory's closed file-name grammar travels with the runtime observability
@@ -183,6 +186,53 @@ export type ActivityLogCompatibilityState = (typeof ACTIVITY_LOG_COMPATIBILITY_S
 export const ACTIVITY_LOG_WRITER_CAPABILITY_STATES = ["active", "degraded", "unavailable"] as const;
 export type ActivityLogWriterCapabilityState =
   (typeof ACTIVITY_LOG_WRITER_CAPABILITY_STATES)[number];
+
+// Diagnostic sufficiency of reconstruction evidence (#3532), projected per failure class by
+// `keiko support analyze` and carried by support incidents. Closed: an analyzer, an incident and a
+// report all speak exactly these statuses and reasons. Insufficient: required evidence or causal
+// closure is missing. Degraded: localization and replay remain possible, but a closed warning or a
+// bounded loss exists. Complete: neither.
+export const DIAGNOSTIC_SUFFICIENCY_STATUSES = ["complete", "degraded", "insufficient"] as const;
+export type DiagnosticSufficiencyStatus = (typeof DIAGNOSTIC_SUFFICIENCY_STATUSES)[number];
+
+export const DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_REASONS = [
+  "no-registered-evidence",
+  "no-registered-failure",
+  "corrupt-evidence",
+  "parent-correlation-missing",
+  "lifecycle-start-missing",
+] as const;
+
+export const DIAGNOSTIC_SUFFICIENCY_DEGRADED_REASONS = [
+  "truncated-evidence",
+  "unsupported-evidence",
+  "incomplete-evidence",
+  "sequence-anomaly",
+  "activity-log-loss",
+  "events-dropped",
+  "correlation-unknown",
+  "evidence-partial",
+] as const;
+
+export const DIAGNOSTIC_SUFFICIENCY_REASONS = [
+  ...DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_REASONS,
+  ...DIAGNOSTIC_SUFFICIENCY_DEGRADED_REASONS,
+] as const;
+export type DiagnosticSufficiencyReason = (typeof DIAGNOSTIC_SUFFICIENCY_REASONS)[number];
+
+const DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_SET: ReadonlySet<string> = new Set(
+  DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_REASONS,
+);
+
+/** The one status rule: any insufficient reason wins, any other reason degrades, none is complete. */
+export function diagnosticSufficiencyStatus(
+  reasons: readonly DiagnosticSufficiencyReason[],
+): DiagnosticSufficiencyStatus {
+  if (reasons.some((reason) => DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_SET.has(reason))) {
+    return "insufficient";
+  }
+  return reasons.length > 0 ? "degraded" : "complete";
+}
 
 export function isActivityLogErrorKind(value: unknown): value is ActivityLogErrorKind {
   return (

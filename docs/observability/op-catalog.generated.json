@@ -64884,27 +64884,33 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 35,
-    "unknownCategoryCount": 62,
+    "dynamicCount": 36,
+    "unknownCategoryCount": 63,
     "authoritative": false
   },
   "entries": [
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:1150",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1158",
       "package": "keiko-cli"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:1930",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1437",
       "package": "keiko-cli"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:1939",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1951",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "unknown",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1960",
       "package": "keiko-cli"
     },
     {
@@ -65078,7 +65084,7 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1063",
+      "site": "packages/keiko-contracts/src/observability.ts:1113",
       "package": "keiko-contracts"
     },
     {
