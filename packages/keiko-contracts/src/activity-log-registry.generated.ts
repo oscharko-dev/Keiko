@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7b067c4859ec4448275ec01c7bfbd4de2a4b00dde68ad9dab2cf6cb090949544" as const;
+  "263c89fe32f33bf17f0cc843f51d0d2e3b27a6fc52b021f77728159dc065ac5b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -22754,6 +22754,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       pinnedBytes: {
         type: "integer",
         dataClass: "count",
+        required: true,
+      },
+      evidenceLostBeforePin: {
+        type: "boolean",
+        dataClass: "closed-enum",
         required: true,
       },
       windowSeconds: {
@@ -52013,6 +52018,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "descriptorSchemaVersion",
               type: "integer",
               dataClass: "safe-version",
+              required: true,
+            },
+            {
+              name: "evidenceLostBeforePin",
+              type: "boolean",
+              dataClass: "closed-enum",
               required: true,
             },
             {
