@@ -209,7 +209,7 @@ export async function runEvaluateCli(
     io.err(USAGE);
     return 2;
   }
-  const [gateway, evaluations, evidence, { parseRunRequest }, configLoader] = await Promise.all([
+  const [gateway, evaluations, evidence, server, configLoader] = await Promise.all([
     loadModelGateway(),
     loadEvaluations(),
     loadEvidence(),
@@ -225,8 +225,9 @@ export async function runEvaluateCli(
     gateway,
     evaluations,
     evidence,
-    parseRunRequest,
+    parseRunRequest: server.parseRunRequest,
     configLoader,
+    gatewayLogSink: server.processServerLogSink(),
   });
 }
 
@@ -236,6 +237,10 @@ interface EvaluateRuntime {
   readonly evidence: EvidenceModule;
   readonly parseRunRequest: (typeof import("@oscharko-dev/keiko-server"))["parseRunRequest"];
   readonly configLoader: (path: string, env: EnvSource) => GatewayConfig;
+  // The process-wide Activity Log port a live evaluation's Model Gateway writes through (#3532).
+  readonly gatewayLogSink: ReturnType<
+    (typeof import("@oscharko-dev/keiko-server"))["processServerLogSink"]
+  >;
 }
 
 async function runSuite(
@@ -264,6 +269,7 @@ async function runSuite(
         env,
         now: Date.now,
         configLoader: runtime.configLoader,
+        gatewayLogSink: runtime.gatewayLogSink,
         surfaceParity: {
           runGenTestsCli,
           runInvestigateCli,

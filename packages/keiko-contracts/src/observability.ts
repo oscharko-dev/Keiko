@@ -30,6 +30,16 @@ export {
   ACTIVITY_LOG_SCHEMA_DIGEST,
 } from "./activity-log-registry.generated.js";
 export { ACTIVITY_LOG_OPERATION_REGISTRY };
+export {
+  ACTIVITY_LOG_LOSS_REASONS,
+  activityLogLossCounters,
+  activityLogLossTotal,
+  isActivityLogLossReason,
+  recordActivityLogLoss,
+  resetActivityLogLossCountersForTests,
+  type ActivityLogLossCounters,
+  type ActivityLogLossReason,
+} from "./activity-log-loss.js";
 
 /**
  * The shape an error KIND may take: a leading letter, then up to 63 more letters, digits,
@@ -807,6 +817,18 @@ function activityLogEventRejection(event: object): ActivityLogEventFailureKind |
   return ACTIVITY_LOG_EVENT_FAILURE_KIND_SET.has(rejection)
     ? (rejection as ActivityLogEventFailureKind)
     : undefined;
+}
+
+/**
+ * True when the persisted-event validation will refuse this event: it carries the body-free
+ * rejection sentinel `activityLogEvent` substitutes for invalid fields, or it was never bound to a
+ * registration at all. A cheap marker read, so a logger can count the loss before the sink drops it.
+ */
+export function activityLogEventWillBeRejected(event: object): boolean {
+  return (
+    activityLogEventRejection(event) !== undefined ||
+    activityLogEventRegistration(event) === undefined
+  );
 }
 
 const ACTIVITY_LOG_EVENT_KEYS: ReadonlySet<string> = new Set([

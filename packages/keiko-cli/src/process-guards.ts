@@ -5,10 +5,13 @@
 // anything a thrown value's constructor put there, including request/secret content), and every
 // other instrumentation site in this repository already refuses to surface one. These guards keep
 // the fail-fast exit (state correctness over limping on) while emitting one clean, body-free
-// stderr line — the error's CONTENT-FREE CLASS only, never a message, never a stack — and, when a
-// state directory is in scope, ALSO a structured `process.fatal` activity-log line carrying the
-// same dist/src-anchored stack frames and content-free `.cause` chain every other diagnostic
-// record on this log already carries (ADR-0173 D3/D11).
+// stderr line — the error's CONTENT-FREE CLASS only, never a message, never a stack — and ALWAYS a
+// structured `process.fatal` activity-log line carrying the same dist/src-anchored stack frames and
+// content-free `.cause` chain every other diagnostic record on this log already carries (ADR-0173
+// D3/D11), followed by the process's `process.exiting` end with reason `fatal-exception` and the
+// exit loss summary (#3532). A process started without `KEIKO_STATE_DIR` writes them to the default
+// runtime state directory the CLI itself uses, never to nowhere, and the fatal lifecycle lines are
+// mandatory evidence no `KEIKO_LOG_LEVEL` can filter.
 //
 // WHY THE CLASSIFIER LOADS DYNAMICALLY, INSIDE THE HANDLER, NEVER AT MODULE SCOPE
 //
@@ -30,8 +33,11 @@
 // classification or the bounded fallback — is the one and only path that writes stderr and exits.
 // The fallback never reads `.message` either: see `fallbackErrorKind`.
 
-import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-server";
-import { processFatalActivityLogEvent } from "./process-activity-log.js";
+import type { ServerLogSink } from "@oscharko-dev/keiko-server";
+import {
+  processExitingActivityLogEvent,
+  processFatalActivityLogEvent,
+} from "./process-activity-log.js";
 
 // The narrow slice of keiko-server's public surface the fatal path needs, loaded only inside the
 // handler (see the file banner). `describeError` is reused rather than re-derived from its parts:
@@ -43,7 +49,10 @@ import { processFatalActivityLogEvent } from "./process-activity-log.js";
 type ServerModule = typeof import("@oscharko-dev/keiko-server");
 export type FatalDiagnosticsModule = Pick<
   ServerModule,
-  "createFileServerLogSink" | "describeError"
+  | "createActivityLogSink"
+  | "describeError"
+  | "persistActivityLogLossSummary"
+  | "resolveRuntimeStateDir"
 >;
 
 export interface ProcessGuardSink {
@@ -114,17 +123,30 @@ function writeFatalActivityLogLine(
   machineKind: FatalReasonKind,
   described: ReturnType<FatalDiagnosticsModule["describeError"]>,
 ): void {
-  const stateDir = process.env.KEIKO_STATE_DIR;
-  if (typeof stateDir !== "string" || stateDir.length === 0) return;
-  const activityLog: ServerLogSink = server.createFileServerLogSink(stateDir);
-  const event: ServerLogEvent = processFatalActivityLogEvent({
-    kind: machineKind,
-    failureKind: described.code ?? described.errorClass,
-    ...(described.frames === undefined ? {} : { frames: described.frames }),
-    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
-  });
-  activityLog.write(event);
-  activityLog.close?.();
+  // `resolveRuntimeStateDir` is the one rule the CLI and the process-wide server logger share:
+  // `KEIKO_STATE_DIR` when set, else `<cwd>/.keiko`, so the fatal line lands in the same log every
+  // other line of this process writes.
+  const stateDir = server.resolveRuntimeStateDir(process.env);
+  const activityLog: ServerLogSink = server.createActivityLogSink(stateDir);
+  try {
+    activityLog.write(
+      processFatalActivityLogEvent({
+        kind: machineKind,
+        failureKind: described.code ?? described.errorClass,
+        ...(described.frames === undefined ? {} : { frames: described.frames }),
+        ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+      }),
+    );
+    server.persistActivityLogLossSummary("exit");
+    activityLog.write(
+      processExitingActivityLogEvent({
+        reason: "fatal-exception",
+        uptimeMs: process.uptime() * 1000,
+      }),
+    );
+  } finally {
+    activityLog.close?.();
+  }
 }
 
 // Loads the classifier, writes the `process.fatal` activity-log line when a state directory is in

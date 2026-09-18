@@ -1,6 +1,6 @@
-import { closeSync, constants as fsConstants, mkdirSync, openSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { Buffer } from "node:buffer";
-import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer as createNetServer } from "node:net";
 import { get as httpGet } from "node:http";
@@ -10,8 +10,13 @@ import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   resolveWindowsPowerShellExecutable,
+  securityErrorKind,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
+import {
+  isActivityLogReadinessSnapshot,
+  type ActivityLogReadinessSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 // From the contracts leaf, NOT keiko-server or the keiko-sdk fat barrel: pulling the server
 // module graph in eagerly here cost every `keiko` invocation ~410ms of ESM loading
 // (GEN-PERF-CLI-001). Lifecycle needs the loopback endpoint constants plus the launcher half of
@@ -37,8 +42,6 @@ import {
   type CliSecurityLogSinkFactory,
 } from "./security-log.js";
 import {
-  assertNotSymlink,
-  assertRegularSingleLinkFile,
   KEIKO_UI_LAUNCH_ID_ENV,
   UI_LAUNCH_ID_FLAG,
   readPidRecord,
@@ -175,16 +178,12 @@ interface LifecycleRuntimeDeps {
 interface HealthProbeResult {
   readonly reachable: boolean;
   readonly version: string | undefined;
+  // The server's diagnostic readiness (#3532), when the health body carried a valid block.
+  readonly diagnostics?: ActivityLogReadinessSnapshot | undefined;
 }
 
 const HEALTH_PROBE_TIMEOUT_MS = 1_000;
 const HEALTH_RESPONSE_MAX_BYTES = 64 * 1024;
-
-interface UiLogStdio {
-  readonly logPath: string;
-  readonly stdio: StdioOptions;
-  readonly close: () => void;
-}
 
 function staleProcessReason(health: HealthProbeResult): string {
   if (!health.reachable) return "health check is unreachable";
@@ -279,8 +278,15 @@ function pidFile(options: LifecycleOptions): string {
   return join(options.stateDir, "ui.pid");
 }
 
-function logFile(options: LifecycleOptions): string {
-  return join(options.stateDir, "ui.log");
+// Where the UI process's evidence lives. The detached UI child no longer persists its raw
+// stdout/stderr (#3532): every diagnostic it produces is a body-free Activity Log line, so the
+// operator is pointed at the Activity Log and the support commands that read it.
+function activityLogDirectory(options: LifecycleOptions): string {
+  return join(options.stateDir, "logs");
+}
+
+function activityLogHint(options: LifecycleOptions): string {
+  return `Activity Log: ${activityLogDirectory(options)} (read it with \`keiko support export\` and \`keiko support analyze\`)`;
 }
 
 function healthUrl(options: LifecycleOptions): string {
@@ -297,12 +303,25 @@ function healthVersion(payload: unknown): string | undefined {
   return typeof version === "string" ? version : undefined;
 }
 
+// The `diagnostics` block is untrusted input like the rest of the body: admitted only when it
+// passes the closed contract guard, otherwise reported as unknown.
+function healthDiagnostics(payload: unknown): ActivityLogReadinessSnapshot | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const diagnostics = (payload as { readonly diagnostics?: unknown }).diagnostics;
+  return isActivityLogReadinessSnapshot(diagnostics) ? diagnostics : undefined;
+}
+
 function healthResult(statusCode: number | undefined, body: string): HealthProbeResult {
   if (statusCode === undefined || statusCode < 200 || statusCode >= 300) {
     return { reachable: false, version: undefined };
   }
   try {
-    return { reachable: true, version: healthVersion(JSON.parse(body) as unknown) };
+    const payload = JSON.parse(body) as unknown;
+    return {
+      reachable: true,
+      version: healthVersion(payload),
+      diagnostics: healthDiagnostics(payload),
+    };
   } catch {
     return { reachable: true, version: undefined };
   }
@@ -553,72 +572,22 @@ async function reportHealthyStart(
   options: LifecycleOptions,
   io: CliIo,
   pid: number,
-  logPath: string,
   openExternal: (url: string) => void,
   securityLogSink: SecurityLogSink | undefined,
   pairingSecret: string,
 ): Promise<number> {
   io.out(`Keiko UI running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
-  io.out(`Logs: ${logPath}\n`);
+  io.out(`${activityLogHint(options)}\n`);
   await maybeOpenBrowser(options, io, openExternal, securityLogSink, pairingSecret);
   return 0;
 }
 
-// KEIKO-0886 / #2906 round 3 (comment 3865329050): refuse to write `<stateDir>/ui.log` through
-// a symlink, hard link, FIFO, or device. O_NOFOLLOW alone only rejects a SYMLINK at the final
-// path component — a HARD LINK to another user's file has no symlink component, so the syscall
-// that blocks symlinks has nothing to object to, and would receive every byte of this process's
-// child stdout/stderr. Worse, a FIFO planted at the path can block this open() (O_WRONLY)
-// indefinitely waiting for a reader that never arrives, before any POST-open validation could
-// ever run. Both are closed the same way the pid file already is (state-paths.ts):
-//   * O_NONBLOCK on every platform that has it, so a planted FIFO can never hang the open()
-//     call itself.
-//   * the OPENED descriptor is fstat-verified via the shared `assertRegularSingleLinkFile`
-//     (isFile() + nlink === 1) before it is ever handed to the child — the same
-//     regular-single-link-file policy the pid file enforces, reused rather than re-derived.
-// Windows has no O_NOFOLLOW; `assertNotSymlink` is the documented, residual-TOCTOU fallback for
-// its reparse-point case, and the post-open fstat check below still runs unconditionally on
-// every platform, including that fallback.
-function openLogAppendNoFollow(logPath: string): number {
-  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
-  const nonblock = (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0;
-  if (nofollow === 0) {
-    assertNotSymlink(logPath);
-  }
-  const fd = openSync(
-    logPath,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | nofollow | nonblock,
-    0o600,
-  );
-  try {
-    assertRegularSingleLinkFile(fd, logPath);
-  } catch (error) {
-    closeSync(fd);
-    throw error;
-  }
-  return fd;
-}
-
-function openUiLogStdio(options: LifecycleOptions): UiLogStdio {
-  mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
-  const logPath = logFile(options);
-  const stdoutFd = openLogAppendNoFollow(logPath);
-  try {
-    const stderrLogFd = openLogAppendNoFollow(logPath);
-    return {
-      logPath,
-      stdio: ["ignore", stdoutFd, stderrLogFd],
-      close: (): void => {
-        closeSync(stdoutFd);
-        closeSync(stderrLogFd);
-      },
-    };
-  } catch (error) {
-    closeSync(stdoutFd);
-    throw error;
-  }
-}
-
+// #3532: the detached UI child's stdio is ignored. It used to be appended, raw and unbounded, to
+// `<stateDir>/ui.log` — free text that included error messages and could never be made body-free.
+// Every diagnostic the child produces now reaches the Activity Log as a registered line, and a
+// startup failure surfaces as the child's `process.fatal` line plus this command's closed start
+// result. The state directory is still created here, owner-only, because the pid file below is
+// published into it before the child has run.
 function spawnUiProcess(
   options: LifecycleOptions,
   env: EnvSource,
@@ -626,8 +595,8 @@ function spawnUiProcess(
   cwd: string,
   pairingSecret: string,
   launchId: string,
-): { readonly child: ChildProcess; readonly logPath: string } {
-  const logStdio = openUiLogStdio(options);
+): ChildProcess {
+  mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   const preferredLayout = resolvePreferredInstallLayout(cwd);
   const uiEnv = childEnv({
     ...env,
@@ -643,52 +612,49 @@ function spawnUiProcess(
           KEIKO_UI_STATIC_ROOT: preferredLayout.staticRoot,
         }),
   });
-  try {
-    return {
-      child: deps.spawnFn(
-        process.execPath,
-        [
-          cliEntryPath(cwd, env),
-          "ui",
-          "--port",
-          String(options.port),
-          "--host",
-          options.host,
-          UI_LAUNCH_ID_FLAG,
-          launchId,
-        ],
-        {
-          argv0: KEIKO_PROCESS_TITLE,
-          cwd,
-          detached: true,
-          env: uiEnv,
-          stdio: logStdio.stdio,
-        },
-      ),
-      logPath: logStdio.logPath,
-    };
-  } finally {
-    logStdio.close();
-  }
+  return deps.spawnFn(
+    process.execPath,
+    [
+      cliEntryPath(cwd, env),
+      "ui",
+      "--port",
+      String(options.port),
+      "--host",
+      options.host,
+      UI_LAUNCH_ID_FLAG,
+      launchId,
+    ],
+    {
+      argv0: KEIKO_PROCESS_TITLE,
+      cwd,
+      detached: true,
+      env: uiEnv,
+      stdio: "ignore",
+    },
+  );
 }
+
+// The closed start result a failed `keiko start` reports (#3532): the child exited before it
+// became healthy, or it stayed alive without answering the health check in time.
+type StartOutcome = "healthy" | "process-exited" | "health-timeout";
 
 async function waitForHealth(
   options: LifecycleOptions,
   pid: number,
   deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive">,
-): Promise<boolean> {
+): Promise<StartOutcome> {
   // Monotonic clock so a wall-clock adjustment during startup does not skip the health
   // window (forward jump) or hold it open indefinitely (backward jump).
   const start = performance.now();
   while (performance.now() - start <= options.startTimeoutMs) {
-    if (!deps.isProcessAlive(pid)) return false;
+    if (!deps.isProcessAlive(pid)) return "process-exited";
     const health = await deps.healthProbe(healthUrl(options));
     if (health.version === SDK_VERSION && deps.isProcessAlive(pid)) {
-      return true;
+      return "healthy";
     }
     await deps.sleep(500);
   }
-  return false;
+  return "health-timeout";
 }
 
 async function ensureStartPortAvailable(
@@ -744,8 +710,8 @@ async function reportUnhealthyStart(
   io: CliIo,
   deps: LifecycleRuntimeDeps,
   pid: number,
-  logPath: string,
   launchId: string,
+  startOutcome: Exclude<StartOutcome, "healthy">,
 ): Promise<number> {
   // #KEIKO-0437: escalate graceful stop -> forced stop and only remove the pid file once the
   // process is confirmed gone. If it survives forced termination, KEEP the pid file so `keiko
@@ -753,10 +719,12 @@ async function reportUnhealthyStart(
   const outcome = await terminateAndConfirm(pid, options, deps, undefined, launchId);
   if (outcome.confirmed) {
     removePidFileIfMatches(pidFile(options), pid, launchId);
-    io.err(`keiko start: UI did not become healthy. Logs: ${logPath}\n`);
+    io.err(
+      `keiko start: UI did not become healthy (${startOutcome}). ${activityLogHint(options)}\n`,
+    );
   } else {
     io.err(
-      `keiko start: UI did not become healthy and did not exit under ${forcedStopLabel(deps.platform)} (pid ${String(pid)} kept in ${pidFile(options)}). Logs: ${logPath}\n`,
+      `keiko start: UI did not become healthy (${startOutcome}) and did not exit under ${forcedStopLabel(deps.platform)} (pid ${String(pid)} kept in ${pidFile(options)}). ${activityLogHint(options)}\n`,
     );
   }
   return 1;
@@ -781,9 +749,8 @@ function publishPidOrKillChild(
     return true;
   } catch (error) {
     deps.killProcess(pid, "SIGKILL");
-    io.err(
-      `keiko start: failed to publish the UI process pid (${error instanceof Error ? error.message : String(error)}).\n`,
-    );
+    // The content-free class only: a filesystem error's text carries the path it failed on.
+    io.err(`keiko start: failed to publish the UI process pid (${securityErrorKind(error)}).\n`);
     return false;
   }
 }
@@ -817,21 +784,21 @@ async function cmdStart(
   const pairingSecret = resolveLauncherPairingSecret(env);
   const launchId = launchIdForStart(env, io);
   if (launchId === undefined) return 1;
-  let spawned: { readonly child: ChildProcess; readonly logPath: string };
+  let child: ChildProcess;
   try {
-    spawned = spawnUiProcess(options, env, deps, cwd, pairingSecret, launchId);
+    child = spawnUiProcess(options, env, deps, cwd, pairingSecret, launchId);
   } catch {
     io.err("keiko start: failed to spawn the UI process.\n");
     return 1;
   }
-  const { child, logPath } = spawned;
 
   // A detached spawn can fail ASYNCHRONOUSLY after returning (EMFILE, exec
   // permission revoked, …). With no listener Node throws the 'error' event and
   // crashes `keiko start` with a raw stack; with this listener the failure is
-  // surfaced cleanly and the health poll below reports the failed start.
+  // surfaced cleanly — by its content-free class, never its path-bearing message — and the
+  // health poll below reports the failed start.
   child.once("error", (error: Error) => {
-    io.err(`keiko start: UI process failed to launch (${error.message}).\n`);
+    io.err(`keiko start: UI process failed to launch (${securityErrorKind(error)}).\n`);
   });
 
   if (child.pid === undefined) {
@@ -849,20 +816,19 @@ async function cmdStart(
   if (!publishPidOrKillChild(options, io, deps, child.pid, launchId)) return 1;
   io.out(`Starting Keiko UI on ${lifecycleBaseUrl(options)} ...\n`);
 
-  const healthy = await waitForHealth(options, child.pid, deps);
-  if (healthy) {
+  const startOutcome = await waitForHealth(options, child.pid, deps);
+  if (startOutcome === "healthy") {
     return reportHealthyStart(
       options,
       io,
       child.pid,
-      logPath,
       deps.openExternal,
       deps.securityLogSink,
       pairingSecret,
     );
   }
 
-  return reportUnhealthyStart(options, io, deps, child.pid, logPath, launchId);
+  return reportUnhealthyStart(options, io, deps, child.pid, launchId, startOutcome);
 }
 
 interface TerminateAndConfirmResult {
@@ -941,17 +907,29 @@ async function cmdStop(
   return 0;
 }
 
-function cmdStatus(
+// `keiko status` also reports the running server's diagnostic readiness (#3532), read from the
+// closed `diagnostics` block of its health endpoint. A server that does not answer, or answers
+// without a valid block, is reported as `unknown` rather than guessed.
+function readinessStatusLine(health: HealthProbeResult): string {
+  const diagnostics = health.diagnostics;
+  if (diagnostics === undefined)
+    return "Diagnostic evidence: unknown (health check unavailable).\n";
+  const reasons = diagnostics.reasons.length === 0 ? "" : ` (${diagnostics.reasons.join(", ")})`;
+  return `Diagnostic evidence: ${diagnostics.readiness}${reasons}; lost events: ${String(diagnostics.lostEvents)}.\n`;
+}
+
+async function cmdStatus(
   options: LifecycleOptions,
   io: CliIo,
-  isAlive: (pid: number) => boolean,
-): number {
-  const pid = runningPid(options, isAlive);
+  deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "isProcessAlive">,
+): Promise<number> {
+  const pid = runningPid(options, deps.isProcessAlive);
   if (pid === undefined) {
     io.out("Keiko UI is not running.\n");
     return 0;
   }
   io.out(`Keiko UI is running on ${lifecycleBaseUrl(options)} (pid ${String(pid)}).\n`);
+  io.out(readinessStatusLine(await deps.healthProbe(healthUrl(options))));
   return 0;
 }
 
@@ -1058,7 +1036,7 @@ export async function runLifecycleCli(
   const handlers: Readonly<Record<LifecycleCommand, () => Promise<number>>> = {
     start: () => cmdStart(options, io, env, fullDeps, cwd),
     stop: () => cmdStop(options, io, fullDeps),
-    status: () => Promise.resolve(cmdStatus(options, io, fullDeps.isProcessAlive)),
+    status: () => cmdStatus(options, io, fullDeps),
     restart: () => cmdRestart(options, io, env, fullDeps, cwd),
   };
   return handlers[command]();
