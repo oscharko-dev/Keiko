@@ -522,11 +522,17 @@ function collectTypeScript(repoRoot, relative, out) {
   }
 }
 
-// Every production TypeScript file on disk, tracked or not, in code-point order.
+// Code-unit order: the same on every host and locale, which `localeCompare` is not.
+function compareCodeUnits(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+// Every production TypeScript file on disk, tracked or not, in code-unit order.
 export function productionTypeScriptFiles(repoRoot = REPO_ROOT) {
   const out = [];
   collectTypeScript(repoRoot, "packages", out);
-  return out.toSorted();
+  return out.toSorted(compareCodeUnits);
 }
 
 export function scanFailurePaths(repoRoot = REPO_ROOT) {
