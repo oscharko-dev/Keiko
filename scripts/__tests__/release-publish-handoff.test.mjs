@@ -121,7 +121,10 @@ describe("runReleasePublishHandoff", () => {
     expect(report.command).toBe(
       `gh workflow run release.yml --repo ${REPO} --ref ${TAG} -f publish=true -f npm_dist_tag=latest -f portable_assets_run_id=35311806746 -f portable_assets_run_attempt=2 -f portable_assets_artifact_name=portable-release-assets`,
     );
-    expect(github.calls.every((args) => args[0] === "api" && args[1] !== "--method")).toBe(true);
+    expect(github.calls).toStrictEqual([
+      ["api", RUNS_PATH],
+      ["api", `repos/${REPO}/git/ref/tags/${TAG}`],
+    ]);
   });
 
   it("emits no duplicate command for an open exact publish", () => {

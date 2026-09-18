@@ -108,6 +108,19 @@ describe("releaseCandidatePlan", () => {
   });
 
   it.each([
+    ["already published", { published: true }],
+    ["tag absent", { remoteTagSha: undefined }],
+    ["tag at candidate", { remoteTagSha: CANDIDATE }],
+    ["tag at an older commit", { remoteTagSha: OLDER }],
+  ])("gives an active publish sole build ownership when the version is %s", (_label, state) => {
+    expect(plan({ ...state, publishRunActive: true })).toMatchObject({
+      action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
+      reason: expect.stringContaining("no second portable build"),
+    });
+  });
+
+  it.each([
     ["candidate", { candidateSha: "HEAD" }],
     ["dev head", { devHeadSha: undefined }],
     ["release tag commit", { remoteTagSha: "abc" }],

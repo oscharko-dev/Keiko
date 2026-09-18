@@ -14,6 +14,25 @@ const releaseYmlPath = fileURLToPath(
 const release = parse(readFileSync(releaseYmlPath, "utf8"));
 const publish = release.jobs.publish;
 
+function normalizedPublishCondition() {
+  return publish.if.replace(/\s+/gu, " ").trim();
+}
+
+function evaluateParsedActorGuard(triggeringActor, serializedOwnerLogins) {
+  const condition = normalizedPublishCondition();
+  const actorGuard = condition.match(
+    /!endsWith\(github\.triggering_actor, '(?<botSuffix>\[bot\])'\) && contains\(fromJSON\(vars\.KEIKO_RELEASE_OWNER_GITHUB_LOGINS\), github\.triggering_actor\)$/u,
+  );
+  if (actorGuard?.groups?.botSuffix === undefined) {
+    throw new TypeError("release workflow actor guard has an unsupported shape");
+  }
+  const ownerLogins = JSON.parse(serializedOwnerLogins);
+  if (!Array.isArray(ownerLogins)) throw new TypeError("release owner allowlist is not an array");
+  return (
+    !triggeringActor.endsWith(actorGuard.groups.botSuffix) && ownerLogins.includes(triggeringActor)
+  );
+}
+
 describe("release publish dispatch guard (#3505, Epic #3495)", () => {
   it("has no tag-push or workflow-owned automatic publish trigger", () => {
     expect(release.on).toStrictEqual({ workflow_dispatch: expect.any(Object) });
@@ -43,23 +62,17 @@ describe("release publish dispatch guard (#3505, Epic #3495)", () => {
   });
 
   it.each([
-    ["a human owner", "oscharko", "oscharko", true, true],
-    ["a GITHUB_TOKEN dispatch", "github-actions[bot]", "github-actions[bot]", true, false],
-    ["a bot-triggered rerun", "oscharko", "github-actions[bot]", true, false],
-    ["a human outside the allowlist", "contributor", "contributor", false, false],
+    ["a human owner", "oscharko", '["oscharko"]', true],
+    ["a GITHUB_TOKEN dispatch", "github-actions[bot]", '["github-actions[bot]"]', false],
+    ["a bot-triggered rerun", "github-actions[bot]", '["oscharko"]', false],
+    ["a human outside the allowlist", "contributor", '["oscharko"]', false],
+    ["a substring login", "osch", '["oscharko"]', false],
   ])(
-    "models %s actor=%s triggering_actor=%s",
-    (_label, _actor, triggeringActor, allowlisted, expected) => {
-      const ownerLogins = allowlisted ? [triggeringActor] : ["oscharko"];
-      const authorized =
-        !triggeringActor.endsWith("[bot]") && ownerLogins.includes(triggeringActor);
-      expect(authorized).toBe(expected);
+    "enforces the parsed workflow guard for %s",
+    (_label, triggeringActor, ownerLogins, expected) => {
+      expect(evaluateParsedActorGuard(triggeringActor, ownerLogins)).toBe(expected);
     },
   );
-
-  it("does not accept a login merely because it is a substring of an owner login", () => {
-    expect(["oscharko"].includes("osch")).toBe(false);
-  });
 
   it("keeps release credentials scoped to the npm-publish environment", () => {
     expect(publish.environment).toBe("npm-publish");

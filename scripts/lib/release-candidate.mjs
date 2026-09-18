@@ -81,6 +81,14 @@ export function releaseCandidatePlan({
 }
 
 function currentDevCandidatePlan({ candidateSha, publishRunActive, published, remoteTagSha, tag }) {
+  if (publishRunActive) {
+    return {
+      action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
+      tag,
+      reason: `a publish of ${tag} is open, so no second portable build may start`,
+    };
+  }
   if (published) {
     return {
       action: "skip",
@@ -103,14 +111,6 @@ function currentDevCandidatePlan({ candidateSha, publishRunActive, published, re
       portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
       tag,
       reason: `${tag} does not exist yet`,
-    };
-  }
-  if (publishRunActive) {
-    return {
-      action: "skip",
-      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
-      tag,
-      reason: `a publish of ${tag} is open, so the tag stays at ${remoteTagSha} until it ends`,
     };
   }
   return {
