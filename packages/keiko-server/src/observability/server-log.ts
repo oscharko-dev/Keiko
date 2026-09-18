@@ -1036,6 +1036,11 @@ function archiveNames(active: ActiveLog): readonly string[] {
     .sort((left, right) => left.localeCompare(right, "en-US"));
 }
 
+function retentionStatus(failed: boolean, prunedCount: number): RotationOutcome["retentionStatus"] {
+  if (failed) return "failed";
+  return prunedCount > 0 ? "pruned" : "unchanged";
+}
+
 function pruneOldFiles(
   active: ActiveLog,
 ): Pick<RotationOutcome, "retentionStatus" | "prunedCount" | "retainedCount"> {
@@ -1055,11 +1060,7 @@ function pruneOldFiles(
       }
     }
     const retainedCount = archiveNames(active).length;
-    return {
-      retentionStatus: failed ? "failed" : prunedCount > 0 ? "pruned" : "unchanged",
-      prunedCount,
-      retainedCount,
-    };
+    return { retentionStatus: retentionStatus(failed, prunedCount), prunedCount, retainedCount };
   } catch {
     return { retentionStatus: "failed", prunedCount: 0, retainedCount: 0 };
   }
