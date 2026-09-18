@@ -1977,7 +1977,7 @@ describe("waitForShutdown", () => {
     return run().finally(() => {
       for (const [signal, listeners] of prior) {
         process.removeAllListeners(signal);
-        for (const listener of listeners) process.on(signal, listener as () => void);
+        for (const listener of listeners) process.on(signal, listener);
       }
     });
   }
