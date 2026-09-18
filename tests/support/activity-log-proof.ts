@@ -20,8 +20,7 @@
 //
 // Failure messages name the proof id, the operation and the missing evidence — never a field value.
 
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { expect } from "vitest";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
@@ -34,6 +33,7 @@ import {
   validateActivityLogOperationFields,
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { listActivityLogFiles } from "@oscharko-dev/keiko-server/observability/server-log";
 
 // Envelope and identity members of a persisted line; everything else is a registered field.
 const PERSISTED_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
@@ -138,15 +138,20 @@ export function expectActivityLogProof(proofId: string, line: string): Record<st
 }
 
 /**
- * Every persisted Activity Log line under `<stateDir>/logs`, file by file in name order. Reads the
- * whole directory rather than one file name, so a proof never depends on how the log is segmented.
+ * Every persisted Activity Log line under `<stateDir>/logs`, read exactly as the production
+ * reader enumerates the store: `listActivityLogFiles` applies the closed name grammar (log files
+ * only, never pin records), the regular-file check, and the logical order (legacy files, then
+ * segments by start, pid, instance and index). The fixture derives all of that from the production
+ * entry point instead of restating it (AGENTS.md §7), so a proof never depends on how the log is
+ * segmented. A file whose text does not end in a newline (a SIGKILLed writer's torn tail) is
+ * terminated before the next file, so its fragment can never corrupt the next file's first record.
  */
 export function readPersistedActivityLog(stateDir: string): string {
-  const directory = join(stateDir, "logs");
-  return [...readdirSync(directory)]
-    .sort((left, right) => (left < right ? -1 : 1))
-    .filter((name) => lstatSync(join(directory, name)).isFile())
-    .map((name) => readFileSync(join(directory, name), "utf8"))
+  return listActivityLogFiles(stateDir)
+    .map((file) => {
+      const text = readFileSync(file.path, "utf8");
+      return text === "" || text.endsWith("\n") ? text : `${text}\n`;
+    })
     .join("");
 }
 

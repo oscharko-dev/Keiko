@@ -585,10 +585,12 @@ describe("installProcessGuards — flushes the fatal line before exiting (KEIKO-
     });
     const loadServer = vi.fn((): Promise<FatalDiagnosticsModule> =>
       Promise.resolve({
-        createFileServerLogSink: (): { write: () => void; close: () => void } => ({
+        createActivityLogSink: (): { write: () => void; close: () => void } => ({
           write: (): void => undefined,
           close: (): void => undefined,
         }),
+        persistActivityLogLossSummary: (): "persisted" => "persisted",
+        resolveRuntimeStateDir: (): string => DEFAULT_RUNTIME_STATE_DIR,
         describeError: (): {
           readonly errorClass: string;
           readonly code?: string;

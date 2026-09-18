@@ -1095,17 +1095,18 @@ async function buildHandlerDepsOrReport(
     });
   } catch (error) {
     if (error instanceof UiStoreError) {
-      io.err(uiStoreRefusal(error.code));
+      io.err(uiStoreRefusal(error));
       return 2;
     }
     throw error;
   }
 }
 
-// A store refusal is reported by its closed code only: the process's stderr is an operator channel,
-// never a place for an error's free text (#3532).
-function uiStoreRefusal(code: string): string {
-  return `keiko ui: the UI store refused startup (${code}).\n`;
+// A store refusal names its closed code. Its message is part of the store's own code-authored
+// vocabulary (fixed sentences over code-owned labels such as "UI database path"), never foreign
+// error text or a path, so it stays as the operator's actionable explanation (#3532).
+function uiStoreRefusal(error: InstanceType<LoadedServerModule["UiStoreError"]>): string {
+  return `keiko ui: ${error.message} (${error.code})\n`;
 }
 
 export function createPortableHandoffShutdownTrigger(input: {
@@ -1139,7 +1140,7 @@ async function registerLaunchProjectOrReport(
     return null;
   } catch (error) {
     if (error instanceof UiStoreError) {
-      io.err(uiStoreRefusal(error.code));
+      io.err(uiStoreRefusal(error));
       return 2;
     }
     throw error;

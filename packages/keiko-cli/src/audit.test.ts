@@ -3,6 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
+import { createActivityLogSink } from "@oscharko-dev/keiko-server";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 
 import {
   AuditLoadError,
@@ -331,12 +337,59 @@ describe("runAuditCli", () => {
         }),
       ).toBe(1);
       expect(events.map(({ op }) => op)).toEqual(["cli.audit.started", "cli.audit.failed"]);
+      // #3532: the envelope carries the closed error kind; the failing class travels as the
+      // shape-gated `failureKind` field.
       expect(events[1]).toEqual(
         expect.objectContaining({
-          errorKind: "AuditLoadError",
+          errorKind: "validation-failed",
         }),
       );
       expect(extraOf(events[1]).reason).toBe("missing-export");
+      expect(extraOf(events[1]).failureKind).toBe("AuditLoadError");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // #3532 latent defect: `cli.audit.*` were unregistered plain objects that the production file
+  // sink refused, so these tests only ever passed against capture sinks. This one persists through
+  // the REAL sink and proves every audit operation lands as a registered, body-free line.
+  it("persists started, completed and failed audit evidence through the real Activity Log sink", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-audit-real-sink-"));
+    const activityStateDir = join(root, "control");
+    try {
+      const deps = {
+        cwd: root,
+        activityStateDir,
+        activityLogSinkFactory: (stateDir: string) => createActivityLogSink(stateDir),
+      };
+      await runAuditCli(["local-state"], makeIo().io, env, {
+        ...deps,
+        loadAuditor: () => Promise.resolve({ auditLocalState: () => DRIFTED }),
+      });
+      await runAuditCli(["local-state"], makeIo().io, env, {
+        ...deps,
+        loadAuditor: () => Promise.resolve({} as never),
+      });
+      const raw = readPersistedActivityLog(activityStateDir);
+      expect(raw).not.toContain(root);
+      const [started] = persistedActivityLogLines(raw, "cli.audit.started");
+      expect(
+        expectActivityLogProof("cli.audit.started.real-sink-line", started ?? ""),
+      ).toMatchObject({ targetSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown });
+      const [completed] = persistedActivityLogLines(raw, "cli.audit.completed");
+      expect(
+        expectActivityLogProof("cli.audit.completed.real-sink-line", completed ?? ""),
+      ).toMatchObject({ healthy: false, classCount: DRIFTED.classes.length });
+      const [failed] = persistedActivityLogLines(raw, "cli.audit.failed");
+      expect(expectActivityLogProof("cli.audit.failed.real-sink-line", failed ?? "")).toMatchObject(
+        {
+          level: "error",
+          errorKind: "validation-failed",
+          reason: "missing-export",
+          failureKind: "AuditLoadError",
+        },
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -373,8 +426,9 @@ describe("runAuditCli", () => {
       expect(auditorLoaded).toBe(false);
       expect(openAttempts).toBe(2);
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ op: "cli.audit.failed", errorKind: "Error" });
+      expect(events[0]).toMatchObject({ op: "cli.audit.failed", errorKind: "unavailable" });
       expect(extraOf(events[0]).reason).toBe("activity-log-open-failed");
+      expect(extraOf(events[0]).failureKind).toBe("Error");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

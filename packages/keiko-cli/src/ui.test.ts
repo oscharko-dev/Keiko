@@ -28,6 +28,7 @@ import type {
   ServerLogSink,
   UiHandlerDeps,
 } from "@oscharko-dev/keiko-server";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 import type { CliIo } from "./runner.js";
 import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
@@ -978,12 +979,14 @@ describe("runUiCli", () => {
     }
   });
 
-  // The activity-log sink mkdirs `<stateDir>/logs` the moment it is CONSTRUCTED. Two things
-  // therefore have to hold on the injected-server path: the state directory comes from the CLI's
-  // own resolution (launch cwd + the effective env, NOT `process.env`), and no sink is built at
-  // all — otherwise a unit test writes a log directory outside its fixture, wherever the process
-  // happens to be running.
-  it("resolves the state directory from the launch cwd and opens no log file under an injected server", async () => {
+  // The lifecycle activity-log sink mkdirs `<stateDir>/logs` the moment it is CONSTRUCTED. Two
+  // things therefore have to hold on the injected-server path: the state directory comes from the
+  // CLI's own resolution (launch cwd + the effective env, NOT `process.env`), and no lifecycle sink
+  // is built at all — otherwise a unit test writes a log directory outside its fixture. Store
+  // evidence emitted while the handler deps are built still goes to the PROCESS-wide Activity Log,
+  // which follows `process.env.KEIKO_STATE_DIR` (a fixture directory here) and never logs to
+  // nowhere (#3532); it must never carry process lifecycle lines.
+  it("resolves the state directory from the launch cwd and opens no lifecycle log under an injected server", async () => {
     const { io, err } = captureIo();
     const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-state-relative-"));
     const processStateDir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-process-state-"));
@@ -1005,7 +1008,10 @@ describe("runUiCli", () => {
       // Relative, so it resolves against the launch cwd — not against the process working
       // directory and not against a bare `.keiko`.
       expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko", "runtime"));
-      expect(existsSync(join(processStateDir, "logs"))).toBe(false);
+      const processLog = existsSync(join(processStateDir, "logs"))
+        ? readPersistedActivityLog(processStateDir)
+        : "";
+      expect(processLog).not.toContain('"category":"process"');
       expect(existsSync(join(cwd, ".keiko", "runtime", "logs"))).toBe(false);
       captured[0]?.store.close();
       captured[0]?.memoryVault?.close();

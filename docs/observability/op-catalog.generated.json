@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fa2d0824a911935c3decd68478bc596cedf1c9013454f112c049c69ed194b9ac",
+    "catalogDigest": "4802fbb9b13dcd22cd7459c545ba561f75c49eb8ad5e7e6f58cba04bef6d9487",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -20187,7 +20187,7 @@
         "proofIds": ["process.heartbeat.resources", "process.heartbeat.event-loop"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:82",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1213"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1214"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -20310,7 +20310,7 @@
         "proofIds": ["process.started.runtime", "process.started.configuration"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:104",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1337"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1338"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -25277,7 +25277,7 @@
         "proofIds": ["update.runtime.legacy-import-deferred.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui.ts:198",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1585"]
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1586"]
       },
       {
         "contractKind": "activity-log-operation",
