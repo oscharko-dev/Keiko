@@ -2197,11 +2197,11 @@
       "releaseNoteCategory": "internal-only",
       "releaseNotePriority": "internal",
       "userVisibleChange": "observable",
-      "userVisibleSummary": "Release delivery and build tooling only. Keiko 1.0.5 does not add, remove or rename a public export, CLI flag, package entry point, state store or product-runtime behavior. A green approved dev SHA now owns one portable build instead of duplicate dev and tag matrices, the stable build emits a read-only exact handoff for an allowlisted human rather than a bot-attributed dispatch the publisher rejects, and the canonical handoff artifact excludes expanded duplicate payload trees. The reviewed build-tool updates are @babel/preset-env 8.0.5, Vite 8.3.0 and Autoprefixer 10.5.6.",
+      "userVisibleSummary": "Release delivery and build tooling only. Keiko 1.0.5 does not add, remove or rename a public export, CLI flag, package entry point, state store or product-runtime behavior. A green approved dev SHA now owns one portable build instead of duplicate dev and tag matrices, a release is one press of the release button by an allowlisted owner after which the publish starts by itself once the stable build and every required check are green, and the canonical release bundle excludes expanded duplicate payload trees. The reviewed build-tool updates are @babel/preset-env 8.0.5, Vite 8.3.0 and Autoprefixer 10.5.6.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
-        "Release delivery: each approved dev SHA is built once, the compact portable handoff keeps only publish-required archives and evidence, and publication starts from an exact allowlisted human dispatch.",
+        "Release delivery: each approved dev SHA is built once, the compact portable bundle keeps only publish-required archives and evidence, and one press of the release button by an allowlisted owner starts a publication that runs to the end by itself.",
         "Build tooling: @babel/preset-env 8.0.5, Vite 8.3.0 and Autoprefixer 10.5.6 carry reviewed correctness and performance fixes without changing Keiko's public surface."
       ],
       "review": {

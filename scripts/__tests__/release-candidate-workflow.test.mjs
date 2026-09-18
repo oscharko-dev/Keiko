@@ -4,15 +4,16 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-// ADR-0177 D8 pins. The release candidate is the one place a workflow may write a release tag, and
-// the stable build's read-only handoff is the one place that prepares the exact owner command, so
-// their triggers, grants, secrets and step order are fixed here.
+// ADR-0177 D8 and D9 pins. The release candidate and the release button are the only places a
+// workflow may write a release tag, and release-advance.yml is the one place that may start a
+// publish, so their triggers, grants, secrets and step order are fixed here.
 
 const workflows = resolve(import.meta.dirname, "../../.github/workflows");
 const candidateSource = readFileSync(resolve(workflows, "release-candidate.yml"), "utf8");
 const candidate = parse(candidateSource);
 const portable = parse(readFileSync(resolve(workflows, "portable-assets.yml"), "utf8"));
 const release = parse(readFileSync(resolve(workflows, "release.yml"), "utf8"));
+const advance = parse(readFileSync(resolve(workflows, "release-advance.yml"), "utf8"));
 
 function stepIndex(job, predicate, label) {
   const index = job.steps.findIndex(predicate);
@@ -40,6 +41,12 @@ describe("release candidate workflow", () => {
       id: "plan",
       run: "node scripts/release-candidate.mjs --plan",
     });
+  });
+
+  it("hands both tag-writing plans the owner allowlist, so only an owner's request holds the tag", () => {
+    const allowlist = "${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}";
+    expect(candidate.jobs.plan.steps.at(-1).env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS).toBe(allowlist);
+    expect(candidate.jobs.tag.steps.at(-1).env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS).toBe(allowlist);
   });
 
   it("writes the tag at once, with a contents-only App token from its environment", () => {
@@ -119,38 +126,88 @@ describe("release workflow commit binding", () => {
   });
 });
 
-describe("stable build publish handoff", () => {
-  it("prepares human authorization only after a stable tag build assembled, with no write grant", () => {
-    const job = portable.jobs["publish-handoff"];
-    expect(job.needs).toBe("assemble");
+describe("release button", () => {
+  it("writes the tag only for an owner's dev dispatch, through the release-tagging App", () => {
+    const { request } = release.jobs;
+    expect(request.environment).toBe("release-tagging");
+    expect(request.permissions).toStrictEqual({ actions: "read", contents: "read" });
+    const mint = stepIndex(
+      request,
+      (step) => String(step.uses).startsWith("actions/create-github-app-token@"),
+      "tag token",
+    );
+    expect(request.steps[mint].with).toStrictEqual({
+      "client-id": "${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}",
+      "permission-contents": "write",
+      "private-key": "${{ secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY }}",
+    });
+    expect(mint).toBe(request.steps.length - 2);
+    expect(request.steps.at(-1)).toMatchObject({
+      env: {
+        CANDIDATE_SHA: "${{ github.sha }}",
+        GITHUB_TOKEN: "${{ github.token }}",
+        KEIKO_RELEASE_TAG_TOKEN: "${{ steps.tag-token.outputs.token }}",
+      },
+      run: "node scripts/release-candidate.mjs --request",
+    });
+  });
+});
+
+describe("event-driven publish start", () => {
+  it("wakes on the request, the tag build, and every release-required check workflow", () => {
+    expect(advance.on).toStrictEqual({
+      workflow_run: {
+        types: ["completed"],
+        workflows: ["Release", "Portable assets", "CI", "CodeQL", "Workflow hygiene"],
+      },
+    });
+    expect(advance.permissions).toStrictEqual({});
+    // Workflow-level concurrency binds every run, a skipped one included. A pull-request completion
+    // sharing the group would cancel the pending evaluation of the last prerequisite and leave a
+    // built, green request waiting for an unrelated event, so only push and dispatch completions
+    // share it; the evaluator's own condition admits exactly the same events.
+    const relevant =
+      "(github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')";
+    expect(advance.concurrency).toStrictEqual({
+      "cancel-in-progress": false,
+      group: `\${{ ${relevant} && 'release-advance' || format('release-advance-ignored-{0}', github.run_id) }}`,
+    });
+    expect(`(${advance.jobs.advance.if})`).toBe(relevant);
+  });
+
+  it("skips pull-request runs, runs trusted default-branch code, and holds no credential", () => {
+    const job = advance.jobs.advance;
     expect(job.if).toBe(
-      "${{ !cancelled() && needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}",
+      "github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'",
     );
     expect(job.permissions).toStrictEqual({
-      actions: "read",
+      actions: "write",
       checks: "read",
       contents: "read",
       statuses: "read",
     });
     expect(job.environment).toBeUndefined();
     expect(JSON.stringify(job)).not.toContain("secrets.");
+    expect(JSON.stringify(job)).not.toMatch(/workflow_run\.(head_sha|head_branch|id)/u);
+    // CodeRabbit finding on #3551: a branch ref binds the tip when the job starts, not the commit
+    // whose definition of this workflow is running; GITHUB_SHA is that default-branch commit.
+    expect(job.steps[0].with).toStrictEqual({
+      "persist-credentials": false,
+      ref: "${{ github.sha }}",
+    });
+    expect(job.steps[1].run).toBe('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"');
     expect(job.steps.some((step) => /npm (ci|install)/u.test(String(step.run)))).toBe(false);
-    const verify = stepIndex(
-      job,
-      (step) =>
-        step.run === 'RELEASE_SHA="$GITHUB_SHA" node scripts/verify-release-required-checks.mjs',
-      "required checks",
-    );
-    expect(verify).toBe(job.steps.length - 2);
     expect(job.steps.at(-1)).toMatchObject({
       env: {
         GITHUB_TOKEN: "${{ github.token }}",
-        RELEASE_TAG: "${{ github.ref_name }}",
-        RUN_ATTEMPT: "${{ github.run_attempt }}",
-        RUN_ID: "${{ github.run_id }}",
-        SOURCE_SHA: "${{ github.sha }}",
+        KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}",
       },
-      run: "node scripts/release-publish-handoff.mjs",
+      run: "node scripts/release-advance.mjs",
     });
+  });
+
+  it("no longer ends the stable build in a handoff an owner has to copy", () => {
+    expect(portable.jobs["publish-handoff"]).toBeUndefined();
+    expect(JSON.stringify(portable)).not.toContain("release-publish-handoff");
   });
 });

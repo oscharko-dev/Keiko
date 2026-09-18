@@ -146,6 +146,7 @@ describe("release workflow trigger scenarios (regression pin)", () => {
   // as a missing check, not a silently-covered one.
   const RELEASE_WORKFLOWS = [
     "release.yml",
+    "release-advance.yml",
     "release-candidate.yml",
     "release-alignment.yml",
     "portable-assets.yml",

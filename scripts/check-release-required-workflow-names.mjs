@@ -7,8 +7,8 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const workflowsDir = join(repoRoot, ".github", "workflows");
 const releaseWorkflowPath = join(workflowsDir, "release.yml");
 // Every workflow that verifies the release-required checks itself must read the same authority as
-// release.yml; the tag build (portable-assets.yml) does so before it asks for a publish.
-const RELEASE_AUTHORITY_WORKFLOWS = ["portable-assets.yml"];
+// release.yml; release-advance.yml does so before it starts a publish.
+const RELEASE_AUTHORITY_WORKFLOWS = ["release-advance.yml"];
 
 function fail(message) {
   console.error(`release-required-workflow-names: FAIL - ${message}`);

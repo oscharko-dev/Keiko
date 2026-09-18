@@ -34,10 +34,6 @@ concurrency:
   group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && 'portable-assets-dev-rehearsal' || format('portable-assets-run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
 
-env:
-  RELEASE_BASE_BRANCH: release/1.0
-  RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
-
 jobs:
   rehearsal-readiness:
     name: Select the portable build owner
@@ -64,7 +60,8 @@ jobs:
         id: plan
         # The same planner owns tag creation and rehearsal admission. An approved unpublished
         # version belongs to its stable-tag build; an already-published version may rehearse future
-        # code on dev. A stale run or open publish owns no build and fails closed.
+        # code on dev. A stale run, an open publish, or a tag an owner's release request holds owns no
+        # build and fails closed.
         env:
           CANDIDATE_SHA: ${{ github.sha }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -467,42 +464,3 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
-
-  publish-handoff:
-    name: Prepare human publish authorization
-    needs: assemble
-    # A stable build prepares an exact, read-only handoff after required checks pass. Publishing is
-    # deliberately started by an allowlisted human workflow_dispatch; a GITHUB_TOKEN dispatch is
-    # attributed to github-actions[bot] and cannot satisfy release.yml's human-actor guard.
-    if: ${{ !cancelled() && needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      checks: read
-      contents: read
-      statuses: read
-    # The tag is written on the dev push, so this build runs beside the commit's CI; this job waits
-    # for the six release-required checks (at most 90 minutes) before it emits the owner handoff.
-    timeout-minutes: 100
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Verify the release-required checks on the tag commit
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: RELEASE_SHA="$GITHUB_SHA" node scripts/verify-release-required-checks.mjs
-      - name: Prepare the exact human publish command
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          RUN_ID: ${{ github.run_id }}
-          SOURCE_SHA: ${{ github.sha }}
-        run: node scripts/release-publish-handoff.mjs

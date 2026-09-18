@@ -136,17 +136,17 @@ describe("releaseAuthorityDrift", () => {
     ).toEqual(["release-candidate.yml release authority drifted: RELEASE_BASE_BRANCH"]);
   });
 
-  it("holds the committed tag build workflow to release.yml's authority", () => {
+  it("holds the committed publish starter (release-advance.yml) to release.yml's authority", () => {
     expect(repositoryReleaseAuthorityDrift()).toEqual([]);
   });
 
   it("reads every dependent workflow through the given reader", () => {
     const read = (file) =>
-      file === "portable-assets.yml"
+      file === "release-advance.yml"
         ? "env:\n  RELEASE_BASE_BRANCH: dev\n  RELEASE_REQUIRED_CHECKS: '[\"ci\"]'"
         : "env:\n  RELEASE_BASE_BRANCH: release/1.0\n  RELEASE_REQUIRED_CHECKS: '[\"ci\"]'";
     expect(repositoryReleaseAuthorityDrift(read)).toEqual([
-      "portable-assets.yml release authority drifted: RELEASE_BASE_BRANCH",
+      "release-advance.yml release authority drifted: RELEASE_BASE_BRANCH",
     ]);
   });
 });
