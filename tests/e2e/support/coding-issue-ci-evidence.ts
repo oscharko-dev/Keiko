@@ -1,5 +1,5 @@
 import { expect, type Page } from "@playwright/test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODING_WORKBENCH_EVIDENCE_MODES,
@@ -9,6 +9,7 @@ import {
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./evidence.js";
 import { runAxe, seriousOrCritical, formatViolations } from "./axe.js";
 import { CI_WINDOW_ID } from "./coding-issue-ci-journey.js";
+import { readActivityLogText } from "../../../scripts/lib/activity-log-files.mjs";
 
 function sourceHashes(): Readonly<Record<string, string>> {
   const paths = [
@@ -75,7 +76,7 @@ export async function captureCiModes(page: Page): Promise<void> {
   await applyCodingWorkbenchEvidenceMode(page, selector, { name: "01-dark", theme: "dark" });
 }
 export function writeCiJourneyReceipt(stateDir: string, cases: readonly string[]): void {
-  const log = readFileSync(join(stateDir, "bff-state", "state", "logs", "server.log"), "utf8");
+  const log = readActivityLogText(join(stateDir, "bff-state", "state", "logs"));
   expect(log).not.toMatch(/required-build|advisory-analysis|REPAIRED_CI_3388/u);
   const lines = log
     .trim()

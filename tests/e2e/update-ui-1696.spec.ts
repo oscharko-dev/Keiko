@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { readActivityLogText } from "../../scripts/lib/activity-log-files.mjs";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 
 // Issue #3405 (Epic #3403) - current browser qualification for the governed update UI. The test
@@ -269,7 +270,7 @@ async function cleanupOutageHarness(harness: OutageHarness): Promise<void> {
 }
 
 function serverLogRecords(stateDir: string): readonly JsonObject[] {
-  return readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+  return readActivityLogText(join(stateDir, "logs"))
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as JsonObject);
@@ -1953,7 +1954,7 @@ test("@real-bff-outage preserves accepted update progress and reconnects to dura
       cancellationCutoff: "mutation-started",
     });
     expect(lifecycle?.correlationId).toEqual(expect.any(String));
-    const rawLog = readFileSync(join(harness.stateDir, "logs", "server.log"), "utf8");
+    const rawLog = readActivityLogText(join(harness.stateDir, "logs"));
     expect(rawLog).not.toContain("executionToken");
     expect(rawLog).not.toContain("confirmationDigest");
   } finally {

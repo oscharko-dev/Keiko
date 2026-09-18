@@ -30,6 +30,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
+import { readActivityLogText } from "../../../scripts/lib/activity-log-files.mjs";
 import { writeCodingIssueJourneyFlowEvidenceReceipt } from "../../../scripts/lib/qualification-evidence-receipt.mjs";
 import { driveOrReuseDraftPullRequest } from "./coding-issue-journey-live-cache.js";
 import {
@@ -868,16 +869,16 @@ export function activityEventTree(
   );
 }
 
-function readActivityEvents(path: string): readonly Readonly<Record<string, unknown>>[] {
-  return readFileSync(path, "utf8")
+function readActivityEvents(logsDir: string): readonly Readonly<Record<string, unknown>>[] {
+  return readActivityLogText(logsDir)
     .split("\n")
     .map(parseActivityLine)
     .filter((event): event is Readonly<Record<string, unknown>> => event !== undefined);
 }
 
 /**
- * Reads the run's activity events from the LIVE server log, twice, and only accepts a reading the
- * second pass reproduces.
+ * Reads the run's activity events from the LIVE Activity Log (every segment, in logical order),
+ * twice, and only accepts a reading the second pass reproduces.
  *
  * The log is being appended to while this reads it, and `parseActivityLine` silently drops an
  * unparseable line -- which a half-written trailing line always is. The strictest assertions in the
@@ -885,17 +886,17 @@ function readActivityEvents(path: string): readonly Readonly<Record<string, unkn
  * be unique, and there must be exactly one run start and one run settlement. A single truncated
  * line therefore failed the whole qualification with "unmatched tool invocations" AFTER the merge
  * had landed and the issue was closed -- full spend, no artifact, and the product blamed for a
- * partial write. Requiring two identical passes admits only a settled file.
+ * partial write. Requiring two identical passes admits only a settled log.
  */
 export function activityEventsForRun(runId: string): readonly Readonly<Record<string, unknown>>[] {
-  const path = process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH;
-  if (path === undefined || path.length === 0) {
-    throw new Error("qualification activity log path is unavailable");
+  const logsDir = process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_DIR;
+  if (logsDir === undefined || logsDir.length === 0) {
+    throw new Error("qualification activity log directory is unavailable");
   }
   const deadline = Date.now() + 60_000;
   for (;;) {
-    const first = readActivityEvents(path);
-    const second = readActivityEvents(path);
+    const first = readActivityEvents(logsDir);
+    const second = readActivityEvents(logsDir);
     if (first.length === second.length) return activityEventTree(second, runId);
     if (Date.now() > deadline) {
       throw new Error("the qualification activity log never settled long enough to be read");

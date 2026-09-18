@@ -123,8 +123,8 @@ describe("Git-connected Chat negative effect surface", () => {
   it("collects real Chat stream correlation headers and joins their activity log records", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-git-chat-activity-"));
     const activityLog = join(root, "server.log");
-    const previousPath = process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH;
-    process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH = activityLog;
+    const previousDir = process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_DIR;
+    process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_DIR = root;
     writeFileSync(
       activityLog,
       `${completedTurnEvents()
@@ -158,8 +158,8 @@ describe("Git-connected Chat negative effect surface", () => {
       });
       expect(events.listenerCount("request")).toBe(0);
     } finally {
-      if (previousPath === undefined) delete process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH;
-      else process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_PATH = previousPath;
+      if (previousDir === undefined) delete process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_DIR;
+      else process.env.KEIKO_QUALIFICATION_ACTIVITY_LOG_DIR = previousDir;
       rmSync(root, { recursive: true, force: true });
     }
   });
