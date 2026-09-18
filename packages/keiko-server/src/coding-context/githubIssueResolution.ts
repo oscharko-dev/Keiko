@@ -514,6 +514,16 @@ function levelFor(
   return errorKind === undefined ? "info" : "warn";
 }
 
+function resolutionFailureKind(
+  outcome: CodingWorkbenchIssueBindingFailure | "resolved",
+  reason: GitHubIssueResolutionReason | undefined,
+  errorKind: string | undefined,
+): ActivityLogErrorKind | undefined {
+  if (errorKind === undefined) return undefined;
+  const failureOutcome = outcome === "resolved" ? "issue-unavailable" : outcome;
+  return githubIssueResolutionErrorKind(failureOutcome, reason);
+}
+
 function record(
   ctx: ResolutionContext,
   outcome: CodingWorkbenchIssueBindingFailure | "resolved",
@@ -526,13 +536,7 @@ function record(
     readonly repositoryId?: string | undefined;
   },
 ): void {
-  const failureKind =
-    detail.errorKind === undefined
-      ? undefined
-      : githubIssueResolutionErrorKind(
-          outcome === "resolved" ? "issue-unavailable" : outcome,
-          detail.reason,
-        );
+  const failureKind = resolutionFailureKind(outcome, detail.reason, detail.errorKind);
   ctx.activityLog.write(
     activityLogEvent(
       ISSUE_RESOLVED_OPERATION,

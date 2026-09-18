@@ -461,7 +461,7 @@ const ACTIVITY_LOG_CREDENTIAL_SHAPES = [
   /^sk-(?:proj-|live-|test-)?[A-Za-z0-9_-]{8,}$/u,
   /^gh[pousr]_[A-Za-z0-9]{20,}$/u,
   /^AKIA[A-Z0-9]{16}$/u,
-  /^(?:bearer|basic|password|secret|token|api[-_]?key)[-_:][A-Za-z0-9._~+/-]{8,}$/iu,
+  /^(?:bearer|basic|password|secret|token|api[-_]?key)[-_:][a-z0-9._~+/-]{8,}$/iu,
 ] as const;
 const ACTIVITY_LOG_REDUCER_OWNED_FIELDS: ReadonlySet<string> = new Set([
   "clientNote",

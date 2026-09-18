@@ -41,6 +41,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const scriptPath = fileURLToPath(import.meta.url);
 const serverEntry = resolve(here, "../packages/keiko-server/dist/index.js");
@@ -49,6 +51,7 @@ const SECRET_MARKER = "gate-secret-DO-NOT-LEAK";
 const ID_PATTERN = /^[A-Za-z0-9._-]{8,128}$/;
 const HOST = "127.0.0.1";
 const REPO_ROOT = resolve(here, "..");
+const GIT_EXECUTABLE = resolveHostExecutable("git", { workspaceRoot: REPO_ROOT });
 
 export const SERVER_TOP_LEVEL_SITE_ID = "server.top-level-catch";
 export const MIN_STRATIFIED_SITES = 10;
@@ -299,7 +302,11 @@ function newFindings(baseSource, headSource, path) {
 }
 
 function gitText(args, cwd = REPO_ROOT) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  return execFileSync(GIT_EXECUTABLE, args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
 }
 
 function resolveGateBaseCommit(repoRoot) {

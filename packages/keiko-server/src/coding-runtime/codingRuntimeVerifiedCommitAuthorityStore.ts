@@ -3,13 +3,22 @@ import {
   isVerifiedCommitResult,
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
-import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  activityLogEvent,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 class VerifiedCommitRuntimeBindingError extends TypeError {}
+
+function verifiedCommitAuthorityErrorKind(error: unknown): ActivityLogErrorKind {
+  if (error instanceof VerifiedCommitRuntimeBindingError) return "conflict";
+  if (error instanceof TypeError || error instanceof SyntaxError) return "validation-failed";
+  return "internal";
+}
 
 export function assertVerifiedCommitRuntimeBinding(
   snapshot: CodingRuntimeSnapshot,
@@ -41,12 +50,7 @@ export function readLastSuccessfulVerifiedCommit(
         {
           level: "warn",
           correlationId: snapshot.runId,
-          errorKind:
-            error instanceof VerifiedCommitRuntimeBindingError
-              ? "conflict"
-              : error instanceof TypeError || error instanceof SyntaxError
-                ? "validation-failed"
-                : "internal",
+          errorKind: verifiedCommitAuthorityErrorKind(error),
         },
         {
           phase: "read",
