@@ -1273,49 +1273,49 @@
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:4243",
+      "site": "packages/keiko-server/src/gateway-setup.ts:4244",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:4855",
+      "site": "packages/keiko-server/src/gateway-setup.ts:4870",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:4948",
+      "site": "packages/keiko-server/src/gateway-setup.ts:4963",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:4979",
+      "site": "packages/keiko-server/src/gateway-setup.ts:4994",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:5199",
+      "site": "packages/keiko-server/src/gateway-setup.ts:5214",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:5224",
+      "site": "packages/keiko-server/src/gateway-setup.ts:5239",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:5597",
+      "site": "packages/keiko-server/src/gateway-setup.ts:5612",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2466,7 +2466,7 @@
     {
       "op": "gateway.tool-calling.verification",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6400",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6415",
       "package": "keiko-server"
     },
     {
