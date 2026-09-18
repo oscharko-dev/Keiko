@@ -432,8 +432,18 @@ function isReadinessReasonList(value: unknown): value is readonly ActivityLogRea
   return (
     Array.isArray(value) &&
     value.length <= ACTIVITY_LOG_READINESS_REASONS.length &&
-    value.every((reason) => isSetMember(reason, READINESS_REASON_SET))
+    value.every((reason) => isSetMember(reason, READINESS_REASON_SET)) &&
+    new Set(value).size === value.length
   );
+}
+
+// A failed check always names its reason and a ready process names none, so a snapshot whose state
+// and reasons disagree is refused instead of shown to an operator.
+function hasCoherentReasons(
+  readiness: unknown,
+  reasons: readonly ActivityLogReadinessReason[],
+): boolean {
+  return (readiness === "ready") === (reasons.length === 0);
 }
 
 export function isActivityLogReadinessSnapshot(
@@ -443,6 +453,7 @@ export function isActivityLogReadinessSnapshot(
   return (
     isSetMember(value.readiness, READINESS_STATE_SET) &&
     isReadinessReasonList(value.reasons) &&
+    hasCoherentReasons(value.readiness, value.reasons) &&
     isSetMember(value.writer, WRITER_KIND_SET) &&
     typeof value.lostEvents === "number" &&
     Number.isSafeInteger(value.lostEvents) &&

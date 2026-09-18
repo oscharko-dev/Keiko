@@ -2,10 +2,14 @@
 // buffers instead of dropping.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  recordClientDiagnosticLoss,
   reportClientDiagnostic,
   resetClientDiagnosticWriter,
+  restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
+  takeClientDiagnosticLoss,
   type ClientDiagnosticMeta,
 } from "./client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
@@ -73,6 +77,8 @@ describe("reportClientDiagnostic", () => {
     expect(written).toHaveLength(100);
     expect(written[0]).toBe("tick 50");
     expect(written.at(-1)).toBe("tick 149");
+    // #3532: the 50 evicted records are counted, never silently gone.
+    expect(takeClientDiagnosticLoss()).toEqual({ bufferEvicted: 50 });
   });
 
   it("discards anything held when the sink is reset", () => {
@@ -121,6 +127,50 @@ describe("reportClientDiagnostic", () => {
       undefined,
       { correlationId: "req-boot-000003" },
     ]);
+  });
+});
+
+// #3532: the page's own delivery-loss ledger — closed keys, bounded counts, handed to a transport
+// once and given back exactly when that delivery fails.
+describe("client diagnostic loss ledger", () => {
+  it("has nothing to hand over while nothing was lost", () => {
+    expect(takeClientDiagnosticLoss()).toBeUndefined();
+  });
+
+  it("hands the counts over once and clears them", () => {
+    recordClientDiagnosticLoss("postsThrottled");
+    recordClientDiagnosticLoss("postsThrottled");
+    recordClientDiagnosticLoss("rejectionsSuppressed", 4);
+
+    expect(takeClientDiagnosticLoss()).toEqual({ postsThrottled: 2, rejectionsSuppressed: 4 });
+    expect(takeClientDiagnosticLoss()).toBeUndefined();
+  });
+
+  // Regression: an absent key used to be restored as `undefined`, which took the default count of
+  // one and invented a loss of every other kind on each failed delivery.
+  it("restores exactly the counts a failed delivery gives back", () => {
+    restoreClientDiagnosticLoss({ errorsSuppressed: 3 });
+    restoreClientDiagnosticLoss(undefined);
+
+    expect(takeClientDiagnosticLoss()).toEqual({ errorsSuppressed: 3 });
+  });
+
+  it("ignores invalid counts and saturates at the contract ceiling", () => {
+    recordClientDiagnosticLoss("postsFailed", 0);
+    recordClientDiagnosticLoss("postsFailed", -2);
+    recordClientDiagnosticLoss("postsFailed", 1.5);
+    expect(takeClientDiagnosticLoss()).toBeUndefined();
+
+    recordClientDiagnosticLoss("bufferEvicted", CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX);
+    recordClientDiagnosticLoss("bufferEvicted", 10);
+    expect(takeClientDiagnosticLoss()).toEqual({ bufferEvicted: CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX });
+  });
+
+  it("clears counted loss when the sink is reset", () => {
+    recordClientDiagnosticLoss("postsFailed");
+    resetClientDiagnosticWriter();
+
+    expect(takeClientDiagnosticLoss()).toBeUndefined();
   });
 });
 

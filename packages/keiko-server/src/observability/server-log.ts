@@ -2107,7 +2107,7 @@ function recordMutationFailure(failures: Map<string, number>, key: string, nowMs
 
 // Forgets failures whose target no longer exists (a peer or an operator removed it).
 function forgetVanished(failures: Map<string, number>, present: ReadonlySet<string>): void {
-  for (const key of [...failures.keys()]) {
+  for (const key of failures.keys()) {
     if (!present.has(key)) failures.delete(key);
   }
 }

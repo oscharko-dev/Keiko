@@ -87,7 +87,11 @@ export function takeClientDiagnosticLoss(): ClientDiagnosticLossCounts | undefin
 /** Returns counts a failed delivery could not hand to the server. */
 export function restoreClientDiagnosticLoss(counts: ClientDiagnosticLossCounts | undefined): void {
   if (counts === undefined) return;
-  for (const key of CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS) recordClientDiagnosticLoss(key, counts[key]);
+  for (const key of CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS) {
+    // An absent key restores nothing: passing its `undefined` on would take the default count.
+    const count = counts[key];
+    if (count !== undefined) recordClientDiagnosticLoss(key, count);
+  }
 }
 
 function bufferUntilTransportArrives(message: string, meta?: ClientDiagnosticMeta): void {
