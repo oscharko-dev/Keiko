@@ -38,6 +38,10 @@ import {
   type PrDescriptionRequest,
   type PrDescriptionResolvedSnapshot,
 } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const NOW = Date.parse("2026-09-04T12:00:00.000Z");
 // The Gateway reports max(1, clock.now() - start) as a call's latency. On the system clock that is
@@ -240,6 +244,13 @@ function fixture(
   return { deps, source, calls, events };
 }
 
+// Activity Log proofs assert on a real captured event, never a hand-built one; when the operation
+// truly never fired this deliberately hands the proof helper an empty object so it fails loudly on
+// the missing/invalid evidence rather than on a TypeScript narrowing error here.
+function firstEventFor(events: readonly ModelGatewayLogEvent[], op: string): object {
+  return events.find((event) => event.op === op) ?? {};
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -326,6 +337,24 @@ describe("production Gateway PR narrative composition", () => {
       responseSchemaProfile: flags.enforced ? "openai-strict-compatible-v1" : "none",
       responseSchemaOmittedKeywordCount: flags.enforced ? 6 : 0,
     });
+    const startedPersisted = expectActivityLogProof(
+      "pr-description.generation.started.emitted-line",
+      formatActivityLogProofLine(firstEventFor(setup.events, "pr-description.generation.started")),
+    );
+    expect(startedPersisted).toMatchObject({
+      snapshotDigest: setup.source.snapshot.snapshotDigest,
+      authorityDigest: REQUEST.authority.authorityDigest,
+    });
+    const modelStartedPersisted = expectActivityLogProof(
+      "pr-description.model.started.emitted-line",
+      formatActivityLogProofLine(firstEventFor(setup.events, "pr-description.model.started")),
+    );
+    expect(modelStartedPersisted).toMatchObject({ callCount: 1, structuredOutput: flags.enforced });
+    const modelCompletedPersisted = expectActivityLogProof(
+      "pr-description.model.completed.emitted-line",
+      formatActivityLogProofLine(firstEventFor(setup.events, "pr-description.model.completed")),
+    );
+    expect(modelCompletedPersisted).toMatchObject({ accepted: true, reason: "none" });
     if (result.status !== "generated") throw new Error("Missing fixture artifact");
     expect(result.artifact.outcome).toBe("complete");
     expect(result.artifact.binding.snapshotDigest).toBe(setup.source.snapshot.snapshotDigest);
@@ -434,6 +463,13 @@ describe("production Gateway PR narrative composition", () => {
       setup.events.every((event) => event.correlationId === REQUEST.authority.correlationId),
     ).toBe(true);
     expect(setup.events.at(-1)?.op).toBe("pr-description.generation.completed");
+    const completedPersisted = expectActivityLogProof(
+      "pr-description.generation.completed.emitted-line",
+      formatActivityLogProofLine(
+        firstEventFor(setup.events, "pr-description.generation.completed"),
+      ),
+    );
+    expect(completedPersisted).toMatchObject({ outcome: "complete", callCount: 1 });
     const logs = JSON.stringify(setup.events);
     expect(logs).not.toContain("Replace the empty-input branch");
     expect(logs).not.toContain("Handle empty input");
@@ -475,15 +511,21 @@ describe("bounded PR narrative lifecycle", () => {
       reason: "cancelled",
     });
     expect(resolveSnapshot).not.toHaveBeenCalled();
-    expect(
-      setup.events
-        .filter((event) => event.op === "pr-description.generation.unavailable")
-        .map((event) => [event.extra?.reason, event.errorKind]),
-    ).toEqual([
+    const unavailableEvents = setup.events.filter(
+      (event) => event.op === "pr-description.generation.unavailable",
+    );
+    expect(unavailableEvents.map((event) => [event.extra?.reason, event.errorKind])).toEqual([
       ["invalid-request", "invalid-request"],
       ["budget-exhausted", "unavailable"],
       ["cancelled", "cancelled"],
     ]);
+    const unavailablePersisted = expectActivityLogProof(
+      "pr-description.generation.unavailable.emitted-line",
+      formatActivityLogProofLine(
+        firstEventFor(setup.events, "pr-description.generation.unavailable"),
+      ),
+    );
+    expect(unavailablePersisted).toMatchObject({ reason: "invalid-request" });
   });
 
   it("records an inaccessible resolver failure without retaining its body", async () => {
@@ -494,6 +536,11 @@ describe("bounded PR narrative lifecycle", () => {
     });
     expect(result).toEqual({ status: "unavailable", reason: "provider-failed" });
     expect(setup.events.at(-1)?.op).toBe("pr-description.generation.failed");
+    const failedPersisted = expectActivityLogProof(
+      "pr-description.generation.failed.emitted-line",
+      formatActivityLogProofLine(firstEventFor(setup.events, "pr-description.generation.failed")),
+    );
+    expect(failedPersisted).toMatchObject({ reason: "provider-failed" });
     expect(JSON.stringify(setup.events)).not.toContain("private resolver detail");
   });
 
@@ -643,11 +690,18 @@ describe("bounded PR narrative lifecycle", () => {
 
     expect(result).toEqual({ status: "unavailable", reason: "authority-denied" });
     expect(setup.calls).toHaveLength(0);
-    expect(
-      setup.events.find((event) => event.op === "pr-description.authority.revalidation.failed")
-        ?.errorKind,
-    ).toBe("internal");
+    const authorityFailed = setup.events.find(
+      (event) => event.op === "pr-description.authority.revalidation.failed",
+    );
+    expect(authorityFailed?.errorKind).toBe("internal");
     expect(JSON.stringify(setup.events)).not.toContain("private authority failure");
+    const authorityFailedPersisted = expectActivityLogProof(
+      "pr-description.authority.revalidation.failed.emitted-line",
+      formatActivityLogProofLine(
+        firstEventFor(setup.events, "pr-description.authority.revalidation.failed"),
+      ),
+    );
+    expect(authorityFailedPersisted).toMatchObject({ reason: "authority-denied" });
   });
 
   it.each([
@@ -735,13 +789,17 @@ describe("bounded PR narrative lifecycle", () => {
       }),
     });
     expect(result.status === "generated" && result.artifact.reason).toBe("provider-failed");
-    expect(
-      setup.events.find((event) => event.op === "pr-description.model.failed")?.errorKind,
-    ).toBeDefined();
+    const modelFailed = setup.events.find((event) => event.op === "pr-description.model.failed");
+    expect(modelFailed?.errorKind).toBeDefined();
     expect(JSON.stringify(setup.events)).not.toContain("private provider body");
-    expect(
-      setup.events.find((event) => event.op === "pr-description.model.failed")?.extra?.frames,
-    ).toEqual(["keiko-model-gateway/dist/prDescription/generate.js:1:1"]);
+    expect(modelFailed?.extra?.frames).toEqual([
+      "keiko-model-gateway/dist/prDescription/generate.js:1:1",
+    ]);
+    const modelFailedPersisted = expectActivityLogProof(
+      "pr-description.model.failed.emitted-line",
+      formatActivityLogProofLine(firstEventFor(setup.events, "pr-description.model.failed")),
+    );
+    expect(modelFailedPersisted).toMatchObject({ reason: "provider-failed", callCount: 1 });
   });
 
   it("classifies a genuine gateway circuit-breaker open, not just an adapter-thrown CircuitOpenError", async () => {

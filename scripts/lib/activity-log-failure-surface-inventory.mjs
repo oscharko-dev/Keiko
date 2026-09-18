@@ -18,10 +18,10 @@ import {
 
 const FAILURE_SURFACE_INVENTORY_SCHEMA = "keiko-activity-log-failure-surface-inventory/1";
 
-// Transitional: the retrofit of every registered proof and scenario lands across several commits
-// of #3532. Until it is complete an unresolved proof or scenario is reported with status
-// "unresolved" but is not yet a violation.
-const RESOLUTION_ENFORCED = false;
+// Every registered proof id and every scenario a failure class maps to must resolve: an unresolved
+// one is a violation. `options.enforceResolution: false` exists only so negative fixtures can
+// isolate the other rules.
+const RESOLUTION_ENFORCED = true;
 
 function compareCodepoints(left, right) {
   if (left === right) return 0;
