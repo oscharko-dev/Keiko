@@ -20,14 +20,14 @@ Every release-impacting issue and PR must record:
 - Supported-from versions.
 - Affected state stores.
 - User action required and remediation.
-- Release-owner review evidence, including an `approvalReference` that points to the issue, PR, or release approval record.
+- Release-owner review evidence, including an `approvalReference` that points to the issue, PR, or
+  release decision record.
 
-Before publish, `release:publish` and `prepublishOnly` require a machine-checkable approval reference in one of two forms, both verified through the GitHub API and both bound to a login listed in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`:
-
-- `github-pr-review:<owner>/<repo>#<pr>#<review>` — the referenced review must exist in the current GitHub repository and be `APPROVED`.
-- `github-issue-comment:<owner>/<repo>#<issue>#<comment>` — the referenced comment must exist on the referenced issue in the current GitHub repository, be authored by an allowed release owner, and carry the literal phrase `Approved-for-publish: <package-name>@<version>` for the exact root package version being published **on a line of its own, starting at column zero** (no leading whitespace — indentation makes the line a documented example, never a grant), outside any Markdown code fence and outside any blockquote. A phrase merely embedded in a sentence, quoted in a denial, shown inside a fenced example, or cited on a `>` blockquote line documents the phrase — it never grants the approval. This form exists because GitHub refuses self-approval of one's own pull requests, which a solo release owner can never satisfy; it carries the same intent — a durable, GitHub-verified owner approval artifact — at the same strictness (owner decision, 2026-08-08).
-
-Bare issue references without a verified approval comment are acceptable while metadata is being prepared, but they are not sufficient to publish.
+The catalog gate validates that every current-version entry is structurally reviewed and carries a
+non-empty durable approval reference. It does not call GitHub or infer authorization from a comment
+phrase. Publication authority comes from the protected signed merge and, for the Actions path, the
+exact allowlisted non-bot dispatch guarded by `.github/workflows/release.yml`. Keep the reference
+useful for audit reconstruction; do not invent a review id or approval comment.
 
 User findings stay reporter-simple. Reporters provide reproduction and impact; maintainers or agents fill the normalized release-impact triage block after confirming the defect and intended fix.
 
@@ -39,10 +39,10 @@ append the change to an already published package version. The PR must state tha
 is deferred and preserve the prepared metadata for release planning.
 
 The release-cut or release-metadata PR appends the prepared record to
-`release-impact.catalog.json` after the target package version is decided and the required
-release-owner approval evidence exists. That PR owns catalog deduplication, version/tag binding, and
-the publish-mode approval-reference check. This lifecycle split keeps feature review complete without
-mutating an append-only release artifact prematurely.
+`release-impact.catalog.json` after the target package version is decided and the release owner has
+reviewed it. That PR owns catalog deduplication, version/tag binding, and the durable approval
+reference. This lifecycle split keeps feature review complete without mutating an append-only release
+artifact prematurely.
 
 ## Taxonomy
 

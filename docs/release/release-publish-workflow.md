@@ -1,23 +1,26 @@
 # Release / Publish Workflow
 
-This repository now has a dedicated automated release workflow at [`.github/workflows/release.yml`](../../.github/workflows/release.yml).
+This repository has a dedicated, human-authorized release workflow at
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml).
 
 ## Operator contract
 
-A stable release is one reviewed merge and one approval (ADR-0177 D8):
+A stable release is one reviewed merge and one explicit owner dispatch (ADR-0177 D8):
 
 1. Land the version bump on `dev`: `npm run set-version -- <version>` moves every mechanical
    spot, and the release-impact catalog entry carries the release-owner approval.
 2. The `dev` push runs `release-candidate.yml`, which points `v<version>` at that commit through
-   the release tag GitHub App; the tag push builds the stable portable assets beside the commit's
-   CI, and the build's last job dispatches `release.yml` with `publish: true` once the
-   release-required checks are green.
-3. Approve the `npm-publish` deployment. The publish job runs `release:publish` for you.
+   the release tag GitHub App. The dev portable workflow assigns that SHA to the tag build instead
+   of duplicating it as a rehearsal. The tag push builds the stable portable assets beside CI.
+3. After the build and required checks pass, its read-only `publish-handoff` summary prints the exact
+   `gh workflow run release.yml` command bound to the tag, SHA, run id, attempt, and canonical
+   artifact. Run that command as an allowlisted release owner. That non-bot dispatch is the publish
+   authorization; the `npm-publish` environment scopes credentials but currently has no reviewer
+   protection rule.
 
-Cutting the tag by hand (`git tag -s v<version>` on the reviewed commit, then dispatching
-`release.yml` with that build's `portable_assets_run_id`) remains the fallback while the App is not
-installed; the candidate workflow keeps, moves, or leaves an owner-cut tag by the same plan. Do not
-publish packages and then manually remember the rest of the cleanup.
+Cutting the tag by hand (`git tag -s v<version>` on the reviewed commit) remains the fallback while
+the App is unavailable. The stable build still emits the same exact human handoff. Do not publish
+packages and then manually remember the rest of the cleanup.
 
 `scripts/release-publish.mjs` is the source of truth for the final publish. A stable `latest`
 release is created or updated BEFORE npm publishes, so its downloads can be verified while the
@@ -184,18 +187,20 @@ it:
    without token authority. The Windows job builds `keiko-windows-x64-setup.exe` from the finalized
    ZIP and verifies its embedded script and ZIP digest. No Apple or Microsoft signing service is
    required or contacted.
-5. Assembles the exact-four, digest-cross-checked `portable-release-assets` bundle (with
-   `portable-assets.json`) via `scripts/assemble-portable-release-assets.mjs` in exactly the layout
-   the Release workflow consumes through `portable_assets_run_id`. GitHub attestations are emitted
-   as supplementary provenance; the protected publisher later adds mandatory Keiko release trust.
+5. Validates each complete staged tree, then assembles a compact exact-four,
+   digest-cross-checked `portable-release-assets` bundle (with `portable-assets.json`) containing
+   only the archives, setup companion, manifests, and publish-required evidence. Expanded payload
+   trees and the downloaded `portable-stage-*` inputs stay outside the handoff artifact. GitHub
+   attestations are supplementary provenance; the publisher later adds mandatory Keiko release
+   trust.
 
-A push to `dev` runs this chain as a rehearsal
+A push to `dev` uses the shared release-candidate planner
 ([ADR-0177](../adr/ADR-0177-rehearse-the-stable-release-on-every-dev-push.md)). Its
-`rehearsal-readiness` job first checks that the committed version is stable and that each of the
-four targets has exactly one reviewed, human-approved release-impact entry; otherwise the job
-summary names what is missing and the rehearsal stops without failing. A releasable push runs every
-step above for `v<package.json version>` except the tag identity and the required-check verification
-of the tagged commit. Its Linux job runs in the `portable-release-rehearsal` environment and signs
+`rehearsal-readiness` job assigns one owner. An approved unpublished SHA belongs only to the
+`stable-tag` build; an already-published version may run the full `dev-rehearsal`; stale,
+unapproved, or publish-blocked SHAs run no expensive portable jobs. A rehearsal runs every step
+above for `v<package.json version>` except tag identity and tagged-commit required-check
+verification. Its Linux job runs in the `portable-release-rehearsal` environment and signs
 the qualification receipt as `portable-assets.yml@refs/heads/dev`, an identity production discovery
 never accepts, and its bundle is uploaded as `portable-rehearsal-assets`, which the Release workflow
 refuses. A newer `dev` push cancels an older rehearsal; tag runs and manual dispatches are never
@@ -220,8 +225,9 @@ exact `v<package.json.version>`, digest, and signing-identity guards. Only their
 `verified-production` outputs may enter the reviewed-candidate bundle. The Ubuntu assembler
 validates those outputs but cannot generate or upgrade signing-verification booleans. `release.yml`
 publishes only from a `workflow_dispatch` whose `portable_assets_run_id` points at the resulting
-green `Portable assets` run; the stable tag build dispatches it itself, an operator does so only on
-the hand-cut fallback path.
+green `Portable assets` run. No workflow dispatches it: `github-actions[bot]` cannot satisfy the
+publish guard, and the stable build holds read-only Actions authority. An allowlisted human uses the
+exact handoff after the required checks pass.
 
 ## Moving the version
 
@@ -236,23 +242,20 @@ stay reviewed work.
 
 ## Triggering
 
-- One-approval stable release (ADR-0177 D8): on a `dev` push whose version is approved for every
+- Human-authorized stable release (ADR-0177 D8): on a `dev` push whose version is approved for every
   portable target and not yet published, `release-candidate.yml` points `v<version>` at that commit
   through the release tag GitHub App. The tag push runs the stable portable build beside the commit's
-  CI; its `request-publish` job waits for the release-required checks and then dispatches this
-  workflow with that run's id and attempt.
-  The only manual step is approving the `npm-publish` deployment.
-- Stable tag pushes (`v<version>`, no prerelease suffix) run the full release verification job.
-- An EXACT tag over the current package version (`v<package.json version>`, including npm
-  prerelease versions such as `v0.3.0-rc.1` over `0.3.0-rc.1`) runs the full verification —
-  exact npm prereleases publish through this workflow.
-- Governed PORTABLE beta tag pushes (`v<version>-beta.<n>` layered over the package version,
-  cut by `scripts/release-portable-prerelease.mjs`) run the SAME full verification — no step is
-  skipped. Their assets carry the prerelease lane's own checks in addition (built-commit
-  version match, checksums, macOS seal — ADR-0163 D9). Any other hyphenated `v*` tag (a
-  non-exact RC, a foreign version, malformed) fails the tag validation.
-- Manual `workflow_dispatch` with `publish: false` runs the same verification job.
-- Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v`; the job then verifies the release-required checks for that tag's commit and waits for the `npm-publish` approval.
+  CI; its `publish-handoff` job waits for the release-required checks and prints the exact manual
+  dispatch. A release owner runs it; there is no automatic release-workflow dispatch.
+- Stable tag pushes build portable assets but do not trigger `release.yml` directly.
+- An exact stable tag over the current package version can be selected for the owner dispatch.
+- Governed portable beta tags remain owned by `scripts/release-portable-prerelease.mjs`; they are not
+  accepted by the stable `latest` handoff.
+- Manual `workflow_dispatch` with `publish: false` runs no publish job.
+- Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref
+  is a tag that starts with `v`, `github.triggering_actor` is not a bot, and that exact login is in
+  the JSON-array repository variable `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`. The job then re-verifies
+  the release-required checks for that tag's commit.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
 - Production stable `latest` publishes require the four archives plus the Windows setup companion
   to be present on the GitHub Release when the run finishes; a reviewed portable asset bundle is how
@@ -311,27 +314,15 @@ branch even though a tag cannot emit it.
 
 ## Gates
 
-The tag verification job is dependency-free after checkout and Node setup:
+The stable portable build waits for the six release-required checks on the exact tagged SHA before
+it emits a publish handoff. The human-dispatched release job independently verifies those checks
+again, validates that the tag still identifies its immutable workflow SHA, resolves the exact
+successful portable run and attempt, and then executes the full release plan and publish gates.
 
-1. Validate that the tag name matches `package.json` (exact match, or the governed portable
-   beta format `v<version>-beta.<n>` layered over the package version).
-2. Verify required GitHub checks for the tagged SHA.
-3. Run `npm run release:plan -- --tag beta`.
-
-Every step runs for EVERY accepted tag, governed portable betas included: the required-check
-lookup resolves its contexts from `RELEASE_REQUIRED_CHECKS` (set at workflow level) rather than
-from branch protection, so it evaluates them directly on the tagged SHA — a dev-based
-prerelease commit included. A green `Release verification` therefore attests the same thing for
-a beta tag as for a stable one.
-
-The release plan validates version consistency, publish manifests, and release-impact metadata
-without relying on `node_modules`, so the tag job can fail fast on metadata drift. It also prints
-the generated GitHub Release notes as a non-publishing preview so maintainers can review the
-customer-readable bullets before dispatching a live publish.
-
-The release workflow relies on the protected required checks for full build, test, SBOM, smoke,
-and supply-chain evidence. The tag verification job verifies those checks on the release SHA before
-planning or publishing.
+The release plan validates version consistency, publish manifests, release-impact metadata, full
+build/test/SBOM/smoke evidence, and supply-chain policy. It also prints the generated GitHub Release
+notes before any publication side effect. Governed portable beta tags remain on the separate
+prerelease orchestration path and are never accepted as stable `latest` handoffs.
 
 ## Publish control
 
@@ -347,6 +338,9 @@ Publish is intentionally off by default. To publish, a maintainer must:
   supply a bundle,
 - optionally set `portable_assets_manifest` to the manifest path inside that bundle; otherwise it
   defaults to `portable-assets.json`.
+
+`KEIKO_RELEASE_OWNER_GITHUB_LOGINS` must be a valid JSON array of exact GitHub logins, for example
+`["release-owner"]`. A malformed, missing, or empty value makes the job condition fail closed.
 
 No `NPM_TOKEN` is required for a normal publish — see [npm authentication](#npm-authentication-trusted-publishing)
 below. The npm Trusted Publisher is configured for this package on npmjs.com and was verified by the
@@ -386,9 +380,9 @@ first release-trusted build. Do not retroactively change their trust scope or tr
 as a canary. Apple/Microsoft provider access is not a prerequisite and this updater repair grants no
 publish approval.
 
-The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` once the `npm-publish`
-approval is given, after it re-verified the release-required checks of the commit it was dispatched
-for and validated the green `Portable assets` run of that commit as its input.
+The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after an allowlisted human
+dispatches it, after it re-verifies the release-required checks of the commit it was dispatched for
+and validates the green `Portable assets` run of that commit as its input.
 The script:
 
 - checks version and publish-manifest consistency,
@@ -416,7 +410,9 @@ The script:
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,
 - rejects credential-bearing registry URLs before logging or release-note generation,
-- requires publish-time release-impact approval evidence to resolve through GitHub to an artifact authored by `KEIKO_RELEASE_OWNER_GITHUB_LOGINS` — either an approved PR review (`github-pr-review:`) or, for the solo-owner case where GitHub refuses self-approval, an owner-authored issue comment (`github-issue-comment:`) carrying the version-bound `Approved-for-publish:` phrase on a line of its own (see the release-impact runbook for both forms),
+- requires reviewed, version-bound release-impact metadata whose approval reference remains a
+  durable audit link; the protected merge and exact allowlisted human dispatch are the executable
+  authorization boundaries,
 - requires a clean tracked working tree,
 - runs the `prepack` release gate,
 - stages and publishes or reuses the root package only; private runtime workspaces ship as
@@ -494,15 +490,15 @@ duplicated, contradictory, unreviewed, unbundled, or version-mismatched release-
 Both paths run the same `scripts/release-publish.mjs` and the same gates. They differ in who has to
 click, and in what the published version carries afterwards:
 
-| Path                                                                                                     | Registry authentication                                                           | Human step                                                                      | Provenance attestation | `npm-publish` deployment                                |
-| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------- |
-| Actions dispatch — `gh workflow run release.yml --ref v<version> -f publish=true -f npm_dist_tag=latest` | OIDC trusted publishing; no stored secret                                         | the `npm-publish` environment's required reviewer approves before any step runs | yes                    | written by GitHub for the environment                   |
-| Governed local publish — `npm run release:publish -- --tag latest`                                       | `NODE_AUTH_TOKEN`/`NPM_TOKEN` from the operator's own environment or local `.env` | none beyond starting the run                                                    | no                     | written by the script itself since 0.3.17 (issue #3252) |
+| Path                                                                                                     | Registry authentication                                                           | Human step                                                       | Provenance attestation | `npm-publish` deployment                                |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------- | ------------------------------------------------------- |
+| Actions dispatch — `gh workflow run release.yml --ref v<version> -f publish=true -f npm_dist_tag=latest` | OIDC trusted publishing; no stored secret                                         | an allowlisted non-bot owner dispatches the exact build handoff  | yes                    | written by GitHub for the environment                   |
+| Governed local publish — `npm run release:publish -- --tag latest`                                       | `NODE_AUTH_TOKEN`/`NPM_TOKEN` from the operator's own environment or local `.env` | an operator deliberately starts the exact tagged release locally | no                     | written by the script itself since 0.3.17 (issue #3252) |
 
-Prefer the Actions dispatch whenever the release owner is available to approve: it publishes with no
-standing credential and leaves a Sigstore publish attestation on the registry. The governed local
-publish exists for releases that must complete without an approval click. When a version ships that
-way, record that it carries no publish attestation — of the 0.3.x line only 0.3.8 does.
+Prefer the Actions dispatch: it publishes with no standing credential and leaves a Sigstore publish
+attestation on the registry. The governed local publish is a recovery path when the OIDC workflow
+cannot complete. When a version ships that way, record that it carries no publish attestation — of
+the 0.3.x line only 0.3.8 does.
 
 The local publish must run on **Linux**: the publish gates re-check editor bundle evidence whose
 gzip sizes are Linux-anchored, and a macOS run fails it for platform reasons alone. Any Linux host
@@ -522,26 +518,24 @@ image, not a release image, so a publish from it needs three things added in the
   there. A checkout mounted from a git worktree carries a `.git` _file_ pointing at a main
   repository that is not mounted, and every git-reading gate fails on it.
 
-The approval requirement on the `npm-publish` environment is a deliberate control (ADR-0170 D3):
-`actions: write` anywhere in this repository is otherwise enough to dispatch a production publish.
-Do not remove it to make the Actions path unattended.
+The `npm-publish` environment currently has no required-reviewer protection rule. Do not describe it
+as an approval gate and do not compensate by granting the stable build `actions: write`: an automatic
+workflow dispatch is bot-attributed and deliberately refused. Human control is the exact JSON-array
+owner guard plus the explicit non-bot dispatch; the environment scopes credentials and OIDC identity.
 
 ### Release-owner allowlist in an operator shell
 
-Both paths verify the publish-time release-impact approval against `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`,
-and an unresolved allowlist refuses **every** approval — the shape of the 0.3.1 operator outage. In
-Actions the workflow injects it from the repository variable of the same name. Locally
-`scripts/lib/release-owner-allowlist.mjs` resolves the same repository variable through `gh`, so no
-export is normally needed; export it by hand only when `gh` cannot read repository variables in that
-shell. It holds GitHub logins, and the author of the `Approved-for-publish:` comment must be one of
-them — that is the release owner's own login, which need not equal the repository account name.
+The Actions job parses `KEIKO_RELEASE_OWNER_GITHUB_LOGINS` as a JSON array and tests exact membership;
+substring matches are not authorization. Local release tooling resolves the same repository variable
+through `gh` when it needs the release-owner configuration, so no export is normally needed. Export
+it only when `gh` cannot read repository variables in that shell, preserving the JSON-array format.
 
 ## GitHub Release and required checks
 
-The tag-push release verification waits only for checks emitted on the release commit. Dependency
-Review remains a required PR gate, but it is not listed in `RELEASE_REQUIRED_CHECKS` because it is
-`pull_request`-only and GitHub does not emit it on the tagged squash commit. This avoids the
-manual commit-status mirroring that previously made patch releases slow and error-prone.
+The stable build's handoff and the human-dispatched release verification wait only for checks emitted
+on the release commit. Dependency Review remains a required PR gate, but it is not listed in
+`RELEASE_REQUIRED_CHECKS` because it is `pull_request`-only and GitHub does not emit it on the tagged
+squash commit. This avoids manual commit-status mirroring.
 
 This exception is limited to tag verification. `release/1.0` PR branch protection must continue to
 require `Review dependency diff (dev/main)` before a hotfix can merge.

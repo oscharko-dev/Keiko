@@ -7,6 +7,12 @@ which retires the reviewer and removes its workflow, configuration, variables, a
 credentials. Originally Accepted (owner decision, 2026-08-02); epic #2881 tracked the
 adoption. Retained as historical decision context.
 
+Historical correction (2026-09-18, #3548): the `npm-publish` environment currently has no
+protection rules. It scopes release credentials, but it is not a human-approval gate. The current
+release boundary is the allowlisted, non-bot `workflow_dispatch` in ADR-0177 D8; a workflow-token
+dispatch is attributed to `github-actions[bot]` and is refused. The original text below is retained
+to explain the retired reviewer's threat analysis, not as a claim about current repository settings.
+
 ## Supersedes and amends
 
 This decision supersedes the ADR-0167 Keiko for Quality retirement **for this surface only**.
@@ -141,15 +147,12 @@ retain `actions: write` (infra-failure-retry):
 1. The `keiko-for-quality` environment carries a protected-branches-only deployment branch
    policy, so a job running a candidate branch's workflow file cannot declare the environment
    and its secrets never materialize there.
-2. `release.yml`'s publish job runs behind the `npm-publish` environment, whose required human
-   reviewer is a provisioned operating prerequisite (verify with
-   `gh api repos/<owner>/<repo>/environments/npm-publish` — the `required_reviewers` rule must
-   be present). Because a dispatched candidate-branch `release.yml` variant could omit the
-   environment declaration entirely, the npm Trusted Publisher (ADR-0130) must additionally be
-   bound to the `npm-publish` environment on npmjs.com — an operator-side setting that no
-   repository configuration or gate can verify: confirmation lives only in the npmjs.com
-   publisher settings, and ADR-0130 D4 records the operator step. Until it is set, that
-   residual path is a stated fail-open window, not a closed one.
+2. The original design required a human reviewer on the `npm-publish` environment. That rule is not
+   provisioned today, so the environment scopes credentials but does not authorize publication.
+   ADR-0177 D8 now requires an allowlisted non-bot dispatch and removes workflow-owned dispatch.
+   Independently, the npm Trusted Publisher (ADR-0130) remains bound to `release.yml` and the
+   `npm-publish` environment on npmjs.com — an operator-side setting that repository configuration
+   cannot verify and ADR-0130 D4 records.
 
 State the approval case precisely rather than in that list. GitHub's create-review API accepts an
 `APPROVE` event from any token holding `pull-requests: write`, so the platform does **not** withhold

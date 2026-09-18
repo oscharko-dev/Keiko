@@ -1,8 +1,10 @@
-# ADR-0177: Rehearse the stable release on every dev push
+# ADR-0177: Coordinate one stable release build from every dev push
 
 ## Status
 
 Accepted (owner decision, 2026-09-14). D8 added by owner decision, 2026-09-14.
+Amended by owner decision, 2026-09-18, to assign one portable build owner and retain explicit
+human publish authorization (#3548).
 
 ## Amends
 
@@ -32,27 +34,36 @@ anyone tags it.
 
 ## Decision
 
-### D1 — A releasable dev push runs the stable chain as a rehearsal
+### D1 — Every dev push assigns one portable build owner
 
-A push to `dev` runs the `stage`, `stage-linux-production`, `qualify-linux-production`, and
-`assemble` jobs of a stable tag with the same steps: native staging with `--release`, the USearch,
-launch/setup, and secure-read smokes, Linux qualification, OIDC signing, sealing, offline
-re-verification on a fresh runner, the Windows setup companion build, assembly, and the GitHub
-Attestations. The release tag the assembly binds is derived from the committed version,
-`v<package.json version>`, never from the ref name.
+The release-candidate planner is the single decision owner for both tag creation and dev rehearsal.
+It emits one of three portable build owners for the exact pushed SHA:
+
+- `stable-tag` when the version is approved and not yet published. The dev workflow does not stage
+  it; the exact tag push performs the one authoritative four-target build.
+- `dev-rehearsal` when the version is already published. This preserves full-chain regression
+  coverage for ordinary post-release development without duplicating a release candidate build.
+- `none` when the version is unapproved, the SHA is stale, or another publish owns the tag.
+
+A `dev-rehearsal` runs the `stage`, `stage-linux-production`, `qualify-linux-production`, and
+`assemble` jobs with the stable steps: native staging with `--release`, the USearch, launch/setup,
+and secure-read smokes, Linux qualification, OIDC signing, sealing, offline re-verification on a
+fresh runner, the Windows setup companion build, assembly, and GitHub Attestations. The release tag
+the assembly binds is derived from the committed version, `v<package.json version>`, never from the
+ref name.
 
 Dev pushes share one concurrency group, and a newer push cancels the older rehearsal. Every tag run
 and every manual dispatch gets a group of its own, because GitHub cancels a queued run in a shared
 group when a third one arrives, even without `cancel-in-progress`.
 
-### D2 — "Not releasable yet" is a named status, not a failure
+### D2 — Build ownership is a named status, not an independent guess
 
-The read-only `rehearsal-readiness` job (`scripts/portable-rehearsal-readiness.mjs`) reads only the
-committed `package.json` and `release-impact.catalog.json`. A prerelease version, or a portable
-target without exactly one reviewed, human-approved release-impact entry for `v<version>`, sets
-`ready=false` and writes the reason to the job summary. The rehearsal jobs are then skipped rather
-than failed, so the lane does not stand red between two releases. An unreadable package or catalog
-fails the job, because that is a defect rather than a state.
+The read-only `rehearsal-readiness` job invokes `scripts/release-candidate.mjs --plan`, the same
+planner used by `release-candidate.yml`. Local readiness still comes from the committed
+`package.json` and `release-impact.catalog.json`; live reads establish the current `dev` head, tag,
+GitHub Release, npm version, and open publish state. The job outputs the portable build owner and
+stages only for `dev-rehearsal`. A normal `stable-tag` or `none` result skips the expensive jobs
+without failing. An unreadable or ambiguous input fails closed.
 
 ### D3 — Only what needs a real tag is skipped
 
@@ -60,8 +71,8 @@ The rehearsal skips exactly the checks that cannot be answered without the tag: 
 at the commit and names `v<version>`, and `scripts/verify-release-required-checks.mjs`, which reads
 the required check runs of the tagged commit. It still validates the release workflow authority
 (`check:release-required-workflows`) and the approved runtime inputs (`check:portable-approvals`).
-`release.yml` is not rehearsed: Keiko release-trust signing, the npm publish behind the
-`npm-publish` approval, and the GitHub Release upload stay with the tag.
+`release.yml` is not rehearsed: Keiko release-trust signing, npm publish, and the GitHub Release
+upload stay with an explicit human dispatch on the tag.
 
 ### D4 — A rehearsal signs under its own identity
 
@@ -104,10 +115,10 @@ compare `git rev-parse HEAD` with `GITHUB_SHA` before any step uses it.
 `rehearsal-readiness` runs only on a `dev` push, so a tag push skips it. Every job downstream of it
 states its own status function (`!cancelled()` or `always()`): without one, GitHub's implicit
 `success()` counts the skipped readiness as an unsuccessful ancestor. The first v1.0.1 tag build
-staged every target and then skipped the Linux qualification, the assembly and the publish request
+staged every target and then skipped the Linux qualification, the assembly and the publish handoff
 that way while the run still concluded "success".
 
-### D8 — A green dev head becomes the release candidate; the approval is the only manual step
+### D8 — A green dev head becomes the release candidate; authorization stays human
 
 The rehearsal itself cannot be released. The Linux runtime-qualification signature inside the shipped
 zip names the Git ref of its build, and installed Keiko accepts only
@@ -129,21 +140,25 @@ starts it:
   only permission is repository contents; the App key lives in the `release-tagging` environment,
   which only `dev` deploys to, and the App is the second bypass actor of the "Owner-only tag changes"
   ruleset.
-- The tag push runs the stable build. After `assemble`, its `request-publish` job waits for the six
-  release-required checks on the tag commit, then dispatches `release.yml` with that run's id and
-  attempt and cancels an older candidate's publish that still waits for approval. A commit whose
-  checks fail is never requested; the next green candidate moves the tag. A `workflow_dispatch` is an event `GITHUB_TOKEN` may start, and it
-  runs on the tag ref, so npm provenance names the tagged commit.
-- The publish job keeps its `npm-publish` review (ADR-0170 D3), which is the only manual step. Every
-  release.yml job checks out the commit it was started for and proves it, never the tag as it is when
-  the job starts, and the publish re-verifies the required checks without waiting for CI. Should the
-  tag move anyway, the publisher re-reads it right before it creates the GitHub Release and stops
-  before any side effect.
+- The tag push runs the stable build. After `assemble`, its read-only `publish-handoff` job waits for
+  the six release-required checks, revalidates the exact tag/SHA/run/attempt and any open publish,
+  and writes the exact owner command to the summary. It holds `actions: read`, never dispatches or
+  cancels a workflow, and fails closed on a moved tag or superseded publish.
+- An allowlisted human starts `release.yml` with `workflow_dispatch` on that exact tag and supplies
+  the emitted run identity. GitHub attributes a workflow-token dispatch to `github-actions[bot]`, so
+  the job's non-bot `triggering_actor` guard rejects it. The `npm-publish` environment scopes the
+  signing key and Trusted Publisher identity but currently has no required-reviewer protection rule;
+  the allowlisted human dispatch is therefore the enforceable authorization boundary.
+- Every `release.yml` job checks out the commit it was started for and proves it, never the tag as it
+  is when the job starts, and the publish re-verifies the required checks without waiting for CI.
+  Should the tag move anyway, the publisher re-reads it right before it creates the GitHub Release
+  and stops before any side effect.
 
 ## Consequences
 
 - A release-only defect surfaces on the `dev` push that introduces it, not in a tagged release.
-- Each releasable `dev` push costs one full four-platform chain; a newer push cancels the older one.
+- Each releasable SHA costs one full four-platform tag build. It no longer also consumes a complete
+  dev rehearsal. Already-published versions retain one cancellable dev rehearsal per latest SHA.
 - Each rehearsal writes public Sigstore transparency-log entries for the Linux receipt and the GitHub
   Attestations. They name the repository, `refs/heads/dev`, and the commit, which the public
   repository already discloses, and they cannot be removed.
@@ -152,8 +167,8 @@ starts it:
 - A green rehearsal proves the chain for `v<version>` at that commit. After a version is published,
   the next release still needs its version bump and its reviewed release-impact approval; readiness
   names that gap until the approval lands.
-- Releasing a version is two actions that were already reviewed work: merge the version bump with its
-  release-impact approval, then approve the `npm-publish` deployment once the stable build is ready.
+- Releasing a version is two human actions: merge the version bump with its release-impact approval,
+  then dispatch the exact handoff from the stable build as an allowlisted release owner.
 - An owner-cut tag still releases as before; the candidate workflow keeps, moves, or leaves it by the
   same rules.
 - Until the GitHub App, the `release-tagging` environment, and the ruleset bypass exist, the tag job of
@@ -163,13 +178,16 @@ starts it:
 ## Guards
 
 `scripts/__tests__/release-portable-assets-workflow.test.mjs` pins the trigger and concurrency, the
-readiness gating, the tag-only authority, the signing-lane mapping, the environment split, the
+single-owner gating, the tag-only authority, the signing-lane mapping, the environment split, the
 checkout binding, secret gating, the derived release tag, and the resolver's refusal of a rehearsal
 run and bundle. `scripts/__tests__/linux-qualification-rehearsal-fence.test.mjs` pins the consumers
-of the rehearsal policy. For D8, `release-candidate.test.mjs` and `release-publish-request.test.mjs`
-prove every decision in-process, `release-candidate-workflow.test.mjs` pins triggers, grants, the one
-secret and the step order, `check-release-required-workflow-names.test.mjs` holds the candidate to
-`release.yml`'s authority, and `release-publish-pipeline.test.mjs` stops a publish whose tag moved.
+of the rehearsal policy. For D8, `release-candidate.test.mjs` and
+`release-publish-handoff.test.mjs` prove every decision in-process,
+`release-candidate-workflow.test.mjs` pins triggers, grants, the one secret and the step order,
+`check-release-required-workflow-names.test.mjs` holds the candidate to
+`release.yml`'s authority, `release-orchestration-integration.test.mjs` proves both build-owner
+scenarios and the complete handoff chain, and `release-publish-pipeline.test.mjs` stops a publish
+whose tag moved.
 
 ## References
 

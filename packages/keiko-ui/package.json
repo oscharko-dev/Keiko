@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-ui",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Keiko Wave 1 local UI (static export). Build-time-only; served by the Node BFF in keiko-server.",
   "license": "Apache-2.0",
   "type": "module",
@@ -58,8 +58,8 @@
   "dependencies": {
     "@monaco-editor/react": "4.7.0",
     "@noble/hashes": "2.4.0",
-    "@oscharko-dev/keiko-contracts": "1.0.4",
-    "@oscharko-dev/keiko-editor": "1.0.4",
+    "@oscharko-dev/keiko-contracts": "1.0.5",
+    "@oscharko-dev/keiko-editor": "1.0.5",
     "diff": "9.0.0",
     "monaco-editor": "0.56.0",
     "next": "16.3.4",
@@ -76,7 +76,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",
-    "autoprefixer": "^10.5.5",
+    "autoprefixer": "^10.5.6",
     "axe-core": "4.12.1",
     "eslint": "^10.8.1",
     "eslint-config-next": "16.3.4",
@@ -85,7 +85,7 @@
     "postcss": "^8.5.28",
     "postcss-load-config": "6.0.1",
     "typescript": "5.7.3",
-    "vite": "8.1.4",
+    "vite": "8.3.0",
     "vitest": "4.1.11"
   },
   "engines": {
