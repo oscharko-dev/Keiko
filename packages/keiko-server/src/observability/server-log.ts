@@ -118,6 +118,7 @@ import {
   type ActivityLogDirectoryListing,
   type ActivityLogFileEntry,
   type ActivityLogOrphanOwner,
+  type ActivityLogPinProtection,
   type ActivityLogPinRead,
   type ActivityLogPinReason,
   type ActivityLogPinRecord,
@@ -1414,6 +1415,7 @@ interface ActiveLog {
   quotaExhaustedReported: boolean;
   recoveredSegments: number;
   readonly failedDeletions: Set<string>;
+  readonly failedPinRemovals: Set<string>;
   readonly failedRecoveries: Set<string>;
   sealTimer: ReturnType<typeof setInterval> | undefined;
 }
@@ -1463,6 +1465,7 @@ function resolveActiveLog(directory: string, config: ActivityLogStorageConfig): 
     quotaExhaustedReported: false,
     recoveredSegments: 0,
     failedDeletions: new Set<string>(),
+    failedPinRemovals: new Set<string>(),
     failedRecoveries: new Set<string>(),
     sealTimer: undefined,
   };
@@ -1904,7 +1907,7 @@ function pinExpiredEvidence(
 }
 
 interface QuotaFacts {
-  readonly outcome: ActivityLogRetentionOutcome;
+  readonly protection: ActivityLogPinProtection;
   readonly pinCount: number;
   readonly seqSpan: number;
   readonly unknownSpanSegmentCount: number;
@@ -1915,7 +1918,7 @@ function pinQuotaExhaustedEvidence(
   config: ActivityLogStorageConfig,
   correlationId: string | undefined,
 ): ServerLogEvent {
-  const protection = facts.outcome.protection;
+  const protection = facts.protection;
   return activityLogEvent(
     ACTIVITY_LOG_PIN_QUOTA_EXHAUSTED_OPERATION,
     {
@@ -2123,25 +2126,28 @@ function removePinRecordQuietly(active: ActiveLog, read: ActivityLogPinRead): bo
     removeActivityLogFile(read.entry.path, active.trustedRoot);
     return true;
   } catch {
-    active.failedDeletions.add(read.entry.path);
+    active.failedPinRemovals.add(read.entry.path);
     return false;
   }
 }
 
 // Expired and unreadable pin records protect nothing; removing them is bounded cleanup, and each
 // removal is evidenced once. A record this process already failed to remove is not retried.
+// Returns the paths removed in this pass.
 function expireActivityLogPins(
   active: ActiveLog,
   cursor: WriteCursor,
   listing: ActivityLogDirectoryListing,
   reads: readonly ActivityLogPinRead[],
   nowMs: number,
-): void {
+): ReadonlySet<string> {
+  const removedPaths = new Set<string>();
   for (const read of reads) {
     if (read.record !== undefined && read.record.expiresAtMs > nowMs) continue;
-    if (active.failedDeletions.has(read.entry.path)) continue;
+    if (active.failedPinRemovals.has(read.entry.path)) continue;
     const coverage = pinCoverage(read.record, listing.files);
     const removed = removePinRecordQuietly(active, read);
+    if (removed) removedPaths.add(read.entry.path);
     const facts: PinExpiryFacts = {
       pinId: read.entry.pinId,
       reason: read.record === undefined ? "invalid-record" : "expired",
@@ -2151,6 +2157,7 @@ function expireActivityLogPins(
     };
     queueEvidence(active, pinExpiredEvidence(facts, cursor.correlationId));
   }
+  return removedPaths;
 }
 
 function tightenLegacyFile(path: string, trustedRoot: string): boolean {
@@ -2199,11 +2206,11 @@ function queueRetentionEvidence(
 
 function unprotectedSpan(
   active: ActiveLog,
-  outcome: ActivityLogRetentionOutcome,
+  protection: ActivityLogPinProtection,
 ): { readonly seqSpan: number; readonly unknown: number } {
   let seqSpan = 0;
   let unknown = 0;
-  for (const entry of outcome.protection.unprotected) {
+  for (const entry of protection.unprotected) {
     const span = activityLogSegmentSeqSpan(entry.path, active.trustedRoot);
     if (span === undefined) unknown += 1;
     else seqSpan += span;
@@ -2212,22 +2219,23 @@ function unprotectedSpan(
 }
 
 // Exactly one loss marker per exhaustion episode: the first pass that finds pinned evidence the
-// quota cannot hold reports it, later passes stay quiet until the quota holds every pin again.
+// quota cannot hold reports it — measured before retention may delete those segments — and later
+// passes stay quiet until the quota holds every pin again.
 function queueQuotaEvidence(
   active: ActiveLog,
   cursor: WriteCursor,
-  outcome: ActivityLogRetentionOutcome,
+  protection: ActivityLogPinProtection,
   pinCount: number,
 ): void {
-  if (outcome.protection.unprotected.length === 0) {
+  if (protection.unprotected.length === 0) {
     active.quotaExhaustedReported = false;
     return;
   }
   if (active.quotaExhaustedReported) return;
   active.quotaExhaustedReported = true;
-  const span = unprotectedSpan(active, outcome);
+  const span = unprotectedSpan(active, protection);
   const facts: QuotaFacts = {
-    outcome,
+    protection,
     pinCount,
     seqSpan: span.seqSpan,
     unknownSpanSegmentCount: span.unknown,
@@ -2265,9 +2273,14 @@ function queuePressureTransition(
   queueEvidence(active, pressureEvidence(facts, active.config, cursor.correlationId));
 }
 
-function pinRecordBytes(reads: readonly ActivityLogPinRead[], nowMs: number): number {
+// Every pin record still on disk counts toward the byte budget, including one this process could
+// not remove; only the records removed in this pass are gone.
+function remainingPinRecordBytes(
+  reads: readonly ActivityLogPinRead[],
+  removed: ReadonlySet<string>,
+): number {
   return reads
-    .filter((read) => read.record !== undefined && read.record.expiresAtMs > nowMs)
+    .filter((read) => !removed.has(read.entry.path))
     .reduce((sum, read) => sum + read.entry.sizeBytes, 0);
 }
 
@@ -2279,13 +2292,19 @@ function applyRetention(
 ): ActivityLogRetentionOutcome {
   const listing = listActivityLogDirectory(active.directory);
   const reads = readActivityLogPins(listing, active.trustedRoot);
-  expireActivityLogPins(active, cursor, listing, reads, nowMs);
+  const removedPins = expireActivityLogPins(active, cursor, listing, reads, nowMs);
   const pins = activeActivityLogPins(reads, nowMs);
+  queueQuotaEvidence(
+    active,
+    cursor,
+    planActivityLogPinProtection(listing.files, pins, active.config.pinQuotaBytes),
+    pins.length,
+  );
   const outcome = applyActivityLogRetention(
     {
       files: listing.files,
       pins,
-      pinRecordBytes: pinRecordBytes(reads, nowMs),
+      pinRecordBytes: remainingPinRecordBytes(reads, removedPins),
       config: active.config,
       nowMs,
       reserveBytes,
@@ -2295,7 +2314,6 @@ function applyRetention(
   );
   for (const name of outcome.failedNames) active.failedDeletions.add(name);
   queueRetentionEvidence(active, cursor, outcome);
-  queueQuotaEvidence(active, cursor, outcome, pins.length);
   queuePressureTransition(active, cursor, outcome);
   return outcome;
 }
@@ -2303,6 +2321,11 @@ function applyRetention(
 // Runs before every new segment: recover orphans, expire pins, apply retention with the new
 // segment's reservation, and report quota and pressure. Returns whether the reservation fits.
 function runMaintenance(active: ActiveLog, cursor: WriteCursor, reserveBytes: number): boolean {
+  // Never list, recover, or prune through a redirected directory: a symlink at the log path is
+  // refused before one name behind it is read.
+  if (!durableLogDirectory(active.directory)) {
+    throw new SafeArtifactFileError("activity-log", "unsafe-ancestor");
+  }
   const nowMs = Date.now();
   recoverOrphanedSegments(active, cursor, listActivityLogDirectory(active.directory), nowMs);
   return applyRetention(active, cursor, nowMs, reserveBytes).admitted;
@@ -2362,8 +2385,7 @@ function admitNewSegment(active: ActiveLog, cursor: WriteCursor): void {
   throw new ActivityLogBudgetError();
 }
 
-function openSegment(active: ActiveLog, cursor: WriteCursor): ActiveSegment {
-  admitNewSegment(active, cursor);
+function createSegmentFile(active: ActiveLog, cursor: WriteCursor): ActiveSegment {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const identity = nextSegmentIdentity(active);
     const path = join(active.directory, activityLogSegmentFileName(identity, "active"));
@@ -2380,6 +2402,37 @@ function openSegment(active: ActiveLog, cursor: WriteCursor): ActiveSegment {
     }
   }
   throw new SafeArtifactFileError("activity-log", "target-exists");
+}
+
+// Gives back a segment whose admission a concurrent process invalidated. It is still empty, so the
+// store never held more bytes than its budget; its queued safe-open line is withdrawn with it.
+function withdrawSegment(
+  active: ActiveLog,
+  segment: ActiveSegment,
+  safeOpen: QueuedEvidence,
+): void {
+  abandonSegment(active);
+  const queued = active.pendingEvidence.indexOf(safeOpen);
+  if (queued >= 0) active.pendingEvidence.splice(queued, 1);
+  try {
+    removeActivityLogFile(segment.activePath, active.trustedRoot);
+  } catch {
+    // Left in place, it is this process's own abandoned segment and the next maintenance seals it.
+  }
+}
+
+// Admission is checked before the exclusive create and again after it: two processes can observe
+// the same free reservation, but only while their new segments are still empty. The re-check sees
+// every peer's new segment at its full reservation and prunes further or withdraws this one, so the
+// bytes on disk never exceed the budget.
+function openSegment(active: ActiveLog, cursor: WriteCursor): ActiveSegment {
+  admitNewSegment(active, cursor);
+  const segment = createSegmentFile(active, cursor);
+  const safeOpen = active.pendingEvidence[0];
+  if (runMaintenance(active, cursor, 0)) return segment;
+  if (safeOpen !== undefined) withdrawSegment(active, segment, safeOpen);
+  active.admissionRetryAtMs = Date.now() + ADMISSION_RETRY_MS;
+  throw new ActivityLogBudgetError();
 }
 
 interface OpenSegment {
