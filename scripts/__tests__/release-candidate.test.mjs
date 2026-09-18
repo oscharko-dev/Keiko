@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyReleaseCandidatePlan,
+  PORTABLE_BUILD_OWNERS,
   planReleaseCandidate,
   releaseCandidateMain,
   releaseCandidatePlan,
@@ -70,6 +71,7 @@ describe("releaseCandidatePlan", () => {
   it("creates the tag for an approved, unpublished version whose dev head is green", () => {
     expect(plan({})).toStrictEqual({
       action: "create",
+      portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
       tag: TAG,
       reason: `${TAG} does not exist yet`,
     });
@@ -93,6 +95,16 @@ describe("releaseCandidatePlan", () => {
     ["a tag whose publish is open", { publishRunActive: true, remoteTagSha: OLDER }],
   ])("skips %s", (_label, overrides) => {
     expect(plan(overrides).action).toBe("skip");
+  });
+
+  it("assigns exactly one portable build owner for every candidate state", () => {
+    expect(plan({}).portableBuild).toBe(PORTABLE_BUILD_OWNERS.STABLE_TAG);
+    expect(plan({ remoteTagSha: CANDIDATE }).portableBuild).toBe(PORTABLE_BUILD_OWNERS.STABLE_TAG);
+    expect(plan({ published: true }).portableBuild).toBe(PORTABLE_BUILD_OWNERS.DEV_REHEARSAL);
+    expect(plan({ devHeadSha: OLDER }).portableBuild).toBe(PORTABLE_BUILD_OWNERS.NONE);
+    expect(plan({ publishRunActive: true, remoteTagSha: OLDER }).portableBuild).toBe(
+      PORTABLE_BUILD_OWNERS.NONE,
+    );
   });
 
   it.each([
@@ -378,7 +390,7 @@ describe("runReleaseCandidate", () => {
     expect(result.plan.action).toBe("create");
     expect(writes).toStrictEqual([]);
     expect(appended).toStrictEqual([
-      ["/out", `action=create\ntag=${TAG}\n`],
+      ["/out", `action=create\ntag=${TAG}\nportable-build=stable-tag\n`],
       ["/summary", `Release candidate ${CANDIDATE}: create, ${TAG} does not exist yet.\n`],
     ]);
   });

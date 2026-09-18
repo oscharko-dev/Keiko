@@ -15,6 +15,10 @@ const release = parse(readFileSync(releaseYmlPath, "utf8"));
 const publish = release.jobs.publish;
 
 describe("release publish dispatch guard (#3505, Epic #3495)", () => {
+  it("has no tag-push or workflow-owned automatic publish trigger", () => {
+    expect(release.on).toStrictEqual({ workflow_dispatch: expect.any(Object) });
+  });
+
   it("has an if: expression on the publish job", () => {
     expect(typeof publish.if).toBe("string");
     expect(publish.if.length).toBeGreaterThan(0);
@@ -38,7 +42,20 @@ describe("release publish dispatch guard (#3505, Epic #3495)", () => {
     );
   });
 
-  it("keeps the npm-publish environment protection as defence in depth", () => {
+  it.each([
+    ["a human owner", "oscharko", "oscharko", true, true],
+    ["a GITHUB_TOKEN dispatch", "github-actions[bot]", "github-actions[bot]", true, false],
+    ["a bot-triggered rerun", "oscharko", "github-actions[bot]", true, false],
+    ["a human outside the allowlist", "contributor", "contributor", false, false],
+  ])(
+    "models %s actor=%s triggering_actor=%s",
+    (_label, _actor, triggeringActor, allowlisted, expected) => {
+      const authorized = !triggeringActor.endsWith("[bot]") && allowlisted;
+      expect(authorized).toBe(expected);
+    },
+  );
+
+  it("keeps release credentials scoped to the npm-publish environment", () => {
     expect(publish.environment).toBe("npm-publish");
   });
 

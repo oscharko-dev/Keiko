@@ -97,7 +97,7 @@ describe("portable release-trust workflow", () => {
       "stage-linux-production",
       "qualify-linux-production",
       "assemble",
-      "request-publish",
+      "publish-handoff",
     ]);
     expect(portableWorkflow).not.toMatch(
       /AZURE_|APPLE_|artifact-signing-action|notarytool|codesign/u,
@@ -110,10 +110,10 @@ describe("portable release-trust workflow", () => {
     expect(valueForRef(linuxEnvironment, "refs/tags/v1.0.0")).toBe("portable-release-signing");
     // A rehearsal must not wait on, or reach into, the signing environment.
     expect(valueForRef(linuxEnvironment, "refs/heads/dev")).toBe("portable-release-rehearsal");
-    // The job the rehearsal added reads the catalog and nothing else.
+    // The planner reads the release state but has no write authority.
     const readiness = workflowJob("rehearsal-readiness");
     expect(readiness.environment).toBeUndefined();
-    expect(readiness.permissions).toEqual({ contents: "read" });
+    expect(readiness.permissions).toEqual({ actions: "read", contents: "read" });
     expect(JSON.stringify(readiness)).not.toMatch(/secrets\.|vars\./u);
   });
 
@@ -418,7 +418,7 @@ describe("jobs downstream of the rehearsal readiness on a tag push", () => {
   // rehearsal-readiness runs only on a dev push, so every tag push and every dispatch skips it. A job
   // condition without a status function gets GitHub's implicit success(), which counts that skipped
   // ancestor as not successful: the first v1.0.1 tag build staged all four targets and then skipped
-  // the Linux qualification, the assembly and the publish request, and still concluded "success".
+  // the Linux qualification, the assembly and the publish handoff, and still concluded "success".
   const jobs = portableWorkflowDocument.jobs;
   const needsOf = (id) => [jobs[id]?.needs ?? []].flat();
   const hasAncestor = (id, ancestor, seen = new Set()) =>
@@ -437,7 +437,7 @@ describe("jobs downstream of the rehearsal readiness on a tag push", () => {
         "stage-linux-production",
         "qualify-linux-production",
         "assemble",
-        "request-publish",
+        "publish-handoff",
       ]),
     );
   });
@@ -464,13 +464,16 @@ describe("stable release rehearsal on dev", () => {
     });
   });
 
-  it("stages a rehearsal only once readiness finds the version approved", () => {
+  it("assigns an already-published dev version to the rehearsal owner only", () => {
     const readiness = workflowJob("rehearsal-readiness");
     expect(readiness.if).toContain("github.event_name == 'push'");
     expect(readiness.if).toContain("github.ref == 'refs/heads/dev'");
-    expect(readiness.outputs.ready).toBe("${{ steps.readiness.outputs.ready }}");
-    expect(readiness.steps.find((step) => step.id === "readiness")?.run).toBe(
-      "node scripts/portable-rehearsal-readiness.mjs",
+    expect(readiness.outputs.ready).toBe(
+      "${{ steps.plan.outputs.portable-build == 'dev-rehearsal' }}",
+    );
+    expect(readiness.outputs.owner).toBe("${{ steps.plan.outputs.portable-build }}");
+    expect(readiness.steps.find((step) => step.id === "plan")?.run).toBe(
+      "node scripts/release-candidate.mjs --plan",
     );
     for (const name of ["stage", "stage-linux-production"]) {
       const job = workflowJob(name);
@@ -482,13 +485,13 @@ describe("stable release rehearsal on dev", () => {
     }
   });
 
-  it("keeps tag identity on stable tags and leaves the required checks to the publish request", () => {
+  it("keeps tag identity on stable tags and leaves required checks to the publish handoff", () => {
     for (const name of ["stage", "stage-linux-production"]) {
       const job = workflowJob(name);
       const authority = namedStep(job, "Validate stable tag and governed release authority");
       expect(authority.if, `${name} authority`).toContain("startsWith(github.ref, 'refs/tags/v')");
       // ADR-0177 D8: the tag build runs beside the commit's CI, so the release-required checks
-      // gate the publish request after assemble (release-candidate-workflow.test.mjs) instead.
+      // gate the publish handoff after assemble (release-candidate-workflow.test.mjs) instead.
       expect(authority.run).not.toContain("verify-release-required-checks.mjs");
       const rehearsal = namedStep(
         job,

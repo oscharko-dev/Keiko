@@ -1,6 +1,7 @@
 import {
-  cpSync,
+  copyFileSync,
   lstatSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -40,6 +41,12 @@ function fail(message) {
   throw new Error(`assemble-portable-release-assets: ${message}`);
 }
 
+function resolvedStagesRoot(options) {
+  return resolve(
+    options.stagesRoot === undefined ? join(options.bundleRoot, "artifacts") : options.stagesRoot,
+  );
+}
+
 function parseArgs(argv) {
   const options = {
     bundleRoot: join(repoRoot, ".portable-release-assets"),
@@ -48,6 +55,7 @@ function parseArgs(argv) {
     runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 0),
     runId: Number(process.env.GITHUB_RUN_ID ?? 0),
     stagePrefix: "portable-stage-",
+    stagesRoot: undefined,
     version: rootPackage.version,
   };
   const fields = new Map([
@@ -57,6 +65,7 @@ function parseArgs(argv) {
     ["--run-attempt", "runAttempt"],
     ["--run-id", "runId"],
     ["--stage-prefix", "stagePrefix"],
+    ["--stages-root", "stagesRoot"],
     ["--version", "version"],
   ]);
   for (let index = 0; index < argv.length; index += 2) {
@@ -67,6 +76,7 @@ function parseArgs(argv) {
     options[field] = ["runAttempt", "runId"].includes(field) ? Number(value) : value;
   }
   options.bundleRoot = resolve(options.bundleRoot);
+  options.stagesRoot = resolvedStagesRoot(options);
   return options;
 }
 
@@ -594,7 +604,7 @@ function assertSidecarEvidence(stageRoot, manifest, target) {
 
 async function loadTarget(options, target) {
   const downloaded = requiredDirectory(
-    join(options.bundleRoot, "artifacts", `${options.stagePrefix}${target.platformTarget}`),
+    join(options.stagesRoot, `${options.stagePrefix}${target.platformTarget}`),
     `${target.platformTarget} artifact`,
   );
   const archivePath = regularContainedFile(
@@ -637,11 +647,52 @@ function notifyTargetCopied(deps, sourceRoot, target) {
   deps.afterTargetCopy?.({ sourceRoot, target });
 }
 
+function portableBundleRelativePaths(manifest, target, setupPath) {
+  const paths = new Set([
+    target.assetName,
+    "manifest/portable-manifest.json",
+    manifest.evidence.checksumsPath,
+    manifest.evidence.sbomPath,
+    manifest.evidence.licenseNoticePath,
+    manifest.security.verificationSummaryPath,
+    manifest.provenance.provenanceStatementPath,
+  ]);
+  const resourceRoot =
+    target.nodePlatform === "darwin"
+      ? "payload/Keiko/Keiko.app/Contents/Resources"
+      : "payload/Keiko";
+  for (const sidecar of manifest.sidecarRuntimes ?? []) {
+    paths.add(join(resourceRoot, sidecar.licenseEvidence.path));
+    paths.add(join(resourceRoot, sidecar.sbomEvidence.path));
+  }
+  if (setupPath !== undefined) paths.add(WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+  return [...paths];
+}
+
+async function copyPortableBundleFiles(sourceRoot, finalRoot, manifest, target, setupPath) {
+  mkdirSync(finalRoot, { recursive: false });
+  for (const relativePath of portableBundleRelativePaths(manifest, target, setupPath)) {
+    const maxBytes =
+      relativePath === target.assetName || relativePath === WINDOWS_PORTABLE_SETUP_ASSET_NAME
+        ? MAX_ARCHIVE_BYTES
+        : MAX_EVIDENCE_BYTES;
+    const source = regularContainedFile(sourceRoot, relativePath, relativePath, maxBytes);
+    const destination = resolve(finalRoot, relativePath);
+    if (!contained(finalRoot, destination)) fail("compact bundle path escapes its target root");
+    mkdirSync(dirname(destination), { recursive: true });
+    const sourceDigest = await sha256File(source);
+    copyFileSync(source, destination);
+    if ((await sha256File(destination)) !== sourceDigest) {
+      fail(`${target.platformTarget} compact bundle copy changed ${relativePath}`);
+    }
+  }
+}
+
 export async function assemblePortableReleaseAssets(argv, deps = {}) {
   const options = parseArgs(argv);
-  requiredDirectory(options.bundleRoot, "bundle root");
-  const artifactsRoot = requiredDirectory(join(options.bundleRoot, "artifacts"), "artifacts root");
-  assertExactDownloadedSet(artifactsRoot, options.stagePrefix);
+  const bundleRoot = requiredDirectory(options.bundleRoot, "bundle root");
+  const stagesRoot = requiredDirectory(options.stagesRoot, "stages root");
+  assertExactDownloadedSet(stagesRoot, options.stagePrefix);
   const loaded = [];
   for (const target of PORTABLE_TARGETS) loaded.push(await loadTarget(options, target));
   const expected = {
@@ -656,14 +707,18 @@ export async function assemblePortableReleaseAssets(argv, deps = {}) {
     expected,
   );
   if (failures.length > 0) fail(`release set is invalid:\n  - ${failures.join("\n  - ")}`);
+  const artifactsRoot = join(bundleRoot, "artifacts");
+  if (artifactsRoot !== stagesRoot) mkdirSync(artifactsRoot, { recursive: false });
   const artifacts = await Promise.all(
     PORTABLE_TARGETS.map(async (target, index) => {
       const finalRoot = join(artifactsRoot, target.platformTarget);
-      cpSync(loaded[index].downloaded, finalRoot, {
-        errorOnExist: true,
-        force: false,
-        recursive: true,
-      });
+      await copyPortableBundleFiles(
+        loaded[index].downloaded,
+        finalRoot,
+        loaded[index].manifest,
+        target,
+        loaded[index].setupPath,
+      );
       notifyTargetCopied(deps, loaded[index].downloaded, target);
       const artifact = {
         platformTarget: target.platformTarget,
@@ -680,10 +735,7 @@ export async function assemblePortableReleaseAssets(argv, deps = {}) {
     }),
   );
   const manifest = { schemaVersion: 1, artifacts };
-  writeFileSync(
-    join(options.bundleRoot, BUNDLE_MANIFEST_NAME),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
+  writeFileSync(join(bundleRoot, BUNDLE_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }
 

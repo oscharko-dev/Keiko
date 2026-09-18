@@ -2626,6 +2626,33 @@ describe("assemblePortableReleaseAssets bounds", () => {
     });
   });
 
+  it("emits a compact publisher bundle without the staged runtime payloads", async () => {
+    const stagingContainer = tempDir();
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(stagingContainer, false, undefined, false, true);
+    const stagesRoot = join(stagingContainer, "artifacts");
+
+    await assemblePortableReleaseAssets([...args(bundleRoot), "--stages-root", stagesRoot]);
+
+    for (const target of PORTABLE_TARGETS) {
+      const finalRoot = join(bundleRoot, "artifacts", target.platformTarget);
+      expect(existsSync(join(finalRoot, target.assetName))).toBe(true);
+      expect(existsSync(join(finalRoot, "manifest", "portable-manifest.json"))).toBe(true);
+      const resourceRoot =
+        target.nodePlatform === "darwin"
+          ? join(finalRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
+          : join(finalRoot, "payload", "Keiko");
+      expect(existsSync(join(resourceRoot, "runtime", "sidecars", "opencode-compatible"))).toBe(
+        true,
+      );
+      expect(existsSync(join(resourceRoot, "runtime", "native"))).toBe(false);
+      expect(
+        existsSync(join(stagesRoot, `portable-stage-${target.platformTarget}`, "payload")),
+      ).toBe(true);
+    }
+    expect(existsSync(join(bundleRoot, "artifacts", "portable-stage-linux-x64"))).toBe(false);
+  });
+
   it("assembles evaluation helpers under the manifest-level trust policy", async () => {
     // The stable lanes as a stable-tag run produces them: the three release-trust candidates carry
     // the evaluation helpers this pins, and Linux is the production-signed target. An all-evaluation
