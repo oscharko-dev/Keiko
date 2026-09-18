@@ -52,8 +52,9 @@ import {
   type ActivityLogWriterState,
 } from "./server-logger.js";
 
-export const ACTIVITY_LOG_READINESS_TRIGGERS = ["startup", "heartbeat", "transition"] as const;
-export type ActivityLogReadinessTrigger = (typeof ACTIVITY_LOG_READINESS_TRIGGERS)[number];
+// The startup evaluation, or a later re-evaluation whose state differs from the last one. An
+// unchanged re-evaluation writes nothing, so there is no third trigger.
+type ActivityLogReadinessTrigger = "startup" | "transition";
 
 const ACTIVITY_LOG_READINESS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -93,7 +94,7 @@ const ACTIVITY_LOG_READINESS_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["startup", "heartbeat", "transition"],
+      values: ["startup", "transition"],
     },
     lostEvents: { type: "integer", dataClass: "count", required: true },
   },
