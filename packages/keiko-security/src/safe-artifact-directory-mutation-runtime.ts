@@ -11,6 +11,7 @@ const UNSUPPORTED_LINK_CODES = new Set(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUP
 
 export interface SafeArtifactDirectoryMutationIo {
   readonly directoryMatches: (expectedDev: bigint, expectedIno: bigint) => boolean;
+  readonly entryMatches: (name: string, expectedDev: bigint, expectedIno: bigint) => boolean;
   readonly link: (source: string, target: string) => void;
   readonly rename: (source: string, target: string) => void;
   readonly unlink: (source: string) => void;
@@ -81,27 +82,80 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parsedRequest(value: unknown): SafeArtifactDirectoryMutationRequest | undefined {
-  if (!isRecord(value)) return undefined;
+type MutationRequestCommon = Pick<
+  SafeArtifactDirectoryMutationRequest,
+  "operation" | "expectedDev" | "expectedIno" | "source"
+>;
+
+function parsedCommon(value: Readonly<Record<string, unknown>>): MutationRequestCommon | undefined {
   const expectedDev = parseExpectedIdentity(value.expectedDev);
   const expectedIno = parseExpectedIdentity(value.expectedIno);
-  const source = value.source;
-  const target = value.target;
   if (
     !isMutationOperation(value.operation) ||
     expectedDev === undefined ||
     expectedIno === undefined ||
-    !isSafeBasename(source)
+    !isSafeBasename(value.source)
   ) {
     return undefined;
   }
-  const identity = { expectedDev: expectedDev.toString(), expectedIno: expectedIno.toString() };
-  if (value.operation === "link" || value.operation === "rename") {
-    if (!isSafeBasename(target)) return undefined;
-    return { operation: value.operation, ...identity, source, target };
+  return {
+    operation: value.operation,
+    expectedDev: expectedDev.toString(),
+    expectedIno: expectedIno.toString(),
+    source: value.source,
+  };
+}
+
+function parsedLinkOrRename(
+  value: Readonly<Record<string, unknown>>,
+  common: MutationRequestCommon,
+): SafeArtifactDirectoryMutationRequest | undefined {
+  const hasEntryIdentity =
+    value.expectedEntryDev !== undefined || value.expectedEntryIno !== undefined;
+  if (!isSafeBasename(value.target) || hasEntryIdentity) return undefined;
+  return { ...common, target: value.target };
+}
+
+function parsedUnlink(
+  value: Readonly<Record<string, unknown>>,
+  common: MutationRequestCommon,
+): SafeArtifactDirectoryMutationRequest | undefined {
+  const entryDev = parseExpectedIdentity(value.expectedEntryDev);
+  const entryIno = parseExpectedIdentity(value.expectedEntryIno);
+  if (value.target !== undefined || entryDev === undefined || entryIno === undefined) {
+    return undefined;
   }
-  if (target !== undefined) return undefined;
-  return { operation: value.operation, ...identity, source };
+  return {
+    ...common,
+    expectedEntryDev: entryDev.toString(),
+    expectedEntryIno: entryIno.toString(),
+  };
+}
+
+function parsedRequest(value: unknown): SafeArtifactDirectoryMutationRequest | undefined {
+  if (!isRecord(value)) return undefined;
+  const common = parsedCommon(value);
+  if (common === undefined) return undefined;
+  return common.operation === "unlink"
+    ? parsedUnlink(value, common)
+    : parsedLinkOrRename(value, common);
+}
+
+// Unlink is the one mutation that can destroy data a concurrent writer just created under the same
+// name, so it runs only while the name still has the identity the caller verified.
+function entryStillExpected(
+  io: SafeArtifactDirectoryMutationIo,
+  request: SafeArtifactDirectoryMutationRequest,
+): boolean {
+  if (request.operation !== "unlink") return true;
+  if (request.expectedEntryDev === undefined || request.expectedEntryIno === undefined) {
+    return false;
+  }
+  return io.entryMatches(
+    request.source,
+    BigInt(request.expectedEntryDev),
+    BigInt(request.expectedEntryIno),
+  );
 }
 
 export function runSafeArtifactDirectoryMutation(
@@ -115,6 +169,7 @@ export function runSafeArtifactDirectoryMutation(
   if (!io.directoryMatches(expectedDev, expectedIno)) {
     return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.directoryMismatch;
   }
+  if (!entryStillExpected(io, request)) return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch;
   try {
     executeMutation(io, request.operation, request.source, request.target);
   } catch (error) {

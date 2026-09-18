@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  appendFileSync,
   chmodSync,
   closeSync,
   existsSync,
@@ -1161,7 +1162,9 @@ describe("publishSafeArtifactFileSet", () => {
     }
   });
 
-  it("keeps the consumed locator when acknowledgement directory fsync fails", async () => {
+  it("keeps the consumed locator when acknowledgement directory fsync fails", async (ctx) => {
+    // Windows has no directory descriptor to fsync, so this injected failure cannot occur there.
+    if (process.platform === "win32") ctx.skip();
     const base = freshDir();
     const report = join(base, "support.jsonl");
     const slot = safeArtifactPublicationSlot("support-export", report);
@@ -1628,6 +1631,40 @@ describe("publishSafeArtifactFileSet", () => {
     expect(readFileSync(integrity, "utf8")).toBe("digest\n");
     expect(statSync(manifest).nlink).toBe(1);
     expect(statSync(integrity).nlink).toBe(1);
+  });
+
+  it("publishes a clean multi-artifact set with the commit artifact last", async () => {
+    const base = freshDir();
+    const manifest = join(base, "manifest.json");
+    const integrity = join(base, "integrity.json");
+    const entries = [
+      { path: manifest, contents: "manifest\n", artifactClass: "manifest" as const },
+      { path: integrity, contents: "digest\n", artifactClass: "integrity-artifact" as const },
+    ];
+    const destinations: string[] = [];
+    vi.resetModules();
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link" && invocation.targetPath !== undefined) {
+        destinations.push(invocation.targetPath);
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
+    const isolated = await import("./fs-hardening.js");
+
+    expect(
+      isolated.publishSafeArtifactFileSet(entries, { commitPath: manifest, trustedRoot: base }),
+    ).toEqual({
+      status: "published",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
+    });
+    expect(destinations).toEqual([integrity, manifest]);
+    expect(readFileSync(manifest, "utf8")).toBe("manifest\n");
+    expect(readFileSync(integrity, "utf8")).toBe("digest\n");
+    expect(statSync(manifest).nlink).toBe(1);
+    expect(statSync(integrity).nlink).toBe(1);
+    expect(readdirSync(base).sort()).toEqual(["integrity.json", "manifest.json"]);
   });
 
   it("publishes a single support report with explicit permission assurance", () => {
@@ -2496,6 +2533,35 @@ describe("bounded Activity Log mutations", () => {
     expect(statSync(archive).nlink).toBe(1);
   });
 
+  it("never deletes a log that a concurrent rotation recreated under the archived name", async () => {
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const archive = join(base, "server-2026-09-17.log");
+    writeFileSync(source, "yesterday\n", { mode: FILE_MODE });
+    // A concurrent process already won the hard link and has not yet removed server.log.
+    linkSync(source, archive);
+    vi.resetModules();
+    await swapBeforeDirectoryMutation(
+      (invocation) => invocation.operation === "unlink",
+      () => {
+        // The winner completes first, and a writer immediately recreates today's server.log.
+        unlinkSync(source);
+        writeFileSync(source, "today\n", { mode: FILE_MODE });
+      },
+    );
+    const isolated = await import("./fs-hardening.js");
+
+    expect(
+      isolated.archiveSafeArtifactFile(source, archive, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      }),
+    ).toBe("archive-exists");
+    expect(readFileSync(source, "utf8")).toBe("today\n");
+    expect(readFileSync(archive, "utf8")).toBe("yesterday\n");
+    expect(statSync(archive).nlink).toBe(1);
+  });
+
   it("rejects an unrelated hard-link surprise without creating an archive target", () => {
     const base = freshDir();
     const source = join(base, "server.log");
@@ -2540,6 +2606,65 @@ describe("bounded Activity Log mutations", () => {
     ).toBe("rename-fallback");
     expect(operations).toStrictEqual(["link", "rename"]);
     expect(readFileSync(archive, "utf8")).toBe("finished-day\n");
+  });
+
+  it("never replaces a concurrent rotation's archive when rename is the only primitive", async () => {
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const archive = join(base, "server-2026-09-17.log");
+    const options = { artifactClass: "activity-log", trustedRoot: base } as const;
+    writeFileSync(source, "yesterday\n", { mode: FILE_MODE });
+    const loaded: { module?: typeof import("./fs-hardening.js") } = {};
+    const racing: { started: boolean; result: string | undefined } = {
+      started: false,
+      result: undefined,
+    };
+    vi.resetModules();
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") {
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.unsupported;
+      }
+      if (invocation.operation === "rename" && !racing.started) {
+        racing.started = true;
+        // A second process completes its whole rotation, then a writer appends today's line.
+        racing.result = loaded.module?.archiveSafeArtifactFile(source, archive, options);
+        appendFileSync(source, "today\n", { mode: FILE_MODE });
+      }
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
+    loaded.module = await import("./fs-hardening.js");
+
+    expect(loaded.module.archiveSafeArtifactFile(source, archive, options)).toBe("rename-fallback");
+    expect(racing.result).toBe("archive-exists");
+    expect(readFileSync(archive, "utf8")).toBe("yesterday\ntoday\n");
+    expect(existsSync(source)).toBe(false);
+  });
+
+  it("releases its own archive claim when the fallback rename fails", async () => {
+    const base = freshDir();
+    const source = join(base, "server.log");
+    const archive = join(base, "server-2026-09-17.log");
+    writeFileSync(source, "finished-day\n", { mode: FILE_MODE });
+    vi.resetModules();
+    await mockDirectoryMutation((invocation, perform) => {
+      if (invocation.operation === "link") {
+        return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.unsupported;
+      }
+      if (invocation.operation === "rename") return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.failed;
+      perform();
+      return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success;
+    });
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.archiveSafeArtifactFile(source, archive, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    expect(existsSync(archive)).toBe(false);
+    expect(readFileSync(source, "utf8")).toBe("finished-day\n");
   });
 
   it("unlinks only an opened owner-private single-link regular file", () => {

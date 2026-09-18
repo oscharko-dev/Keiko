@@ -181,8 +181,15 @@ interface DirectoryGuard {
   readonly descriptor: number | undefined;
 }
 
-type GuardedDirectoryMutationResult = "success" | "target-exists" | "unsupported" | "failed";
+type GuardedDirectoryMutationResult =
+  "success" | "target-exists" | "unsupported" | "entry-mismatch" | "failed";
 type DirectoryGuardAuthority = "owner-only-mutation" | "standard";
+
+/** The device/inode an unlink must still find at its name; BigIntStats satisfies it. */
+interface EntryIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
 
 export interface SafeArtifactDirectoryEntryOptions {
   readonly artifactClass: SafeArtifactClass;
@@ -219,6 +226,7 @@ function mutationExitResult(status: number | null): GuardedDirectoryMutationResu
   if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.success) return "success";
   if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.targetExists) return "target-exists";
   if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.unsupported) return "unsupported";
+  if (status === SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch) return "entry-mismatch";
   return "failed";
 }
 
@@ -227,12 +235,16 @@ function directoryMutationRequest(
   guard: DirectoryGuard,
   path: string,
   targetPath: string | undefined,
+  entry: EntryIdentity | undefined,
 ): SafeArtifactDirectoryMutationRequest {
   const common = {
     operation,
     expectedDev: guard.dev.toString(),
     expectedIno: guard.ino.toString(),
     source: basename(path),
+    ...(entry === undefined
+      ? {}
+      : { expectedEntryDev: entry.dev.toString(), expectedEntryIno: entry.ino.toString() }),
   };
   return targetPath === undefined ? common : { ...common, target: basename(targetPath) };
 }
@@ -244,6 +256,7 @@ function runGuardedDirectoryMutation(
   artifactClass: SafeArtifactClass,
   targetPath?: string,
   authority: DirectoryGuardAuthority = "standard",
+  entry?: EntryIdentity,
 ): GuardedDirectoryMutationResult {
   const parent = dirname(resolve(path));
   if (targetPath !== undefined && dirname(resolve(targetPath)) !== parent) {
@@ -255,7 +268,7 @@ function runGuardedDirectoryMutation(
     if (!directoryGuardsStillAuthorized(guards, trustedRoot, path, authority)) {
       throw safeFileError(artifactClass, "target-mutated");
     }
-    const request = directoryMutationRequest(operation, guard, path, targetPath);
+    const request = directoryMutationRequest(operation, guard, path, targetPath, entry);
     // The child validates the OS-established cwd identity, then mutates only relative basenames.
     // Keep those names off argv and suppress child output so no path value reaches diagnostics.
     const child = spawnSync(process.execPath, [directoryMutationHelperPath()], {
@@ -275,8 +288,12 @@ function runGuardedDirectoryMutation(
   }
 }
 
+// Removes the name only while it still has the identity the caller verified. Between that check
+// and the helper's unlink, a concurrent Keiko process may have replaced a shared name such as
+// server.log; a pathname-only unlink would then delete the new file and the lines in it.
 function unlinkGuardedPath(
   path: string,
+  entry: EntryIdentity,
   trustedRoot: string,
   artifactClass: SafeArtifactClass,
   authority: DirectoryGuardAuthority = "standard",
@@ -288,9 +305,13 @@ function unlinkGuardedPath(
     artifactClass,
     undefined,
     authority,
+    entry,
   );
   if (result === "success") return;
-  throw safeFileError(artifactClass, "publish-failed");
+  throw safeFileError(
+    artifactClass,
+    result === "entry-mismatch" ? "target-mutated" : "publish-failed",
+  );
 }
 
 function archiveDescriptor(
@@ -393,10 +414,29 @@ function finalizeLinkedArchive(
   if (!linkedArchiveMatches(descriptor, source, target)) {
     throw safeFileError(options.artifactClass, "target-mutated");
   }
-  unlinkGuardedPath(source, options.trustedRoot, options.artifactClass, "owner-only-mutation");
+  const archived = fstatSync(descriptor, { bigint: true });
+  try {
+    unlinkGuardedPath(
+      source,
+      archived,
+      options.trustedRoot,
+      options.artifactClass,
+      "owner-only-mutation",
+    );
+  } catch (error) {
+    // A concurrent rotation already removed the archived name (and a writer may have recreated
+    // it). The identity check refused to delete that newer file; the archive is still final when
+    // it alone holds the archived inode.
+    if (!isTargetMutated(error) || !movedArchiveMatches(descriptor, target)) throw error;
+    return;
+  }
   if (!movedArchiveMatches(descriptor, target)) {
     throw safeFileError(options.artifactClass, "target-mutated");
   }
+}
+
+function isTargetMutated(error: unknown): boolean {
+  return error instanceof SafeArtifactFileError && error.kind === "target-mutated";
 }
 
 /** Archives one private regular file without replacing an existing destination. */
@@ -429,21 +469,77 @@ export function archiveSafeArtifactFile(
     if (linked !== "unsupported") {
       throw safeFileError(options.artifactClass, "publish-failed");
     }
-    if (pathExists(target, options.artifactClass)) return "archive-exists";
-    const renamed = runGuardedDirectoryMutation(
-      "rename",
-      source,
-      options.trustedRoot,
-      options.artifactClass,
-      target,
-      "owner-only-mutation",
-    );
-    if (renamed !== "success" || !movedArchiveMatches(descriptor, target)) {
-      throw safeFileError(options.artifactClass, "publish-failed");
-    }
-    return "rename-fallback";
+    return renameIntoClaimedArchive(descriptor, source, target, options);
   } finally {
     closeArtifactDescriptor(descriptor, options.artifactClass);
+  }
+}
+
+// rename(2) replaces an existing destination and Node has no RENAME_NOREPLACE, so a concurrent
+// rotation could destroy the winner's archive. The name is claimed exclusively first; only the
+// claim winner renames, and the only file it can replace is its own empty claim.
+function renameIntoClaimedArchive(
+  descriptor: number,
+  source: string,
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): SafeArtifactArchiveResult {
+  const claim = claimArchiveName(target, options);
+  if (claim === undefined) return "archive-exists";
+  const renamed = runGuardedDirectoryMutation(
+    "rename",
+    source,
+    options.trustedRoot,
+    options.artifactClass,
+    target,
+    "owner-only-mutation",
+  );
+  if (renamed !== "success") {
+    if (pathHasIdentity(target, claim)) {
+      unlinkGuardedPath(
+        target,
+        claim,
+        options.trustedRoot,
+        options.artifactClass,
+        "owner-only-mutation",
+      );
+    }
+    throw safeFileError(options.artifactClass, "publish-failed");
+  }
+  if (!movedArchiveMatches(descriptor, target)) {
+    throw safeFileError(options.artifactClass, "publish-failed");
+  }
+  return "rename-fallback";
+}
+
+function claimArchiveName(
+  target: string,
+  options: SafeArtifactDirectoryEntryOptions,
+): BigIntStats | undefined {
+  let claim: number;
+  try {
+    claim = openSafeArtifactFile(target, {
+      artifactClass: options.artifactClass,
+      mode: "exclusive-create",
+      trustedRoot: options.trustedRoot,
+    });
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError && error.kind === "target-exists") return undefined;
+    throw error;
+  }
+  try {
+    return fstatSync(claim, { bigint: true });
+  } finally {
+    closeArtifactDescriptor(claim, options.artifactClass);
+  }
+}
+
+function pathHasIdentity(path: string, identity: BigIntStats): boolean {
+  try {
+    const current = lstatSync(path, { bigint: true });
+    return current.dev === identity.dev && current.ino === identity.ino;
+  } catch {
+    return false;
   }
 }
 
@@ -458,7 +554,13 @@ export function removeSafeArtifactFile(
   });
   try {
     verifySafeArtifactFileDescriptor(descriptor, path, options);
-    unlinkGuardedPath(path, options.trustedRoot, options.artifactClass, "owner-only-mutation");
+    unlinkGuardedPath(
+      path,
+      fstatSync(descriptor, { bigint: true }),
+      options.trustedRoot,
+      options.artifactClass,
+      "owner-only-mutation",
+    );
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
     throw error;
@@ -1368,7 +1470,7 @@ function removePublicationIntent(
   });
   try {
     verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
-    unlinkGuardedPath(path, trustedRoot, artifactClass);
+    unlinkGuardedPath(path, fstatSync(descriptor, { bigint: true }), trustedRoot, artifactClass);
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
     if (error instanceof SafeArtifactFileError) throw error;
@@ -1650,7 +1752,12 @@ function removeVerifiedStage(entry: PreparedPublicationEntry): void {
       artifactClass: entry.artifactClass,
       trustedRoot: entry.trustedRoot,
     });
-    unlinkGuardedPath(entry.stagePath, entry.trustedRoot, entry.artifactClass);
+    unlinkGuardedPath(
+      entry.stagePath,
+      fstatSync(descriptor, { bigint: true }),
+      entry.trustedRoot,
+      entry.artifactClass,
+    );
     syncDirectory(dirname(entry.stagePath), entry.trustedRoot, entry.artifactClass);
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
@@ -1755,7 +1862,12 @@ function cleanupPublishedStage(entry: PreparedPublicationEntry): void {
     throw safeFileError(entry.artifactClass, "recovery-conflict");
   }
   try {
-    unlinkGuardedPath(entry.stagePath, entry.trustedRoot, entry.artifactClass);
+    unlinkGuardedPath(
+      entry.stagePath,
+      lstatSync(entry.stagePath, { bigint: true }),
+      entry.trustedRoot,
+      entry.artifactClass,
+    );
   } catch {
     restoreRecoveryMarker(entry, dirname(entry.stagePath));
     throw safeFileError(entry.artifactClass, "publish-failed");

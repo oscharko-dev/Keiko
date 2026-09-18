@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,18 @@ function runHelper(cwd: string, input: string): ReturnType<typeof spawnSync> {
   });
 }
 
+function entryIdentity(path: string): {
+  readonly expectedEntryDev: string;
+  readonly expectedEntryIno: string;
+} {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    return { expectedEntryDev: stat.dev.toString(), expectedEntryIno: stat.ino.toString() };
+  } catch {
+    return { expectedEntryDev: "0", expectedEntryIno: "0" };
+  }
+}
+
 function request(
   cwd: string,
   operation: "link" | "rename" | "unlink",
@@ -52,6 +64,7 @@ function request(
     expectedIno: stat.ino.toString(),
     source,
   };
+  if (operation === "unlink") return { ...common, ...entryIdentity(join(cwd, source)) };
   return target === undefined ? common : { ...common, target };
 }
 
@@ -60,6 +73,7 @@ function runtimeIo(
 ): SafeArtifactDirectoryMutationIo {
   return {
     directoryMatches: () => true,
+    entryMatches: () => true,
     link: () => undefined,
     rename: () => undefined,
     unlink: () => undefined,
@@ -73,6 +87,7 @@ function runtimeRequest(
   target?: string,
 ): SafeArtifactDirectoryMutationRequest {
   const common = { operation, expectedDev: "1", expectedIno: "2", source };
+  if (operation === "unlink") return { ...common, expectedEntryDev: "3", expectedEntryIno: "4" };
   return target === undefined ? common : { ...common, target };
 }
 
@@ -128,6 +143,20 @@ describe("safe artifact directory mutation helper", () => {
     );
     expect(readFileSync(target, "utf8")).toBe("artifact");
   });
+
+  it("refuses to unlink a name that was replaced after the caller verified it", () => {
+    const cwd = freshDirectory();
+    const entry = join(cwd, "server.log");
+    writeFileSync(entry, "verified");
+    const verified = request(cwd, "unlink", "server.log");
+    unlinkSync(entry);
+    writeFileSync(entry, "recreated by a concurrent writer");
+
+    expect(runHelper(cwd, JSON.stringify(verified)).status).toBe(
+      SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch,
+    );
+    expect(readFileSync(entry, "utf8")).toBe("recreated by a concurrent writer");
+  });
 });
 
 describe("safe artifact directory mutation runtime", () => {
@@ -149,6 +178,10 @@ describe("safe artifact directory mutation runtime", () => {
     runtimeRequest("link", "source"),
     runtimeRequest("link", "source", "../target"),
     { ...runtimeRequest("unlink"), target: "target" },
+    { operation: "unlink", expectedDev: "1", expectedIno: "2", source: "source" },
+    { ...runtimeRequest("unlink"), expectedEntryDev: "01" },
+    { ...runtimeRequest("unlink"), expectedEntryIno: 4 },
+    { ...runtimeRequest("link", "source", "target"), expectedEntryDev: "3" },
   ])("rejects an invalid request without touching the directory", (value) => {
     const directoryMatches = vi.fn(() => true);
     expect(runSafeArtifactDirectoryMutation(value, runtimeIo({ directoryMatches }))).toBe(
@@ -193,6 +226,20 @@ describe("safe artifact directory mutation runtime", () => {
         runtimeIo({ directoryMatches }),
       ),
     ).toBe(SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.directoryMismatch);
+  });
+
+  it("refuses an unlink whose entry no longer has the verified identity", () => {
+    const unlink = vi.fn();
+    const entryMatches = vi.fn(() => false);
+
+    expect(
+      runSafeArtifactDirectoryMutation(
+        runtimeRequest("unlink"),
+        runtimeIo({ entryMatches, unlink }),
+      ),
+    ).toBe(SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch);
+    expect(entryMatches).toHaveBeenCalledWith("source", 3n, 4n);
+    expect(unlink).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -19,6 +19,15 @@ function directoryMatches(expectedDev: bigint, expectedIno: bigint): boolean {
   }
 }
 
+function entryMatches(name: string, expectedDev: bigint, expectedIno: bigint): boolean {
+  try {
+    const current = lstatSync(name, { bigint: true });
+    return current.dev === expectedDev && current.ino === expectedIno;
+  } catch {
+    return false;
+  }
+}
+
 function readRequest(): unknown {
   const buffer = Buffer.alloc(MAX_SAFE_ARTIFACT_DIRECTORY_MUTATION_PROTOCOL_BYTES + 1);
   let offset = 0;
@@ -37,6 +46,7 @@ function readRequest(): unknown {
 
 const mutationIo: SafeArtifactDirectoryMutationIo = {
   directoryMatches,
+  entryMatches,
   link: linkSync,
   rename: renameSync,
   unlink: unlinkSync,
