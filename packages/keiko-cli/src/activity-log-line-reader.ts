@@ -27,8 +27,8 @@ export interface ActivityLogReadLine extends ActivityLogTextLine {
 export interface ActivityLogReadOptions {
   readonly chunkBytes?: number | undefined;
   readonly maxLineBytes?: number | undefined;
-  // Observes every chunk read; used by tests and budget accounting, never for content.
-  readonly onChunk?: ((bytes: number) => void) | undefined;
+  // Observes every raw chunk, in order, before its lines are yielded (manifest digests, metrics).
+  readonly onChunk?: ((chunk: Uint8Array) => void) | undefined;
 }
 
 /**
@@ -104,8 +104,8 @@ export function* readDescriptorLines(
   let position = 0;
   for (let count = readChunk(descriptor, chunk, position); count > 0;) {
     position += count;
-    options.onChunk?.(count);
     const view = chunk.subarray(0, count);
+    options.onChunk?.(view);
     let start = 0;
     for (let newline = view.indexOf(NEWLINE, start); newline >= 0;) {
       // A line completed inside this chunk is decoded before the chunk is reused: no copy needed.
