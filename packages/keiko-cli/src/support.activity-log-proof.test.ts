@@ -25,6 +25,7 @@ import {
   ACTIVITY_LOG_SCHEMA_DIGEST,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { closeFileServerLogSinks } from "@oscharko-dev/keiko-server";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import {
   expectActivityLogProof,
@@ -50,6 +51,10 @@ function makeRoot(prefix: string): string {
 }
 
 afterEach(() => {
+  // The real file sink is a process-wide singleton per log directory (support.ts's publication and
+  // analysis evidence build one directly, with no injection seam); a suite that leaves one
+  // registered leaves its segment open past this test's own temp dir being removed below.
+  closeFileServerLogSinks();
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -132,10 +137,7 @@ describe("support activity log proofs", () => {
     expect(code).toBe(1);
     expect(events).toHaveLength(1);
     const line = formatActivityLogProofLine(events[0] ?? {});
-    const record = expectActivityLogProof(
-      "cli.support.export.failed.install-layout-refusal",
-      line,
-    );
+    const record = expectActivityLogProof("cli.support.export.failed.install-layout-refusal", line);
     expect(record).toMatchObject({
       correlationId,
       errorKind: "unsafe-target",
@@ -198,9 +200,14 @@ describe("support activity log proofs", () => {
     writeFileSync(analyzeFile, `${supportedV2InputLine()}\n`, "utf8");
     const { io } = makeIo();
 
-    const code = await runSupportCli(["analyze", analyzeFile], io, { KEIKO_STATE_DIR: stateDir }, {
-      cwd: outDir,
-    });
+    const code = await runSupportCli(
+      ["analyze", analyzeFile],
+      io,
+      { KEIKO_STATE_DIR: stateDir },
+      {
+        cwd: outDir,
+      },
+    );
 
     expect(code).toBe(0);
     const raw = readPersistedActivityLog(stateDir);

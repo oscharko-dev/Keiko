@@ -18,6 +18,11 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import {
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  validateActivityLogOperationFields,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const capability: ModelCapability = {
   id: "spend-fixture",
@@ -187,6 +192,16 @@ describe("shared persistent model spend admission", () => {
     // and a successful model response was replaced by a raw error. The reserved upper bound stays
     // charged -- the conservative outcome -- and the settlement line names the failure.
     const hold = budget().reserve(capability, request, "unpriceable-usage");
+    const reservation = events.find((event) => event.op === "gateway.spend.reserved");
+    const reservedProof = expectActivityLogProof(
+      "gateway.spend.reserved.line",
+      formatActivityLogProofLine(reservation ?? {}),
+    );
+    expect(reservedProof).toMatchObject({
+      correlationId: "unpriceable-usage",
+      reservedNanoUsd: 120_000_000_000,
+      ceilingNanoUsd: 150_000_000_000,
+    });
     expect(() => {
       hold.settle({ ...response.usage, promptTokens: Number.MAX_SAFE_INTEGER });
     }).not.toThrow();
@@ -198,6 +213,16 @@ describe("shared persistent model spend admission", () => {
       boundExceeded: false,
     });
     expect(typeof settlement?.extra?.measurementErrorKind).toBe("string");
+    const settledProof = expectActivityLogProof(
+      "gateway.spend.settled.line",
+      formatActivityLogProofLine(settlement ?? {}),
+    );
+    expect(settledProof).toMatchObject({
+      correlationId: "unpriceable-usage",
+      chargedNanoUsd: 120_000_000_000,
+      measured: false,
+      boundExceeded: false,
+    });
   });
 
   it("does not enforce a qualification ceiling when no spend budget is configured", async () => {
@@ -283,6 +308,16 @@ describe("shared persistent model spend admission", () => {
       ceilingNanoUsd: 500_000_000_000,
       configuredNanoUsd: 500_000_000_000,
     });
+    const persisted = expectActivityLogProof(
+      "gateway.spend.ceiling.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      correlationId: "after-restart",
+      disposition: "raised",
+      ceilingNanoUsd: 500_000_000_000,
+      configuredNanoUsd: 500_000_000_000,
+    });
   });
 
   it("keeps a ledger that broke its own cost bound closed against any configured raise", () => {
@@ -332,4 +367,28 @@ describe("shared persistent model spend admission", () => {
       budget().reserve(capability, { ...request, maxOutputTokens: 21 }, "output"),
     ).toThrow("spend-bound-unavailable");
   });
+});
+
+it.only("DEBUG probe", () => {
+  expect(() =>
+    budget().reserve({ ...capability, pricing: undefined }, request, "pricing-rejection"),
+  ).toThrow("spend-pricing-unavailable");
+  const event = events.at(-1);
+  const line = formatActivityLogProofLine(event ?? {});
+  const record = JSON.parse(line.trimEnd()) as Record<string, unknown>;
+  const registration = (
+    ACTIVITY_LOG_OPERATION_REGISTRY as readonly ActivityLogOperationRegistration[]
+  ).find((candidate) => candidate.proofIds.includes("gateway.spend.rejected.line"));
+  if (registration === undefined) throw new Error("no registration");
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (registration.fields[key] !== undefined) fields[key] = value;
+  }
+  try {
+    validateActivityLogOperationFields(registration.op, registration.category, fields);
+  } catch (error) {
+    throw new Error(
+      `KIND=${JSON.stringify((error as { kind?: unknown }).kind)} FIELDS=${JSON.stringify(fields)}`,
+    );
+  }
 });

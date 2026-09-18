@@ -51,6 +51,10 @@ import {
 import { createRunRegistry } from "./runs.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const EMBEDDING_DIMENSIONS = 1536;
@@ -404,6 +408,17 @@ describe("the start-indexing route is on the record", () => {
       correlationId: jobId,
       extra: { jobIdMinted: true, sourceCount: 1 },
     });
+    // Activity Log proof (#3532): the captured event, formatted exactly as the production file
+    // sink persists it, resolves indexing.start.accepted for the op-catalog.
+    const startedProof = expectActivityLogProof(
+      "indexing.start.accepted.line",
+      formatActivityLogProofLine(lineFor(sink, START_ACCEPTED)),
+    );
+    expect(startedProof).toMatchObject({
+      correlationId: jobId,
+      jobIdMinted: true,
+      sourceCount: 1,
+    });
     // The join, asserted against the PRODUCER rather than a restated formula: the capsule digest
     // on the route's line has to be the digest `keiko-local-knowledge` puts on the run's own
     // lines, or an operator holding the 202's job id still cannot reach the six blank minutes.
@@ -434,6 +449,18 @@ describe("the start-indexing route is on the record", () => {
     });
     const ops = sink.events.map((event) => event.op);
     expect(ops.indexOf(RUN_LAUNCHED)).toBeGreaterThan(ops.indexOf(START_ACCEPTED));
+    // Activity Log proof (#3532): this is the one parent-correlation-bearing line among the
+    // seven — it carries the REQUEST's correlation id as `parentCorrelationId` alongside its own
+    // (minted) `correlationId`, so the two runs join without collapsing into one id.
+    const launchedProof = expectActivityLogProof(
+      "indexing.detached-run.launched.line",
+      formatActivityLogProofLine(lineFor(sink, RUN_LAUNCHED)),
+    );
+    expect(launchedProof).toMatchObject({
+      correlationId: jobIdOf(accepted),
+      parentCorrelationId: "request-indexing-launch-parent",
+      jobIdMinted: true,
+    });
   });
 
   it("keeps the raw capsule id off the route's own lines", async () => {
@@ -471,6 +498,13 @@ describe("every refusal of a start names which refusal it was", () => {
       errorKind: "invalid-request",
       extra: { reason: "capsule-not-found" },
     });
+    // Activity Log proof (#3532): the captured event, formatted exactly as the production file
+    // sink persists it, resolves indexing.start.refused for the op-catalog.
+    const refusedProof = expectActivityLogProof(
+      "indexing.start.refused.line",
+      formatActivityLogProofLine(lineFor(sink, START_REFUSED)),
+    );
+    expect(refusedProof).toMatchObject({ reason: "capsule-not-found" });
   });
 
   it("records a capsule with no sources as capsule-has-no-sources", async () => {
@@ -590,6 +624,21 @@ describe("cancelling an indexing run is on the record", () => {
       correlationId: jobIdOf(started),
       extra: { cancellationRequested: true },
     });
+    // Activity Log proof (#3532): each captured event, formatted exactly as the production file
+    // sink persists it, resolves its op-catalog proof id.
+    const requestedProof = expectActivityLogProof(
+      "indexing.cancel.requested.line",
+      formatActivityLogProofLine(lineFor(sink, CANCEL_REQUESTED)),
+    );
+    expect(requestedProof.capsuleIdDigest).toMatch(/^[0-9a-f]{16}$/u);
+    const acceptedProof = expectActivityLogProof(
+      "indexing.cancel.accepted.line",
+      formatActivityLogProofLine(lineFor(sink, CANCEL_ACCEPTED)),
+    );
+    expect(acceptedProof).toMatchObject({
+      correlationId: jobIdOf(started),
+      cancellationRequested: true,
+    });
   });
 
   it("records a cancellation request even when the capsule does not exist", async () => {
@@ -621,5 +670,12 @@ describe("cancelling an indexing run is on the record", () => {
       errorKind: "conflict",
       extra: { reason: "no-running-job" },
     });
+    // Activity Log proof (#3532): the captured event, formatted exactly as the production file
+    // sink persists it, resolves indexing.cancel.refused for the op-catalog.
+    const refusedProof = expectActivityLogProof(
+      "indexing.cancel.refused.line",
+      formatActivityLogProofLine(lineFor(sink, CANCEL_REFUSED)),
+    );
+    expect(refusedProof).toMatchObject({ reason: "no-running-job" });
   });
 });

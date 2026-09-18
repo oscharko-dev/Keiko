@@ -126,6 +126,7 @@ function withTypedRegistryFixture(pkgName, fileContents, check) {
 
 const EXEMPTION_OPERATION_FIXTURE = {
   op: "fixture.registry.completed",
+  owner: "keiko-contracts",
   failureClasses: ["fixture-failure"],
 };
 
@@ -140,7 +141,7 @@ function validExemption(overrides = {}) {
     owner: "keiko-contracts",
     reason: "The fixture platform cannot expose this proof signal.",
     trackingIssue: 3529,
-    expiresOn: "2030-01-01",
+    expiresOn: "2026-12-31",
     ...overrides,
   };
 }
@@ -191,6 +192,13 @@ describe("Activity Log registry exemptions", () => {
     ["missing issue", { trackingIssue: undefined }, "exemption-invalid", "trackingIssue"],
     ["broad operation", { operation: "*" }, "exemption-invalid", "operation"],
     ["expired", { expiresOn: "2026-09-16" }, "exemption-expired", "2026-09-16"],
+    ["effectively permanent", { expiresOn: "2027-03-17" }, "exemption-permanent", "2027-03-17"],
+    [
+      "owned by another package",
+      { owner: "keiko-server" },
+      "exemption-owner-mismatch",
+      "keiko-server",
+    ],
     [
       "unknown operation",
       { operation: "fixture.registry.unknown" },
