@@ -228,8 +228,14 @@ export const ACTIVITY_LOG_FAILURE_MODE_TOKENS = [
 
 const TEST_SOURCE = /\.test\.(?:ts|tsx|mts)$/u;
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "fixtures", "coverage", ".git"]);
-const PROOF_CALL = "expectActivityLogProof";
-const SCENARIO_CALL = "expectActivityLogScenario";
+// The proof helpers of tests/support/activity-log-proof.ts: a file-sink line, or the emergency
+// stderr notice the sink writes when it cannot persist. Either resolves the proof id it names.
+const CALL_KINDS = new Map([
+  ["expectActivityLogProof", "proof"],
+  ["expectActivityLogStderrProof", "proof"],
+  ["expectActivityLogScenario", "scenario"],
+]);
+const CALL_NAME_PREFIX = "expectActivityLog";
 
 function compareCodepoints(left, right) {
   if (left === right) return 0;
@@ -309,16 +315,12 @@ function callSite(repoRoot, sourceFile, node) {
 function collectCalls(repoRoot, path, text, calls) {
   const sourceFile = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   const visit = (node) => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      (node.expression.text === PROOF_CALL || node.expression.text === SCENARIO_CALL)
-    ) {
-      calls.push({
-        kind: node.expression.text === PROOF_CALL ? "proof" : "scenario",
-        id: literalFirstArgument(node),
-        ...callSite(repoRoot, sourceFile, node),
-      });
+    const kind =
+      ts.isCallExpression(node) && ts.isIdentifier(node.expression)
+        ? CALL_KINDS.get(node.expression.text)
+        : undefined;
+    if (kind !== undefined) {
+      calls.push({ kind, id: literalFirstArgument(node), ...callSite(repoRoot, sourceFile, node) });
     }
     ts.forEachChild(node, visit);
   };
@@ -330,7 +332,7 @@ export function scanActivityLogProofCalls(repoRoot) {
   const calls = [];
   for (const path of testSourceFiles(repoRoot)) {
     const text = readFileSync(path, "utf8");
-    if (!text.includes(PROOF_CALL) && !text.includes(SCENARIO_CALL)) continue;
+    if (!text.includes(CALL_NAME_PREFIX)) continue;
     collectCalls(repoRoot, path, text, calls);
   }
   return calls;
