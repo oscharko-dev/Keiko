@@ -227,6 +227,7 @@ const RUNTIME_STATE_LABEL: Readonly<Record<RuntimeStateCategory, string>> = {
   "quality-intelligence": "Quality Intelligence store",
   "update-recovery": "update recovery state",
   "activity-log": "activity log",
+  "support-incident": "support incident store",
 };
 
 interface LoosePermFinding {
