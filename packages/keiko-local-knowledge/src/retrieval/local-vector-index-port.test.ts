@@ -23,6 +23,10 @@ import {
 import type { VectorIndexUnexpectedFailureDiagnostic as PublicUnexpectedFailureDiagnostic } from "@oscharko-dev/keiko-local-knowledge";
 import { describe, expect, it } from "vitest";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { createCapsule } from "../capsule-lifecycle.js";
 import type { KnowledgeLogEvent, KnowledgeLogSink } from "../knowledge-log.js";
@@ -241,6 +245,13 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
       const capsuleIdDigest = lines[0]?.extra?.capsuleIdDigest;
       expect(capsuleIdDigest).toMatch(/^[0-9a-f]{16}$/u);
       expect(JSON.stringify(lines[0])).not.toContain("cap-port-a");
+
+      const persisted = expectActivityLogProof(
+        "search.index-invalidated-for-capsule.digest",
+        formatActivityLogProofLine(lines[0] ?? {}),
+      );
+      expect(persisted).toMatchObject({ namespace: "knowledge" });
+      expect(persisted.capsuleIdDigest).toMatch(/^[0-9a-f]{16}$/u);
 
       // A successful search never emits this line.
       events.length = 0;

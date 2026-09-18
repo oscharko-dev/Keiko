@@ -15,6 +15,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   emitKnowledgeLogEvent,
   knowledgeErrorKind,
   knowledgeLogCorrelationId,
@@ -207,6 +211,13 @@ describe("emitKnowledgeLogEvent", () => {
       extra: { failureKind: "ENOSPC" },
     });
     expect(events[0]?.extra?.droppedOpDigest).toMatch(/^[0-9a-f]{16}$/u);
+
+    const persisted = expectActivityLogProof(
+      "knowledge.log.sink-failed.body-free",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "ENOSPC" });
+    expect(persisted.droppedOpDigest).toMatch(/^[0-9a-f]{16}$/u);
   });
 
   it("keeps writing subsequent lines a recovered sink can take", () => {

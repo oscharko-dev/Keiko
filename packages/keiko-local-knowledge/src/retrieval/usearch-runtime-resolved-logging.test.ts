@@ -18,6 +18,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { KnowledgeLogEvent, KnowledgeLogSink } from "../knowledge-log.js";
 
 import {
@@ -146,6 +150,12 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
       // Content-free: never the resolved filesystem path or the raw SHA-256 digest.
       expect(JSON.stringify(coldLines[0])).not.toContain(binary);
       expect(JSON.stringify(coldLines[0])).not.toContain(FIXTURE_BINARY_SHA256);
+
+      const persisted = expectActivityLogProof(
+        "search.native-runtime-resolved.state",
+        formatActivityLogProofLine(coldLines[0] ?? {}),
+      );
+      expect(persisted).toMatchObject({ resolutionState: "resolved", version: FIXTURE_VERSION });
 
       events.length = 0;
       await searchUsearchAnnIndex(request);

@@ -53,7 +53,7 @@
   "summary": {
     "operationCount": 415,
     "proofCount": 423,
-    "resolvedProofCount": 239,
+    "resolvedProofCount": 245,
     "failureClassCount": 307,
     "scenarioCount": 29,
     "resolvedScenarioCount": 0
@@ -1558,9 +1558,13 @@
     "pr-description.repository.mismatch.emitted-line": [],
     "pr-description.workbench.egress.denied.emitted-line": [],
     "process.exiting.reason": ["packages/keiko-cli/src/process-guards.test.ts"],
-    "process.exiting.uptime": [],
+    "process.exiting.uptime": [
+      "packages/keiko-cli/src/process-activity-log.activity-log-proof.test.ts"
+    ],
     "process.fatal.body-free": ["packages/keiko-cli/src/process-guards.test.ts"],
-    "process.fatal.stack-context": [],
+    "process.fatal.stack-context": [
+      "packages/keiko-cli/src/process-activity-log.activity-log-proof.test.ts"
+    ],
     "process.heartbeat.resources": [],
     "process.heartbeat.event-loop": [],
     "process.started.runtime": [],
@@ -1597,16 +1601,20 @@
     "security.portable-tree-attestation.failed.driver": [
       "packages/keiko-security/src/portable-tree-attestation.test.ts"
     ],
-    "security.vault.entries-delete-failed.count": [],
-    "security.vault.entries-deleted.count": [],
-    "security.vault.entries-merge-failed.count": [],
+    "security.vault.entries-delete-failed.count": [
+      "packages/keiko-security/src/secret-vault.test.ts"
+    ],
+    "security.vault.entries-deleted.count": ["packages/keiko-security/src/secret-vault.test.ts"],
+    "security.vault.entries-merge-failed.count": [
+      "packages/keiko-security/src/secret-vault.test.ts"
+    ],
     "security.vault.entries-merged.count": ["packages/keiko-security/src/secret-vault.test.ts"],
     "security.vault.entries-rollback-failed.count": [],
     "security.vault.key-resolution-failed.evidence": [
       "packages/keiko-security/src/secret-vault.test.ts"
     ],
     "security.vault.key-resolved.source": ["packages/keiko-security/src/secret-vault.test.ts"],
-    "security.vault.shard-unreadable.count": [],
+    "security.vault.shard-unreadable.count": ["packages/keiko-security/src/secret-vault.test.ts"],
     "security.windows-launcher.system-binary-missing.emitted-line": [],
     "security.windows-launcher.system-root-refused.emitted-line": [],
     "security.windows-lifecycle-opener.system-binary-missing.emitted-line": [],
