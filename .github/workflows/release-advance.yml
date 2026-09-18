@@ -1,0 +1,75 @@
+name: Release advance
+
+# ADR-0177 D9: the event-driven half of the release button. After a release owner requested a release
+# (release.yml on dev), this workflow runs whenever that request, the stable tag build, or one of the
+# release-required check workflows completes. Each run reads every fact fresh and dispatches release.yml
+# on the tag once the requested commit is built and every release-required check is green, so the run
+# after the last prerequisite completed starts the publish. Nothing polls and nothing waits on a clock.
+# A request that is already published, superseded, or publishing is left alone, and each request is
+# published at most once: a failed publish needs a new press of the button, never an automatic retry.
+#
+# `workflow_run` is the only trigger GitHub offers for "another workflow completed". Its classic misuse
+# is checking out the triggering run's head and executing it with the elevated token. This workflow
+# does the opposite by construction: it checks out the default branch, runs only committed repository
+# code, reads nothing from the triggering run, and skips every pull-request run. Its only write grant
+# is `actions: write`, which dispatches release.yml; that run's authorize job then refuses any commit
+# no allowlisted owner requested.
+on:
+  workflow_run:
+    workflows:
+      - Release
+      - Portable assets
+      - CI
+      - CodeQL
+      - Workflow hygiene
+    types:
+      - completed
+
+permissions: {}
+
+# One evaluation at a time. GitHub keeps only the newest pending run of a group, which is the one that
+# reads the newest facts, and a running evaluation is never cancelled while it may dispatch.
+concurrency:
+  group: release-advance
+  cancel-in-progress: false
+
+env:
+  RELEASE_BASE_BRANCH: release/1.0
+  # The release-required checks release.yml verifies; check:release-required-workflows holds the two
+  # lists equal.
+  RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
+
+jobs:
+  advance:
+    name: Start the requested release once it is built and green
+    # A release is requested, built, and checked on dev and its tag only: pushes and dispatches. A
+    # pull-request run can never complete a prerequisite, so it never starts an evaluation.
+    if: >-
+      github.event.workflow_run.event == 'push'
+      || github.event.workflow_run.event == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      statuses: read
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # `workflow_run` executes the default branch's definition of this file, so the decision it
+          # runs comes from the same place, never from the triggering run's head.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Start the publish once the requested release is ready
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
+        run: node scripts/release-advance.mjs

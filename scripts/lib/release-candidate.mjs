@@ -1,12 +1,14 @@
 // ADR-0177 D8: a green dev head whose version is approved for every portable target and not yet
-// published is the release candidate, and `v<version>` points at it. This module owns the decision
-// and the tag write; `scripts/release-candidate.mjs` only wires the host executables, so every
-// branch here is proven in-process.
+// published is the release candidate, and `v<version>` points at it. ADR-0177 D9: the release button
+// (`release.yml` dispatched on dev by an allowlisted owner) binds the tag to exactly the commit it was
+// pressed on, and no later dev push moves the tag away from that request. This module owns the
+// decision and the tag write; `scripts/release-candidate.mjs` only wires the host executables, so
+// every branch here is proven in-process.
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
-// A release.yml publish is open from its human dispatch until it completes. Authorization and the
-// portable inputs are bound to the commit the run was dispatched for, so the tag must not move under
-// it. The read-only handoff reads the same set.
+// A release.yml run is open from its dispatch until it completes. A publish and its portable inputs
+// are bound to the commit the run was dispatched for, so the tag must not move under it, and an owner
+// request that is still running holds its tag the same way.
 export const OPEN_RUN_STATUSES = new Set([
   "requested",
   "waiting",
@@ -38,6 +40,7 @@ function requireCommitSha(value, label) {
  * @param readiness         portableRehearsalReadiness() for the candidate checkout
  * @param candidateSha      the green dev commit this run was started for
  * @param devHeadSha        the dev head right now
+ * @param ownerRequestHeld  an owner's release request holds the tag at the commit it points at
  * @param published         npm or GitHub already carries the version
  * @param remoteTagSha      the commit `v<version>` points at, or undefined when it does not exist
  * @param publishRunActive  a release.yml publish of this tag is open, waiting for approval included
@@ -46,6 +49,7 @@ function requireCommitSha(value, label) {
 export function releaseCandidatePlan({
   candidateSha,
   devHeadSha,
+  ownerRequestHeld = false,
   publishRunActive,
   published,
   readiness,
@@ -73,6 +77,7 @@ export function releaseCandidatePlan({
   }
   return currentDevCandidatePlan({
     candidateSha,
+    ownerRequestHeld,
     publishRunActive,
     published,
     remoteTagSha,
@@ -80,45 +85,55 @@ export function releaseCandidatePlan({
   });
 }
 
-function currentDevCandidatePlan({ candidateSha, publishRunActive, published, remoteTagSha, tag }) {
+function candidatePlan(action, portableBuild, tag, reason) {
+  return { action, portableBuild, tag, reason };
+}
+
+function currentDevCandidatePlan({
+  candidateSha,
+  ownerRequestHeld,
+  publishRunActive,
+  published,
+  remoteTagSha,
+  tag,
+}) {
+  const { DEV_REHEARSAL, NONE, STABLE_TAG } = PORTABLE_BUILD_OWNERS;
   if (publishRunActive) {
-    return {
-      action: "skip",
-      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
+    return candidatePlan(
+      "skip",
+      NONE,
       tag,
-      reason: `a publish of ${tag} is open, so no second portable build may start`,
-    };
+      `a publish of ${tag} is open, so no second portable build may start`,
+    );
   }
   if (published) {
-    return {
-      action: "skip",
-      portableBuild: PORTABLE_BUILD_OWNERS.DEV_REHEARSAL,
+    return candidatePlan(
+      "skip",
+      DEV_REHEARSAL,
       tag,
-      reason: `${tag} is already published, and its tag never moves`,
-    };
+      `${tag} is already published, and its tag never moves`,
+    );
   }
   if (remoteTagSha === candidateSha) {
-    return {
-      action: "keep",
-      portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
+    return candidatePlan("keep", STABLE_TAG, tag, `${tag} already points at ${candidateSha}`);
+  }
+  if (ownerRequestHeld) {
+    return candidatePlan(
+      "skip",
+      NONE,
       tag,
-      reason: `${tag} already points at ${candidateSha}`,
-    };
+      `a release owner requested ${tag} at ${String(remoteTagSha)}, so the tag stays there`,
+    );
   }
   if (remoteTagSha === undefined) {
-    return {
-      action: "create",
-      portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
-      tag,
-      reason: `${tag} does not exist yet`,
-    };
+    return candidatePlan("create", STABLE_TAG, tag, `${tag} does not exist yet`);
   }
-  return {
-    action: "move",
-    portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
+  return candidatePlan(
+    "move",
+    STABLE_TAG,
     tag,
-    reason: `${tag} moves from ${remoteTagSha} to the green dev head`,
-  };
+    `${tag} moves from ${remoteTagSha} to the green dev head`,
+  );
 }
 
 function readGithub(runGh, path) {
@@ -136,7 +151,7 @@ function readGithub(runGh, path) {
 }
 
 /** A GitHub API read that must succeed; any failure, a 404 included, fails closed. */
-function readFound(runGh, path, label) {
+export function readFound(runGh, path, label) {
   const read = readGithub(runGh, path);
   if (read.kind !== "found") fail(`${label} could not be read.`);
   return read.value;
@@ -162,13 +177,13 @@ export function remoteTagCommit(runGh, repository, tag) {
   return peeledTagCommit(runGh, repository, tag, ref.value?.object);
 }
 
-function releaseExists(runGh, repository, tag) {
+export function releaseExists(runGh, repository, tag) {
   const release = readGithub(runGh, `repos/${repository}/releases/tags/${tag}`);
   if (release.kind === "error") fail(`the GitHub release for ${tag} could not be read.`);
   return release.kind === "found";
 }
 
-function npmHasVersion(runNpm, packageName, version) {
+export function npmHasVersion(runNpm, packageName, version) {
   const result = runNpm(["view", `${packageName}@${version}`, "version", "--json"]);
   if (result?.error === undefined && result?.status === 0) {
     return String(result.stdout).trim() === JSON.stringify(version);
@@ -202,31 +217,59 @@ export function readReleaseDispatchRuns(runGh, repository) {
   return fail(`the release workflow runs span more than ${RUN_PAGE_LIMIT} pages.`);
 }
 
-function publishRunActive(runGh, repository, tag) {
-  return readReleaseDispatchRuns(runGh, repository).some(
-    (run) => run?.head_branch === tag && OPEN_RUN_STATUSES.has(run?.status),
+const RELEASE_REQUEST_BRANCH = "dev";
+
+/**
+ * True for a press of the release button: release.yml dispatched on dev by a human account. Whether
+ * that human is an allowlisted release owner is release.yml's own job guard and the publish
+ * authorization's question (scripts/lib/release-automation.mjs); the planner only needs to know that a
+ * request holds the tag, and a held tag can at most stop a tag move, never start a publish.
+ */
+export function isReleaseRequest(run) {
+  const login = run?.triggering_actor?.login;
+  return (
+    run?.event === "workflow_dispatch" &&
+    run?.head_branch === RELEASE_REQUEST_BRANCH &&
+    typeof login === "string" &&
+    login !== "" &&
+    !login.endsWith("[bot]")
+  );
+}
+
+// A request run of an account outside the allowlist skips every job and concludes "skipped", so only
+// an owner's request can hold the tag beyond the seconds its run is open.
+function releaseRequestHolds(runs, remoteTagSha) {
+  return runs.some(
+    (run) =>
+      run?.head_sha === remoteTagSha &&
+      isReleaseRequest(run) &&
+      (run?.conclusion === "success" || OPEN_RUN_STATUSES.has(run?.status)),
   );
 }
 
 /**
- * Gathers every fact the plan needs through the caller's host seams.
+ * Gathers every fact the plan needs through the caller's host seams. A release request binds the
+ * exact commit the owner pressed the button on, so it neither yields to a newer dev head nor to an
+ * older request; a dev push yields to both.
  *
+ * @param request true for the release button, false for a dev push
  * @param runGh   (args) => {status, stdout, stderr, error}; reads with the workflow token
  * @param runNpm  (args) => {status, stdout, stderr, error}
  */
 export function planReleaseCandidate({
   candidateSha,
   repository,
+  request = false,
   rootPackage,
   readiness,
   runGh,
   runNpm,
 }) {
   const tag = readiness.releaseTag;
-  const devHead = readFound(runGh, `repos/${repository}/git/ref/heads/dev`, "the dev head");
   const facts = {
     candidateSha,
-    devHeadSha: devHead?.object?.sha,
+    devHeadSha: request ? candidateSha : readDevHead(runGh, repository),
+    ownerRequestHeld: false,
     publishRunActive: false,
     published: false,
     readiness,
@@ -237,9 +280,18 @@ export function planReleaseCandidate({
       npmHasVersion(runNpm, rootPackage.name, rootPackage.version) ||
       releaseExists(runGh, repository, tag);
     facts.remoteTagSha = remoteTagCommit(runGh, repository, tag);
-    facts.publishRunActive = publishRunActive(runGh, repository, tag);
+    const runs = readReleaseDispatchRuns(runGh, repository);
+    facts.publishRunActive = runs.some(
+      (run) => run?.head_branch === tag && OPEN_RUN_STATUSES.has(run?.status),
+    );
+    facts.ownerRequestHeld =
+      !request && facts.remoteTagSha !== undefined && releaseRequestHolds(runs, facts.remoteTagSha);
   }
   return releaseCandidatePlan(facts);
+}
+
+function readDevHead(runGh, repository) {
+  return readFound(runGh, `repos/${repository}/git/ref/heads/dev`, "the dev head")?.object?.sha;
 }
 
 function writeArgs(repository, plan, candidateSha) {
@@ -312,13 +364,15 @@ export function applyReleaseCandidatePlan({ candidateSha, plan, repository, runG
   return true;
 }
 
-const RUN_MODES = new Set(["--plan", "--apply"]);
+const RUN_MODES = new Set(["--plan", "--apply", "--request"]);
 const REPOSITORY = /^[\w.-]+\/[\w.-]+$/u;
 
 /**
  * The whole run behind `scripts/release-candidate.mjs`. `--plan` decides and hands the action to
  * the workflow; `--apply` decides again from fresh facts, because dev or a publish can move between
- * the two jobs, and writes the tag only for a create or move.
+ * the two jobs, and writes the tag only for a create or move. `--request` is the release button: it
+ * binds the tag to the pressed commit and fails when that commit cannot be released, so a successful
+ * request run is always a releasable one.
  *
  * @param decideReadiness  ({catalog, rootPackage}) => portableRehearsalReadiness() result
  * @param readText         (repositoryRelativePath) => file text of the candidate checkout
@@ -338,30 +392,46 @@ export function runReleaseCandidate({
   const rootPackage = JSON.parse(readText("package.json"));
   const catalog = JSON.parse(readText("release-impact.catalog.json"));
   const readiness = decideReadiness({ catalog, rootPackage });
+  const request = mode === "--request";
   const plan = planReleaseCandidate({
     candidateSha,
     readiness,
     repository,
+    request,
     rootPackage,
     runGh,
     runNpm,
   });
-  const writes = mode === "--apply" && WRITING_ACTIONS.has(plan.action);
+  if (request && plan.action === "skip") {
+    fail(`${plan.tag} cannot be released from ${candidateSha}: ${plan.reason}.`);
+  }
+  const writes = mode !== "--plan" && WRITING_ACTIONS.has(plan.action);
   if (writes) {
     if (typeof env.KEIKO_RELEASE_TAG_TOKEN !== "string" || env.KEIKO_RELEASE_TAG_TOKEN === "") {
       fail("the release tag token is missing.");
     }
     applyReleaseCandidatePlan({ candidateSha, plan, repository, runGhWithTagToken });
   }
-  const line = writes
-    ? `Release candidate ${candidateSha}: ${plan.tag} written (${plan.action}), ${plan.reason}.`
-    : `Release candidate ${candidateSha}: ${plan.action}, ${plan.reason}.`;
+  const line = reportLine({ candidateSha, plan, request, writes });
   reportRun({ appendFile, env, line, mode, plan });
   return { line, plan };
 }
 
+function reportLine({ candidateSha, plan, request, writes }) {
+  if (request) {
+    const tagState = writes ? `${plan.tag} written (${plan.action})` : plan.reason;
+    return (
+      `Release ${plan.tag} requested for ${candidateSha}: ${tagState}. The publish starts by ` +
+      "itself once the tag build and every release-required check are green."
+    );
+  }
+  return writes
+    ? `Release candidate ${candidateSha}: ${plan.tag} written (${plan.action}), ${plan.reason}.`
+    : `Release candidate ${candidateSha}: ${plan.action}, ${plan.reason}.`;
+}
+
 function runInputs(env, mode) {
-  if (!RUN_MODES.has(mode)) fail("pass --plan or --apply.");
+  if (!RUN_MODES.has(mode)) fail("pass --plan, --apply or --request.");
   const candidateSha = requireCommitSha(env.CANDIDATE_SHA, "CANDIDATE_SHA");
   const repository = env.GITHUB_REPOSITORY;
   if (typeof repository !== "string" || !REPOSITORY.test(repository)) {

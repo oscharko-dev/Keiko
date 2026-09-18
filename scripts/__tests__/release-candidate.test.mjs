@@ -85,6 +85,21 @@ describe("releaseCandidatePlan", () => {
     expect(plan({ remoteTagSha: CANDIDATE }).action).toBe("keep");
   });
 
+  it("leaves a tag an owner's release request holds, and builds nothing for the newer head", () => {
+    // ADR-0177 D9: an agent merge after the owner pressed the release button must not move the tag
+    // away from the commit the owner authorized; the newer head belongs to the next release.
+    expect(plan({ ownerRequestHeld: true, remoteTagSha: OLDER })).toStrictEqual({
+      action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
+      tag: TAG,
+      reason: `a release owner requested ${TAG} at ${OLDER}, so the tag stays there`,
+    });
+  });
+
+  it("keeps a held tag that already points at the candidate", () => {
+    expect(plan({ ownerRequestHeld: true, remoteTagSha: CANDIDATE }).action).toBe("keep");
+  });
+
   it.each([
     [
       "an unapproved version",
@@ -239,6 +254,95 @@ describe("planReleaseCandidate", () => {
         }),
     });
     expect(gather(github).action).toBe("move");
+  });
+
+  const RUNS_PATH = `repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page=1`;
+  const human = { login: "oscharko", type: "User" };
+  const request = (overrides) => ({
+    event: "workflow_dispatch",
+    head_branch: "dev",
+    head_sha: OLDER,
+    status: "completed",
+    conclusion: "success",
+    triggering_actor: human,
+    ...overrides,
+  });
+  const tagAtOlder = ok({ object: { sha: OLDER, type: "commit" } });
+
+  it.each([
+    ["a successful request", request({})],
+    ["a request that is still running", request({ status: "in_progress", conclusion: null })],
+  ])("does not move a tag %s holds at its commit", (_label, run) => {
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: tagAtOlder,
+      [RUNS_PATH]: ok({ workflow_runs: [run] }),
+    });
+    expect(gather(github)).toMatchObject({
+      action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
+      reason: `a release owner requested ${TAG} at ${OLDER}, so the tag stays there`,
+    });
+  });
+
+  it.each([
+    ["a failed request", request({ conclusion: "failure" })],
+    ["a request no owner could make (every job skipped)", request({ conclusion: "skipped" })],
+    ["a request for another commit", request({ head_sha: "c".repeat(40) })],
+    ["a bot dispatch on dev", request({ triggering_actor: { login: "github-actions[bot]" } })],
+    ["a dispatch without an actor", request({ triggering_actor: undefined })],
+    ["a publish run on the tag", request({ head_branch: TAG })],
+    ["a push run on dev", request({ event: "push" })],
+  ])("moves the tag past %s", (_label, run) => {
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: tagAtOlder,
+      [RUNS_PATH]: ok({ workflow_runs: [run] }),
+    });
+    expect(gather(github).action).toBe("move");
+  });
+
+  it("creates a missing tag even when a request run carries no commit", () => {
+    const github = fakeGithub({
+      [RUNS_PATH]: ok({ workflow_runs: [request({ head_sha: undefined })] }),
+    });
+    expect(gather(github).action).toBe("create");
+  });
+
+  describe("for the release button", () => {
+    function press(github) {
+      return planReleaseCandidate({
+        candidateSha: CANDIDATE,
+        readiness: READY,
+        repository: REPO,
+        request: true,
+        rootPackage: ROOT_PACKAGE,
+        runGh: github.runGh,
+        runNpm: NPM_MISSING,
+      });
+    }
+
+    it("binds the pressed commit without reading the dev head, even after dev moved on", () => {
+      const github = fakeGithub({
+        [`repos/${REPO}/git/ref/heads/dev`]: ok({ object: { sha: OLDER, type: "commit" } }),
+      });
+      expect(press(github).action).toBe("create");
+      expect(github.calls).not.toContainEqual(["api", `repos/${REPO}/git/ref/heads/dev`]);
+    });
+
+    it("moves a tag an older request holds: the newest press wins", () => {
+      const github = fakeGithub({
+        [`repos/${REPO}/git/ref/tags/${TAG}`]: tagAtOlder,
+        [RUNS_PATH]: ok({ workflow_runs: [request({})] }),
+      });
+      expect(press(github).action).toBe("move");
+    });
+
+    it("still refuses to move a tag whose publish is open", () => {
+      const github = fakeGithub({
+        [`repos/${REPO}/git/ref/tags/${TAG}`]: tagAtOlder,
+        [RUNS_PATH]: ok({ workflow_runs: [{ head_branch: TAG, status: "in_progress" }] }),
+      });
+      expect(press(github)).toMatchObject({ action: "skip" });
+    });
   });
 
   it.each([
@@ -448,8 +552,76 @@ describe("runReleaseCandidate", () => {
     expect(writes).toStrictEqual([]);
   });
 
+  it("requests a release: writes the tag with the tag token and says the rest is automatic", () => {
+    const { appended, result, writes } = run("--request", { KEIKO_RELEASE_TAG_TOKEN: "app-token" });
+    expect(result.plan.action).toBe("create");
+    expect(writes).toHaveLength(1);
+    expect(result.line).toBe(
+      `Release ${TAG} requested for ${CANDIDATE}: ${TAG} written (create). The publish starts by ` +
+        "itself once the tag build and every release-required check are green.",
+    );
+    // The request hands nothing to later jobs; only the summary reports it.
+    expect(appended).toStrictEqual([["/summary", `${result.line}\n`]]);
+  });
+
+  it("requests a release whose tag already points at the pressed commit without a write", () => {
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: CANDIDATE, type: "commit" } }),
+    });
+    const { result, writes } = run("--request", {}, github);
+    expect(writes).toStrictEqual([]);
+    expect(result.line).toContain(`${TAG} already points at ${CANDIDATE}`);
+  });
+
   it.each([
-    ["an unknown mode", "--publish", {}, "pass --plan or --apply"],
+    [
+      "a published version",
+      { [`repos/${REPO}/releases/tags/${TAG}`]: ok({ id: 1 }) },
+      `${TAG} is already published`,
+    ],
+    [
+      "a tag whose publish is still running",
+      {
+        [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
+        [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page=1`]:
+          ok({ workflow_runs: [{ head_branch: TAG, status: "queued" }] }),
+      },
+      `a publish of ${TAG} is open`,
+    ],
+  ])("fails a request for %s, so the run is no authorization", (_label, overrides, reason) => {
+    expect(() =>
+      run("--request", { KEIKO_RELEASE_TAG_TOKEN: "app-token" }, fakeGithub(overrides)),
+    ).toThrow(`release-candidate: ${TAG} cannot be released from ${CANDIDATE}: ${reason}`);
+  });
+
+  it("fails a request for an unapproved version", () => {
+    const appended = [];
+    expect(() =>
+      runReleaseCandidate({
+        appendFile: (path, text) => appended.push([path, text]),
+        decideReadiness: () => ({ ready: false, releaseTag: TAG, reason: "not approved" }),
+        env: { CANDIDATE_SHA: CANDIDATE, GITHUB_REPOSITORY: REPO },
+        mode: "--request",
+        readText: (path) =>
+          path === "package.json" ? JSON.stringify(ROOT_PACKAGE) : '{"entries":[]}',
+        runGh: fakeGithub().runGh,
+        runGhWithTagToken: () => {
+          throw new Error("no write expected");
+        },
+        runNpm: NPM_MISSING,
+      }),
+    ).toThrow(`${TAG} cannot be released from ${CANDIDATE}: not approved.`);
+    expect(appended).toStrictEqual([]);
+  });
+
+  it("refuses to request a release without the tag token", () => {
+    expect(() => run("--request", { KEIKO_RELEASE_TAG_TOKEN: "" })).toThrow(
+      "release tag token is missing",
+    );
+  });
+
+  it.each([
+    ["an unknown mode", "--publish", {}, "pass --plan, --apply or --request"],
     [
       "a malformed candidate",
       "--plan",
@@ -508,7 +680,9 @@ describe("releaseCandidateMain", () => {
   it("prints a known refusal as it is and exits 1", () => {
     const { code, written } = main({ argv: ["--publish"] });
     expect(code).toBe(1);
-    expect(written).toStrictEqual([["stderr", "release-candidate: pass --plan or --apply.\n"]]);
+    expect(written).toStrictEqual([
+      ["stderr", "release-candidate: pass --plan, --apply or --request.\n"],
+    ]);
   });
 
   it("prefixes an unexpected failure and a thrown non-Error", () => {

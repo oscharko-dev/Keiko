@@ -4,7 +4,8 @@
 
 Accepted (owner decision, 2026-09-14). D8 added by owner decision, 2026-09-14.
 Amended by owner decision, 2026-09-18, to assign one portable build owner and retain explicit
-human publish authorization (#3548).
+human publish authorization (#3548). D9 added by owner decision, 2026-09-18: the human
+authorization moves to the start, as one release button, and the publish starts by itself.
 
 ## Amends
 
@@ -140,19 +141,63 @@ starts it:
   only permission is repository contents; the App key lives in the `release-tagging` environment,
   which only `dev` deploys to, and the App is the second bypass actor of the "Owner-only tag changes"
   ruleset.
-- The tag push runs the stable build. After `assemble`, its read-only `publish-handoff` job waits for
-  the six release-required checks, revalidates the exact tag/SHA/run/attempt and any open publish,
-  and writes the exact owner command to the summary. It holds `actions: read`, never dispatches or
-  cancels a workflow, and fails closed on a moved tag or superseded publish.
-- An allowlisted human starts `release.yml` with `workflow_dispatch` on that exact tag and supplies
-  the emitted run identity. GitHub attributes a workflow-token dispatch to `github-actions[bot]`, so
-  the job's non-bot `triggering_actor` guard rejects it. The `npm-publish` environment scopes the
-  signing key and Trusted Publisher identity but currently has no required-reviewer protection rule;
-  the allowlisted human dispatch is therefore the enforceable authorization boundary.
+- The tag push runs the stable build, which ends with `assemble`. Who starts the publish, and when,
+  is D9. (Until D9 a read-only `publish-handoff` job polled for the release-required checks for up to
+  90 minutes and printed a `gh workflow run release.yml` command with the run id, attempt and
+  artifact name for the owner to copy and run.)
 - Every `release.yml` job checks out the commit it was started for and proves it, never the tag as it
   is when the job starts, and the publish re-verifies the required checks without waiting for CI.
   Should the tag move anyway, the publisher re-reads it right before it creates the GitHub Release
   and stops before any side effect.
+
+### D9 — One release button; the publish starts by itself
+
+D8 placed the human authorization at the end of the chain: after the roughly 50-minute tag build the
+owner had to come back, copy a generated command with five parameters, and dispatch the publish. The
+owner's requirement is the opposite: when `dev` is green, press one button and let the release run
+to the end unattended. Nothing technical forced the old order. A workflow-token dispatch is
+attributed to `github-actions[bot]`, but the human decision does not have to be made by the run that
+publishes; it only has to be verifiable by it.
+
+- **The button.** An allowlisted owner runs `release.yml` on `dev` (`npm run release`, or "Run
+  workflow" in the Actions tab) and supplies nothing else. The `request` job runs only for a non-bot
+  triggering actor in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`. It points `v<version>` at exactly the
+  commit the button was pressed on (`scripts/release-candidate.mjs --request`, through the release tag
+  App) and fails, naming the reason, when that commit cannot be released: the version is not
+  approved, npm or GitHub already carries it, or a publish of the tag is still open. A successful
+  request run is therefore the owner's authorization for exactly its head commit. GitHub records the
+  dispatching account as the run's triggering actor, and no token can choose it.
+- **The held tag.** A later `dev` push never moves a tag that a successful or still-running request
+  holds; that push belongs to the next release, and the planner assigns it no build. Only a newer
+  press moves the tag. A held tag can at most stop a tag move, never start a publish, so the planner
+  needs no allowlist: a request run of any other account skips every job and concludes `skipped`.
+- **The event-driven start.** `release-advance.yml` runs on `workflow_run` completion of `Release`,
+  `Portable assets`, `CI`, `CodeQL` and `Workflow hygiene`, skipping every pull-request run. Each run
+  reads every fact fresh: the newest successful owner request, whether its version is published,
+  whether the tag still points at the requested commit, the newest stable tag build of that commit,
+  and the release-required checks on it. Once the build succeeded and every check is green it
+  dispatches `release.yml` on the tag. Every evaluation runs after its own prerequisite completed, so
+  the evaluation after the last one sees them all complete: nothing polls, and no decision depends
+  on a clock. A running evaluation is never cancelled, and GitHub keeps only the newest pending one.
+- **Exactly once.** A request whose tag already has a publish run started after it is left alone,
+  whatever that run's outcome; a failed publish needs a new press, never an automatic retry. A failed
+  build or check only stops the release; re-running that workflow continues it.
+- **The authorization.** The dispatched run's `authorize` job decides who may publish in one tested
+  place (`scripts/lib/release-automation.mjs`): an allowlisted owner who dispatched the tag directly,
+  or `github-actions[bot]` for a commit an owner requested with the button. Every other actor, a
+  moved tag, or a missing or unsuccessful stable build fails it before the `npm-publish` job, which
+  holds the signing key and the npm Trusted Publisher identity, can start. `authorize` also names the
+  exact build run and attempt for the publish job, so `release.yml` has no inputs. The job condition
+  compares no actor with a bot login, which zizmor's `bot-conditions` audit reports as spoofable.
+- **Why the publish stays a tag dispatch.** `workflow_run` executes on the default branch with its
+  head as `GITHUB_SHA`, so npm provenance would name `dev`'s newest commit rather than the released
+  one; the Linux qualification receipt must name `portable-assets.yml@refs/tags/vX.Y.Z` (D8). The
+  event-driven run therefore only decides and dispatches; the publish runs on the tag and binds its
+  commit as before.
+- **The trust boundary.** A token with `actions: write` alone can dispatch `release.yml`, but it can
+  only publish a commit an allowlisted owner requested, on a tag only the owner and the release tag
+  App may write. `release-advance.yml` checks out the default branch, runs only committed code, reads
+  no value of the triggering run and holds no secret; its only write grant is `actions: write`.
 
 ## Consequences
 
@@ -167,8 +212,11 @@ starts it:
 - A green rehearsal proves the chain for `v<version>` at that commit. After a version is published,
   the next release still needs its version bump and its reviewed release-impact approval; readiness
   names that gap until the approval lands.
-- Releasing a version is two human actions: merge the version bump with its release-impact approval,
-  then dispatch the exact handoff from the stable build as an allowlisted release owner.
+- Releasing a version is one prepared version on `dev` (the version bump with its release-impact
+  approval) and one press of the release button. No second human step, command, run id or re-run is
+  part of a release that succeeds.
+- Merges after the press are held back from the release they would otherwise have silently joined,
+  and each requested commit is published at most once per press.
 - An owner-cut tag still releases as before; the candidate workflow keeps, moves, or leaves it by the
   same rules.
 - Until the GitHub App, the `release-tagging` environment, and the ruleset bypass exist, the tag job of
@@ -181,13 +229,15 @@ starts it:
 single-owner gating, the tag-only authority, the signing-lane mapping, the environment split, the
 checkout binding, secret gating, the derived release tag, and the resolver's refusal of a rehearsal
 run and bundle. `scripts/__tests__/linux-qualification-rehearsal-fence.test.mjs` pins the consumers
-of the rehearsal policy. For D8, `release-candidate.test.mjs` and
-`release-publish-handoff.test.mjs` prove every decision in-process,
-`release-candidate-workflow.test.mjs` pins triggers, grants, the one secret and the step order,
-`check-release-required-workflow-names.test.mjs` holds the candidate to
-`release.yml`'s authority, `release-orchestration-integration.test.mjs` proves both build-owner
-scenarios and the complete handoff chain, and `release-publish-pipeline.test.mjs` stops a publish
-whose tag moved.
+of the rehearsal policy. For D8 and D9, `release-candidate.test.mjs` proves every tag decision
+in-process, including the request and the held tag, and `release-automation.test.mjs` proves every
+start and authorization decision; `release-candidate-workflow.test.mjs` pins triggers, grants, the
+secrets and the step order of the candidate, the button and the event-driven start;
+`release-publish-dispatch-guard.test.mjs` pins the button's owner guard and the single authorization
+place; `check-release-required-workflow-names.test.mjs` holds `release-advance.yml` to `release.yml`'s
+authority; `release-orchestration-integration.test.mjs` proves both build-owner scenarios, the held
+tag and the complete chain from the press to the authorized publish; and
+`release-publish-pipeline.test.mjs` stops a publish whose tag moved.
 
 ## References
 

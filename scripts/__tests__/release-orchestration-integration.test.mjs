@@ -4,8 +4,14 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
+import {
+  AUTOMATION_ACTOR,
+  newestOwnerRequest,
+  releaseAdvancePlan,
+  releaseAuthorizePlan,
+  releaseOwners,
+} from "../lib/release-automation.mjs";
 import { PORTABLE_BUILD_OWNERS, releaseCandidatePlan } from "../lib/release-candidate.mjs";
-import { releasePublishHandoffPlan } from "../lib/release-publish-handoff.mjs";
 
 const SHA = "a".repeat(40);
 const TAG = "v1.0.5";
@@ -13,6 +19,8 @@ const workflows = resolve(import.meta.dirname, "../../.github/workflows");
 const candidate = parse(readFileSync(resolve(workflows, "release-candidate.yml"), "utf8"));
 const portable = parse(readFileSync(resolve(workflows, "portable-assets.yml"), "utf8"));
 const release = parse(readFileSync(resolve(workflows, "release.yml"), "utf8"));
+const advance = parse(readFileSync(resolve(workflows, "release-advance.yml"), "utf8"));
+const OWNERS = releaseOwners('["oscharko"]');
 
 function candidatePlan(overrides = {}) {
   return releaseCandidatePlan({
@@ -33,7 +41,7 @@ function buildOwners(plan) {
   ].filter(Boolean);
 }
 
-describe("release orchestration integration (#3548)", () => {
+describe("release orchestration integration (#3548, ADR-0177 D9)", () => {
   it("assigns an approved unpublished SHA to exactly one stable-tag build", () => {
     const plan = candidatePlan();
 
@@ -53,11 +61,57 @@ describe("release orchestration integration (#3548)", () => {
     expect(buildOwners(plan)).toHaveLength(1);
   });
 
-  it("joins tag creation, one canonical bundle, read-only handoff, and human publish", () => {
-    const handoff = releasePublishHandoffPlan({
-      releaseRuns: [],
+  it("keeps the tag on the commit an owner requested while dev moves on", () => {
+    const newer = "c".repeat(40);
+    const plan = candidatePlan({
+      candidateSha: newer,
+      devHeadSha: newer,
+      ownerRequestHeld: true,
       remoteTagSha: SHA,
-      sourceSha: SHA,
+    });
+
+    expect(plan).toMatchObject({ action: "skip", portableBuild: "none", tag: TAG });
+    expect(buildOwners(plan)).toHaveLength(0);
+  });
+
+  it("joins the button, one canonical bundle, the event-driven start, and the authorized publish", () => {
+    // One press on dev is the whole human part; every later step is a decision over GitHub state.
+    const pressed = {
+      conclusion: "success",
+      event: "workflow_dispatch",
+      head_branch: "dev",
+      head_sha: SHA,
+      run_number: 20,
+      status: "completed",
+      triggering_actor: { login: "oscharko" },
+    };
+    const build = {
+      conclusion: "success",
+      event: "push",
+      head_branch: TAG,
+      head_sha: SHA,
+      id: 42,
+      path: ".github/workflows/portable-assets.yml",
+      run_attempt: 1,
+      status: "completed",
+    };
+    const request = newestOwnerRequest([pressed], OWNERS);
+    const start = releaseAdvancePlan({
+      build,
+      checks: { failed: [], missing: [], ok: true, passed: [], pending: [] },
+      publishAttempt: undefined,
+      published: false,
+      remoteTagSha: SHA,
+      request,
+      tag: TAG,
+    });
+    const authorized = releaseAuthorizePlan({
+      actor: AUTOMATION_ACTOR,
+      build,
+      owners: OWNERS,
+      releaseRuns: [pressed],
+      remoteTagSha: SHA,
+      sha: SHA,
       tag: TAG,
     });
     const upload = portable.jobs.assemble.steps.filter((step) =>
@@ -68,19 +122,18 @@ describe("release orchestration integration (#3548)", () => {
     expect(portable.jobs["rehearsal-readiness"].steps.at(-1).run).toBe(
       "node scripts/release-candidate.mjs --plan",
     );
-    expect(upload).toHaveLength(1);
-    expect(portable.jobs["publish-handoff"].needs).toBe("assemble");
-    expect(portable.jobs["publish-handoff"].permissions).toStrictEqual({
-      actions: "read",
-      checks: "read",
-      contents: "read",
-      statuses: "read",
-    });
-    expect(handoff.action).toBe("authorize");
-    expect(release.on).toStrictEqual({ workflow_dispatch: expect.any(Object) });
-    expect(release.jobs.publish.if).toContain("!endsWith(github.triggering_actor, '[bot]')");
-    expect(release.jobs.publish.if).toContain(
-      "contains(fromJSON(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS), github.triggering_actor)",
+    expect(release.jobs.request.steps.at(-1).run).toBe(
+      "node scripts/release-candidate.mjs --request",
     );
+    expect(upload).toHaveLength(1);
+    expect(portable.jobs["publish-handoff"]).toBeUndefined();
+    expect(advance.on.workflow_run.workflows).toEqual(
+      expect.arrayContaining(["Release", "Portable assets"]),
+    );
+    expect(advance.jobs.advance.steps.at(-1).run).toBe("node scripts/release-advance.mjs");
+    expect(start.action).toBe("dispatch");
+    expect(authorized).toMatchObject({ runAttempt: 1, runId: 42 });
+    expect(release.on).toStrictEqual({ workflow_dispatch: null });
+    expect(release.jobs.publish.needs).toBe("authorize");
   });
 });

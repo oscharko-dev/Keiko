@@ -1,42 +1,21 @@
 name: Release
 
+# The release button (ADR-0177 D9, Epic #3495). A release owner runs this workflow on dev and supplies
+# nothing else: `npm run release`, or "Run workflow" in the Actions tab. That dispatch authorizes
+# exactly the dev commit it was started on. Everything after it is event-driven and needs no human:
+#
+#   1. request (this workflow on dev) points v<version> at that commit through the release tag App,
+#      which starts the stable tag build in portable-assets.yml.
+#   2. release-advance.yml runs whenever the request, the tag build, or a release-required check
+#      workflow completes, and dispatches this workflow on the tag once the build and every
+#      release-required check are green. Whichever finishes last starts the publish; nothing polls and
+#      nothing waits for a timeout.
+#   3. authorize (this workflow on the tag) accepts that dispatch only for a commit an allowlisted owner
+#      requested, and hands the exact stable build to publish.
+#
+# The npm Trusted Publisher is bound to this file and the npm-publish environment.
 on:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: "Publish to npm after all release gates pass"
-        type: boolean
-        required: false
-        default: false
-      npm_dist_tag:
-        description: "npm dist-tag to publish under"
-        type: choice
-        required: false
-        default: beta
-        options:
-          - beta
-          - next
-          - latest
-      portable_assets_manifest:
-        description: "Path to reviewed portable assets manifest, or relative path inside the downloaded portable asset artifact"
-        type: string
-        required: false
-        default: ""
-      portable_assets_run_id:
-        description: "Workflow run id that produced the reviewed portable asset bundle"
-        type: string
-        required: false
-        default: ""
-      portable_assets_run_attempt:
-        description: "Workflow run attempt that produced the reviewed portable asset bundle"
-        type: string
-        required: false
-        default: ""
-      portable_assets_artifact_name:
-        description: "Artifact name containing the reviewed portable asset bundle"
-        type: string
-        required: false
-        default: ""
 
 permissions: {}
 
@@ -51,39 +30,100 @@ env:
   RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
-  # #3498 (Epic #3495): the wait-for-required-checks `release-verify` job (previously here) was
-  # retired. It used a 105-minute time budget to poll for CI, CodeQL, workflow hygiene and
-  # portable-assets to conclude on the tag SHA — a time-driven wait for something that has an event
-  # source. An event-driven cross-workflow dispatcher was considered and withdrawn: a default
-  # GITHUB_TOKEN dispatch attributes triggering_actor to `github-actions[bot]`, which the publish
-  # guard below refuses. No workflow dispatches this workflow automatically: the button (or an
-  # authenticated owner CLI call) is the authoritative human authorization. The publish job still
-  # verifies the required checks itself (defence in depth) and never waits for CI inside the
-  # approved deployment.
-  publish:
-    name: Publish to npm
-    # #3505 (Epic #3495): the button IS the publish approval (product-owner decision 2026-09-15).
-    # Two gates keep it safe:
-    #   - `!endsWith(github.triggering_actor, '[bot]')`: refuses any bot-triggered dispatch, so a
-    #     token holding `actions: write` alone (dependabot, a compromised app) cannot dispatch a
-    #     publish. A dispatch from another workflow via GITHUB_TOKEN records github-actions[bot]
-    #     here, regardless of the human who caused the upstream event.
-    #   - exact membership in the JSON-array `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`: refuses any
-    #     dispatch by an account that is not in the release-owner allowlist recorded in the repo
-    #     variable. Empty, missing, or malformed configuration refuses every dispatch.
-    # The environment scopes the release signing key and npm Trusted Publisher identity. Repository
-    # settings currently impose no required-reviewer rule there, so the allowlisted non-bot dispatch
-    # is the live human-control boundary and must remain explicit.
+  request:
+    name: Request the release of this dev commit
+    # The button. GitHub records the dispatching account as the run's triggering actor, and no token can
+    # choose it: a dispatch made with a workflow token names github-actions[bot]. Only an allowlisted
+    # human in the JSON-array repository variable KEIKO_RELEASE_OWNER_GITHUB_LOGINS reaches this job, so
+    # a successful run of it is that owner's authorization for exactly its commit. Empty, missing, or
+    # malformed configuration refuses every dispatch.
     if: >-
       github.event_name == 'workflow_dispatch'
-      && inputs.publish
-      && startsWith(github.ref, 'refs/tags/v')
+      && github.ref == 'refs/heads/dev'
       && !endsWith(github.triggering_actor, '[bot]')
       && contains(fromJSON(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS), github.triggering_actor)
     runs-on: ubuntu-latest
-    # The environment scopes credentials but currently has no reviewer rule. Human control comes
-    # from the job guard above: a compromised job with actions:write dispatches as a bot and this
-    # job never starts. The npm Trusted Publisher remains bound to this workflow and environment.
+    # The GitHub App credentials exist only in this environment, and only dev may deploy to it.
+    environment: release-tagging
+    permissions:
+      actions: read
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify checked-out commit
+        # The request authorizes the commit the button was pressed on, never a newer dev head.
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Mint the release tag token
+        id: tag-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Point the release tag at this commit
+        # Fails when this commit cannot be released (unapproved, already published, or a publish of
+        # the tag is still running), so a successful request is always a releasable one.
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_RELEASE_TAG_TOKEN: ${{ steps.tag-token.outputs.token }}
+        run: node scripts/release-candidate.mjs --request
+
+  authorize:
+    name: Authorize the publish of this tag
+    # The publish itself. release-advance.yml dispatches it with the workflow token once the requested
+    # commit is built and green, so it arrives as github-actions[bot]; an allowlisted owner may also
+    # dispatch a tag directly. Who may publish is decided in one place, the step below
+    # (scripts/lib/release-automation.mjs): an allowlisted owner, or the automation for a commit an
+    # owner requested with the button. Every other actor fails it before publish can start.
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    timeout-minutes: 10
+    outputs:
+      run-id: ${{ steps.authorize.outputs.run-id }}
+      run-attempt: ${{ steps.authorize.outputs.run-attempt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Bind the publish to an owner request and the exact stable build
+        id: authorize
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: node scripts/release-authorize.mjs
+
+  publish:
+    name: Publish to npm
+    needs: authorize
+    # authorize is tag-only and refuses every dispatch no release owner authorized, so a skipped or
+    # failed authorize never reaches the release credentials below.
+    if: ${{ !cancelled() && needs.authorize.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    # The environment scopes the signing key and the npm Trusted Publisher identity; it has no reviewer
+    # rule. Human control is the owner's release request that authorize verified.
     environment: npm-publish
     permissions:
       actions: read
@@ -97,6 +137,12 @@ jobs:
       id-token: write
       statuses: read
     timeout-minutes: 75
+    env:
+      # The button releases stable versions only, and a stable version is npm's latest.
+      NPM_DIST_TAG: latest
+      PORTABLE_ASSETS_ARTIFACT_NAME: portable-release-assets
+      PORTABLE_ASSETS_RUN_ATTEMPT: ${{ needs.authorize.outputs.run-attempt }}
+      PORTABLE_ASSETS_RUN_ID: ${{ needs.authorize.outputs.run-id }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -129,13 +175,12 @@ jobs:
       - name: Verify required checks for release SHA
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # The stable build emitted the owner handoff only after every required check passed, so
+          # release-advance.yml dispatched this publish only after every required check passed, so
           # this re-verifies them and never waits for CI inside the authorized deployment.
           RELEASE_CHECK_TIMEOUT_SECONDS: "60"
         run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate publish dist-tag
         env:
-          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           node <<'NODE'
@@ -153,24 +198,16 @@ jobs:
           }
           NODE
       - name: Resolve successful stable portable-assets workflow run
-        if: inputs.portable_assets_run_id != '' || inputs.portable_assets_artifact_name != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
-          PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
-          PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/resolve-release-portable-assets.mjs --validate-run
       - name: Download reviewed portable asset bundle
-        if: inputs.portable_assets_run_id != '' || inputs.portable_assets_artifact_name != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
-          PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
-          PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
         run: |
           if [ -z "$PORTABLE_ASSETS_RUN_ID" ] || [ -z "$PORTABLE_ASSETS_ARTIFACT_NAME" ]; then
-            echo "portable_assets_run_id and portable_assets_artifact_name must be provided together" >&2
+            echo "authorize named no stable build run or artifact for this publish" >&2
             exit 1
           fi
           gh run download "$PORTABLE_ASSETS_RUN_ID" \
@@ -179,12 +216,7 @@ jobs:
       - name: Resolve portable assets manifest
         id: portable_assets
         env:
-          PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
-          PORTABLE_ASSETS_MANIFEST: ${{ inputs.portable_assets_manifest }}
-          PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
-          PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
           RELEASE_TAG: ${{ github.ref_name }}
-          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: node scripts/resolve-release-portable-assets.mjs
       - name: Build workspace packages
         # --ignore-scripts builds nothing, and release-publish.mjs imports the portable release trust
@@ -198,11 +230,11 @@ jobs:
         # token; recovery for a delayed npm registry write is wait/re-verify, not adding a secret.
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
+          KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: ${{ env.PORTABLE_ASSETS_ARTIFACT_NAME }}
           KEIKO_PORTABLE_ASSETS_MANIFEST: ${{ steps.portable_assets.outputs.manifest }}
           KEIKO_PORTABLE_ASSETS_REPOSITORY: ${{ github.repository }}
-          KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
-          KEIKO_PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
+          KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT: ${{ env.PORTABLE_ASSETS_RUN_ATTEMPT }}
+          KEIKO_PORTABLE_ASSETS_RUN_ID: ${{ env.PORTABLE_ASSETS_RUN_ID }}
           KEIKO_PORTABLE_ASSETS_SOURCE_SHA: ${{ github.sha }}
           KEIKO_PORTABLE_ASSETS_TAG: ${{ github.ref_name }}
           KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: .github/workflows/portable-assets.yml
@@ -210,7 +242,6 @@ jobs:
           # platform signing as the updater's mandatory authenticity boundary; the protected
           # npm-publish environment keeps the private key outside source and build artifacts.
           KEIKO_PORTABLE_RELEASE_SIGNING_KEY: ${{ secrets.KEIKO_PORTABLE_RELEASE_SIGNING_KEY }}
-          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
           # npm Trusted Publishing can quarantine an OIDC/provenance publish after the CLI reports
           # success and before the version-specific registry endpoint returns HTTP 200. v1.0.3 took

@@ -37,6 +37,7 @@ import {
 const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "utf8");
 const portableWorkflowDocument = parse(portableWorkflow);
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
+const releaseAdvanceWorkflow = readFileSync(".github/workflows/release-advance.yml", "utf8");
 
 function workflowJob(name) {
   return portableWorkflowDocument.jobs[name];
@@ -97,7 +98,6 @@ describe("portable release-trust workflow", () => {
       "stage-linux-production",
       "qualify-linux-production",
       "assemble",
-      "publish-handoff",
     ]);
     expect(portableWorkflow).not.toMatch(
       /AZURE_|APPLE_|artifact-signing-action|notarytool|codesign/u,
@@ -315,20 +315,25 @@ describe("portable release-trust workflow", () => {
     }
   });
 
-  it("pins portable staging to the release workflow authority", () => {
-    expect(portableReleaseAuthorityFailures(releaseWorkflow, portableWorkflow)).toEqual([]);
+  it("pins the workflow that starts a publish to the release workflow authority", () => {
+    // ADR-0177 D9 moved the release-required check verification that gates a publish from the
+    // stable build's handoff to release-advance.yml, so the authority pin moves with it. The build
+    // keeps no copy: an authority nothing reads could only drift unnoticed.
+    expect(envValue(portableWorkflow, "RELEASE_BASE_BRANCH")).toBeUndefined();
+    expect(envValue(portableWorkflow, "RELEASE_REQUIRED_CHECKS")).toBeUndefined();
+    expect(portableReleaseAuthorityFailures(releaseWorkflow, releaseAdvanceWorkflow)).toEqual([]);
     const releaseBaseBranch = envValue(releaseWorkflow, "RELEASE_BASE_BRANCH");
     expect(releaseBaseBranch).toMatch(/^release\/\d+\.\d+$/u);
     expect(
       portableReleaseAuthorityFailures(
         releaseWorkflow,
-        portableWorkflow.replace(releaseBaseBranch, "release/drift"),
+        releaseAdvanceWorkflow.replace(releaseBaseBranch, "release/drift"),
       ),
     ).toEqual(["RELEASE_BASE_BRANCH"]);
     expect(
       portableReleaseAuthorityFailures(
         releaseWorkflow,
-        portableWorkflow.replace('"ui"]', '"drift"]'),
+        releaseAdvanceWorkflow.replace('"ui"]', '"drift"]'),
       ),
     ).toEqual(["RELEASE_REQUIRED_CHECKS"]);
   });
@@ -437,7 +442,6 @@ describe("jobs downstream of the rehearsal readiness on a tag push", () => {
         "stage-linux-production",
         "qualify-linux-production",
         "assemble",
-        "publish-handoff",
       ]),
     );
   });

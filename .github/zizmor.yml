@@ -54,10 +54,18 @@ rules:
       # Verified with the pinned scanner version: zizmor 1.26.1 reports this one finding for this
       # file and nothing else.
       - infra-failure-retry.yml:25
+      # ADR-0177 D9: release-advance.yml must see that the release request, the stable tag build, or a
+      # release-required check workflow completed, and `workflow_run` is the only trigger GitHub offers
+      # for that. It is not the classic misuse: it checks out `github.event.repository.default_branch`
+      # (never the triggering run's head), runs only committed repository code, reads no value of the
+      # triggering run, skips every pull-request run in its job condition, and holds no secret. Its only
+      # write grant is `actions: write`, which dispatches release.yml on a tag; that run's authorize job
+      # refuses every commit no allowlisted release owner requested with the release button.
+      - release-advance.yml:17
   adhoc-packages:
     ignore:
       # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;
       # bootstrapping npm is inherently outside the lockfile since it changes the binary that
       # later reads that lockfile. The version is pinned exactly (not @latest), which is the
       # practical mitigation for this specific operation (see the inline comment there).
-      - release.yml:124
+      - release.yml:170

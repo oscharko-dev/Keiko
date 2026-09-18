@@ -94,6 +94,10 @@ const releaseAlignmentWorkflow = readFileSync(
   resolve(repoRoot, ".github/workflows/release-alignment.yml"),
   "utf8",
 );
+const releaseAdvanceWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/release-advance.yml"),
+  "utf8",
+);
 const secretScanningQueueWorkflow = readFileSync(
   resolve(repoRoot, ".github/workflows/secret-scanning-queue.yml"),
   "utf8",
@@ -452,6 +456,7 @@ describe("CI test/gate wiring guard", () => {
       releaseWorkflow,
       portableAssetsWorkflow,
       releaseCandidateWorkflow,
+      releaseAdvanceWorkflow,
       mutationSecurityWorkflow,
       secretScanningQueueWorkflow,
       releaseAlignmentWorkflow,
@@ -469,12 +474,14 @@ describe("CI test/gate wiring guard", () => {
     // standing release-alignment lane; ADR-0177 D8 adds the release-candidate plan and tag lanes and
     // the stable build's publish-request lane. Epic #3495 (#3498) retired the wait-for-checks
     // release-verify lane. Issue #3519 keeps Windows in the full cross-platform matrix while making
-    // that matrix omit only the Windows leg for positively classified non-Windows PRs.
+    // that matrix omit only the Windows leg for positively classified non-Windows PRs. ADR-0177 D9
+    // replaces the stable build's publish-handoff lane with release.yml's request and authorize lanes
+    // and release-advance.yml's event-driven start lane.
     // The load-bearing pairing below proves every lane verifies the governed toolchain, while the
     // exact counts make a removed or unreviewed new lane fail.
-    expect(node24SetupCount).toBe(27);
+    expect(node24SetupCount).toBe(29);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(28);
+    expect(nodeSetupCount).toBe(30);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
