@@ -55,12 +55,14 @@ as applicable. Saved support reports remain local artifacts written to a user-se
 publishing or attaching one to GitHub or another external system requires separate explicit user
 authority and is never part of logging or export.
 
-Activity Log storage must remain bounded on every intermediate change. The current daily-file
-implementation publishes one immutable `server-YYYY-MM-DD.log` archive per UTC boundary and retains
-only the configured number of closed-grammar archives. Filesystem mutation is limited to verified
-owner-private, non-redirected directories and opened regular owner-matched targets. Cross-process
-rotation uses a non-replacing hard-link winner; rename is permitted only when the filesystem reports
-hard links unsupported. Any successor segment design must replace this bound atomically rather than
+Activity Log storage must remain bounded on every intermediate change. The Activity Log is stored as
+immutable segments in `<stateDir>/logs/` (ADR-0173 D14). Each process appends only to its own active
+segment, sealed segments are read-only, and retention bounds every segment and legacy file by bytes
+and age, so total use stays within the byte budget plus the pin quota. Filesystem mutation is
+limited to verified owner-private, non-redirected directories and opened regular owner-matched
+targets, and only on names in the closed grammar of `keiko-contracts` `activity-log-files.ts`.
+Publication never replaces an existing name; rename is permitted only when the filesystem reports
+hard links unsupported. Any successor storage design must replace this bound atomically rather than
 remove it first.
 
 ## Pull requests

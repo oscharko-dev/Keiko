@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +26,7 @@ import type { CatalogToolBinderInput } from "@oscharko-dev/keiko-server/tool-cat
 // for this repair pass, so this one import stays a relative deep path. The other four imports
 // above now resolve through keiko-server's own declared exports map instead of reaching past it.
 import { catalogToolFixture } from "../../keiko-server/src/tool-catalog/__fixtures__/catalogToolFixture.js";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 import {
   analyzeLogText,
   buildReproductionSeed,
@@ -85,7 +86,7 @@ async function emittedLog(
       { actionId: "action-1", idempotencyKey: "key-1" },
     );
     sink.close?.();
-    return { text: readFileSync(join(directory, "logs", "server.log"), "utf8"), fixture };
+    return { text: readPersistedActivityLog(directory), fixture };
   } finally {
     sink.close?.();
     vi.unstubAllEnvs();

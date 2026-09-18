@@ -1,32 +1,33 @@
 # Observability: the server activity log
 
 Keiko configures one operator-readable activity log for every local install. `KEIKO_LOG_LEVEL`
-controls its threshold and can explicitly disable writes with `silent`; a silent interval has no
-reconstruction evidence and must not be interpreted as an active writer. This page documents the
+controls its threshold. `silent` suppresses ordinary events but never the log's own lifecycle,
+loss and readiness evidence, and a silent interval is reported as degraded readiness rather than
+passing for an active writer. This page documents the
 log itself, how its lines join together across a request's lifecycle, and how to read it with
 `keiko support export` / `keiko support analyze`. It is the consumer-facing counterpart to
 [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md), which records
 the design decisions behind everything described here.
 
-## File location, daily rotation, and retention
+## File location, segments, and retention
 
-Normal runtime activity lives at `<stateDir>/logs/server.log` — `<stateDir>` is `./.keiko` by
-default, or wherever `--state-dir` / `KEIKO_STATE_DIR` points. Commands that must audit or remove
-that selected tree write their own lifecycle evidence to a fixed per-user CLI control-state log:
+Normal runtime activity lives in `<stateDir>/logs/`. `<stateDir>` is `./.keiko` by default, or
+wherever `--state-dir` / `KEIKO_STATE_DIR` points. Commands that must audit or remove that selected
+tree write their own lifecycle evidence to a fixed per-user CLI control-state log directory:
 
-| Platform | CLI control-state log                                         |
-| -------- | ------------------------------------------------------------- |
-| Linux    | `~/.local/state/keiko/control/logs/server.log`                |
-| macOS    | `~/Library/Application Support/Keiko/control/logs/server.log` |
-| Windows  | `%USERPROFILE%\AppData\Local\Keiko\control\logs\server.log`   |
+| Platform | CLI control-state log directory                     |
+| -------- | --------------------------------------------------- |
+| Linux    | `~/.local/state/keiko/control/logs/`                |
+| macOS    | `~/Library/Application Support/Keiko/control/logs/` |
+| Windows  | `%USERPROFILE%\AppData\Local\Keiko\control\logs\`   |
 
 The control path accepts no environment override and may not be at or below the selected audit or
 uninstall target. `keiko audit local-state` therefore cannot mutate the forensic tree it reads, and
 `keiko uninstall --state` cannot delete or asynchronously recreate the store that holds its own
 result. If the primary control root overlaps the target or cannot be validated or opened, the
 command emits a body-free terminal refusal before any sink opens. It does not create an independent
-fallback log root inside an unproved trust boundary. A control-state `server.log` can be passed
-directly to `keiko support analyze`.
+fallback log root inside an unproved trust boundary. Any Activity Log file from a control-state log
+directory can be passed directly to `keiko support analyze`.
 
 One correlation id joins install-layout normalization to audit or uninstall start, subordinate
 forced-stop activity, and completion/failure. Audit and uninstall events carry SHA-256 identities
@@ -39,71 +40,183 @@ that the last line on disk before a hang or a crash is the last line the process
 When a state directory is configured, failure to create or open its log directory aborts startup
 with a closed safe-artifact error. Keiko never silently substitutes a null sink for a configured
 activity log; an in-memory/null sink exists only where a caller explicitly selected one, such as a
-unit-test composition without a state directory.
+unit test that installs the test writer (see [Writer wiring](#writer-wiring-loss-accounting-and-readiness)).
 
-At the first write after each UTC day boundary, Keiko seals the finished current file as exactly one
-`server-YYYY-MM-DD.log` archive and opens a fresh `server.log`. The default retention window is
-seven dated archives; an explicitly configured positive `retentionDays` value replaces that default.
-Pruning recognizes only real calendar dates in the closed archive grammar and never deletes a
-lookalike, backup, stage, or unrelated file.
+### Segments
+
+The directory holds one logical log, stored as immutable segments:
+
+| File                                                     | Meaning                                                       |
+| -------------------------------------------------------- | ------------------------------------------------------------- |
+| `activity-<start>-<pid>-<instance>-<index>.active.jsonl` | The segment one running process writes. Only it appends here. |
+| `activity-<start>-<pid>-<instance>-<index>.jsonl`        | A sealed segment: read-only, never changed again.             |
+| `server.log`, `server-YYYY-MM-DD.log`                    | Legacy files from earlier releases. Read-only; they age out.  |
+| `pin-<id>.json`                                          | A retention pin that protects segments from deletion.         |
+
+`<start>` is the segment's UTC start time. `<pid>` and `<instance>` identify the writing process, as
+its lines do, and `<index>` counts that process's segments. The logical order is the legacy archives
+by day, then `server.log`, then the segments by start time. `keiko support export` reads them in that
+order for you.
+
+A process seals its active segment in four cases:
+
+- the next line would exceed the segment size;
+- the segment reaches its maximum age;
+- the process shuts down;
+- a pin is requested.
+
+The seal writes a final `activity-log.segment.sealed` line with the seq range, line count, bytes,
+duration and dropped-event count. It then drops `.active` from the name and makes the file
+read-only.
+
+If a process crashes, its active segment stays behind. The next Keiko process seals it as it is, at
+startup or before opening its next segment. A partial last line is kept and reported by
+`activity-log.segment.recovered` with `tailState: "truncated"` and `truncatedBytes`. Complete lines
+are never rewritten.
+
+### Retention and limits
+
+Retention runs at startup and before every new segment. It counts every file in the directory,
+including legacy files and other processes' active segments. It deletes the oldest unprotected
+sealed and legacy files first: those older than the retention age, then as many more as the byte
+budget requires. Each pass is recorded as `activity-log.retention.pruned`. Total disk use stays
+within the byte budget plus the pin quota.
+
+| Variable                    | Default | Meaning                                                                          |
+| --------------------------- | ------- | -------------------------------------------------------------------------------- |
+| `KEIKO_LOG_SEGMENT_BYTES`   | 8 MiB   | Seal a segment before it exceeds this size. At least 32 KiB, at most 1/4 budget. |
+| `KEIKO_LOG_SEGMENT_SECONDS` | 3600    | Seal a segment after this many seconds, from 1 to 604800.                        |
+| `KEIKO_LOG_RETENTION_BYTES` | 256 MiB | Byte budget for every unpinned file. At least 64 KiB.                            |
+| `KEIKO_LOG_RETENTION_DAYS`  | 14      | Delete sealed and legacy files older than this, from 1 to 3650 days.             |
+| `KEIKO_LOG_PIN_QUOTA_BYTES` | 64 MiB  | Extra space reserved for pinned segments.                                        |
+
+Each value must be a positive whole number within its range. Anything else falls back to the
+default, so a typo never removes the bound.
+
+A pin protects a time window, or named segments, from retention until it expires, within the pin
+quota. `activity-log.pin.created` and `activity-log.pin.expired` record its lifecycle. A pin that
+the quota cannot hold is still recorded, with `quotaStatus: "exceeded"`. One
+`activity-log.pin.quota-exhausted` line then states how much evidence stays unprotected.
+
+When storage runs short, `activity-log.pressure` records the transition. The states are
+`low-disk-space`, `disk-full`, `backpressure`, `budget-exceeded` and `retention-blocked`, plus
+`cleared` when the condition ends. The line carries the dropped-event count and the used, budget,
+pin-quota and free bytes, so a gap in the log is never silent.
+
+### Filesystem boundary
 
 The filesystem boundary is the operating-system user. The selected state and log directories must
 be owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected owner's inherited
-ACL on Windows). Keiko rechecks their device/inode identity around every link, rename, and unlink.
-Before retention removes an archive, an opened handle must prove that the target is a regular,
-owner-matched, private, single-link file and still names the checked pathname. Every link, rename,
+ACL on Windows). Keiko rechecks their device/inode identity around every link, rename, and unlink,
+and never lists, recovers, or prunes through a redirected directory.
+
+Before a seal or a deletion, an opened handle must prove that the target is a regular,
+owner-matched, private, single-link file that still names the checked pathname. Every link, rename,
 and unlink also carries its source file's device/inode, taken from a descriptor held open until the
-mutation returns: the mutation helper acts on the name only while it still has that identity, so a
-process can never delete a `server.log` that a concurrent writer recreated, nor publish a file that
-replaced the verified one. Holding the descriptor matters because Linux reuses a freed inode number
-immediately.
+mutation returns. The mutation helper acts on the name only while it still has that identity, so a
+process can never delete or publish a file that replaced the verified one. Holding the descriptor
+matters because Linux reuses a freed inode number immediately.
 
-Cross-process rotation uses a hard link to publish the dated destination without replacement:
-`EEXIST` means another process won, and the loser preserves that archive. Only errors that state the
-filesystem does not support hard links permit the guarded rename fallback. That fallback first claims
-the dated name with an exclusive no-follow create, so a concurrent rotation that loses the claim
-preserves the winner's archive, and the winner's rename can replace only its own empty claim. A
-failed, unsafe, or ambiguous mutation leaves evidence in place and never escapes into the caller.
+Sealing publishes the sealed name with a hard link, which never replaces an existing name, and then
+removes the active name. Only errors that state the filesystem does not support hard links permit
+the guarded rename fallback. That fallback first claims the destination with an exclusive no-follow
+create. A failed, unsafe, or ambiguous mutation leaves the file in place, is recorded as body-free
+evidence, and never escapes into the caller.
 
-`server-log.rotation` records the closed `persistenceStatus`, `rotationReason`, `archivedCount`,
-`retentionStatus`, `prunedCount`, and `retainedCount`. A mutation failure is a body-free
-`durability-failed` event with partial completeness; paths and filenames never enter the event.
-
-There is a documented residual same-user race: Node has no portable descriptor-relative
+There is a documented residual same-user race. Node has no portable descriptor-relative
 link/rename/unlink API, and filesystems that lack hard links offer no no-replace rename, so the
 fallback relies on its exclusive name claim. A process already running as the same OS user can act
-between pathname checks. The
-implementation narrows that window with owner-private directories, held directory/file handles,
-pre/post identity checks, and the non-replacing hard-link winner. This residual risk does not justify
-removing or postponing bounded retention.
+between pathname checks. The implementation narrows that window with owner-private directories,
+held directory and file handles, pre/post identity checks, and the non-replacing hard link. This
+residual risk does not justify removing or postponing bounded retention.
 
-As an additional non-mutating capacity safeguard, the sink emits one correlated
-`server-log.capacity-warning` when the current file reaches 256 MiB. The line reports only the
-observed byte count, threshold, `operatorAction: "stop-export-replace"`, and
-`mutationStatus: "not-attempted"`; it does not rotate, truncate, rename, or delete anything. To
-recover capacity safely:
+### Upgrading from daily files
 
-1. Stop every Keiko process using the state directory.
-2. Run `keiko support export --state-dir <stateDir> --out <path-outside-stateDir>` and retain both
-   the export and its integrity sidecar.
-3. With all writers still stopped, verify `logs/server.log` is the expected regular, single-link
-   file, then move it intact to an operator-controlled archive outside `logs/`. Never truncate or
-   replace a live descriptor.
-4. Restart Keiko so the guarded sink creates a new `server.log`; retain the archived original until
-   the applicable evidence policy permits disposal.
-
-Immutable byte-bounded segments may replace daily files later, but the daily retention bound remains
-active until the replacement is complete on the same revision.
+Earlier releases wrote one shared `server.log` and daily `server-YYYY-MM-DD.log` archives. After
+the upgrade those files stay where they are, as read-only legacy segments. They are exported and
+analyzed like segments, count toward the byte budget, and are deleted by the same retention once
+they age out. `server-log.rotation` and `server-log.capacity-warning` are no longer written; old
+lines that carry them stay readable.
 
 ## Log level
 
 `KEIKO_LOG_LEVEL` gates volume, not content: an event below the configured threshold returns
 before any string or JSON work happens at all, so a quiet level is also the cheap one. Accepted
 values are `debug`, `info` (the default when unset or unrecognized), `warn`, and `error`, plus the
-threshold-only `silent` to turn the log off entirely. A handful of common aliases are also
+threshold-only `silent` to turn ordinary events off. A handful of common aliases are also
 accepted (`trace`/`verbose` → `debug`, `warning` → `warn`, `fatal`/`critical` → `error`,
 `off`/`none` → `silent`); a typo falls back to `info` rather than crashing the process or silently
 disabling the log the operator is trying to read.
+
+The log's own evidence is written at every level, `silent` included: `process.started`,
+`process.exiting`, `process.fatal`, `activity-log.readiness`, `activity-log.loss`, and every
+operation registered with `lifecycle: "loss"`. A quieted log therefore still says that it was
+quieted (readiness reason `level-silent`) and whether it lost anything.
+
+## Writer wiring, loss accounting, and readiness
+
+**Every process writes, or says that it cannot.** A process resolves its log directory the way the
+CLI does: a non-empty `KEIKO_STATE_DIR`, resolved against the working directory when relative,
+otherwise `<cwd>/.keiko`. Commands that never set the variable (`keiko run`, `keiko memory`,
+`keiko evaluate`, `keiko update`) therefore write the same log that `keiko start` in that directory
+would. When the directory cannot be opened, the logger counts every event it receives as lost
+(`logger-unavailable`) and tries again on the next event. A writer that discards events exists only
+in tests, where the vitest setup files install it explicitly.
+
+**Domain packages write through the process sink.** Each domain package owns an injected log port
+(`SecurityLogSink`, `KnowledgeLogSink`, `MemoryVaultLogSink`, `ConsolidationLogSink`,
+`ModelGatewayLogSink`), and the server and CLI composition roots pass every port the process sink.
+A port catches its own sink failures and counts every one of them. A new package follows the same
+pattern; ADR-0173 D6 states it as five rules.
+
+**The UI process has no second log.** `keiko start` ignores the UI process's stdout and stderr,
+because every diagnostic already reaches this log. Earlier versions copied that raw output into
+`<stateDir>/ui.log`. An existing `ui.log` is left in place, never read into a support report, and
+removed with the rest of the runtime state by `keiko uninstall --state`. When the UI does not become
+healthy, `keiko start` names a closed outcome (`process-exited` or `health-timeout`), and a crash is
+recorded as `process.fatal`.
+
+**Loss is counted under a closed reason.** Every place that loses an event counts it in one bounded,
+process-wide ledger:
+
+| Reason                                                                                                                           | Counted when                                                                              |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `logger-write-failed`                                                                                                            | The logger caught a failure while building or writing an event.                           |
+| `logger-unavailable`                                                                                                             | No writable log directory existed for the process.                                        |
+| `schema-rejected`                                                                                                                | The sink's registry validation refused an event.                                          |
+| `persistence-failed`                                                                                                             | The file sink dropped an event after a failed append.                                     |
+| `diagnostic-sink-failed`                                                                                                         | A server diagnostic record could not be delivered.                                        |
+| `port-sink-failed`                                                                                                               | A domain package's log port threw. Every failure counts, not only the first.              |
+| `client-rejected`, `client-rate-suppressed`                                                                                      | The BFF refused a malformed or oversized browser report, or its rate limiter dropped one. |
+| `client-buffer-evicted`, `client-post-throttled`, `client-post-failed`, `client-rejection-suppressed`, `client-error-suppressed` | The browser reported loss on its own side of the transport.                               |
+| `collector-dropped`                                                                                                              | The CLI's deferred security-event collector dropped events.                               |
+| `summary-write-failed`                                                                                                           | The loss summary itself could not be written.                                             |
+
+The counters are persisted as an `activity-log.loss` summary, one count field per reason that lost
+anything. A heartbeat writes a summary only when the counters changed; the exit summary is always
+written, so a clean shutdown also proves that nothing was lost. A summary that cannot be written only increments
+`summary-write-failed`, so the accounting never recurses into a failing sink. The browser sends its
+counts with its next report, and once more when the page is hidden.
+
+**Readiness says whether this log can be trusted right now.** Each process evaluates a closed state:
+
+- `ready`: every check passed.
+- `degraded`: evidence is being recorded, with a named gap.
+- `unavailable`: the registry identity is incoherent, or the log cannot be written at all.
+
+The reasons are closed too: `catalog-mismatch`, `sink-unwritable`, `storage-pressure`,
+`budget-exceeded`, `port-unwired` and `level-silent`. The startup check runs before the server
+listens and persists an `activity-log.readiness` line through the real append path. The heartbeat
+re-evaluates it and logs every transition.
+
+| Where to read it                   | What it shows                                                        |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `keiko status`                     | `Diagnostic evidence: <state> (<reasons>); lost events: N.`          |
+| `keiko ui` (foreground)            | A line naming the state and reasons when readiness is not `ready`.   |
+| `keiko support export`             | The exported directory's readiness, after the report is written.     |
+| `GET /api/health`                  | The `diagnostics` block: state, reasons, writer kind, lost events.   |
+| The desktop footer                 | A badge when readiness is `degraded` or `unavailable`, with reasons. |
+| The log (`activity-log.readiness`) | The startup state and every later transition.                        |
 
 ## The op catalog
 
@@ -251,7 +364,7 @@ remediation records after execution begins. `keiko support analyze --json` expos
 request or background correlation id. The analyzer follows `parentCorrelationId` from a bound
 request to child work, but never groups by target version, wall-clock proximity, or guessed install
 facts. Candidate execution tokens, release-note prose, filesystem paths, and command output are not
-update activity fields. Current events are written solely to `logs/server.log`; existing
+update activity fields. Current events are written solely to the Activity Log in `logs/`; existing
 `updates/update-audit.jsonl` files are retained historical data, not a second active writer or
 recovery authority. Startup attempts a bounded schema-1 snapshot import after recovery/listen and
 before `process.started`. Import uses the existing file sink, formatter, redaction and sequence;
@@ -295,18 +408,23 @@ Read the log in this order for one failure:
 5. For process-level events (`process.started`, `process.heartbeat`, `process.exiting`), which
    carry no `correlationId` and so never belong to a per-correlation timeline, read
    `keiko support analyze`'s `processes[]` summary instead, keyed by `(pid, instanceId)`.
+6. Before you trust an absence, read that process's `activity-log.readiness` and
+   `activity-log.loss` lines. A missing line during a period with a non-zero loss count is lost
+   evidence, not proof that nothing happened.
 
 ## Worked example: `keiko support analyze`
 
-Given a raw `server.log` (or a full support bundle from `keiko support export` — the analyzer
-auto-detects either), reconstruct the timeline for one correlation id:
+Given one raw Activity Log file (a segment or a legacy file from `<stateDir>/logs/`) or a full
+support bundle from `keiko support export` (the analyzer auto-detects either), reconstruct the
+timeline for one correlation id. An operation that spans several segments is complete only in the
+bundle, which joins every file in logical order:
 
 ```bash
-keiko support analyze .keiko/logs/server.log --correlation-id 3f9a2b7c-1e44-4d21-9a02-6b1c9e0a5f31
+keiko support analyze .keiko/logs/activity-20260821T090000000Z-4242-bbbbbbbb-000001.jsonl --correlation-id 3f9a2b7c-1e44-4d21-9a02-6b1c9e0a5f31
 ```
 
 ```text
-Analyzed log: /workspace/.keiko/logs/server.log
+Analyzed log: /workspace/.keiko/logs/activity-20260821T090000000Z-4242-bbbbbbbb-000001.jsonl
 State directory: /workspace/.keiko
 Source: raw-log
 Newest event: 2026-08-21T09:14:02.901Z
@@ -342,8 +460,8 @@ their process activity is `not-applicable`. Missing or invalid observations rema
 `unknown`; file mtimes and guessed instance ids are never substituted.
 
 A line successfully parsed but missing the full `(pid, instanceId, seq)` triple is a **legacy
-line** — one written before this envelope shipped in the current file or a compatible legacy
-`server-YYYY-MM-DD.log` archive retained by the bounded daily-rotation implementation.
+line** — one written before this envelope shipped, in a retained legacy `server.log` or
+`server-YYYY-MM-DD.log` file.
 It is never dropped or misordered; it is ordered by its own file position, counted in
 `legacyLineCount`, and named in exactly one `warnings[]` entry when that count is nonzero. Treat
 that warning as an instruction to read the file position ordering with less confidence for those
@@ -380,5 +498,5 @@ unverified line.
   redaction escape hatches, and the support-bundle format.
 - [`reproduction-harness.md`](reproduction-harness.md) — turning one correlation id's evidence into
   a red-then-green regression test.
-- [Troubleshooting guide](../troubleshooting/README.md) — the `logs/server.log` row in the
+- [Troubleshooting guide](../troubleshooting/README.md) — the `logs/` row in the
   "Log locations and debug mode" table, alongside the other operator-facing log files.

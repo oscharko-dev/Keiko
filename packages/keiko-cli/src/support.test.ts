@@ -22,8 +22,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  activityLogSegmentFileName,
+  type ActivityLogSegmentState,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createInMemoryEvidenceStore,
@@ -55,8 +58,6 @@ import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
-import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
-
 const runSupportCli = runSupportCliImpl;
 
 const BUILT_CLI_ENTRY = fileURLToPath(new URL("../../../dist/cli/index.js", import.meta.url));
@@ -181,6 +182,18 @@ async function crashDirectoryMutationAtLink(linkOrdinal: number): Promise<void> 
 function writePrivateFile(path: string, text: string): void {
   writeFileSync(path, text, { mode: 0o600 });
 }
+
+// Segment names come from the shared closed grammar (keiko-contracts `activity-log-files.ts`),
+// never from a hand-written spelling that could drift from what the writer creates.
+function segmentName(index: number, state: ActivityLogSegmentState = "sealed", pid = 4242): string {
+  return activityLogSegmentFileName(
+    { startMs: Date.parse("2026-08-21T10:00:00.000Z"), pid, instanceId: "a1b2c3d4", index },
+    state,
+  );
+}
+
+// The newest file of a live Activity Log: the writer's active segment.
+const CURRENT_SEGMENT = segmentName(2, "active");
 
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
   const outChunks: string[] = [];
@@ -420,21 +433,26 @@ describe("runSupportCli export", () => {
     expect(supportPublicationErrorKind(error)).toBe("unknown");
   });
 
-  it("rejects a fresh Activity Log path as the support-bundle destination", async () => {
-    const outPath = join(stateDir, "logs", CURRENT_LOG_FILE_NAME);
-    const c = makeIo();
+  // #3530: every name in the Activity Log directory belongs to the store's closed grammar and its
+  // retention, so a report may be written nowhere in that directory: not over a legacy name, not
+  // under a segment's spelling, and not under any other name either.
+  it("rejects any destination inside the Activity Log directory", async () => {
+    for (const name of [ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME, CURRENT_SEGMENT, "report.jsonl"]) {
+      const outPath = join(stateDir, "logs", name);
+      const c = makeIo();
 
-    const code = await runSupportCli(
-      ["export", "--state-dir", stateDir, "--out", outPath],
-      c.io,
-      AUDIT_ENV,
-      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
-    );
+      const code = await runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        c.io,
+        AUDIT_ENV,
+        { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+      );
 
-    expect(code).toBe(1);
-    expect(c.err()).toContain("destination collides with the Activity Log");
-    expect(existsSync(outPath)).toBe(false);
-    expect(existsSync(`${outPath}.sha256`)).toBe(false);
+      expect(code).toBe(1);
+      expect(c.err()).toContain("destination collides with the Activity Log");
+      expect(existsSync(outPath)).toBe(false);
+      expect(existsSync(`${outPath}.sha256`)).toBe(false);
+    }
   });
 
   it("fails before publication when the required Activity Log directory is unavailable", async () => {
@@ -517,8 +535,8 @@ describe("runSupportCli export", () => {
     expect(first.status).toBe(0);
     const firstReports = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
     expect(firstReports).toHaveLength(1);
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
+    writePrivateFile(
+      join(stateDir, "logs", ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME),
       `${JSON.stringify({ op: "between-built-runs", correlationId: "built-proof" })}\n`,
     );
 
@@ -556,8 +574,8 @@ describe("runSupportCli export", () => {
     const reportPath = join(outDir, reportName);
     const priorBytes = readFileSync(reportPath);
     expect(readdirSync(outDir).filter((name) => name.endsWith(".complete"))).toHaveLength(1);
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
+    writePrivateFile(
+      join(stateDir, "logs", ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME),
       `${JSON.stringify({ op: "after-built-crash", correlationId: "built-proof" })}\n`,
     );
 
@@ -587,7 +605,7 @@ describe("runSupportCli export", () => {
     expect(existsSync(`${outPath}.sha256`)).toBe(false);
     expect(c.err()).toContain("could not write the bundle: target-exists");
     expect(c.err()).not.toContain(outPath);
-    const failure = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    const failure = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -712,10 +730,9 @@ describe("runSupportCli export", () => {
 
     vi.doUnmock("node:child_process");
     vi.resetModules();
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
+    writePrivateFile(
+      join(stateDir, "logs", ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME),
       `${JSON.stringify({ op: "post-interruption-log", correlationId: "post-interruption" })}\n`,
-      { flag: "a" },
     );
     const resumed = await import("./support.js");
     const secondIo = makeIo();
@@ -743,7 +760,7 @@ describe("runSupportCli export", () => {
     ]);
     const expectedDigest = createHash("sha256").update(report).digest("hex");
     expect(readFileSync(`${outPath}.sha256`, "utf8").trim()).toBe(expectedDigest);
-    const evidence = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    const evidence = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -793,7 +810,7 @@ describe("runSupportCli export", () => {
       ),
     ).toBe(1);
     expect(secondIo.err()).toContain("local-state audit could not produce a result");
-    const recovery = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+    const recovery = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -1107,7 +1124,8 @@ describe("runSupportCli export", () => {
     const victimContent = "VICTIM-7f3a-must-never-reach-the-bundle\n";
     const victim = join(outDir, "victim.txt");
     writePrivateFile(victim, victimContent);
-    symlinkSync(victim, join(stateDir, "logs", CURRENT_LOG_FILE_NAME));
+    symlinkSync(victim, join(stateDir, "logs", CURRENT_SEGMENT));
+    linkSync(victim, join(stateDir, "logs", segmentName(1)));
     symlinkSync(victim, join(stateDir, "logs", "server-2026-08-19.log"));
     linkSync(victim, join(stateDir, "logs", "server-2026-08-18.log"));
     symlinkSync(victim, join(stateDir, "ui.log"));
@@ -1130,7 +1148,8 @@ describe("runSupportCli export", () => {
     expect(manifest.skippedLogFiles).toEqual([
       { name: "server-2026-08-18.log", errorKind: "unsafe-target" },
       { name: "server-2026-08-19.log", errorKind: "unsafe-target" },
-      { name: CURRENT_LOG_FILE_NAME, errorKind: "unsafe-target" },
+      { name: segmentName(1), errorKind: "unsafe-target" },
+      { name: CURRENT_SEGMENT, errorKind: "unsafe-target" },
     ]);
     expect(manifest.sectionsExcluded).toEqual(["ui-log"]);
   });
@@ -1200,7 +1219,7 @@ describe("runSupportCli export", () => {
   });
 
   it("preserves an unterminated crash fragment for bundle analysis", async () => {
-    writePrivateFile(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), '{"ts":');
+    writePrivateFile(join(stateDir, "logs", CURRENT_SEGMENT), '{"ts":');
     const outPath = join(outDir, "terminal-fragment.jsonl");
     const c = makeIo();
 
@@ -1214,6 +1233,40 @@ describe("runSupportCli export", () => {
     expect(code).toBe(0);
     const bundle = readFileSync(outPath, "utf8");
     expect(bundle.endsWith("\n")).toBe(false);
+    expect(analyzeLogText(bundle).evidence).toMatchObject({
+      classification: "truncated",
+      truncatedLineCount: 1,
+      corruptLineCount: 0,
+    });
+  });
+
+  // #3530: recovery seals a crashed writer's segment with its torn tail intact, and newer segments
+  // follow it in the bundle, so that fragment becomes a terminated line in the MIDDLE of the report.
+  // The manifest's per-file boundaries let analysis classify it as truncated, never as corruption.
+  it("classifies a torn segment tail in the middle of a bundle as truncated, not corrupt", async () => {
+    const crashedSegment = segmentName(1);
+    const newerSegment = segmentName(2);
+    const firstRecord = JSON.stringify(validV2AnalysisRecord());
+    const newerRecord = JSON.stringify(validV2AnalysisRecord({ seq: 2 }));
+    writePrivateFile(join(stateDir, "logs", crashedSegment), `${firstRecord}\n{"ts":`);
+    writePrivateFile(join(stateDir, "logs", newerSegment), `${newerRecord}\n`);
+    const outPath = join(outDir, "mid-bundle-fragment.jsonl");
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      makeIo().io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const bundle = readFileSync(outPath, "utf8");
+    expect(bundle.endsWith(`${newerRecord}\n`)).toBe(true);
+    const manifest = JSON.parse(bundle.split("\n")[0] ?? "{}") as Record<string, unknown>;
+    expect(manifest.sourceLogFileLines).toEqual([
+      { name: crashedSegment, lineCount: 2, terminalFragment: true },
+      { name: newerSegment, lineCount: 1, terminalFragment: false },
+    ]);
     expect(analyzeLogText(bundle).evidence).toMatchObject({
       classification: "truncated",
       truncatedLineCount: 1,
@@ -1241,7 +1294,7 @@ describe("runSupportCli export", () => {
     // support-export.test.ts uses for the same scenario.
     const currentLine = (i: number): string => `{"seq":${String(i).padStart(3, "0")}}`;
     const currentText = `${Array.from({ length: 20 }, (_, i) => currentLine(i)).join("\n")}\n`;
-    writePrivateFile(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), currentText);
+    writePrivateFile(join(stateDir, "logs", CURRENT_SEGMENT), currentText);
 
     const c = makeIo();
     const code = await runSupportCli(
@@ -1262,9 +1315,9 @@ describe("runSupportCli export", () => {
     >;
 
     expect(manifest.truncatedLogFiles).toEqual(["server-2026-08-18.log"]);
-    expect(manifest.sourceLogFiles).toEqual([CURRENT_LOG_FILE_NAME]);
+    expect(manifest.sourceLogFiles).toEqual([CURRENT_SEGMENT]);
     expect(manifest.currentFileTailTruncated).toEqual({
-      name: CURRENT_LOG_FILE_NAME,
+      name: CURRENT_SEGMENT,
       droppedBytes: 192,
     });
     // The tail strategy brought the export back within budget, so budgetExceeded must be false.
@@ -1622,7 +1675,7 @@ describe("runSupportCli export", () => {
 
     const report = readFileSync(outPath);
     const reportSha256 = createHash("sha256").update(report).digest("hex");
-    const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    const records = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -1669,7 +1722,7 @@ describe("runSupportCli export", () => {
         { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
       ),
     ).toBe(1);
-    const failure = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+    const failure = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -1710,7 +1763,7 @@ describe("runSupportCli export", () => {
     // printed first, contradicting the exit code.
     expect(c.out()).not.toContain("Wrote ");
     expect(c.err()).toContain("could not acknowledge publication: durability-failed");
-    const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    const records = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -1808,7 +1861,7 @@ describe("runSupportCli analyze", () => {
     );
 
     expect(code).toBe(0);
-    const evidence = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+    const evidence = readPersistedActivityLog(stateDir)
       .split("\n")
       .filter((line) => line.startsWith("{"))
       .flatMap((line) => {
