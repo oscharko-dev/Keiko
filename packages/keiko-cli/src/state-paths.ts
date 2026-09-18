@@ -33,6 +33,10 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { assertRealpathContained } from "./launcher-paths.js";
+import {
+  ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
+  isSegmentManifestFileName,
+} from "./support-segment-manifest-names.js";
 import { LauncherError } from "./launcher-platforms.js";
 
 export const DEFAULT_STATE_DIR_NAME = ".keiko";
@@ -758,6 +762,16 @@ const logsSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
+// `activity-log-manifests/` holds the derived, rebuildable per-segment manifests of the Activity Log
+// (#3531). Classified, never `whole`: only the closed `manifest-<segmentId>.json` grammar is owned,
+// so an operator file or directory placed there is retained, never narrowed or deleted.
+const activityLogManifestsSubtree: OwnedSubtree = {
+  category: "activity-log",
+  whole: false,
+  ownsFile: isSegmentManifestFileName,
+  childSubtree: NO_CHILD,
+};
+
 function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
   if (name === "ui.pid" || name === "ui.log" || name === UI_SHUTDOWN_REQUEST_FILE) {
     return "lifecycle";
@@ -784,6 +798,7 @@ const TOP_LEVEL_CHILD_SUBTREES: ReadonlyMap<string, OwnedSubtree> = new Map([
   [UPDATE_SUBDIR, updateSubtree],
   [LOGS_SUBDIR, logsSubtree],
   [SUPPORT_INCIDENT_DIRECTORY_NAME, supportIncidentsSubtree],
+  [ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME, activityLogManifestsSubtree],
 ]);
 
 function topLevelChildSubtree(name: string, absPath: string): OwnedSubtree | undefined {

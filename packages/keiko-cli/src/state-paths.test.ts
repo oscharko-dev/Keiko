@@ -473,6 +473,29 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(scan.retained.map((r) => r.relPath)).toContain("support-incidents/incident-draft.json");
   });
 
+  // #3531: the rebuildable segment-manifest store owns exactly `manifest-<segmentId>.json`.
+  it("owns only the closed segment-manifest grammar under activity-log-manifests/", () => {
+    const stateDir = join(makeRoot(), ".keiko");
+    const manifests = join(stateDir, "activity-log-manifests");
+    mkdirSync(join(manifests, "nested"), { recursive: true });
+    const manifestName = SEALED_SEGMENT.replace(/^activity-/u, "manifest-").replace(
+      /\.jsonl$/u,
+      ".json",
+    );
+    for (const name of [manifestName, "notes.txt", "manifest-bogus.json"]) {
+      touch(join(manifests, name));
+    }
+
+    const scan = scanRuntimeState(stateDir);
+
+    expect(categoryOf(scan, "activity-log-manifests")).toBe("activity-log");
+    expect(categoryOf(scan, `activity-log-manifests/${manifestName}`)).toBe("activity-log");
+    for (const foreign of ["notes.txt", "manifest-bogus.json", "nested"]) {
+      expect(categoryOf(scan, `activity-log-manifests/${foreign}`)).toBeUndefined();
+      expect(scan.retained.map((r) => r.relPath)).toContain(`activity-log-manifests/${foreign}`);
+    }
+  });
+
   it("classifies quarantined .corrupt.<ts> database and sidecar copies as owned", () => {
     const stateDir = seedRuntimeState(makeRoot());
     const scan = scanRuntimeState(stateDir);

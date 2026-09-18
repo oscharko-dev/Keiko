@@ -1597,6 +1597,30 @@ describe("runUninstallCli — runtime state manifest", () => {
     });
   });
 
+  // #3531: `--state` removes the rebuildable segment manifests and retains an operator file there.
+  it("removes segment manifests with the state and retains a foreign file beside them", async () => {
+    const root = makeRoot();
+    const stateDir = seedFullState(root);
+    const manifests = join(stateDir, "activity-log-manifests");
+    mkdirSync(manifests, { recursive: true, mode: 0o700 });
+    const manifest = join(manifests, "manifest-20260918T100000000Z-4242-a1b2c3d4-000001.json");
+    const foreign = join(manifests, "operator-notes.txt");
+    writeFileSync(manifest, "{}\n", { encoding: "utf8", mode: 0o600 });
+    writeFileSync(foreign, "keep me\n", "utf8");
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
+    expect(existsSync(manifest)).toBe(false);
+    expect(existsSync(foreign)).toBe(true);
+    rmSync(foreign);
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
   it("refuses to follow a symlink and keeps the state dir", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();

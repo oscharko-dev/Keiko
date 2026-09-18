@@ -27,6 +27,7 @@ import {
 } from "../check-activity-log.mjs";
 import { unregisteredFailurePathViolations } from "../check-error-observability.mjs";
 import {
+  generateActivityLogFailureSurfaceInventory,
   generateTypedActivityLogRegistry,
   validateActivityLogRegistryExemptions,
 } from "../generate-op-catalog.mjs";
@@ -1090,6 +1091,29 @@ describe("rule families the gate composes", () => {
         { ...proofCall, site: "packages/zzz-gate-baseline/src/fixture.test.ts:9" },
       ];
       expect(inventory({ calls }).violations).toEqual([]);
+    });
+
+    // Once every proof and scenario resolves, the checked-in inventory is byte-identical whether
+    // resolution is enforced or not, so the drift check alone could not see enforcement being
+    // switched off. These calls pass no enforcement option: they read the production default,
+    // through both the library and the exact entry point `check:op-catalog` uses.
+    it("enforces proof and scenario resolution by default on the production path", () => {
+      const library = generateFailureSurfaceInventory(root, baselineRegistry(), {
+        surfaceRules,
+        ownerPorts,
+        calls: [],
+      });
+      expect(library.violations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ code: "proof-unresolved", detail: "fixture.gate.baseline" }),
+          expect.objectContaining({ code: "scenario-unresolved", detail: "fixture-baseline" }),
+        ]),
+      );
+      expect(
+        generateActivityLogFailureSurfaceInventory(root, baselineRegistry()).violations,
+      ).toContainEqual(
+        expect.objectContaining({ code: "proof-unresolved", detail: "fixture.gate.baseline" }),
+      );
     });
   });
 
