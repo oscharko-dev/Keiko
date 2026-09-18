@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "86f436ca83d514bee6d4696d99f1af10c37c5a7dd7286ab03b8fe2f61b2e4df1",
+    "catalogDigest": "0d0968306cd2f90b751e27f5093c970cebca144cae1c00e41559607d3928f0ac",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1272,9 +1272,9 @@
         "failureClasses": ["github-issue-reader-authorization"],
         "proofIds": ["coding-context.github-authorization.evaluated.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:23",
+        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:21",
         "emitterSites": [
-          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:241"
+          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:235"
         ]
       },
       {
@@ -1321,9 +1321,9 @@
         "failureClasses": ["github-remote-resolution"],
         "proofIds": ["coding-context.github-remote.evaluated.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:50",
+        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:48",
         "emitterSites": [
-          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:334"
+          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:327"
         ]
       },
       {
@@ -21723,8 +21723,8 @@
         "failureClasses": ["activity-log-capacity"],
         "proofIds": ["server-log.capacity-warning.threshold"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1192",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1292"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1201",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1301"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -21835,8 +21835,8 @@
         "failureClasses": ["activity-log-rotation"],
         "proofIds": ["server-log.rotation.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1140",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1258"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1149",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1267"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -21887,8 +21887,8 @@
         "failureClasses": ["activity-log-persistence"],
         "proofIds": ["server-log.safe-open.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1115",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1238"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:1124",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1247"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -21940,7 +21940,7 @@
         "proofIds": ["server-log.target-mutated.registered-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/observability/server-log.ts:464",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1362"]
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1371"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -63177,7 +63177,7 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1003",
+      "site": "packages/keiko-contracts/src/observability.ts:1019",
       "package": "keiko-contracts"
     },
     {
@@ -64354,13 +64354,13 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1439",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1448",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:2001",
+      "site": "packages/keiko-server/src/observability/server-log.ts:2010",
       "package": "keiko-server"
     },
     {
@@ -64705,13 +64705,13 @@
     {
       "op": "coding-context.github-authorization.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:26",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:24",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.github-remote.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:53",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:51",
       "package": "keiko-server"
     },
     {
@@ -66535,7 +66535,7 @@
     {
       "op": "server-log.capacity-warning",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1195",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1204",
       "package": "keiko-server"
     },
     {
@@ -66559,13 +66559,13 @@
     {
       "op": "server-log.rotation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1143",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1152",
       "package": "keiko-server"
     },
     {
       "op": "server-log.safe-open",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1118",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1127",
       "package": "keiko-server"
     },
     {
