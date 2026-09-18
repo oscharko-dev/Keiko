@@ -286,6 +286,35 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "packages/keiko-server/src/observability/activity-log-store.ts:activityLogFreeBytes",
     "Free space that cannot be measured is reported as absent, never as plenty.",
   ],
+  // #3554 store policy (review comment 4050604711 on PR #3554): every outcome below is one branch
+  // of resolveActivityLogStorePolicy's fail-safe fallback, and any branch that actually changes what
+  // governs the store is reported through the registered activity-log.policy.conflict line the very
+  // next time this process writes.
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:readActivityLogPolicyRecord",
+    "An unreadable or corrupt policy record is treated as absent; the caller republishes it, or " +
+      "adopts a live peer's record and persists activity-log.policy.conflict when it still differs.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:publishPolicy",
+    "A failed publish — including the expected exclusive-create race loss — is reported false; the " +
+      "caller re-reads the record and persists activity-log.policy.conflict when its own values differ.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:repairPolicy",
+    "A failed removal of an already-corrupt or already-gone record is not retried; the publish that " +
+      "follows, or a peer's own resolution, is what actually decides the store's governing policy.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:replacePolicy",
+    "A failed removal of the stale record does not block the replacement publish that follows; " +
+      "whether it lands or a racing peer's does, the outcome is what activity-log.policy.conflict reports.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:resolveActivityLogStorePolicy",
+    "Any unexpected filesystem failure falls back to this process's own requested values, " +
+      "unpersisted — the same ungoverned behavior the store had before this policy existed.",
+  ],
   // #3531 segment-manifest store: derived, rebuildable metadata. Every outcome below is counted in
   // the registered support.manifest.rebuilt event, and nothing is ever trusted after a failure.
   [

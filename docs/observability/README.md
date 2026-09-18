@@ -79,7 +79,8 @@ Retention runs at startup and before every new segment. It counts every file in 
 including legacy files and other processes' active segments. It deletes the oldest unprotected
 sealed and legacy files first: those older than the retention age, then as many more as the byte
 budget requires. Each pass is recorded as `activity-log.retention.pruned`. Total disk use stays
-within the byte budget plus the pin quota.
+within the byte budget plus the pin quota — the ONE governing budget below, shared by every
+cooperating process, never each process's own unreconciled view (#3554).
 
 | Variable                    | Default | Meaning                                                                          |
 | --------------------------- | ------- | -------------------------------------------------------------------------------- |
@@ -91,6 +92,17 @@ within the byte budget plus the pin quota.
 
 Each value must be a positive whole number within its range. Anything else falls back to the
 default, so a typo never removes the bound.
+
+Several cooperating processes can share one directory — a long-running server plus a one-off CLI
+invocation, or two server instances across a restart — and each reads the five variables above from
+its own environment. One closed-grammar record, `store-policy.json` (never log content), holds the
+retention/pin-quota values every cooperating process actually enforces: the first process to find no
+valid record publishes its own; every later process applies the STORED values regardless of its own
+env, and records one `activity-log.policy.conflict` line when they differ. A process may replace a
+stale or corrupt record only while it is the directory's sole live writer, which is what lets a
+changed `KEIKO_LOG_RETENTION_BYTES` take effect on the next clean restart. Every retention pass reads
+the record again before it deletes anything, so a process that was running idle when the record was
+replaced applies the new values from its next pass on.
 
 A pin protects a time window, or named segments, from retention until it expires, within the pin
 quota. `activity-log.pin.created` and `activity-log.pin.expired` record its lifecycle; a pin released before its expiry is recorded with `expiryReason: "released"`. A pin that
@@ -625,7 +637,9 @@ A candidate is created in two ways:
   `failure` lifecycle and at least one supported failure class creates one. There is one open
   automatic candidate per defect fingerprint; a recurrence is logged as
   `support.incident.deduplicated`. Each process evaluates at most one failure per fingerprint every
-  60 seconds and at most six per minute.
+  60 seconds and at most six per minute; a new defect dropped only because that shared per-minute cap
+  was already spent is evidenced as `support.incident.rejected` (`evaluation-rate-limited`), at most
+  once per 60-second window so a storm cannot flood the log with one line per dropped evaluation.
 - **By you.** `keiko support incident report` records a problem Keiko did not detect. It needs no
   failure event; every report is its own occurrence.
 
@@ -664,6 +678,12 @@ or window not resolvable, `2` usage error.
   so explicit reports always have room. A full store rejects the new candidate
   (`support.incident.rejected`) and never evicts an existing one. Candidates expire after 14 days
   (`support.incident.expired`).
+- **Cross-process dedup and quotas.** The store also holds `fingerprint-<64 hex>.claim` and
+  `slot-<NN>.claim` files: exclusive-create claims that make "one open automatic candidate per
+  defectFingerprint" and the count quotas hold even when two processes hit the identical failure at
+  once, not just within one process. Both are released when their incident is dismissed or expires,
+  and a claim orphaned by a crash between claiming and writing its record is swept the same way a
+  torn record is.
 
 ## Querying the log and selective export
 

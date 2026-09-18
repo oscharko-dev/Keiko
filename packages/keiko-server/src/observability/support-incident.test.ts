@@ -44,6 +44,31 @@ vi.mock("./activity-log-store.js", async (importOriginal) => {
   };
 });
 
+// Simulates "a second process wins the race" (#3533 review 4050606506): armed for one test, the
+// next directory snapshot createCandidate's sweep takes is captured FIRST (this call's own stale,
+// pre-race view), and only THEN does the armed hook run -- so a concurrent occurrence can fully
+// publish (claim, write, evidence) before this call proceeds to its own atomic claim attempt,
+// exactly the window the old entries-scan dedup and quota missed. Every other call is untouched.
+const dedupRace = vi.hoisted(() => ({
+  onStaleSnapshot: undefined as (() => void) | undefined,
+}));
+
+vi.mock("./support-incident-store.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./support-incident-store.js")>();
+  return {
+    ...original,
+    listSupportIncidentEntries: (
+      stateDir: string,
+    ): ReturnType<typeof original.listSupportIncidentEntries> => {
+      const staleSnapshot = original.listSupportIncidentEntries(stateDir);
+      const hook = dedupRace.onStaleSnapshot;
+      dedupRace.onStaleSnapshot = undefined;
+      hook?.();
+      return staleSnapshot;
+    },
+  };
+});
+
 import {
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_OPERATION_SURFACES,
@@ -51,6 +76,8 @@ import {
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
   defectFingerprintPreimage,
+  isSupportIncidentId,
+  parseSupportIncidentFileName,
   parseSupportIncidentRecord,
   supportIncidentFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -66,6 +93,11 @@ import {
   resetServerLogFailureNotices,
   type ServerLogEvent,
 } from "./server-log.js";
+import {
+  claimSupportIncidentFingerprint,
+  claimSupportIncidentSlot,
+  ensureSupportIncidentDirectory,
+} from "./support-incident-store.js";
 import {
   MAX_REGISTERED_FAILURE_INCIDENTS,
   SUPPORT_INCIDENT_TTL_MS,
@@ -141,6 +173,7 @@ describe("SupportIncident candidates", () => {
     vi.restoreAllMocks();
     retentionRace.targetPath = undefined;
     retentionRace.armed = false;
+    dedupRace.onStaleSnapshot = undefined;
     rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -148,10 +181,29 @@ describe("SupportIncident candidates", () => {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
   }
 
+  // Real incident-<32 hex>.json records only, never a fingerprint- or slot-claim file: the
+  // closed-grammar parse also recognizes claims (state-paths.ts needs it to), so this mirrors the
+  // production isSupportIncidentId guard rather than counting every file the store owns.
   function storeNames(): readonly string[] {
+    return [...readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))]
+      .filter((name) => isSupportIncidentId(parseSupportIncidentFileName(name)))
+      .sort((left, right) => left.localeCompare(right, "en-US"));
+  }
+
+  // Every name in the store directory, unfiltered: proves a foreign file is left exactly alone.
+  function allStoreNames(): readonly string[] {
     return [...readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))].sort((left, right) =>
       left.localeCompare(right, "en-US"),
     );
+  }
+
+  function claimNames(): readonly string[] {
+    return [...readdirSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME))]
+      .filter((name) => {
+        const parsed = parseSupportIncidentFileName(name);
+        return parsed !== undefined && !isSupportIncidentId(parsed);
+      })
+      .sort((left, right) => left.localeCompare(right, "en-US"));
   }
 
   describe("the user-initiated trigger", () => {
@@ -286,6 +338,66 @@ describe("SupportIncident candidates", () => {
     });
   });
 
+  describe("cross-process dedup and quota atomicity", () => {
+    it("claims a fingerprint exactly once when two attempts race (#3533 review 4050606506)", () => {
+      ensureSupportIncidentDirectory(stateDir);
+      expect(
+        claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, "a".repeat(32)),
+      ).toBe(true);
+      expect(
+        claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, "b".repeat(32)),
+      ).toBe(false);
+    });
+
+    it("claims a quota slot exactly once when two attempts race (#3533 review 4050606506)", () => {
+      ensureSupportIncidentDirectory(stateDir);
+      expect(claimSupportIncidentSlot(stateDir, 3, "a".repeat(32))).toBe(true);
+      expect(claimSupportIncidentSlot(stateDir, 3, "b".repeat(32))).toBe(false);
+    });
+
+    it("deduplicates onto a concurrent occurrence that published between this call's stale snapshot and its own claim attempt (#3533 review 4050606506)", () => {
+      const evidence = { op: FAILURE_OP, errorKind: "unavailable", frames: FRAMES };
+      let concurrent: SupportIncidentCreation | undefined;
+      dedupRace.onStaleSnapshot = (): void => {
+        // The "second process": it fully claims, writes and evidences its own occurrence of the
+        // IDENTICAL defect while this call still holds only its own stale, pre-race snapshot.
+        concurrent = recordRegisteredFailureIncident(stateDir, {
+          ...evidence,
+          correlationId: "concurrent-process",
+        });
+      };
+      const result = recordRegisteredFailureIncident(stateDir, {
+        ...evidence,
+        correlationId: "this-process",
+      });
+      expect(dedupRace.onStaleSnapshot).toBeUndefined(); // the hook fired exactly once
+      expect(concurrent?.status).toBe("created");
+      expect(result).toEqual({ status: "deduplicated", record: created(concurrent).record });
+      expect(storeNames()).toHaveLength(1);
+      expect(lines("support.incident.created")).toHaveLength(1);
+      expect(lines("support.incident.deduplicated")).toHaveLength(1);
+    });
+
+    it("recovers a fingerprint and slot claim orphaned by a crash between claiming and writing the record", () => {
+      ensureSupportIncidentDirectory(stateDir);
+      const orphanId = "c".repeat(32);
+      expect(claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, orphanId)).toBe(
+        true,
+      );
+      expect(claimSupportIncidentSlot(stateDir, 9, orphanId)).toBe(true);
+      expect(claimNames()).toHaveLength(2);
+
+      expect(listSupportIncidents(stateDir)).toEqual([]); // runs the expiry/orphan sweep
+
+      expect(claimNames()).toHaveLength(0);
+      // Both the fingerprint and the slot are free again for a fresh occurrence.
+      expect(
+        claimSupportIncidentFingerprint(stateDir, GOLDEN_FAILURE_FINGERPRINT, "d".repeat(32)),
+      ).toBe(true);
+      expect(claimSupportIncidentSlot(stateDir, 9, "d".repeat(32))).toBe(true);
+    });
+  });
+
   describe("the incident window pin", () => {
     it("is already published before recordRegisteredFailureIncident returns", () => {
       const { record } = created(
@@ -413,7 +525,7 @@ describe("SupportIncident candidates", () => {
       });
       writeFileSync(join(directory, "notes.txt"), "not a Keiko record", { mode: 0o600 });
       expect(listSupportIncidents(stateDir)).toEqual([]);
-      expect(storeNames()).toEqual(["notes.txt"]);
+      expect(allStoreNames()).toEqual(["notes.txt"]);
       expect(
         persistedActivityLogLines(readPersistedActivityLog(stateDir), "support.incident.expired"),
       ).toHaveLength(1);
@@ -548,16 +660,19 @@ describe("SupportIncident candidates", () => {
       expect(listSupportIncidents(stateDir)).toEqual([]);
     });
 
-    it("suppresses a failure storm of one defect to a single evaluation", () => {
+    it("suppresses a failure storm of one defect to a single evaluation, with no rejection evidence", () => {
       setSupportIncidentTriggerForTests(true);
       const sink = createFileServerLogSink(stateDir);
       for (let index = 0; index < 5; index += 1) sink.write(failureEvent());
       drainSupportIncidentCandidates();
       expect(listSupportIncidents(stateDir)).toHaveLength(1);
       expect(lines("support.incident.deduplicated")).toHaveLength(0);
+      // A suppressed recurrence loses no evidence -- the first occurrence already pinned the
+      // window -- so, unlike a rate-limited evaluation, it is not itself an evidenced rejection.
+      expect(lines("support.incident.rejected")).toHaveLength(0);
     });
 
-    it("caps evaluations across distinct defects per rolling minute", () => {
+    it("caps evaluations across distinct defects per rolling minute, evidencing the overflow once (#3533 audit)", () => {
       setSupportIncidentTriggerForTests(true);
       const sink = createFileServerLogSink(stateDir);
       for (let index = 0; index < MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE + 3; index += 1) {
@@ -577,6 +692,20 @@ describe("SupportIncident candidates", () => {
       expect(listSupportIncidents(stateDir)).toHaveLength(
         MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE,
       );
+      // 3 distinct new defects were dropped purely by the shared per-minute cap: evidenced once,
+      // never once per dropped evaluation (#3533 audit: "rate-limited evaluations vanish silently").
+      expect(lines("support.incident.rejected")).toHaveLength(1);
+      const line = expectActivityLogProof(
+        "support.incident.rejected.emitted-line",
+        lines("support.incident.rejected")[0] ?? "",
+      );
+      expect(line).toMatchObject({
+        rejectionReason: "evaluation-rate-limited",
+        trigger: "registered-failure",
+        errorKind: "rate-limited",
+        completeness: "partial",
+        loss: "event-dropped",
+      });
     });
 
     it("never throws into the sink when candidate creation fails", () => {

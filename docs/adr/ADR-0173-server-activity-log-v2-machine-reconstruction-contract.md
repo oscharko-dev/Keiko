@@ -32,6 +32,15 @@ and age across every segment and legacy file, with crash recovery, retention pin
 quota, and closed body-free evidence for sealing, recovery, retention, pressure and pins.
 `server-log.rotation` and `server-log.capacity-warning` are retired.
 
+Amended by #3554 on 2026-09-18: several cooperating processes sharing one `logs/` directory
+previously resolved `KEIKO_LOG_RETENTION_BYTES`/`_DAYS`/`KEIKO_LOG_PIN_QUOTA_BYTES` purely from their
+own env, so the byte bound above held only per process, not across them (D14). One closed-grammar
+`store-policy.json` record now holds the values every cooperating process actually enforces: the
+first process to find no valid record publishes it, race-safe; every later process applies the
+STORED values regardless of its own env and records one `activity-log.policy.conflict` line per
+process lifetime when they differ; a process may replace a stale or corrupt record only while it is
+the directory's sole live writer.
+
 Amended by #3529 on 2026-09-17: the heuristic operation inventory is now a non-authoritative
 migration view. Canonical TypeScript-resolved registrations form the versioned production registry,
 derive exact emitter types, and are revalidated at the serialization boundary. Persisted v2
@@ -892,6 +901,7 @@ reader import it; nothing restates it.
 | `activity-<start>-<pid>-<instance>-<index>.jsonl`        | A sealed segment: read-only (`0400`), never rewritten.                 |
 | `server-YYYY-MM-DD.log`, `server.log`                    | Legacy files of the retired daily rotation. Read-only.                 |
 | `pin-<24 hex>.json`                                      | A retention-pin record.                                                |
+| `store-policy.json`                                      | The store's one governing policy record (#3554); never log content.   |
 
 `<start>` is the segment's UTC start time (`YYYYMMDDTHHMMSSmmmZ`), `<pid>` and `<instance>` are the
 envelope's process identity, and `<index>` counts that instance's segments from `000001`. Sealing
@@ -948,6 +958,26 @@ the segment about to open.
   evidence.
 
 Total disk use is therefore at most the byte budget plus the pin quota.
+
+**One governing policy across processes (#3554).** The five variables above are read from each
+process's own env, so several cooperating processes — a long-running server plus a one-off CLI
+invocation, or two server instances across a restart — could previously enforce retention under
+different views of the budget: a smaller one could prune segments a larger one relied on to keep,
+and a larger one was never capped by a stricter peer's limit. `store-policy.json` (deliberately
+outside the grammar above and never read as log content) now holds the retention bytes/days and pin
+quota every cooperating process enforces. The first process that finds no valid record publishes its
+own, race-safe through the same exclusive-create primitive pin records use. Every later process
+applies the STORED values, whatever its own env says, and — when they differ — records one
+`activity-log.policy.conflict` line per process lifetime: the differing setting names, and the
+stored and requested values, as closed and bounded fields. A process may replace a stale or corrupt
+record only while it is the store's sole live writer (every other active segment belongs to a
+confirmed-exited instance), which is what lets a changed `KEIKO_LOG_RETENTION_BYTES` take effect on
+the next clean restart without letting a stray concurrent process silently override a running
+server's governance. Every maintenance pass re-reads the record before it deletes anything, so a
+process that held no active segment while the record was replaced (an idle server) adopts the new
+values on its next pass instead of pruning under its first read. Segment size/age stay per-writer settings, clamped against the governing
+retention bytes with the same invariant as before. Total disk use is therefore at most the ONE
+governing byte budget plus the pin quota, even when cooperating processes' own env values disagree.
 
 **Pins.** `pinActivityLogWindow` protects one of two scopes until an expiry of at most 3650 days:
 
@@ -1043,7 +1073,14 @@ never a reason to disable or defer bounded retention.
 An incident is a control artifact over the Activity Log, not a second log (#3533). A local candidate
 is created automatically for a registered failure operation logged at `error` with at least one
 supported failure class, or explicitly by the user (`keiko support incident report`); a closed
-`trigger` records which. Eligibility derives from the registry, never from a UI-side list.
+`trigger` records which. Eligibility derives from the registry, never from a UI-side list. A process
+evaluates at most one failure per defectFingerprint every SUPPORT_INCIDENT_SUPPRESSION_MS and, across
+every fingerprint together, at most MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE per rolling minute.
+The first bound loses no evidence (the fingerprint's own candidate already pins its window), but the
+second can drop a defect Keiko has never seen before, purely because the shared cap was already
+spent; that case is evidenced as `support.incident.rejected` (`evaluation-rate-limited`), throttled
+to at most one line per suppression window so a storm reports the loss once rather than flooding the
+log with one line per dropped evaluation (#3533 audit).
 
 On the registered-failure trigger, the window's Activity Log retention pin (15 minutes before, 5
 minutes after, through D14's pin primitive, across every process instance) is published
@@ -1068,8 +1105,21 @@ to its inputs or algorithm bumps the algorithm version; a golden-value test enfo
 The descriptor has a strict public projection and a richer, still body-free private projection from
 the same record; both expose the sufficiency status, and only the private one carries reasons and
 coverage. The store is owner-private, closed-grammar and quota-bounded (32 open candidates, 8 of them
-reserved for explicit reports, 4 KiB each), and candidates expire after 14 days. Acknowledge, dismiss
-and report remain explicit human actions; nothing is disclosed automatically.
+reserved for explicit reports, 4 KiB each), and candidates expire after 14 days.
+
+Both the defectFingerprint dedup rule and the count quotas hold atomically across every process
+sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
+processes could each read as "still free": a registered failure claims its fingerprint's own
+`fingerprint-<64 hex>.claim` file by exclusive-create before it decides duplicate-or-new, and every
+candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics from slot 0 up, user
+reports from the top down, so the reserve holds without a shared counter) before its record is
+written. Both claim grammars are recognized by the same `parseSupportIncidentFileName` the
+repair/uninstall ownership predicate already calls, so state-paths.ts needed no change to own them.
+A claim releases with its record on dismissal or expiry; one whose record was never written (a crash
+between the two) is swept as an orphan against a fresh, per-claim read taken at sweep time, never a
+snapshot taken earlier in the same pass, so a claim another process just published is never mistaken
+for one that failed to publish. Acknowledge, dismiss and report remain explicit human actions;
+nothing is disclosed automatically.
 
 ### D16 — Queries select whole causal closures through derived segment manifests
 

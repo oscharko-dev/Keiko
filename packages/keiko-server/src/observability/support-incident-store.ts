@@ -38,8 +38,12 @@ import {
   SUPPORT_INCIDENT_DIRECTORY_NAME,
   isSupportIncidentId,
   parseSupportIncidentFileName,
+  parseSupportIncidentFingerprintClaimFileName,
   parseSupportIncidentRecord,
+  parseSupportIncidentSlotClaimFileName,
   supportIncidentFileName,
+  supportIncidentFingerprintClaimFileName,
+  supportIncidentSlotClaimFileName,
   type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -126,8 +130,11 @@ export function listSupportIncidentEntries(stateDir: string): readonly SupportIn
   const directory = supportIncidentDirectory(stateDir);
   const entries: SupportIncidentStoreEntry[] = [];
   for (const name of readDirectoryNames(directory)) {
+    // parseSupportIncidentFileName also recognizes the fingerprint- and slot-claim grammars (so
+    // state-paths.ts's ownership predicate covers them too); only a real 32-hex incident id names
+    // a record here, so a claim's fingerprint or slot-index string is never mistaken for one.
     const incidentId = parseSupportIncidentFileName(name);
-    if (incidentId === undefined) continue;
+    if (incidentId === undefined || !isSupportIncidentId(incidentId)) continue;
     const path = join(directory, name);
     const sizeBytes = regularFileSize(path);
     if (sizeBytes === undefined) continue;
@@ -192,4 +199,160 @@ export function removeSupportIncidentRecord(stateDir: string, incidentId: string
     artifactClass: ARTIFACT_CLASS,
     trustedRoot: directory,
   });
+}
+
+// ─── Cross-process dedup and quota claims (#3533 review 4050606506) ────────────────────────────
+//
+// The incident record's own exclusive-create only ever protected its random incident-id file
+// name, never a defect fingerprint or the store's count quotas that two processes could each read
+// as "still free" before either published. A claim file's NAME is the atomic arbiter instead: an
+// exclusive-create on a fingerprint- or slot-keyed name can succeed for only one caller --
+// kernel-guaranteed, the same primitive the incident record itself already trusts. Its whole
+// content is the incidentId it was claimed for, so a loser can read who holds it, and dismissal or
+// expiry release it through that same stored reference. A claim whose referenced incident no
+// longer exists (a crash between claiming and writing the record, or a cleanup that missed it) is
+// an orphan; `listSupportIncidentClaims` lets the caller sweep those the same way it recovers a
+// torn incident record.
+
+// No claim at this path is the common, expected outcome for most fingerprints and slots (most
+// were simply never claimed), so it is checked first and treated as a plain `undefined`, never a
+// caught failure. A file that exists but cannot be read (permission, corruption, a same-instant
+// removal after this check) is a genuine anomaly and propagates: support-incident-store.ts never
+// imports the evidence sink (server-log.ts also reaches this module, and reporting from here would
+// cycle back through it), so every caller that can legitimately hit that anomaly reports it itself.
+function readClaimIncidentId(path: string, directory: string): string | undefined {
+  if (regularFileSize(path) === undefined) return undefined;
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass: ARTIFACT_CLASS,
+    mode: "read",
+    trustedRoot: directory,
+  });
+  try {
+    const text = readBoundedText(descriptor);
+    return text !== undefined && isSupportIncidentId(text) ? text : undefined;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/**
+ * Exclusive-creates `fileName` with `incidentId` as its whole content. `false` (never throws for
+ * this one outcome) means another occurrence already holds it -- a real cross-process race, or a
+ * same-process retry -- so the caller reads the holder instead of publishing a second record.
+ */
+function claimSupportIncidentFile(
+  directory: string,
+  fileName: string,
+  incidentId: string,
+): boolean {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSafeArtifactFile(join(directory, fileName), {
+      artifactClass: ARTIFACT_CLASS,
+      mode: "exclusive-create",
+      trustedRoot: directory,
+    });
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError && error.kind === "target-exists") return false;
+    throw error;
+  }
+  try {
+    writeAllBytes(descriptor, Buffer.from(incidentId, "utf8"));
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  return true;
+}
+
+/** Best-effort, idempotent removal: a claim that is already gone is not an error. */
+function removeClaimIfPresent(directory: string, fileName: string): void {
+  const path = join(directory, fileName);
+  if (regularFileSize(path) === undefined) return;
+  removeSafeArtifactFile(path, { artifactClass: ARTIFACT_CLASS, trustedRoot: directory });
+}
+
+/** Atomically claims the defectFingerprint's dedup slot for `incidentId`, or `false` if held. */
+export function claimSupportIncidentFingerprint(
+  stateDir: string,
+  defectFingerprint: string,
+  incidentId: string,
+): boolean {
+  const directory = supportIncidentDirectory(stateDir);
+  return claimSupportIncidentFile(
+    directory,
+    supportIncidentFingerprintClaimFileName(defectFingerprint),
+    incidentId,
+  );
+}
+
+/** The incidentId currently holding `defectFingerprint`'s claim, or `undefined`. */
+export function readSupportIncidentFingerprintClaim(
+  stateDir: string,
+  defectFingerprint: string,
+): string | undefined {
+  const directory = supportIncidentDirectory(stateDir);
+  return readClaimIncidentId(
+    join(directory, supportIncidentFingerprintClaimFileName(defectFingerprint)),
+    directory,
+  );
+}
+
+export function releaseSupportIncidentFingerprintClaim(
+  stateDir: string,
+  defectFingerprint: string,
+): void {
+  removeClaimIfPresent(
+    supportIncidentDirectory(stateDir),
+    supportIncidentFingerprintClaimFileName(defectFingerprint),
+  );
+}
+
+/** Atomically claims quota slot `slotIndex` for `incidentId`, or `false` if another id holds it. */
+export function claimSupportIncidentSlot(
+  stateDir: string,
+  slotIndex: number,
+  incidentId: string,
+): boolean {
+  const directory = supportIncidentDirectory(stateDir);
+  return claimSupportIncidentFile(
+    directory,
+    supportIncidentSlotClaimFileName(slotIndex),
+    incidentId,
+  );
+}
+
+export function releaseSupportIncidentSlot(stateDir: string, slotIndex: number): void {
+  removeClaimIfPresent(
+    supportIncidentDirectory(stateDir),
+    supportIncidentSlotClaimFileName(slotIndex),
+  );
+}
+
+export interface SupportIncidentClaimEntry {
+  readonly fileName: string;
+  // `undefined` when the claim is unreadable or torn -- an orphan by construction.
+  readonly incidentId: string | undefined;
+}
+
+/** Every fingerprint- and slot-claim file in the store, for the orphan sweep. */
+export function listSupportIncidentClaims(stateDir: string): readonly SupportIncidentClaimEntry[] {
+  const directory = supportIncidentDirectory(stateDir);
+  const entries: SupportIncidentClaimEntry[] = [];
+  for (const name of readDirectoryNames(directory)) {
+    const isClaim =
+      parseSupportIncidentFingerprintClaimFileName(name) !== undefined ||
+      parseSupportIncidentSlotClaimFileName(name) !== undefined;
+    if (!isClaim) continue;
+    entries.push({
+      fileName: name,
+      incidentId: readClaimIncidentId(join(directory, name), directory),
+    });
+  }
+  return entries;
+}
+
+/** Removes one claim file by its exact, already-validated name (the orphan sweep). */
+export function removeSupportIncidentClaimFile(stateDir: string, fileName: string): void {
+  removeClaimIfPresent(supportIncidentDirectory(stateDir), fileName);
 }

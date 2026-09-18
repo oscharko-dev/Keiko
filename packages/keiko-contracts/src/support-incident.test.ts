@@ -6,17 +6,22 @@ import { ACTIVITY_LOG_FAILURE_SURFACES } from "./activity-log-registry.generated
 import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
+  SUPPORT_INCIDENT_SLOT_COUNT,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   defectFingerprintPreimage,
   isSupportIncidentSurface,
   normalizeKeikoFrame,
   normalizeKeikoFrameSignature,
   parseSupportIncidentFileName,
+  parseSupportIncidentFingerprintClaimFileName,
   parseSupportIncidentRecord,
+  parseSupportIncidentSlotClaimFileName,
   supportIncidentBuild,
   supportIncidentFileName,
+  supportIncidentFingerprintClaimFileName,
   supportIncidentPrivateProjection,
   supportIncidentPublicProjection,
+  supportIncidentSlotClaimFileName,
   type DefectFingerprintInput,
   type SupportIncident,
   type SupportIncidentRecord,
@@ -49,6 +54,7 @@ function record(overrides: Partial<SupportIncidentRecord> = {}): SupportIncident
       pinnedBytes: 4096,
       evidenceLostBeforePin: false,
     },
+    slotIndex: 5,
     createdAtMs: 2_000,
     expiresAtMs: 9_000,
     ...overrides,
@@ -257,6 +263,15 @@ describe("the closed record schema", () => {
       "an unsafe product version",
       { ...record(), build: { ...record().build, productVersion: "x" } },
     ],
+    [
+      "a missing slotIndex",
+      (function withoutSlotIndex(): Omit<SupportIncidentRecord, "slotIndex"> {
+        const { slotIndex: _slotIndex, ...rest } = record();
+        return rest;
+      })(),
+    ],
+    ["an out-of-bounds slotIndex", { ...record(), slotIndex: SUPPORT_INCIDENT_SLOT_COUNT }],
+    ["a negative slotIndex", { ...record(), slotIndex: -1 }],
   ])("rejects %s", (_label, value) => {
     expect(parseSupportIncidentRecord(value)).toBeUndefined();
   });
@@ -275,6 +290,30 @@ describe("the closed record schema", () => {
     expect(parseSupportIncidentFileName(`incident-${INCIDENT_ID}.json.tmp`)).toBeUndefined();
     expect(parseSupportIncidentFileName("pin-fedcba9876543210fedcba98.json")).toBeUndefined();
     expect(() => supportIncidentFileName("../escape")).toThrow(RangeError);
+  });
+
+  it("names the cross-process dedup and quota claim files by their own closed grammars (#3533 review 4050606506)", () => {
+    expect(supportIncidentFingerprintClaimFileName(FINGERPRINT)).toBe(
+      `fingerprint-${FINGERPRINT}.claim`,
+    );
+    expect(parseSupportIncidentFingerprintClaimFileName(`fingerprint-${FINGERPRINT}.claim`)).toBe(
+      FINGERPRINT,
+    );
+    expect(parseSupportIncidentFingerprintClaimFileName("fingerprint-short.claim")).toBeUndefined();
+    expect(() => supportIncidentFingerprintClaimFileName("not-a-fingerprint")).toThrow(RangeError);
+
+    expect(supportIncidentSlotClaimFileName(0)).toBe("slot-00.claim");
+    expect(supportIncidentSlotClaimFileName(31)).toBe("slot-31.claim");
+    expect(parseSupportIncidentSlotClaimFileName("slot-07.claim")).toBe(7);
+    expect(parseSupportIncidentSlotClaimFileName("slot-99.claim")).toBeUndefined();
+    expect(parseSupportIncidentSlotClaimFileName(`incident-${INCIDENT_ID}.json`)).toBeUndefined();
+    expect(() => supportIncidentSlotClaimFileName(SUPPORT_INCIDENT_SLOT_COUNT)).toThrow(RangeError);
+    expect(() => supportIncidentSlotClaimFileName(-1)).toThrow(RangeError);
+
+    // parseSupportIncidentFileName is the one function state-paths.ts calls for ownership, so both
+    // claim grammars must be non-undefined there too -- but never mistakable for a real incident id.
+    expect(parseSupportIncidentFileName(`fingerprint-${FINGERPRINT}.claim`)).toBe(FINGERPRINT);
+    expect(parseSupportIncidentFileName("slot-07.claim")).toBe("7");
   });
 
   it("derives the surface vocabulary from the generated registry", () => {
