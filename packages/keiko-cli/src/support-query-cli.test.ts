@@ -344,4 +344,38 @@ describe("keiko support export with a selector (#3531)", () => {
     expect(existsSync(outPath)).toBe(false);
     expect(err()).toContain("insufficient (evidence-not-retained)");
   });
+
+  // Audit (#3531/#3533): a user-reported incident's window is never empty — it always captures at
+  // least its own support.incident.created line — but when the window holds no REGISTERED FAILURE,
+  // the selection is `insufficient` with the closed instrumentation-gap reason `no-registered-failure`
+  // (support-analyze-sufficiency.ts). That reason was never asserted end-to-end through export.
+  it("writes nothing and exits 1 for a user-reported incident with no registered failure", async () => {
+    const stateDir = makeRoot("keiko-query-cli-no-failure-");
+    const created = recordUserReportedIncident(stateDir, {
+      correlationId: "corr-cli-no-failure-01",
+    });
+    if (created.status === "rejected") throw new Error(`incident rejected: ${created.reason}`);
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const outPath = join(outDir, "no-failure.jsonl");
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      [
+        "export",
+        "--state-dir",
+        stateDir,
+        "--incident",
+        created.record.incidentId,
+        "--out",
+        outPath,
+      ],
+      io,
+      AUDIT_ENV,
+      exportDeps(outDir),
+    );
+
+    expect(code).toBe(1);
+    expect(existsSync(outPath)).toBe(false);
+    expect(err()).toContain("insufficient (no-registered-failure)");
+  });
 });
