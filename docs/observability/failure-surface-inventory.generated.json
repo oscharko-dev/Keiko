@@ -56,7 +56,7 @@
     "resolvedProofCount": 398,
     "failureClassCount": 308,
     "scenarioCount": 29,
-    "resolvedScenarioCount": 16
+    "resolvedScenarioCount": 20
   },
   "surfaces": [
     {
@@ -2001,10 +2001,10 @@
       "tests/activity-log-scenarios/client-diagnostics-ui.test.ts"
     ],
     "client-diagnostics.loss": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
-    "editor-delivery.crash": [],
-    "editor-delivery.dependency-failure": [],
-    "editor-delivery.loss": [],
-    "editor-delivery.rejection": [],
+    "editor-delivery.crash": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
+    "editor-delivery.dependency-failure": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
+    "editor-delivery.loss": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
+    "editor-delivery.rejection": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
     "lifecycle-crash.crash": ["tests/activity-log-scenarios/lifecycle-crash.test.ts"],
     "lifecycle-crash.dependency-failure": [],
     "lifecycle-crash.loss": [],
