@@ -31,7 +31,12 @@ import {
   activityLogLossCounters,
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { closeFileServerLogSinks, createActivityLogSink } from "@oscharko-dev/keiko-server";
+import {
+  closeFileServerLogSinks,
+  createActivityLogSink,
+  recordRegisteredFailureIncident,
+  recordUserReportedIncident,
+} from "@oscharko-dev/keiko-server";
 
 import {
   handleClientDiagnosticIngest,
@@ -47,6 +52,10 @@ import {
   readPersistedActivityLog,
 } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
+
+// The ui scenarios write through the built package, so their incidents come from it too: one
+// Activity Log writer instance per process (activity-log-scenario.ts).
+const PACKAGED_INCIDENTS = { recordRegisteredFailureIncident, recordUserReportedIncident };
 
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
@@ -236,6 +245,7 @@ describe("Activity Log scenario: ui", () => {
     // escalation decision itself (`escalateForcedStop` logs the disposition AFTER attempting the
     // forced signal) — `expectOrderedSubsequence` enforces this exact causal order.
     const trace = await expectActivityLogScenario("ui.crash", {
+      incidents: PACKAGED_INCIDENTS,
       stateDir,
       startedAtMs,
       expectedOps: [
@@ -279,6 +289,7 @@ describe("Activity Log scenario: ui", () => {
     }
 
     const trace = await expectActivityLogScenario("ui.dependency-failure", {
+      incidents: PACKAGED_INCIDENTS,
       stateDir,
       startedAtMs,
       expectedOps: ["process.heartbeat"],

@@ -31,10 +31,12 @@ import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogOperationSchema,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+// The default recorders: the source graph the scenario suites write and reset through
+// (`resetServerLogger`). See `ActivityLogScenarioRun.incidents`.
 import {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
-} from "@oscharko-dev/keiko-server";
+} from "../../packages/keiko-server/src/observability/support-incident.js";
 import {
   analyzeLogText,
   type AnalyzeAllResult,
@@ -57,7 +59,26 @@ export interface ActivityLogScenarioRun {
   readonly startedAtMs: number;
   /** Operations the scenario must have persisted, in causal order (other lines may interleave). */
   readonly expectedOps: readonly string[];
+  /**
+   * The incident recorders of the module graph that wrote this scenario's log; the source graph by
+   * default. A process runs one Activity Log writer instance, so another instance id under the same
+   * pid can only be a dead predecessor: an incident pinned through a second graph would seal the
+   * scenario writer's live active segment as that predecessor's. A suite writing through the built
+   * package passes that package's recorders.
+   */
+  readonly incidents?: ScenarioIncidentRecorders | undefined;
 }
+
+/** The incident recorders of one module graph: the source tree or the built package. */
+export interface ScenarioIncidentRecorders {
+  readonly recordRegisteredFailureIncident: typeof recordRegisteredFailureIncident;
+  readonly recordUserReportedIncident: typeof recordUserReportedIncident;
+}
+
+const SOURCE_INCIDENT_RECORDERS: ScenarioIncidentRecorders = {
+  recordRegisteredFailureIncident,
+  recordUserReportedIncident,
+};
 
 export interface ActivityLogScenarioTrace {
   readonly scenario: string;
@@ -157,13 +178,14 @@ async function proveIncidentWindowCoversClosure(
   scenario: string,
   stateDir: string,
   result: AnalyzeAllResult,
+  incidents: ScenarioIncidentRecorders,
 ): Promise<void> {
   const failure = primaryFailureCluster(result);
   const correlationId = failure === undefined ? undefined : knownFailureCorrelationId(failure);
   const creation =
     failure === undefined
-      ? recordUserReportedIncident(stateDir, {})
-      : recordRegisteredFailureIncident(stateDir, {
+      ? incidents.recordUserReportedIncident(stateDir, {})
+      : incidents.recordRegisteredFailureIncident(stateDir, {
           op: failure.op,
           errorKind: failure.errorKind ?? undefined,
           correlationId,
@@ -231,7 +253,12 @@ export async function expectActivityLogScenario(
     .map((entry) => `${entry.failureClass}:${entry.reasons.join("+")}`);
   expect(incomplete, `scenario ${scenario}: every observed class is complete`).toEqual([]);
   expect(result.sufficiency.status, `scenario ${scenario}: report sufficiency`).toBe("complete");
-  await proveIncidentWindowCoversClosure(scenario, run.stateDir, result);
+  await proveIncidentWindowCoversClosure(
+    scenario,
+    run.stateDir,
+    result,
+    run.incidents ?? SOURCE_INCIDENT_RECORDERS,
+  );
   const lineCount = persistedOps(text).length;
   const trace = {
     scenario,

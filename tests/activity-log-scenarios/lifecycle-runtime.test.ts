@@ -27,7 +27,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { UpdateInstallMode, UpdatePreflightReport } from "@oscharko-dev/keiko-contracts";
 import { activityLogSegmentFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { createActivityLogSink as createPackagedActivityLogSink } from "@oscharko-dev/keiko-server";
+import {
+  closeFileServerLogSinks as closePackagedFileServerLogSinks,
+  createActivityLogSink as createPackagedActivityLogSink,
+  recordRegisteredFailureIncident as recordPackagedRegisteredFailureIncident,
+  recordUserReportedIncident as recordPackagedUserReportedIncident,
+} from "@oscharko-dev/keiko-server";
 import {
   emitSecurityLogEvent,
   type SecurityLogEvent,
@@ -53,6 +58,13 @@ import {
   readPersistedActivityLog,
 } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
+
+// The two runtime-packages scenarios below write through the built package, so their incidents
+// come from it too: one Activity Log writer instance per process (activity-log-scenario.ts).
+const PACKAGED_INCIDENTS = {
+  recordRegisteredFailureIncident: recordPackagedRegisteredFailureIncident,
+  recordUserReportedIncident: recordPackagedUserReportedIncident,
+};
 
 function tempStateDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -263,6 +275,7 @@ describe("Activity Log scenario: runtime-packages", () => {
       expect(code).toBe(1);
 
       const trace = await expectActivityLogScenario("runtime-packages.dependency-failure", {
+        incidents: PACKAGED_INCIDENTS,
         stateDir: activityStateDir,
         startedAtMs,
         expectedOps: ["cli.audit.started", "cli.audit.failed"],
@@ -275,6 +288,8 @@ describe("Activity Log scenario: runtime-packages", () => {
         { reason: "missing-export", failureKind: "AuditLoadError" },
       );
     } finally {
+      // Seals what the packaged graph opened here while the directory still exists.
+      closePackagedFileServerLogSinks();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -303,6 +318,7 @@ describe("Activity Log scenario: runtime-packages", () => {
       });
 
       const trace = await expectActivityLogScenario("runtime-packages.loss", {
+        incidents: PACKAGED_INCIDENTS,
         stateDir,
         startedAtMs,
         expectedOps: ["security.log.sink-failed"],
@@ -315,6 +331,7 @@ describe("Activity Log scenario: runtime-packages", () => {
         expectActivityLogProof("security.log.sink-failed.body-free", line ?? ""),
       ).toMatchObject({ droppedOpDigest: expect.stringMatching(/^[0-9a-f]{16}$/u) as unknown });
     } finally {
+      closePackagedFileServerLogSinks();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });

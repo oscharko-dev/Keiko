@@ -946,7 +946,9 @@ export interface ActivityLogOrphanContext {
  * Whether an active segment has lost its writer. A live foreign owner seals its own segment within
  * one segment window, so an active segment is only taken over when its owner has exited, when it is
  * older than two windows and unwritten for one (pid reuse), or when it is this process's own
- * abandoned segment. `undefined` means: leave it alone.
+ * abandoned segment. A process runs exactly one writer instance, so an active segment under this
+ * process's pid with another instance id can only be a dead predecessor whose pid was reused.
+ * `undefined` means: leave it alone.
  */
 export function activityLogOrphanOwner(
   entry: ActivityLogFileEntry & { readonly file: ActivityLogSegmentFileName },
