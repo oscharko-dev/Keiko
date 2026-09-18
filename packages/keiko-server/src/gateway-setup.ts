@@ -1861,28 +1861,29 @@ async function setupToolCallingObservations(
       const modelId = testedModelIds[index];
       if (modelId === undefined) continue;
       const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-      if (provider === undefined) {
-        observations[index] = { modelId, status: "unverified", checkedAt };
-        continue;
-      }
-      const status = await probeGatewayToolCalling(
-        config,
-        provider,
-        undefined,
-        (error) => {
-          reportSetupVerificationFailure(
-            deps,
-            error,
-            correlationId,
-            "gateway.setup.tool-calling-probe",
-          );
-        },
-        {
-          env: deps.env,
-          capability: findConfiguredCapability(config, modelId),
-          correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-        },
-      );
+      // A model without a provider stays unverified; that conclusion takes the same log line below
+      // as every probe result instead of being recorded silently.
+      const status =
+        provider === undefined
+          ? "unverified"
+          : await probeGatewayToolCalling(
+              config,
+              provider,
+              undefined,
+              (error) => {
+                reportSetupVerificationFailure(
+                  deps,
+                  error,
+                  correlationId,
+                  "gateway.setup.tool-calling-probe",
+                );
+              },
+              {
+                env: deps.env,
+                capability: findConfiguredCapability(config, modelId),
+                correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+              },
+            );
       observations[index] = {
         modelId,
         status,
@@ -4709,8 +4710,22 @@ interface ChatAdmission {
   readonly unverifiedModelIds: readonly string[];
 }
 
-function temporaryChatAdmission(candidateModels: SetupCandidateModels): ChatAdmission {
+function temporaryChatAdmission(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  candidateConfig: GatewayConfig,
+): ChatAdmission {
   const checkedAt = new Date().toISOString();
+  // The persisted "unverified" proof is a tool-calling conclusion like any probe result, so it
+  // leaves the same activity-log line the probe path writes.
+  for (const modelId of candidateModels.chatModelIds) {
+    logToolCallingVerification(
+      candidateConfig,
+      modelId,
+      "unverified",
+      input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+  }
   return {
     testResult: {
       testedModelIds: [],
@@ -5005,7 +5020,7 @@ async function admitChatCandidatesOrDefer(
         admittedModels,
         candidateConfig,
         embeddingAdmission,
-        temporaryChatAdmission(candidateModels),
+        temporaryChatAdmission(input, candidateModels, candidateConfig),
       ),
     );
   }
