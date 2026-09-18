@@ -1387,6 +1387,8 @@ describe("runLifecycleCli", () => {
         op: "cli.install-layout.normalized",
         correlationId: "00000000-0000-4000-8000-000000000001",
         extra: {
+          completeness: "complete",
+          loss: "none",
           overriddenCount: 2,
           overriddenKinds: ["cli-bin", "ui-static-root"],
         },

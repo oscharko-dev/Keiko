@@ -75,7 +75,12 @@ describe("authoritative install layout", () => {
       category: "diagnostic",
       op: "cli.install-layout.normalized",
       correlationId: evidence?.correlationId,
-      extra: { overriddenCount: 1, overriddenKinds: ["cli-bin"] },
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        overriddenCount: 1,
+        overriddenKinds: ["cli-bin"],
+      },
     });
     expect(validateRegisteredActivityLogEvent(events[0] ?? {})).toMatchObject({
       op: "cli.install-layout.normalized",

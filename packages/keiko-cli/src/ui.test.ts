@@ -273,7 +273,11 @@ describe("runUiCli", () => {
     expect(code).toBe(1);
     expect(err.join("")).toContain("build:ui");
     expect(sink.events).toEqual([
-      expect.objectContaining({ op: "cli.install-layout.normalized", correlationId }),
+      expect.objectContaining({
+        op: "cli.install-layout.normalized",
+        correlationId,
+        extra: expect.objectContaining({ completeness: "complete", loss: "none" }),
+      }),
     ]);
   });
 
@@ -299,6 +303,7 @@ describe("runUiCli", () => {
       ),
     ).rejects.toThrow();
     expect(sink.events.map(({ op }) => op)).toEqual(["cli.install-layout.normalized"]);
+    expect(sink.events[0]?.extra).toMatchObject({ completeness: "complete", loss: "none" });
   });
 
   it("prefers the built workspace checkout over a stale inherited global static root", async () => {
@@ -538,7 +543,12 @@ describe("runUiCli", () => {
     ]);
     expect(sink.events[0]).toMatchObject({
       correlationId: "00000000-0000-4000-8000-000000000001",
-      extra: { overriddenCount: 1, overriddenKinds: ["ui-static-root"] },
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        overriddenCount: 1,
+        overriddenKinds: ["ui-static-root"],
+      },
     });
     expect(sink.closeCallCount).toBe(1);
     const event = sink.events.find(({ op }) => op === "process.fatal");
@@ -1240,6 +1250,8 @@ describe("runUiCli", () => {
         correlationId,
         level: "info",
         extra: {
+          completeness: "complete",
+          loss: "none",
           overriddenCount: 3,
           overriddenKinds: ["cli-bin", "ui-static-root", "local-state-auditor"],
         },

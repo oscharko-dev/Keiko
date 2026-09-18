@@ -311,7 +311,12 @@ describe("runLauncherCli install — refusals (security)", () => {
       expect.objectContaining({
         op: "cli.install-layout.normalized",
         correlationId,
-        extra: { overriddenCount: 1, overriddenKinds: ["cli-bin"] },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          overriddenCount: 1,
+          overriddenKinds: ["cli-bin"],
+        },
       }),
     ]);
   });
