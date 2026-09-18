@@ -786,6 +786,7 @@ function evidenceWriterDependencies(overrides = {}) {
     now: () => new Date().toISOString(),
     read: readJson,
     rulerDigest: toolCatalogPerformanceRulerDigest,
+    subject: toolCatalogPerformanceSubject,
     write: writeJson,
     ...overrides,
   };
@@ -911,7 +912,7 @@ export function rebindToolCatalogPerformanceSubject(root = process.cwd(), overri
   const calibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
   const measurement = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement);
   const currentSubject = {
-    ...toolCatalogPerformanceSubject(root),
+    ...deps.subject(root),
     measurementHarnessSha256: deps.rulerDigest(root),
   };
   for (const document of [calibration, measurement]) {
