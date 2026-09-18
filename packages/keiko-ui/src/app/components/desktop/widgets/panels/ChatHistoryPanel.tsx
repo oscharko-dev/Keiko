@@ -415,7 +415,14 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           <p className="chat-history-kicker">Conversations</p>
           <h2>Chat History</h2>
         </div>
-        <button type="button" className="lk-btn lk-btn-primary" onClick={() => void createNew()}>
+        {/* A new chat needs the session bootstrap (models, active project). A click before it
+            settles created nothing and reported a false "no model configured" error. */}
+        <button
+          type="button"
+          className="lk-btn lk-btn-primary"
+          disabled={session.loading}
+          onClick={() => void createNew()}
+        >
           <NewChatIcon size={15} />
           New
         </button>

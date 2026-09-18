@@ -171,6 +171,26 @@ describe("ChatHistoryPanel", () => {
     expect(openChatWindow).not.toHaveBeenCalled();
   });
 
+  it("keeps New disabled until the chat session has loaded", async (): Promise<void> => {
+    const openNewChat = vi.fn(async (): Promise<Chat | undefined> => undefined);
+    const view = render(
+      <ChatSessionProvider value={makeSession({ loading: true, openNewChat })}>
+        <ChatHistoryPanel openChatWindow={vi.fn()} />
+      </ChatSessionProvider>,
+    );
+    // A click during the session bootstrap created nothing and reported a false "no model" error.
+    expect(screen.getByRole("button", { name: "New" })).toBeDisabled();
+
+    view.rerender(
+      <ChatSessionProvider value={makeSession({ loading: false, openNewChat })}>
+        <ChatHistoryPanel openChatWindow={vi.fn()} />
+      </ChatSessionProvider>,
+    );
+    await userEvent.setup().click(screen.getByRole("button", { name: "New" }));
+
+    await waitFor((): void => expect(openNewChat).toHaveBeenCalledOnce());
+  });
+
   it("opens a created chat when the requested project remains active", async (): Promise<void> => {
     const created = makeChat({ id: "chat-created", projectPath: "/repo" });
     const openNewChat = vi.fn(async (): Promise<Chat | undefined> => created);
