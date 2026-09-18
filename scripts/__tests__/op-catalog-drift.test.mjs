@@ -17,11 +17,14 @@ import {
 import {
   activityLogSchemaDigest,
   activityLogSchemaDigestMaterial,
+  formatGeneratedJson,
+  generateActivityLogFailureSurfaceInventory,
   generateOpCatalog,
   generateTypedActivityLogRegistry,
   validateActivityLogFailureClassContracts,
   validateActivityLogRegistryExemptions,
 } from "../generate-op-catalog.mjs";
+import { failureSurfaceInventoryDrift } from "../lib/activity-log-failure-surface-inventory.mjs";
 import {
   newFailurePathFindings,
   unregisteredFailurePathViolations,
@@ -40,6 +43,12 @@ import {
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(repoRoot, "docs", "observability", "op-catalog.generated.json");
+const INVENTORY_PATH = join(
+  repoRoot,
+  "docs",
+  "observability",
+  "failure-surface-inventory.generated.json",
+);
 // Coverage instrumentation makes a complete repository scan take more than two minutes on the
 // smallest CI workers. This is a harness deadline, not a product latency budget; cache the one
 // immutable result and keep that unavoidable scan bounded without letting the global 15-second
@@ -901,6 +910,36 @@ describe("op catalog drift", () => {
     const regenerated = generateCurrentOpCatalog();
     const checkedIn = readCheckedInCatalog();
     expect(regenerated).toEqual(checkedIn);
+  });
+
+  // #3532: the failure-surface inventory is a generated view over the same typed registry, pinned
+  // byte for byte so a new operation, a moved proof or a reformatted file cannot leave it stale.
+  it(
+    "matches the checked-in failure-surface inventory byte for byte",
+    async () => {
+      const generated = await formatGeneratedJson(
+        generateActivityLogFailureSurfaceInventory(repoRoot, generateCurrentTypedRegistry()),
+      );
+      expect(failureSurfaceInventoryDrift(generated, readFileSync(INVENTORY_PATH, "utf8"))).toBe(
+        undefined,
+      );
+    },
+    REPOSITORY_SCAN_TEST_TIMEOUT_MS,
+  );
+
+  it("names the stale inventory when its checked-in bytes drift from the generator", () => {
+    const checkedIn = readFileSync(INVENTORY_PATH, "utf8");
+    const tampered = checkedIn.replace('"lifecycle-crash"', '"lifecycle-crashed"');
+    expect(tampered).not.toBe(checkedIn);
+    expect(failureSurfaceInventoryDrift(checkedIn, tampered)).toMatch(
+      /failure-surface-inventory\.generated\.json is stale/u,
+    );
+    expect(failureSurfaceInventoryDrift(checkedIn, `${checkedIn}\n`)).toMatch(/is stale/u);
+    expect(failureSurfaceInventoryDrift(checkedIn, checkedIn)).toBeUndefined();
+  });
+
+  it("has no failure-surface inventory violations", () => {
+    expect(JSON.parse(readFileSync(INVENTORY_PATH, "utf8")).violations).toEqual([]);
   });
 
   it("does not recursively rediscover the generated runtime registry", () => {
