@@ -94,7 +94,6 @@ import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/ver
 
 import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
 import {
-  DEFAULT_ACTIVITY_LOG_RETENTION_BYTES,
   MAX_ACTIVITY_LOG_PIN_DURATION_MS,
   MAX_ACTIVITY_LOG_PINS,
   MAX_LOG_LINE_BYTES,
@@ -346,10 +345,6 @@ export interface ServerLogSink {
   readonly flush?: (() => void) | undefined;
   readonly close?: (() => void) | undefined;
 }
-
-// Retained for the #3532 readiness default provider, which reads it as the byte budget until it
-// consumes `activityLogStorageHealth`; it equals the Activity Log's default retention budget.
-export const DEFAULT_LOG_CAPACITY_WARNING_BYTES = DEFAULT_ACTIVITY_LOG_RETENTION_BYTES;
 
 const NULL_SINK: ServerLogSink = {
   write(_event: ServerLogEvent): void {
