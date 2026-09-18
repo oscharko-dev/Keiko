@@ -39,6 +39,13 @@ identity now includes registry/schema digests and safe build/release/platform/ca
 readers classify compatibility and sequence integrity explicitly instead of treating every
 parseable or partially identified line as valid v2 evidence.
 
+Amended by #3532 on 2026-09-18: every production process now reaches the registry-validated writer
+or reports that it cannot (D6). Lost events are counted in one bounded, closed ledger and persisted
+as summaries. Diagnostic readiness is a closed state that `/api/health`, `keiko status`,
+`keiko support export` and the desktop footer report. Every exit leaves one `process.exiting` line,
+and a fatal crash leaves `process.fatal` (D7). The raw `ui.log` channel is retired, and the support
+bundle never carries it (D8, D9).
+
 ## Context
 
 `<stateDir>/logs/server.log` (JSON lines, `KEIKO_LOG_LEVEL`-gated, always on) shipped in #3230. It
@@ -397,6 +404,79 @@ rejects broad or unknown scope, duplicates, stale/expired records, and any extra
 to authorize prohibited fields, silent loss, or incomplete evidence. Exemptions cannot modify an
 operation schema or reduce a supported class's sufficiency requirement.
 
+**Every production process has a writer, and a missing one is visible (#3532).** The registry is
+authoritative only when every production emitter reaches the sink that enforces it. The
+process-wide logger therefore resolves the runtime state directory exactly as the CLI does: a
+non-empty `KEIKO_STATE_DIR`, resolved against the working directory when relative, else
+`<cwd>/.keiko`. So `keiko run`, `keiko memory`, `keiko evaluate` and every other command that never
+set the variable write the same Activity Log that `keiko start` in that directory would.
+
+- A logger that writes nothing exists only when a test installs it explicitly: the vitest setup
+  files set a global test-writer symbol.
+- A production process whose log directory cannot be opened gets an unavailable logger. It counts
+  every event it receives as lost, and it is rebuilt on the next event instead of being memoised.
+- The log's own evidence bypasses the `KEIKO_LOG_LEVEL` threshold: `process.started`,
+  `process.exiting`, `process.fatal`, `activity-log.readiness`, `activity-log.loss`, and every
+  `lifecycle: "loss"` registration. `silent` can quiet the log. It can never hide that the log was
+  quieted or that it lost data.
+
+Domain packages keep their own injected port (`SecurityLogSink`, `KnowledgeLogSink`,
+`MemoryVaultLogSink`, `ConsolidationLogSink`, `ModelGatewayLogSink`). The composition roots hand
+every port the process sink. `keiko memory` hands it to the memory vault and security ports. The
+Gateways built by CLI model resolution, `keiko run`, the prompt enhancer and `keiko evaluate` write
+through it, and so does the Quality Intelligence capsule store. `cli.audit.*` is now registered
+like every other operation. Before this, those lines were unregistered plain objects that the
+production sink refused.
+
+**The port pattern for a new package (BYOA #482).** A package that performs work follows five rules:
+
+1. It declares its own `<Package>LogSink { write(event) }` port.
+2. It builds its events with `activityLogEvent` from its own registrations.
+3. It receives the process sink from the server or CLI composition root. It never constructs a file
+   sink and never reads `KEIKO_STATE_DIR` itself.
+4. It isolates its sink. A throwing `write` is caught and counted as `port-sink-failed` in the loss
+   ledger, every time and not only the first.
+5. It reports a failing sink once per sink instance, on the independent process-warning channel.
+
+**Loss is counted, never silent (#3532).** One bounded, process-wide loss ledger lives in the
+contracts leaf, so every layer can reach it without a dependency edge that points the wrong way.
+It is a fixed record of saturating counters, never a queue and never content. Each counter has a
+closed reason:
+
+- the logger: a failed write, or no writer at all;
+- a schema rejection;
+- a persistence failure;
+- a failed diagnostic sink or domain-port sink;
+- the BFF's rejected and rate-suppressed browser reports;
+- the browser's own evicted, throttled, failed and cap-suppressed reports;
+- events the CLI collector dropped;
+- a summary that could not be written.
+
+The server persists the counters as an `activity-log.loss` summary: on a heartbeat when the
+counters changed, and always at exit, so a clean shutdown also proves that nothing was lost. A
+summary that cannot be written only increments its own counter, so the accounting never recurses
+into the failing sink. The browser counts its own side in the same closed vocabulary. It sends the
+counts with its next report and once more when the page is hidden. The BFF adds them to its ledger
+and records them on the `client.diagnostic` line.
+
+**Readiness is a closed, observable state (#3532).** Each process evaluates whether it can currently
+produce reconstruction evidence. The result is one of three states: `ready`, `degraded` or
+`unavailable`. It carries three more facts:
+
+- the closed reasons: `catalog-mismatch`, `sink-unwritable`, `storage-pressure`,
+  `budget-exceeded`, `port-unwired` and `level-silent`;
+- the writer kind: `production-file`, `test-injected` or `unavailable`;
+- the lost-event total.
+
+The startup evaluation runs before the server listens. It persists its `activity-log.readiness` line
+through the durable append path, so the probe is a real write, not a permission check. A failed write
+means `unavailable`, with the reason `sink-unwritable`. Storage conditions come from the segment
+store's own health report (`activityLogStorageHealth`). The heartbeat re-evaluates without a probe
+and logs every transition. A persistence loss since the last evaluation degrades readiness with
+`sink-unwritable`. `GET /api/health` returns the snapshot as `diagnostics`. `keiko status` prints
+it, and so does `keiko support export` for the exported directory. The desktop footer shows a
+degraded or unavailable state with its reasons.
+
 ### D7 — Process lifecycle events give the log a subject
 
 Before this contract, the log recorded what happened but never which process, running which
@@ -420,7 +500,21 @@ rather than a separate `process.config` line avoids a second, always-co-occurrin
 that is knowable at the exact same instant `process.started` already fires. Feature flags remain an
 explicitly named, out-of-scope-for-this-epic follow-up.
 
-### D8 — The support artifact is one JSON-Lines file; `ui.log` is excluded by default
+Every exit leaves exactly one `process.exiting` line (#3532). A fatal uncaught exception or
+unhandled rejection writes three lines in order, then the process exits:
+
+1. `process.fatal`, which goes to the resolved runtime state directory even when no server was ever
+   built;
+2. the exit loss summary;
+3. `process.exiting` with the reason `fatal-exception`.
+
+A server error takes the same path. Each other exit records its own closed reason: `sigint`,
+`sigterm`, `sighup`, `server-close` or `shutdown-request`. A `process.exit` fallback records
+`process-exit` when no other path ran first. A process-wide latch makes the first recorded reason
+the only one, so the close that a crash causes is never relabelled. The lines carry the classified
+error kind and Keiko-code frames only.
+
+### D8 — The support artifact is one JSON-Lines file; the raw `ui.log` is never part of it
 
 **Format.** One `.jsonl` file, not an archive. `server.log` is already valid JSONL and every line
 is already redacted at write time, so wrapping it in a zip or tar format would re-redact nothing
@@ -435,16 +529,22 @@ byte-for-byte copy of a real `server*.log` line — oldest file first. Nothing a
 re-transformed, so a re-encoding bug cannot introduce a leak into lines that were already safe on
 disk.
 
-**`ui.log` is excluded by default.** That channel is a verified, acknowledged-unredacted operator
-stream (`${error.name}: ${error.message}`, raw). A customer-facing export tool that blends a
-redacted structured stream with an unredacted free-text one in the same artifact would undermine the
-body-free contract by construction. `ui.log` is therefore always listed in the manifest's
-`sectionsExcluded`, with an explicit `--include-ui-log --i-understand-this-is-unredacted`
-double-confirmation flag (both flags required together) for an operator who has made an informed
-decision to attach it anyway. The manifest always records whether it was included — never silently.
-This opt-in gate is not removed once the fatal-crash-path fix (D3's neighbor, Wave 2) stops new
-`ui.log` lines from carrying raw messages, because a bundle exported later can still be exported
-against a `stateDir` whose history predates that fix.
+**The raw `ui.log` is retired, and never part of a report (#3532).** Earlier versions of
+`keiko start` copied the detached UI process's raw stdout and stderr into `<stateDir>/ui.log`. That
+channel was free text, including raw error messages, so it could never meet the body-free contract.
+A customer-facing export that mixes it with the redacted structured stream would undermine the
+contract by construction.
+
+The UI process's stdio is now ignored. Every diagnostic it produces already reaches the Activity
+Log, and a crash that happens before the first log line is still recorded: `process.fatal` falls
+back to the resolved state directory (D7). When the UI does not become healthy, `keiko start` names
+a closed outcome (`process-exited` or `health-timeout`) instead of pointing at a raw log.
+
+The former opt-in flags (`--include-ui-log --i-understand-this-is-unredacted`) are refused as a
+usage error rather than ignored. An existing `ui.log` from an earlier version is left in place,
+never read into a report, and removed with the rest of the runtime state by
+`keiko uninstall --state`. The manifest still names `ui-log` in
+`sectionsExcluded`, so a reader of an old or a new bundle sees the same, explicit exclusion.
 
 **Size bounds.** Capped by an overall export byte ceiling; files are dropped oldest-first when the
 ceiling is exceeded, and every drop is recorded in
@@ -459,8 +559,8 @@ in the manifest's `currentFileTailTruncated` (name and dropped-byte count only, 
 Two new commands under one `support` command family (not `bundle export` / `log:analyze` — a single
 coherent noun groups the artifact producer and its own consumer under one verb space):
 
-- `keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N] [--include-ui-log
---i-understand-this-is-unredacted] [--include-evidence RUNID[,RUNID...]]` composes existing,
+- `keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N]
+  [--include-evidence RUNID[,RUNID...]]` composes existing,
   already-hardened pieces — the evidence index listing, the local-state audit summary, a redacted
   config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a concatenation of
   every Activity Log file in logical-log order (legacy files, then sealed and active segments, D14),
@@ -470,10 +570,13 @@ coherent noun groups the artifact producer and its own consumer under one verb s
   through) — into one manifest-led
   `.jsonl` bundle, plus a
   `<output>.sha256` integrity sidecar (D12). No new redaction logic is written for the bulk of the
-  file — every log line copied in is a line that was already redacted at write time. `ui.log` (a
-  verified, acknowledged-unredacted operator stream) is excluded by default and requires both new
-  flags together to attach (D8); `--include-evidence` attaches the full `EvidenceStore` manifest
-  for each named run id, beyond the index-only summary, for deep replay.
+  file — every log line copied in is a line that was already redacted at write time. A legacy raw
+  `ui.log` is never read into the bundle, and the retired flags that once attached it are refused
+  (D8). `--include-evidence` attaches the full `EvidenceStore` manifest for each named run id,
+  beyond the index-only summary, for deep replay. After a successful export, the command evaluates
+  the exported directory's diagnostic readiness (D6) and prints it. That readiness line is persisted
+  after the report is written, so the report stays exactly the evidence that existed when it was
+  taken.
 - `keiko support analyze FILE [--correlation-id ID] [--json]` reconstructs three complementary
   views from the same parsed lines, because `correlationId` alone cannot carry everything an agent
   needs to reconstruct: a **per-correlation timeline** for every line that carries a
@@ -964,6 +1067,10 @@ rather than left implicit across the Decision section:
 8. **For a failed or slow request** (landed Wave 5), read the `request` line's `routeTemplate`,
    `queryParamNames`, `responseBytes` and `aborted`, the stream's `sse.stream.closed` `reason`, and
    any `client.diagnostic` line that shares the request's `correlationId` (D13).
+9. **Before trusting an absence**, read the same process lifetime's `activity-log.readiness` lines
+   (state, closed reasons, writer) and its `activity-log.loss` summaries (lost events per closed
+   reason, written when the counters change and always at exit) (D6). A timeline gap during a period with a non-zero loss
+   count is lost evidence, not evidence that nothing happened.
 
 ## Consequences
 
@@ -999,9 +1106,13 @@ rather than left implicit across the Decision section:
 - The no-source-maps decision (D3) means reading a frame meaningfully requires building the exact
   tagged version the customer ran; this is a documented, deliberate cost, not a gap to be quietly
   worked around by enabling source maps later without amending this ADR.
-- `ui.log`'s default exclusion (D8) keeps the body-free contract intact by default, at the cost of
-  an operator needing an explicit double-confirmation flag for the (rare, informed) case where they
-  want it included anyway.
+- Retiring the raw `ui.log` (D8) removes the one free-text channel beside the body-free log. The
+  cost is that an operator can no longer read a UI process's raw console output after the fact.
+  Anything worth reconstructing has to be recorded as a registered, body-free Activity Log line,
+  which is the contract this ADR sets for every change.
+- Loss and readiness are counts and closed states, never content (D6). An operator learns that
+  evidence was lost, how much and why, but never what the lost lines said. The ledger saturates
+  instead of growing, so a storm of failures can never itself exhaust memory.
 - The op catalog's closed vocabulary (D6) is enforced at the literal's origin, not at every
   forwarding call: a positional helper that cannot be statically resolved to a literal is recorded
   as `<dynamic>` at its own call site rather than failing generation, on the condition that every

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +21,7 @@ import { createUpdateLocalStateManager } from "@oscharko-dev/keiko-server";
 import { runCli, type CliIo } from "./runner.js";
 import { runUpdateCli, type UpdateCliDeps, type UpdateCliPreflight } from "./update.js";
 import { isTerminalUpdateSession, renderApplyTerminal } from "./update-output.js";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 
 const defaultRuntimeControl = vi.hoisted(() => ({
   enabled: false,
@@ -326,7 +327,7 @@ function defaultRuntimeFetch(): typeof fetch {
 }
 
 function activityLogOperations(stateDir: string): readonly string[] {
-  return readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+  return readPersistedActivityLog(stateDir)
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as { readonly op?: unknown })
