@@ -261,6 +261,15 @@ describe("segment manifests (#3531)", () => {
     expect(parseSegmentManifest(text, "20260918T090000000Z-1-abcdef01-000009")).toBeUndefined();
     expect(parseSegmentManifest("not json", segmentId)).toBeUndefined();
     expect(parseSegmentManifest(foreign, segmentId)).toBeDefined();
+    const shortBody = {
+      ...body,
+      correlations: { ...body.correlations, data: body.correlations.data.slice(0, 4) },
+    };
+    const short = `${JSON.stringify({
+      ...shortBody,
+      digest: createHash("sha256").update(JSON.stringify(shortBody)).digest("hex"),
+    })}\n`;
+    expect(parseSegmentManifest(short, segmentId)).toBeUndefined();
 
     chmodSync(path, 0o600);
     writeFileSync(path, foreign);
