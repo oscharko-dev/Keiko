@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  activityLogLossCounters,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   activityLogErrorKind,
   logEndpointHost,
@@ -383,5 +387,21 @@ describe("a caller-supplied sink is foreign code", () => {
     }
     // Five dropped lines, exactly one report.
     expect(attempts.filter((op) => op === "gateway.log.sink-failed")).toHaveLength(1);
+  });
+
+  // #3532: the report is once per sink, but the process loss ledger counts every dropped line.
+  it("counts every line a dead sink drops in the process loss ledger", () => {
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    resetActivityLogLossCountersForTests();
+    try {
+      const sink = resolveLogSink(throwingSink());
+      for (let index = 0; index < 5; index += 1) {
+        sink.write({ level: "info", category: "gateway", op: "gateway.chat.started" });
+      }
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(5);
+    } finally {
+      resetActivityLogLossCountersForTests();
+      warn.mockRestore();
+    }
   });
 });
