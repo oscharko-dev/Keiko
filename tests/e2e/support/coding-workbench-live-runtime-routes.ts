@@ -9,6 +9,8 @@ import type {
 import {
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
   parseEditorAgentSnapshotRequest,
+  type EditorAgentBridgeSnapshotRequest,
+  type EditorAgentSnapshotRequest,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
 import {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
@@ -50,6 +52,20 @@ type RuntimeOptions = Required<
 const FIXTURE_BRIDGE_DECISION_CAPABILITY = "A".repeat(
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
 );
+const INVALID_EDITOR_SNAPSHOT_JSON = "request body must contain valid JSON";
+
+export function parseFixtureEditorSnapshotRequest(
+  payload: string | null,
+): CodingWorkbenchValidationResult<EditorAgentSnapshotRequest | EditorAgentBridgeSnapshotRequest> {
+  if (payload === null) return { ok: false, errors: [INVALID_EDITOR_SNAPSHOT_JSON] };
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(payload);
+  } catch {
+    return { ok: false, errors: [INVALID_EDITOR_SNAPSHOT_JSON] };
+  }
+  return parseEditorAgentSnapshotRequest(decoded);
+}
 
 // The clamp is the product invariant under test, so the fixture must not re-implement it: it uses
 // the same contracts resolver the server does. A local copy could drift and let a projection bug
@@ -191,7 +207,7 @@ async function handleEditorSnapshotRoute(
   if (route.request().method() !== "POST" || pathname !== "/api/editor/agent/snapshot") {
     return false;
   }
-  const parsed = parseEditorAgentSnapshotRequest(route.request().postDataJSON());
+  const parsed = parseFixtureEditorSnapshotRequest(route.request().postData());
   if (!parsed.ok) {
     fixture.validationErrors.push(...parsed.errors);
     await route.fulfill({ status: 400, contentType: "application/json", body: "{}" });
