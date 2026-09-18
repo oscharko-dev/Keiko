@@ -1712,7 +1712,11 @@ describe("local-knowledge handlers", () => {
     });
     seeded.store.close();
     const events: ServerLogEvent[] = [];
-    const sink: ServerLogSink = { write: (event): void => events.push(event) };
+    const sink: ServerLogSink = {
+      write: (event): void => {
+        events.push(event);
+      },
+    };
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const rejectedValue = `private migration failure at ${docsRoot}`;
     storeOpenFault.message = rejectedValue;
@@ -1736,6 +1740,14 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(failed)).not.toContain(rejectedValue);
     expect(JSON.stringify(failed)).not.toContain(docsRoot);
     expect(JSON.stringify(failed)).not.toContain("customer body must not appear");
+
+    // The failed launch must release its capsule slot, or every later start answers 409.
+    const retried = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: seeded.capId } },
+      depsFor(tmp),
+    );
+    expect(retried.status).toBe(202);
+    await awaitDetachedCapsuleIndexing(String(seeded.capId));
   });
 
   it("answers 202 with the job id while the run is still in flight — the request never carries the job", async () => {

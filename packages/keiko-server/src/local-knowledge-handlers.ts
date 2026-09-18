@@ -3216,10 +3216,13 @@ function launchDetachedCapsuleIndexing(
       },
     ),
   );
-  const run = (async (): Promise<void> => {
+  // The body starts on a microtask, after the launch-map key below is registered. Run inline, a
+  // synchronous store-open throw would execute the finally's delete BEFORE the set, and the key
+  // would then stay registered forever — answering 409 for the process lifetime.
+  const run = Promise.resolve().then(async (): Promise<void> => {
     // The store open lives INSIDE the try: openKnowledgeStore throws on open/migration failure,
     // and a throw before the handler would leave the rejection unhandled (production never awaits
-    // this promise) and leak the launch-map key — answering 409 for the process lifetime.
+    // this promise).
     let env: ReturnType<typeof openStoreForDeps> | undefined;
     try {
       env = openStoreForDeps(deps);
@@ -3235,7 +3238,7 @@ function launchDetachedCapsuleIndexing(
       env?.close();
       detachedIndexingRuns.delete(key);
     }
-  })();
+  });
   detachedIndexingRuns.set(key, run);
 }
 
