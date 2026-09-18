@@ -17,7 +17,6 @@ import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
-import { useUnhandledRejectionLog } from "./hooks/useUnhandledRejectionLog";
 import {
   readWorkspaceCameraSmoothness,
   WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
@@ -1925,9 +1924,8 @@ export function AppShell(): ReactNode {
   useEffect(() => {
     registerSw();
   }, []);
-  // GEN-STAB-WINDOW-002 — surface (bounded) unhandled promise rejections; the shell had
-  // no listener, so escaped async failures degraded long sessions with zero signal.
-  useUnhandledRejectionLog();
+  // GEN-STAB-WINDOW-002 — unhandled promise rejections are surfaced once for every route by the
+  // root layout's `ClientDiagnosticsRoot` (#3532); a second listener here reported each twice.
   // uiux-fix F039 C402 — the gate used to be a completely empty .app: from first paint until
   // hydration finished the user saw a bare surface colour with zero loading feedback. A pure-CSS
   // placeholder (pulsing logo, reduced-motion-safe) gives that feedback. The hydration guarantee
