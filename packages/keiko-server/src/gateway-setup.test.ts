@@ -9551,17 +9551,17 @@ describe("gateway setup writes the process activity log", () => {
       expect(proof?.status).toBe("unverified");
       expect(
         sink.events.filter((event) => event.op === "gateway.tool-calling.verification"),
-      ).toEqual([
-        expect.objectContaining({
+      ).toMatchObject([
+        {
           category: "gateway",
           correlationId: "corr-temporary-admission",
           status: 503,
           errorKind: "unverified",
-          extra: expect.objectContaining({
+          extra: {
             verificationStatus: "unverified",
             configurationFingerprint: proof?.configurationFingerprint,
-          }),
-        }),
+          },
+        },
       ]);
     } finally {
       deps.store.close();
