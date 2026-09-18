@@ -197,8 +197,11 @@ function recordFailedPost(loss: ClientDiagnosticLossCounts | undefined): void {
   writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
 }
 
-function sendClientDiagnostic(message: string, meta: ClientDiagnosticMeta | undefined): void {
-  const loss = takeClientDiagnosticLoss();
+function sendClientDiagnostic(
+  message: string,
+  meta: ClientDiagnosticMeta | undefined,
+  loss: ClientDiagnosticLossCounts | undefined,
+): void {
   try {
     const body = clientDiagnosticPostBody(message, meta, loss);
     void bffFetchJson<undefined>("/api/diagnostics/client", {
@@ -221,7 +224,7 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
     if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
     return;
   }
-  sendClientDiagnostic(message, meta);
+  sendClientDiagnostic(message, meta, takeClientDiagnosticLoss());
 }
 
 // Loss counted after the page's last report would otherwise stay in the tab forever: a storm of
@@ -232,9 +235,7 @@ const LOSS_FLUSH_MESSAGE = "[keiko] client diagnostic delivery loss summary"; //
 
 export function flushClientDiagnosticLoss(): void {
   const loss = takeClientDiagnosticLoss();
-  if (loss === undefined) return;
-  restoreClientDiagnosticLoss(loss);
-  sendClientDiagnostic(LOSS_FLUSH_MESSAGE, { kind: "other" });
+  if (loss !== undefined) sendClientDiagnostic(LOSS_FLUSH_MESSAGE, { kind: "other" }, loss);
 }
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
