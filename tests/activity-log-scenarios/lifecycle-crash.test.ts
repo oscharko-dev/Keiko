@@ -71,7 +71,7 @@ describe("Activity Log scenario: lifecycle/crash", () => {
         },
         { timeout: 15_000 },
       );
-      const trace = expectActivityLogScenario("lifecycle-crash.crash", {
+      const trace = await expectActivityLogScenario("lifecycle-crash.crash", {
         stateDir,
         startedAtMs,
         expectedOps: ["process.fatal", "process.exiting"],
@@ -101,20 +101,20 @@ describe("Activity Log scenario: lifecycle/crash", () => {
       const lines = readPersistedActivityLog(stateDir).split("\n").filter(Boolean);
       const withoutFatal = lines.filter((line) => !line.includes('"op":"process.fatal"'));
       expect(withoutFatal).toHaveLength(lines.length - 1);
-      expect(() =>
+      await expect(
         expectActivityLogScenario("lifecycle-crash.crash", {
           stateDir: legacyLogCopy(withoutFatal),
           startedAtMs,
           expectedOps: ["process.fatal", "process.exiting"],
         }),
-      ).toThrow(/process\.fatal persisted in causal order/u);
-      expect(() =>
+      ).rejects.toThrow(/process\.fatal persisted in causal order/u);
+      await expect(
         expectActivityLogScenario("lifecycle-crash.crash", {
           stateDir: legacyLogCopy([...lines.slice(0, 1), "{not a record", ...lines.slice(1)]),
           startedAtMs,
           expectedOps: ["process.fatal", "process.exiting"],
         }),
-      ).toThrow(/evidence integrity/u);
+      ).rejects.toThrow(/evidence integrity/u);
     } finally {
       cleanup();
     }

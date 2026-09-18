@@ -307,16 +307,24 @@ interface IncidentSelectionPart {
 }
 
 // A registered failure selects its causal closure; a user report also selects its pinned window and
-// takes every correlation in it as a root (#3533's descriptor references, resolved here).
+// takes every correlation in it as a root (#3533's descriptor references, resolved here). Every
+// incident record pins a bounded window regardless of trigger (#3533's candidate creation), but a
+// registered failure with no correlation of its own (a bare diagnostic op, e.g. an LSP spawn
+// failure logged with no request in flight) has no root to walk a closure from at all: without its
+// own window as a fallback, that incident would resolve to nothing ever again, even though its
+// segments stayed pinned. Fall back to the window only then, so a correlated failure keeps
+// selecting precisely its own closure (never a sibling merely sharing the time window).
 function incidentPart(
   server: LoadedServer,
   stateDir: string,
   record: SupportIncidentRecord,
 ): IncidentSelectionPart {
   const userReport = record.trigger === "user-report";
+  const roots = incidentRoots(record);
+  const needsWindowFallback = userReport || roots.length === 0;
   return {
-    roots: incidentRoots(record),
-    windows: userReport ? [incidentWindow(server, stateDir, record)] : [],
+    roots,
+    windows: needsWindowFallback ? [incidentWindow(server, stateDir, record)] : [],
     declaredClasses: userReport ? [] : activityLogFailureClassesOf([record.fingerprint.op]),
     userReport,
   };

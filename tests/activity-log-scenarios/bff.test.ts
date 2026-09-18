@@ -337,7 +337,7 @@ describe("Activity Log scenario: bff", () => {
     await driveCancelledBody(ids.cancelled);
     await driveFailedBody(ids.failed);
 
-    const trace = expectActivityLogScenario("bff.crash", {
+    const trace = await expectActivityLogScenario("bff.crash", {
       stateDir,
       startedAtMs,
       expectedOps: [
@@ -351,7 +351,7 @@ describe("Activity Log scenario: bff", () => {
     expectHttpRequestBodyEvidence(stateDir, ids);
   });
 
-  it("drives a request's collaborator failure and its close line to a complete dependency-failure record", () => {
+  it("drives a request's collaborator failure and its close line to a complete dependency-failure record", async () => {
     const startedAtMs = Date.now();
     const requestCorrelationId = "bff-dependency-failure-request";
     const secondCorrelationId = "bff-dependency-failure-knowledge";
@@ -359,7 +359,7 @@ describe("Activity Log scenario: bff", () => {
     driveDependencyFailureRequest(requestCorrelationId);
     driveSecondCollaboratorFailure(secondCorrelationId);
 
-    const trace = expectActivityLogScenario("bff.dependency-failure", {
+    const trace = await expectActivityLogScenario("bff.dependency-failure", {
       stateDir,
       startedAtMs,
       expectedOps: ["server.diagnostic.failure", "request"],
@@ -370,7 +370,7 @@ describe("Activity Log scenario: bff", () => {
     expectDependencyFailureEvidence(stateDir, requestCorrelationId, secondCorrelationId);
   });
 
-  it("drives chat admission and PR-description turn authority rejections to a complete rejection record", () => {
+  it("drives chat admission and PR-description turn authority rejections to a complete rejection record", async () => {
     const startedAtMs = Date.now();
     const ids: ChatRejectionScenarioIds = {
       creation: "bff-rejection-creation",
@@ -383,7 +383,7 @@ describe("Activity Log scenario: bff", () => {
     driveRejectedChatSend(ids.send);
     driveDeniedPrDescriptionTurn(ids.turn, relationshipId);
 
-    const trace = expectActivityLogScenario("bff.rejection", {
+    const trace = await expectActivityLogScenario("bff.rejection", {
       stateDir,
       startedAtMs,
       expectedOps: [

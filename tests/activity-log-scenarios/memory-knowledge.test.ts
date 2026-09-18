@@ -350,7 +350,7 @@ describe("Activity Log scenario: memory-knowledge", () => {
 
   it("cancels an in-flight embedding batch and reaches a complete crash trace", async () => {
     const { startedAtMs } = await runCrashFixture(stateDir);
-    const trace = expectActivityLogScenario("memory-knowledge.crash", {
+    const trace = await expectActivityLogScenario("memory-knowledge.crash", {
       stateDir,
       startedAtMs,
       expectedOps: ["embedding.batch.transport-selected", "embedding.batch.cancelled"],
@@ -360,7 +360,7 @@ describe("Activity Log scenario: memory-knowledge", () => {
 
   it("fails connected-context retrieval and reaches a complete dependency-failure trace", async () => {
     const { startedAtMs } = await runDependencyFailureFixture(stateDir);
-    const trace = expectActivityLogScenario("memory-knowledge.dependency-failure", {
+    const trace = await expectActivityLogScenario("memory-knowledge.dependency-failure", {
       stateDir,
       startedAtMs,
       expectedOps: ["search.connected-context.started", "search.connected-context.failed"],
@@ -370,7 +370,7 @@ describe("Activity Log scenario: memory-knowledge", () => {
 
   it("truncates discovery at its configured bound and reaches a complete loss trace", async () => {
     const { startedAtMs } = await runLossFixture(stateDir);
-    const trace = expectActivityLogScenario("memory-knowledge.loss", {
+    const trace = await expectActivityLogScenario("memory-knowledge.loss", {
       stateDir,
       startedAtMs,
       expectedOps: [
@@ -384,7 +384,7 @@ describe("Activity Log scenario: memory-knowledge", () => {
 
   it("rejects a mismatched embedding identity and reaches a complete rejection trace", async () => {
     const { startedAtMs } = await runRejectionFixture(stateDir);
-    const trace = expectActivityLogScenario("memory-knowledge.rejection", {
+    const trace = await expectActivityLogScenario("memory-knowledge.rejection", {
       stateDir,
       startedAtMs,
       expectedOps: [

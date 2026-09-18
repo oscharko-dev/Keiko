@@ -125,7 +125,7 @@ describe("Activity Log scenario: model-gateway", () => {
       break;
     }
 
-    const trace = expectActivityLogScenario("model-gateway.crash", {
+    const trace = await expectActivityLogScenario("model-gateway.crash", {
       stateDir,
       startedAtMs,
       expectedOps: ["gateway.stream.started", "gateway.stream.abandoned"],
@@ -151,7 +151,7 @@ describe("Activity Log scenario: model-gateway", () => {
 
     await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
 
-    const trace = expectActivityLogScenario("model-gateway.dependency-failure", {
+    const trace = await expectActivityLogScenario("model-gateway.dependency-failure", {
       stateDir,
       startedAtMs,
       expectedOps: [
@@ -188,7 +188,7 @@ describe("Activity Log scenario: model-gateway", () => {
     await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
     await expect(gateway.chat(REQUEST)).rejects.toThrow();
 
-    const trace = expectActivityLogScenario("model-gateway.rejection", {
+    const trace = await expectActivityLogScenario("model-gateway.rejection", {
       stateDir,
       startedAtMs,
       expectedOps: [
@@ -233,7 +233,7 @@ describe("Activity Log scenario: model-gateway", () => {
 
     await expect(gateway.chat(REQUEST)).resolves.toMatchObject({ content: "answer" });
 
-    const trace = expectActivityLogScenario("model-gateway.loss", {
+    const trace = await expectActivityLogScenario("model-gateway.loss", {
       stateDir,
       startedAtMs,
       expectedOps: ["gateway.log.sink-failed", "gateway.chat.started", "gateway.chat.completed"],

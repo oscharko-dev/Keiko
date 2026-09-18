@@ -130,7 +130,7 @@ describe("Activity Log scenario: lifecycle-crash storage lifecycle", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("prunes a stale legacy archive on the first segment open, fully evidenced", () => {
+  it("prunes a stale legacy archive on the first segment open, fully evidenced", async () => {
     stateDir = tempStateDir("keiko-scenario-retention-");
     const logsDir = join(stateDir, "logs");
     mkdirSync(logsDir, { recursive: true, mode: 0o700 });
@@ -144,7 +144,7 @@ describe("Activity Log scenario: lifecycle-crash storage lifecycle", () => {
     const sink = createFileServerLogSink(stateDir, { env });
     logMemoryAuditStateCacheSeeded(sink, undefined, 3);
 
-    const trace = expectActivityLogScenario("lifecycle-crash.dependency-failure", {
+    const trace = await expectActivityLogScenario("lifecycle-crash.dependency-failure", {
       stateDir,
       startedAtMs,
       expectedOps: ["activity-log.retention.pruned"],
@@ -170,7 +170,7 @@ describe("Activity Log scenario: lifecycle-crash storage lifecycle", () => {
   // production crash-recovery path finds it on next startup: a sealed name and an `.active` twin of
   // the same segment, both already carrying the segment's real content (server-log.ts's own
   // `recoverOrphanedSegments` fault-injection tests build the fixture the same way).
-  it("finishes a seal interrupted between its link and its unlink, evidenced as a lossless recovery", () => {
+  it("finishes a seal interrupted between its link and its unlink, evidenced as a lossless recovery", async () => {
     stateDir = tempStateDir("keiko-scenario-segment-recovery-");
     const logsDir = join(stateDir, "logs");
     mkdirSync(logsDir, { recursive: true, mode: 0o700 });
@@ -221,7 +221,7 @@ describe("Activity Log scenario: lifecycle-crash storage lifecycle", () => {
     logMemoryAuditStateCacheSeeded(createFileServerLogSink(stateDir, { env }), undefined, 1);
 
     expect(lstatSync(sealedPath).nlink).toBe(1);
-    const trace = expectActivityLogScenario("lifecycle-crash.loss", {
+    const trace = await expectActivityLogScenario("lifecycle-crash.loss", {
       stateDir,
       startedAtMs,
       expectedOps: ["activity-log.segment.recovered"],
@@ -262,7 +262,7 @@ describe("Activity Log scenario: runtime-packages", () => {
       );
       expect(code).toBe(1);
 
-      const trace = expectActivityLogScenario("runtime-packages.dependency-failure", {
+      const trace = await expectActivityLogScenario("runtime-packages.dependency-failure", {
         stateDir: activityStateDir,
         startedAtMs,
         expectedOps: ["cli.audit.started", "cli.audit.failed"],
@@ -291,7 +291,7 @@ describe("Activity Log scenario: runtime-packages", () => {
     };
   }
 
-  it("self-reports a keiko-security log sink failure as a fully evidenced loss", () => {
+  it("self-reports a keiko-security log sink failure as a fully evidenced loss", async () => {
     const stateDir = tempStateDir("keiko-scenario-security-log-sink-");
     try {
       const sink = createCliSecurityLogSink(stateDir, flakyOnceSinkFactory);
@@ -302,7 +302,7 @@ describe("Activity Log scenario: runtime-packages", () => {
         level: "warn",
       });
 
-      const trace = expectActivityLogScenario("runtime-packages.loss", {
+      const trace = await expectActivityLogScenario("runtime-packages.loss", {
         stateDir,
         startedAtMs,
         expectedOps: ["security.log.sink-failed"],
@@ -325,7 +325,7 @@ describe("Activity Log scenario: runtime-packages", () => {
   // own line would need either an unknown correlation (failing the causal-known check) or a known
   // one with no matching start (failing lifecycle-start-missing). Issuing a real candidate first and
   // rejecting it with a mismatched execution token gives the rejection a genuine causal parent.
-  it("rejects a claim-mismatch consume on a known candidate, fully evidenced as a rejection", () => {
+  it("rejects a claim-mismatch consume on a known candidate, fully evidenced as a rejection", async () => {
     const stateDir = tempStateDir("keiko-scenario-update-candidate-");
     try {
       const authority = createUpdateCandidateAuthority({
@@ -350,7 +350,7 @@ describe("Activity Log scenario: runtime-packages", () => {
       );
       expect(outcome).toEqual({ ok: false, reason: "claim-mismatch" });
 
-      const trace = expectActivityLogScenario("runtime-packages.rejection", {
+      const trace = await expectActivityLogScenario("runtime-packages.rejection", {
         stateDir,
         startedAtMs,
         expectedOps: ["update.candidate.issued", "update.candidate.rejected"],

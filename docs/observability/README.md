@@ -355,12 +355,18 @@ every surface into each applicable failure mode. The real file writer runs under
 `KEIKO_STATE_DIR`. Each scenario then calls
 `expectActivityLogScenario("<surface>.<mode>", { stateDir, startedAtMs, expectedOps })` from
 `tests/support/activity-log-scenario.ts`. That call reconstructs the persisted log with the analyzer
-and asserts four things:
+and asserts five things:
 
 - only supported evidence;
 - the expected operations in causal order;
 - a failure class that the inventory maps to the scenario;
-- a `complete` projection.
+- a `complete` projection;
+- (#3533 acceptance) the local incident candidate the scenario's failure creates through the same
+  production trigger (`recordRegisteredFailureIncident`, or `recordUserReportedIncident` for a
+  scenario whose only evidence is an uncorrelated state signal, never itself a registered failure
+  op) pins a window whose #3531 query-engine selection (`keiko support query --incident`) contains
+  every line of that failure's own registered causal closure, proven against the same engine's
+  direct `--correlation-id` selection for that one correlation.
 
 Every failure class maps to the scenario of its surface and mode. There is no separate journey per
 class.

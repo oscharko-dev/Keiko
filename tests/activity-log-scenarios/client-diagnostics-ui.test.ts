@@ -104,7 +104,7 @@ describe("Activity Log scenario: client-diagnostics", () => {
     const response = await handleClientDiagnosticIngest(context(body));
     expect(response.status).toBe(204);
 
-    const trace = expectActivityLogScenario("client-diagnostics.dependency-failure", {
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
       stateDir,
       startedAtMs,
       expectedOps: ["client.diagnostic"],
@@ -143,7 +143,7 @@ describe("Activity Log scenario: client-diagnostics", () => {
     const shapeless = JSON.stringify({ message: "no timestamp" });
     expect((await handleClientDiagnosticIngest(context(shapeless))).status).toBe(400);
 
-    const trace = expectActivityLogScenario("client-diagnostics.loss", {
+    const trace = await expectActivityLogScenario("client-diagnostics.loss", {
       stateDir,
       startedAtMs,
       expectedOps: ["client.diagnostic.rejected"],
@@ -235,7 +235,7 @@ describe("Activity Log scenario: ui", () => {
     // Write order: the initial SIGTERM request, then the denied SIGKILL inside escalation, then the
     // escalation decision itself (`escalateForcedStop` logs the disposition AFTER attempting the
     // forced signal) — `expectOrderedSubsequence` enforces this exact causal order.
-    const trace = expectActivityLogScenario("ui.crash", {
+    const trace = await expectActivityLogScenario("ui.crash", {
       stateDir,
       startedAtMs,
       expectedOps: [
@@ -278,7 +278,7 @@ describe("Activity Log scenario: ui", () => {
       stop();
     }
 
-    const trace = expectActivityLogScenario("ui.dependency-failure", {
+    const trace = await expectActivityLogScenario("ui.dependency-failure", {
       stateDir,
       startedAtMs,
       expectedOps: ["process.heartbeat"],
