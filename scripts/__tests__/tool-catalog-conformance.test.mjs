@@ -321,6 +321,12 @@ describe("compiler measurements reuse the existing sample and percentile convent
       join(ROOT, "scripts/tool-catalog-performance-budget.json"),
       join(ROOT, "docs/release/3415-tool-catalog-perf-evidence.json"),
     ]);
+    expect(() =>
+      regenerateArguments("/repo-root", {
+        recalibrate: true,
+        rebindCaseIdentity: true,
+      }),
+    ).toThrow("choose one tool-catalog performance evidence migration");
   });
 
   it("refuses to measure a working tree that the clean clone cannot reproduce", () => {
@@ -717,6 +723,12 @@ describe("compiler measurements reuse the existing sample and percentile convent
           measure: async () => driftedRaw,
         }),
       ).rejects.toThrow("catalog case-identity rebind reference environment differs");
+      await expect(
+        rebindToolCatalogPerformanceCaseIdentity(root, {
+          ...dependencies,
+          measure: async () => driftedRaw,
+        }),
+      ).rejects.toThrow("catalog case identity did not change");
 
       const changedToolCount = structuredClone(driftedRaw);
       changedToolCount.cases["legacy-native-6-tool"].toolCount += 1;
@@ -730,6 +742,17 @@ describe("compiler measurements reuse the existing sample and percentile convent
           measure: async () => changedToolCount,
         }),
       ).rejects.toThrow("legacy-native-6-tool tool count differs from calibration");
+
+      const budgetPath = join(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
+      const invalidBudget = JSON.parse(readFileSync(budgetPath, "utf8"));
+      invalidBudget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs += 1;
+      writeFileSync(budgetPath, `${JSON.stringify(invalidBudget, null, 2)}\n`);
+      await expect(
+        rebindToolCatalogPerformanceCaseIdentity(root, {
+          ...dependencies,
+          measure: async () => driftedRaw,
+        }),
+      ).rejects.toThrow("budget exceeds its reviewed ceiling");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
