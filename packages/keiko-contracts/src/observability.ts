@@ -736,6 +736,13 @@ export const ACTIVITY_LOG_EVENT_REGISTRATION = Symbol.for(
   "@oscharko-dev/keiko-contracts/activity-log-event-registration",
 );
 
+const ACTIVITY_LOG_EVENT_REJECTION = Symbol.for(
+  "@oscharko-dev/keiko-contracts/activity-log-event-rejection",
+);
+const ACTIVITY_LOG_EVENT_FAILURE_KIND_SET: ReadonlySet<unknown> = new Set(
+  ACTIVITY_LOG_EVENT_FAILURE_KINDS,
+);
+
 export function activityLogEventRegistration(
   event: object,
 ): ActivityLogOperationRegistration | undefined {
@@ -744,6 +751,15 @@ export function activityLogEventRegistration(
   ];
   return registration !== null && typeof registration === "object"
     ? (registration as ActivityLogOperationRegistration)
+    : undefined;
+}
+
+function activityLogEventRejection(
+  event: Readonly<Record<PropertyKey, unknown>>,
+): ActivityLogEventFailureKind | undefined {
+  const rejection: unknown = event[ACTIVITY_LOG_EVENT_REJECTION];
+  return ACTIVITY_LOG_EVENT_FAILURE_KIND_SET.has(rejection)
+    ? (rejection as ActivityLogEventFailureKind)
     : undefined;
 }
 
@@ -923,6 +939,8 @@ function registeredEventFields(
 export function validateRegisteredActivityLogEvent(
   event: Readonly<Record<PropertyKey, unknown>>,
 ): ActivityLogOperationRegistration {
+  const rejection = activityLogEventRejection(event);
+  if (rejection !== undefined) throw new ActivityLogEventValidationError(rejection);
   const registration = activityLogEventRegistration(event);
   if (registration === undefined) {
     throw new ActivityLogEventValidationError("unregistered-operation");
@@ -935,6 +953,30 @@ export function validateRegisteredActivityLogEvent(
   validateActivityLogEnvelope(canonical, registeredEventEnvelope(event));
   validateActivityLogFields(canonical, registeredEventFields(event));
   return canonical;
+}
+
+type BoundActivityLogEvent<Registration extends ActivityLogOperationRegistration> =
+  RegisteredActivityLogEvent<Registration> &
+    ActivityLogEventEnvelope & { readonly extra: ActivityLogFields<Registration> };
+
+function rejectedActivityLogEvent<Registration extends ActivityLogOperationRegistration>(
+  error: unknown,
+): BoundActivityLogEvent<Registration> {
+  const rejection =
+    error instanceof ActivityLogEventValidationError ? error.kind : "registration-mismatch";
+  const event = {
+    level: "error",
+    category: "diagnostic",
+    op: "server-log.write-failed",
+    extra: { completeness: "unknown", loss: "event-dropped" },
+  };
+  Object.defineProperty(event, ACTIVITY_LOG_EVENT_REJECTION, {
+    value: rejection,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return event as unknown as BoundActivityLogEvent<Registration>;
 }
 
 /**
@@ -969,9 +1011,9 @@ export function defineActivityLogOperation<
 }
 
 /**
- * Binds an emitted field set to its registered operation. Runtime schema validation is added at
- * the owning serializer in the next migration slice; this typed binding lets discovery fail
- * closed now instead of inferring operations from unrelated object literals.
+ * Binds an emitted field set to its registered operation. Invalid runtime values become a
+ * body-free rejection sentinel: the physical sink revalidates it, drops it, and emits the one
+ * independent rejection notice without letting observability change the business operation.
  */
 export function activityLogEvent<
   const Registration extends ActivityLogOperationRegistration & {
@@ -982,27 +1024,30 @@ export function activityLogEvent<
   registration: Registration,
   envelope: ActivityLogEventEnvelope,
   fields: ExactActivityLogFields<Registration, Fields>,
-): RegisteredActivityLogEvent<Registration> &
-  ActivityLogEventEnvelope & { readonly extra: ActivityLogFields<Registration> } {
-  const normalizedEnvelope = normalizeActivityLogEnvelope(registration, envelope);
-  validateActivityLogEnvelope(registration, normalizedEnvelope);
-  const normalizedFields = {
-    completeness: "complete",
-    loss: "none",
-    ...fields,
-  } as ActivityLogFields<Registration>;
-  validateActivityLogFields(registration, normalizedFields);
-  const event = {
-    ...normalizedEnvelope,
-    category: registration.category,
-    ["op"]: registration.op,
-    extra: normalizedFields,
-  };
-  Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
-    value: registration,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
-  return event;
+): BoundActivityLogEvent<Registration> {
+  try {
+    const normalizedEnvelope = normalizeActivityLogEnvelope(registration, envelope);
+    validateActivityLogEnvelope(registration, normalizedEnvelope);
+    const normalizedFields = {
+      completeness: "complete",
+      loss: "none",
+      ...fields,
+    } as ActivityLogFields<Registration>;
+    validateActivityLogFields(registration, normalizedFields);
+    const event = {
+      ...normalizedEnvelope,
+      category: registration.category,
+      ["op"]: registration.op,
+      extra: normalizedFields,
+    };
+    Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
+      value: registration,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+    return event;
+  } catch (error) {
+    return rejectedActivityLogEvent<Registration>(error);
+  }
 }

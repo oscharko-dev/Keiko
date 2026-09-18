@@ -31,7 +31,9 @@ function emitFixtureValue(contract: ActivityLogFieldContract, value: unknown): v
     proofIds: ["registry-fixture-data-class"],
     releaseImpact: "none",
   });
-  activityLogEvent(operation, {}, { value } as never);
+  const event = activityLogEvent(operation, {}, { value } as never);
+  const emittedOp: unknown = Reflect.get(event, "op");
+  if (emittedOp !== operation.op) validateRegisteredActivityLogEvent(event);
 }
 
 function canonicalFixtureRegistration(): ActivityLogOperationRegistration {
@@ -185,15 +187,19 @@ describe("typed Activity Log operation registration", () => {
     expect(assertInvalidFieldTypes).toBeTypeOf("function");
 
     expect(() =>
-      activityLogEvent(operation, { correlationId: "registry-fixture-correlation" }, {
-        itemCount: 2,
-        rawBody: "secret",
-      } as never),
+      validateRegisteredActivityLogEvent(
+        activityLogEvent(operation, { correlationId: "registry-fixture-correlation" }, {
+          itemCount: 2,
+          rawBody: "secret",
+        } as never),
+      ),
     ).toThrow(new ActivityLogEventValidationError("unknown-field"));
     expect(() =>
-      activityLogEvent(operation, { correlationId: "registry-fixture-correlation" }, {
-        itemCount: "two",
-      } as never),
+      validateRegisteredActivityLogEvent(
+        activityLogEvent(operation, { correlationId: "registry-fixture-correlation" }, {
+          itemCount: "two",
+        } as never),
+      ),
     ).toThrow(new ActivityLogEventValidationError("invalid-field-type"));
   });
 
