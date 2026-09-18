@@ -143,6 +143,10 @@ const SUPPORT_INCIDENT_CREATED_OPERATION = defineActivityLogOperation({
     },
     pinnedSegmentCount: { type: "integer", dataClass: "count", required: true },
     pinnedBytes: { type: "integer", dataClass: "count", required: true },
+    // True when a sealed segment inside the window, visible just before the pin was published, was
+    // already gone by the time the pin actually covered it (a maintenance pass raced the gap): the
+    // window is then never reported as a clean "pinned" even though `pinStatus` says "pinned".
+    evidenceLostBeforePin: { type: "boolean", dataClass: "closed-enum", required: true },
     windowSeconds: { type: "integer", dataClass: "count", required: true },
     expiresInSeconds: { type: "integer", dataClass: "count", required: true },
     openIncidentCount: OPEN_COUNT_FIELD,
@@ -305,10 +309,14 @@ function createdEvidence(
         pinStatus: record.pin.status,
         pinnedSegmentCount: record.pin.pinnedSegmentCount,
         pinnedBytes: record.pin.pinnedBytes,
+        evidenceLostBeforePin: record.pin.evidenceLostBeforePin,
         windowSeconds: Math.ceil((record.window.toMs - record.window.fromMs) / 1000),
         expiresInSeconds: Math.ceil((record.expiresAtMs - record.createdAtMs) / 1000),
         openIncidentCount,
-        completeness: record.pin.status === "pinned" ? "complete" : "partial",
+        completeness:
+          record.pin.status === "pinned" && !record.pin.evidenceLostBeforePin
+            ? "complete"
+            : "partial",
       },
     ),
   );
@@ -525,6 +533,11 @@ interface CandidateDraft {
   readonly input: DefectFingerprintInput;
   readonly correlation: SupportIncidentCorrelation;
   readonly evidenceCorrelationId: string;
+  // Set only by the registered-failure trigger (observeSupportIncidentTrigger): the window pin it
+  // already published synchronously, in the same turn as the triggering failure write, before any
+  // later maintenance pass could run against an unprotected window. publishCandidate reuses it
+  // instead of pinning again; any outcome other than "created" releases it (releasePrePinned).
+  readonly prePinned?: SupportIncidentPin | undefined;
 }
 
 interface CandidateContext {
@@ -544,14 +557,61 @@ function incidentWindow(nowMs: number): SupportIncidentRecord["window"] {
 
 function pinFromResult(result: ActivityLogPinResult): SupportIncidentPin {
   if (result.status === "rejected") {
-    return { status: "rejected", pinnedSegmentCount: 0, pinnedBytes: 0 };
+    return {
+      status: "rejected",
+      pinnedSegmentCount: 0,
+      pinnedBytes: 0,
+      evidenceLostBeforePin: false,
+    };
   }
   return {
     status: result.quotaStatus === "within-quota" ? "pinned" : "quota-exceeded",
     pinId: result.pinId,
     pinnedSegmentCount: result.pinnedSegmentCount,
     pinnedBytes: result.pinnedBytes,
+    evidenceLostBeforePin: false,
   };
+}
+
+// A synthetic pin record used only to reuse `activityLogPinCovers`'s coverage rule (the same rule
+// retention and the pin API apply) for a window that may not have a real, or not yet a final, pin
+// id. Only `scope` is ever read by that rule; the other fields are structural filler.
+function windowCoverageRecord(
+  window: SupportIncidentRecord["window"],
+  pinId: string | undefined,
+): ActivityLogPinRecord {
+  return {
+    schemaVersion: 1,
+    pinId: pinId ?? "0".repeat(24),
+    reason: "incident",
+    createdAtMs: window.incidentAtMs,
+    expiresAtMs: window.incidentAtMs + 1,
+    scope: { kind: "window", fromMs: window.fromMs, toMs: window.toMs },
+  };
+}
+
+// The sealed segments the Activity Log directory currently shows overlapping `window`. Sealed
+// only: an active segment is never a retention target (`deletable` in activity-log-store.ts
+// excludes it), so only a sealed name can meaningfully disappear between two snapshots.
+function overlappingSealedSegmentNames(
+  stateDir: string,
+  window: SupportIncidentRecord["window"],
+  correlationId: string,
+): ReadonlySet<string> {
+  const coverage = windowCoverageRecord(window, undefined);
+  try {
+    return new Set(
+      listActivityLogDirectory(join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME))
+        .files.filter(isActivityLogSegmentEntry)
+        .filter((entry) => entry.file.kind === "sealed" && activityLogPinCovers(coverage, entry))
+        .map((entry) => entry.file.name),
+    );
+  } catch (error) {
+    // Best-effort: an unreadable directory here only skips the evidenceLostBeforePin check below.
+    // The pin request itself still runs its own, separately reported, directory read.
+    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_CREATED_OPERATION.op, correlationId });
+    return new Set();
+  }
 }
 
 function buildRecord(
@@ -592,12 +652,26 @@ function quotaAllows(
   return automatic < MAX_REGISTERED_FAILURE_INCIDENTS;
 }
 
+// Releases a window pin a draft already published before dedup or quota was decided (the
+// registered-failure trigger always pre-pins; see observeSupportIncidentTrigger). Nothing will
+// reference it once the candidate is rejected or turns out to be a duplicate, so it must not sit
+// and hold its segments for no reason until its own TTL. Never throws: `releaseWindowPin` mirrors
+// `releaseActivityLogPin`'s own closed, evidenced-rejection contract.
+function releasePrePinned(context: CandidateContext, draft: CandidateDraft): void {
+  if (draft.prePinned === undefined) return;
+  releaseWindowPin(context.stateDir, draft.prePinned.pinId, {
+    correlationId: draft.evidenceCorrelationId,
+    env: context.env,
+  });
+}
+
 function reject(
   context: CandidateContext,
   draft: CandidateDraft,
   reason: SupportIncidentRejection,
   openIncidentCount: number,
 ): SupportIncidentCreation {
+  releasePrePinned(context, draft);
   rejectedEvidence(context.stateDir, {
     reason,
     trigger: draft.trigger,
@@ -612,31 +686,45 @@ const REJECTED_PIN: SupportIncidentPin = {
   status: "rejected",
   pinnedSegmentCount: 0,
   pinnedBytes: 0,
+  evidenceLostBeforePin: false,
 };
 
-// Seals the active segment and pins the bounded window across every process instance, including
-// segments sealed later inside it. A failed pin never blocks the candidate: it is recorded as
-// `rejected` in the record and in `support.incident.created`, so sufficiency can say so.
-function pinIncidentWindow(draft: CandidateDraft, context: CandidateContext): SupportIncidentPin {
-  const window = incidentWindow(context.nowMs);
+/**
+ * Publishes the Activity Log retention pin for the incident window and seals the caller's own
+ * active segment as part of that request (#3530). Also detects the residual race a synchronous
+ * caller cannot fully close on its own: a sealed segment inside the window, visible in the
+ * directory just before this call, that is already gone by the time the pin actually covers it —
+ * for example another process sharing `stateDir` running retention in the same narrow gap. That
+ * loss is reported as `evidenceLostBeforePin` instead of a silent, clean `pinned`. A failed pin
+ * never blocks the candidate: it is recorded as `rejected`, so sufficiency can say so.
+ */
+function pinIncidentWindow(
+  stateDir: string,
+  nowMs: number,
+  correlationId: string,
+  env: ServerLogEnv,
+): SupportIncidentPin {
+  const window = incidentWindow(nowMs);
+  const before = overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
-    return pinFromResult(
+    const pin = pinFromResult(
       pinActivityLogWindow(
-        context.stateDir,
+        stateDir,
         {
           scope: { kind: "window", fromMs: window.fromMs, toMs: window.toMs },
-          expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
+          expiresAtMs: nowMs + SUPPORT_INCIDENT_TTL_MS,
           reason: "incident",
-          correlationId: draft.evidenceCorrelationId,
+          correlationId,
         },
-        context.env,
+        env,
       ),
     );
+    if (pin.status === "rejected" || before.size === 0) return pin;
+    const after = overlappingSealedSegmentNames(stateDir, window, correlationId);
+    const evidenceLostBeforePin = [...before].some((name) => !after.has(name));
+    return { ...pin, evidenceLostBeforePin };
   } catch (error) {
-    reportServerLogFailure(error, {
-      op: SUPPORT_INCIDENT_CREATED_OPERATION.op,
-      correlationId: draft.evidenceCorrelationId,
-    });
+    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_CREATED_OPERATION.op, correlationId });
     return REJECTED_PIN;
   }
 }
@@ -646,7 +734,10 @@ function publishCandidate(
   context: CandidateContext,
   entries: readonly SupportIncidentStoreEntry[],
 ): SupportIncidentCreation {
-  const record = buildRecord(draft, context, pinIncidentWindow(draft, context));
+  const pin =
+    draft.prePinned ??
+    pinIncidentWindow(context.stateDir, context.nowMs, draft.evidenceCorrelationId, context.env);
+  const record = buildRecord(draft, context, pin);
   const payload = serializeSupportIncidentRecord(record);
   if (payload === undefined) return reject(context, draft, "record-too-large", entries.length);
   try {
@@ -704,6 +795,7 @@ function createCandidate(
   }
   const duplicate = openDuplicate(entries, draft, context.defectFingerprint);
   if (duplicate !== undefined) {
+    releasePrePinned(context, draft);
     deduplicatedEvidence(stateDir, duplicate, draft.evidenceCorrelationId, entries.length);
     return { status: "deduplicated", record: duplicate };
   }
@@ -711,6 +803,18 @@ function createCandidate(
     return reject(context, draft, "quota-exhausted", entries.length);
   }
   return publishCandidate(draft, context, entries);
+}
+
+function registeredFailureDraft(evidence: SupportIncidentFailureEvidence): CandidateDraft {
+  const correlation = failureCorrelation(evidence);
+  return {
+    trigger: "registered-failure",
+    input: failureFingerprintInput(evidence),
+    correlation,
+    // The failing operation's own correlation (validated), so the candidate's lines join it.
+    evidenceCorrelationId:
+      correlation.childCorrelationIds[0] ?? correlation.rootCorrelationId ?? randomUUID(),
+  };
 }
 
 /**
@@ -723,19 +827,7 @@ export function recordRegisteredFailureIncident(
   options: SupportIncidentOptions = {},
 ): SupportIncidentCreation | undefined {
   if (!supportIncidentEligibleOperation(evidence.op)) return undefined;
-  const correlation = failureCorrelation(evidence);
-  return createCandidate(
-    stateDir,
-    {
-      trigger: "registered-failure",
-      input: failureFingerprintInput(evidence),
-      correlation,
-      // The failing operation's own correlation (validated), so the candidate's lines join it.
-      evidenceCorrelationId:
-        correlation.childCorrelationIds[0] ?? correlation.rootCorrelationId ?? randomUUID(),
-    },
-    options,
-  );
+  return createCandidate(stateDir, registeredFailureDraft(evidence), options);
 }
 
 /**
@@ -838,14 +930,7 @@ export function supportIncidentSegmentFiles(
   stateDir: string,
   record: SupportIncidentRecord,
 ): readonly SupportIncidentSegmentFile[] {
-  const coverage: ActivityLogPinRecord = {
-    schemaVersion: 1,
-    pinId: record.pin.pinId ?? "0".repeat(24),
-    reason: "incident",
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-    scope: { kind: "window", fromMs: record.window.fromMs, toMs: record.window.toMs },
-  };
+  const coverage = windowCoverageRecord(record.window, record.pin.pinId);
   return listActivityLogDirectory(join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME))
     .files.filter(isActivityLogSegmentEntry)
     .filter((entry) => activityLogPinCovers(coverage, entry))
@@ -859,18 +944,30 @@ export function supportIncidentSegmentFiles(
 
 export type SupportIncidentDismissal = "dismissed" | "not-found" | "failed";
 
+// Shared by dismissal (an existing record's own pin) and by a candidate outcome other than
+// "created" that must release a pin it published pre-emptively (releasePrePinned above). Never
+// throws: an absent pin id is `not-pinned`, and `releaseActivityLogPin` closes every other outcome
+// into `released` or a rejection on its own.
+function releaseWindowPin(
+  stateDir: string,
+  pinId: string | undefined,
+  context: { readonly correlationId: string; readonly env: ServerLogEnv },
+): SupportIncidentPinRelease {
+  if (pinId === undefined) return "not-pinned";
+  const result = releaseActivityLogPin(
+    stateDir,
+    { pinId, correlationId: context.correlationId },
+    context.env,
+  );
+  return result.status === "released" ? "released" : "rejected";
+}
+
 function releaseIncidentPin(
   stateDir: string,
   record: SupportIncidentRecord,
   context: { readonly correlationId: string; readonly env: ServerLogEnv },
 ): SupportIncidentPinRelease {
-  if (record.pin.pinId === undefined) return "not-pinned";
-  const result = releaseActivityLogPin(
-    stateDir,
-    { pinId: record.pin.pinId, correlationId: context.correlationId },
-    context.env,
-  );
-  return result.status === "released" ? "released" : "rejected";
+  return releaseWindowPin(stateDir, record.pin.pinId, context);
 }
 
 /**
@@ -907,9 +1004,15 @@ export function dismissSupportIncident(
 // ─── The registered-failure trigger ────────────────────────────────────────────────────────────
 //
 // The Activity Log file sink calls `observeSupportIncidentTrigger` for every persisted line. The
-// hook only admits and queues: candidate creation (a store write plus a pin, which seals the active
-// segment) runs outside the sink's write path on the next turn of the event loop, and synchronously
-// on process exit so a failure that ends the process still becomes a candidate.
+// hook computes eligibility and, for an admitted failure, publishes the Activity Log retention pin
+// for its window SYNCHRONOUSLY, in the same turn as the triggering write: the window must be
+// protected before any later maintenance pass -- this process's own next segment admission, or a
+// second process sharing the same stateDir -- can run against it (a `setImmediate` deferral here
+// previously left exactly that gap; #3533 review). Only the rest of candidate creation (the
+// directory sweep, deduplication, the quota check, and the record write) runs outside the sink's
+// write path, on the next turn of the event loop, and synchronously on process exit so a failure
+// that ends the process still becomes a candidate. A duplicate or a rejected candidate releases the
+// pin the trigger already published (releasePrePinned) instead of leaving it to its own TTL.
 
 /** A process evaluates at most this many new candidates per rolling minute (all fingerprints). */
 export const MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE = 6;
@@ -917,7 +1020,10 @@ const MAX_REMEMBERED_FINGERPRINTS = 128;
 
 interface PendingCandidate {
   readonly stateDir: string;
-  readonly evidence: SupportIncidentFailureEvidence;
+  readonly draft: CandidateDraft;
+  // Captured at trigger time: the same instant the pin's own window was computed from, so the
+  // deferred record's window and createdAt/expiresAt line up with what was actually pinned.
+  readonly nowMs: number;
 }
 
 let triggerDepth = 0;
@@ -989,9 +1095,9 @@ function reportLostCandidate(error: unknown, correlationId: string | undefined):
 function createQueuedCandidate(pending: PendingCandidate): void {
   triggerDepth += 1;
   try {
-    recordRegisteredFailureIncident(pending.stateDir, pending.evidence);
+    createCandidate(pending.stateDir, pending.draft, { nowMs: pending.nowMs });
   } catch (error) {
-    reportLostCandidate(error, pending.evidence.correlationId);
+    reportLostCandidate(error, pending.draft.evidenceCorrelationId);
   } finally {
     triggerDepth -= 1;
   }
@@ -1014,16 +1120,20 @@ function scheduleDrain(): void {
 }
 
 /**
- * Called by the Activity Log file sink after it persisted `event`. Queues an incident candidate
- * for an eligible, admitted failure and returns; it never throws and never writes from inside the
- * sink's own write.
+ * Called by the Activity Log file sink after it persisted `event`. For an eligible, admitted
+ * failure, publishes the incident window's retention pin right now (before returning) and queues
+ * the rest of candidate creation; never throws. An ineligible or suppressed event does no
+ * filesystem work at all.
  */
 export function observeSupportIncidentTrigger(stateDir: string, event: ServerLogEvent): void {
   if (triggerDepth > 0 || event.level !== "error" || !triggerEnabled()) return;
   try {
     const evidence = admittedEvidence(event);
     if (evidence === undefined) return;
-    pendingCandidates.push({ stateDir, evidence });
+    const nowMs = Date.now();
+    const draft = registeredFailureDraft(evidence);
+    const pin = pinIncidentWindow(stateDir, nowMs, draft.evidenceCorrelationId, process.env);
+    pendingCandidates.push({ stateDir, draft: { ...draft, prePinned: pin }, nowMs });
     scheduleDrain();
   } catch (error) {
     reportLostCandidate(error, event.correlationId);

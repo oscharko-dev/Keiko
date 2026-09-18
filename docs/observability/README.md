@@ -605,9 +605,14 @@ A candidate is created in two ways:
   failure event; every report is its own occurrence.
 
 Each candidate pins the Activity Log from 15 minutes before to 5 minutes after the incident, across
-every process, including segments sealed later in that window. The pin expires with the candidate
-after 14 days, is released by `dismiss`, and holds only within `KEIKO_LOG_PIN_QUOTA_BYTES`; the
-candidate shows `pinned`, `quota-exceeded` or `rejected`.
+every process, including segments sealed later in that window. For the automatic trigger, that pin is
+published synchronously in the same turn as the failure that caused it, before any later maintenance
+pass — this process's own next segment admission, or another process sharing the state directory —
+can run against the window. The pin expires with the candidate after 14 days; it is released by
+`dismiss`, and also when a duplicate or a rejected candidate finds it no longer needs the window its
+trigger pre-published. It holds only within `KEIKO_LOG_PIN_QUOTA_BYTES`; the candidate shows
+`pinned`, `quota-exceeded` or `rejected`, plus `evidenceLostBeforePin` when a sealed segment inside
+the window was already gone by the time the pin actually covered it.
 
 | Command                               | What it does                                                 |
 | ------------------------------------- | ------------------------------------------------------------ |
