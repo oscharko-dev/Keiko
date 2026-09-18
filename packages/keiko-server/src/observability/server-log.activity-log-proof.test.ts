@@ -31,6 +31,7 @@ import {
 
 import {
   expectActivityLogProof,
+  expectActivityLogStderrProof,
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
@@ -41,6 +42,7 @@ import {
   formatServerLogLine,
   listActivityLogFiles,
   pinActivityLogWindow,
+  resetServerLogFailureNotices,
   serverLogProcessIdentity,
 } from "./server-log.js";
 import type { ServerLogIdentity } from "./server-log.js";
@@ -367,19 +369,31 @@ describe("Activity Log storage evidence proofs (#3532)", () => {
     });
   });
 
-  // `server-log.write-failed.stderr-line` (this operation's own emitted-failure notice) is NOT
-  // proven here. `SERVER_LOG_FAILURE_OPERATION` (this file, ~line 426) declares `compatibilityState`
-  // (values: ["incomplete"]) and `writerCapability` (values: ["unavailable"]) as its own required
-  // data fields — but both names are RESERVED v2-envelope identity fields
-  // (`RESERVED_FIELD_NAMES`, log-redaction.ts ~line 148-149) that every persistence/format path
-  // strips or overrides. On the real stderr path (`stderrEventRecord`, this file ~line 700, which
-  // never runs `redactLogFields`) the printed line therefore carries the DATA field's own
-  // `"compatibilityState":"incomplete"` — confirmed by driving `reportServerLogFailure` through the
-  // real mutation path above and reading the actual `process.stderr.write` text — which fails
-  // `tests/support/activity-log-proof.ts`'s `expectPersistedIdentity`, hard-coded to require
-  // `compatibilityState === "supported"` on every proof. This is a structural field-name collision
-  // in the operation's own registration, not a test gap: no event for this op, however produced,
-  // can ever satisfy both its own registration and the v2 identity check at the same time. See this
-  // suite's final report for the full defect writeup; `server-log.ts` is owned by another stream
-  // (this task's instructions) so it is reported, not patched, here.
+  // The write failure a mid-write swap causes never reaches the file: `reportServerLogFailure`
+  // writes it as the emergency stderr notice, an incomplete line of an unavailable writer.
+  it("writes the write-failed notice to stderr when a peer swaps the active segment", () => {
+    // Notices are throttled per window; the previous swap in this file already used this one.
+    resetServerLogFailureNotices();
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    swapHook.logsDir = logsDirOf(stateDir);
+    swapHook.armed = true;
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+
+    logGitChangeApply(sink, "corr-mutation-02", "preview");
+
+    const notices = stderrWrite.mock.calls
+      .map(([chunk]) => String(chunk))
+      .filter((text) => text.includes('"op":"server-log.write-failed"'));
+    expect(notices.length).toBeGreaterThan(0);
+    const notice = expectActivityLogStderrProof(
+      "server-log.write-failed.stderr-line",
+      notices[0] ?? "",
+    );
+    expect(notice).toMatchObject({
+      loss: "event-location-unknown",
+      compatibilityState: "incomplete",
+      writerCapability: "unavailable",
+    });
+    expect(readPersistedActivityLog(stateDir)).not.toContain('"op":"server-log.write-failed"');
+  });
 });

@@ -4,16 +4,17 @@
 // temporary KEIKO_STATE_DIR and reconstructs the persisted log through `keiko support analyze` to a
 // complete report (tests/support/activity-log-scenario.ts).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   _resetInstalledProcessGuardsForTests,
   installProcessGuards,
   type ProcessGuardSink,
 } from "../../packages/keiko-cli/src/process-guards.js";
+import { readPersistedActivityLog } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
 
 type FatalListener = (reason: unknown) => void;
@@ -82,4 +83,56 @@ describe("Activity Log scenario: lifecycle/crash", () => {
       cleanup();
     }
   });
+
+  // Mutation fixtures: the same production trace with one causal event removed, or with an
+  // unreadable line in it, must no longer pass as a complete scenario.
+  it("goes red when a causal event is missing or the evidence is corrupt", async () => {
+    const exit = vi.fn();
+    const { uncaught, cleanup } = installGuards({ err: vi.fn(), exit });
+    try {
+      const startedAtMs = Date.now();
+      uncaught?.(new TypeError("scenario-fault-injection"));
+      await vi.waitFor(
+        () => {
+          expect(exit).toHaveBeenCalledWith(1);
+        },
+        { timeout: 15_000 },
+      );
+      const lines = readPersistedActivityLog(stateDir).split("\n").filter(Boolean);
+      const withoutFatal = lines.filter((line) => !line.includes('"op":"process.fatal"'));
+      expect(withoutFatal.length).toBe(lines.length - 1);
+      expect(() =>
+        expectActivityLogScenario("lifecycle-crash.crash", {
+          stateDir: legacyLogCopy(withoutFatal),
+          startedAtMs,
+          expectedOps: ["process.fatal", "process.exiting"],
+        }),
+      ).toThrow(/process\.fatal persisted in causal order/u);
+      expect(() =>
+        expectActivityLogScenario("lifecycle-crash.crash", {
+          stateDir: legacyLogCopy([...lines.slice(0, 1), "{not a record", ...lines.slice(1)]),
+          startedAtMs,
+          expectedOps: ["process.fatal", "process.exiting"],
+        }),
+      ).toThrow(/evidence integrity/u);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+const legacyCopies: string[] = [];
+
+// A copy of mutated persisted lines as a legacy `server.log`, read back through the same
+// production reader the scenario helper uses.
+function legacyLogCopy(lines: readonly string[]): string {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-scenario-mutation-"));
+  legacyCopies.push(dir);
+  mkdirSync(join(dir, "logs"), { mode: 0o700 });
+  writeFileSync(join(dir, "logs", "server.log"), `${lines.join("\n")}\n`, { mode: 0o600 });
+  return dir;
+}
+
+afterAll(() => {
+  for (const dir of legacyCopies.splice(0)) rmSync(dir, { recursive: true, force: true });
 });

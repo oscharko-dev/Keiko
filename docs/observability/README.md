@@ -258,6 +258,104 @@ pair at an unavoidable platform or durability boundary, and must include an owne
 reason, linked issue, and expiry. Unknown or broad scope, stale/expired records, and extra keys that
 attempt to authorize fields, prohibited data, silent loss, or incomplete evidence fail closed.
 
+A registration never declares `frames` or `causeChain` required
+(`ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES`): redaction omits an empty array, so a required one
+would reject every failure line without Keiko frames or a cause. The generator reports it as
+`registration-omitted-field-required`.
+
+## Proofs, the failure-surface inventory, and sufficiency
+
+Three generated or derived views turn the registry into executable evidence. None of them is a
+second catalog: each is computed from the typed registry and the sources.
+
+**Executable proofs.** Every proof id is `<op>.<suffix>`. It resolves only when a test in the
+operation's owning package calls one of these helpers with the id as a string literal:
+
+- `expectActivityLogProof("<proof id>", line)` checks a line the production file sink persisted, or
+  an event passed through `formatActivityLogProofLine(event)`. That function is the real
+  `formatRegisteredServerLogLine`, so it revalidates the registration, the fields, and this build's
+  v2 identity.
+- `expectActivityLogStderrProof("<proof id>", line)` checks the emergency stderr notice the sink
+  writes when it cannot persist.
+
+Both helpers live in `tests/support/activity-log-proof.ts`. A captured event object alone cannot
+satisfy them. The generator finds the calls with the TypeScript parser, so a commented-out call or a
+call spelled inside a string does not count. The following are violations:
+
+- a proof call in another package;
+- a non-literal or unregistered proof id;
+- a registered proof id that no test resolves.
+
+**The failure-surface inventory.**
+[`failure-surface-inventory.generated.json`](failure-surface-inventory.generated.json) is written by
+`generate:op-catalog` and pinned byte for byte by `check:op-catalog`. It carries only what the
+catalog does not, and it joins the catalog by operation name.
+
+- A closed rule table in `scripts/lib/activity-log-failure-surfaces.mjs` maps each owner package and
+  emitter-module prefix to one of nine surfaces: `ui`, `bff`, `client-diagnostics`,
+  `model-gateway`, `tools-workflows`, `memory-knowledge`, `editor-delivery`, `lifecycle-crash` and
+  `runtime-packages`. An unmapped operation, an ambiguous rule, or an unused rule is a violation.
+  So is a surface with no operation.
+- Each surface lists its owners, the log ports they emit through, its operations, and its
+  scenarios.
+- Each failure class maps to `<surface>.<mode>`. The mode is one of `rejection`,
+  `dependency-failure`, `crash` and `loss`. It comes from a registered loss lifecycle or from closed
+  operation-name tokens.
+- `proofs` and `scenarios` name the test files that resolve them. An empty list means unresolved.
+- The autonomy mode is recorded as closed context: it is not a matrix multiplier. The inventory
+  lists the operations that carry it.
+
+The same op-to-surface map is generated into the contracts runtime as
+`ACTIVITY_LOG_OPERATION_SURFACES` and `ACTIVITY_LOG_FAILURE_SURFACES`.
+
+**Per-failure-class sufficiency.** `keiko support analyze` projects every failure class an artifact
+observed to `complete`, `degraded` or `insufficient`. The reasons come from the closed
+`DIAGNOSTIC_SUFFICIENCY_REASONS` in the contracts. The projection is derived generically from the
+registry's lifecycle and causal declarations, in `support-analyze-sufficiency.ts`:
+
+- **Insufficient** means required evidence is missing: corrupt lines, a parent-correlated operation
+  without its parent, an end or failure without its class's causal start on the same correlation,
+  or no registered evidence at all.
+- **Degraded** means localization remains possible, but there is a closed warning or a bounded loss:
+  - truncated, unsupported or incomplete lines;
+  - a duplicate, decreasing or reset sequence (a gap alone is not degraded, because it can be a
+    write to another state directory);
+  - a failure line without a known correlation;
+  - an emitter that declared its own line partial;
+  - Activity Log evidence loss.
+- **Evidence loss** is attributed as precisely as its loss line allows:
+  - a line that names the dropped operation affects that operation's classes;
+  - a port sink failure affects the owning package's classes in the same process;
+  - any other loss affects every class in the same process.
+
+  The `activity-log.loss` summary propagates only its Activity Log counters. The browser-side
+  `client*` counts do not propagate, because the client-diagnostic loss lines evidence them.
+
+- A product loss that its own registered loss line fully evidences keeps the report complete. A
+  rate-limited client report and a bounded discovery are examples.
+
+The projection appears in several places:
+
+- the `--json` output, as `sufficiency` on the whole artifact and on a single timeline;
+- every `--seed`, narrowed to the timeline's classes;
+- the `support.analyze.classified` line, as `sufficiency`, `sufficiencyReasons` and the class
+  counts.
+
+**The scenario matrix.** `tests/activity-log-scenarios/*.test.ts` drive production entry points of
+every surface into each applicable failure mode. The real file writer runs under a temporary
+`KEIKO_STATE_DIR`. Each scenario then calls
+`expectActivityLogScenario("<surface>.<mode>", { stateDir, startedAtMs, expectedOps })` from
+`tests/support/activity-log-scenario.ts`. That call reconstructs the persisted log with the analyzer
+and asserts four things:
+
+- only supported evidence;
+- the expected operations in causal order;
+- a failure class that the inventory maps to the scenario;
+- a `complete` projection.
+
+Every failure class maps to the scenario of its surface and mode. There is no separate journey per
+class.
+
 ## Redaction scope, stated honestly
 
 Every field this log can carry passes through `redactLogFields` before it reaches disk. That

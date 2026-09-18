@@ -175,7 +175,7 @@ export const ACTIVITY_LOG_OWNER_PORTS = {
 // Checked in order: the first mode whose token appears in a member operation's name wins, after a
 // registered `loss` lifecycle phase, which always means loss. A class matching none of them is a
 // dependency failure or timeout — the mode every failed call to a collaborator falls into.
-export const ACTIVITY_LOG_FAILURE_MODE_TOKENS = [
+const ACTIVITY_LOG_FAILURE_MODE_TOKENS = [
   {
     mode: "loss",
     tokens: [
@@ -423,11 +423,6 @@ function ownerPortViolations(repoRoot, operations, ports) {
         ];
   });
 }
-
-export const ACTIVITY_LOG_FAILURE_SURFACE_TABLES = {
-  surfaceRules: ACTIVITY_LOG_SURFACE_RULES,
-  ownerPorts: ACTIVITY_LOG_OWNER_PORTS,
-};
 
 export {
   ownerPortViolations as failureSurfaceOwnerPortViolations,

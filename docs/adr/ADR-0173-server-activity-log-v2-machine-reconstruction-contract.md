@@ -487,6 +487,40 @@ and logs every transition. A persistence loss since the last evaluation degrades
 it, and so does `keiko support export` for the exported directory. The desktop footer shows a
 degraded or unavailable state with its reasons.
 
+**Sufficiency is proven compositionally (#3532).** Four mechanisms close the gap between declared
+and demonstrated evidence. Each is derived from the registry, never maintained beside it.
+
+- **Contract-level proofs.** A proof id (`<op>.<suffix>`) resolves only through a literal
+  `expectActivityLogProof` or `expectActivityLogStderrProof` call in a test of the owning package.
+  The call asserts a line that the real formatter produced: `formatRegisteredServerLogLine`, or the
+  file sink itself. It checks this build's v2 identity and the registered fields, so a captured
+  event object can never stand in for a persisted line. The generator reports an unresolved,
+  misplaced, non-literal or unregistered proof as a violation.
+- **The failure-surface inventory.** `docs/observability/failure-surface-inventory.generated.json`
+  maps every operation to one of nine product surfaces through a closed rule table (owner package
+  plus emitter-module prefix). It maps every owner to its log port, and every failure class to a
+  `<surface>.<mode>` scenario, where the mode is `rejection`, `dependency-failure`, `crash` or
+  `loss`. The autonomy mode is closed context on events, not a matrix multiplier. The inventory
+  holds only what the catalog does not carry, and `check:op-catalog` pins it byte for byte.
+- **Per-failure-class sufficiency.** `keiko support analyze` projects every observed class to
+  `complete`, `degraded` or `insufficient`. The closed reasons are `DIAGNOSTIC_SUFFICIENCY_REASONS`
+  in the contracts, and there is one status rule, `diagnosticSufficiencyStatus`. The projection is
+  derived generically from the class's lifecycle and causal declarations. Artifact integrity,
+  parent correlation, the class's causal start on a failure's correlation, an unknown failure
+  correlation, own-line partial evidence and Activity Log evidence loss all feed it. Loss is
+  attributed to the named dropped operation, to the reporting package's classes for a port sink
+  failure, or else to the reporting process lifetime. A product loss that its own loss line fully
+  evidences keeps the report complete. The projection is carried by `--json`, `--seed` and
+  `support.analyze.classified`.
+- **A curated end-to-end scenario matrix.** For each surface and each applicable mode,
+  `tests/activity-log-scenarios` drives a production entry point through the real file writer. The
+  support analyzer must then reach `complete` (`expectActivityLogScenario`). Every failure class
+  maps to the scenario of its surface and mode, and no class gets its own journey.
+
+A registration never declares `frames` or `causeChain` required. Redaction omits an empty array, so
+a required one would reject the ordinary failure without Keiko frames or a cause. The generator
+reports that declaration as `registration-omitted-field-required`.
+
 ### D7 — Process lifecycle events give the log a subject
 
 Before this contract, the log recorded what happened but never which process, running which
