@@ -208,9 +208,14 @@ The reasons are closed too: `catalog-mismatch`, `sink-unwritable`, `storage-pres
 `budget-exceeded`, `port-unwired`, `level-silent` and `storage-check-failed` (the storage could not
 be inspected at all, for example an unlistable `logs/` directory; readiness reports it as degraded
 and never passes the underlying error, which can name a path, to any surface). The startup check
-runs before the server
-listens and persists an `activity-log.readiness` line through the real append path. The heartbeat
-re-evaluates it and logs every transition.
+runs before the server listens and persists an `activity-log.readiness` line through the real
+append path. The heartbeat re-evaluates it and logs every transition.
+
+Readiness covers the segment store through its health report: writability, the byte budget and
+storage pressure, including blocked retention. Segment manifests are not a readiness input. They
+are derived metadata that a query rebuilds whenever one is missing or stale, and they are never on
+the path that writes or reads evidence, so their state cannot make evidence unwritable or
+unreadable. `keiko support manifest verify` reports it.
 
 | Where to read it                   | What it shows                                                        |
 | ---------------------------------- | -------------------------------------------------------------------- |

@@ -490,7 +490,11 @@ produce reconstruction evidence. The result is one of three states: `ready`, `de
 The startup evaluation runs before the server listens. It persists its `activity-log.readiness` line
 through the durable append path, so the probe is a real write, not a permission check. A failed write
 means `unavailable`, with the reason `sink-unwritable`. Storage conditions come from the segment
-store's own health report (`activityLogStorageHealth`). The heartbeat re-evaluates without a probe
+store's own health report (`activityLogStorageHealth`), which covers the segment store's state:
+writability, byte budget and pressure, including blocked retention. Segment manifests (D16) are not a
+readiness input: they are derived metadata, rebuilt whenever missing or stale, and never on the path
+that writes or reads evidence, so their state cannot make evidence unwritable or unreadable;
+`keiko support manifest verify` reports it. The heartbeat re-evaluates without a probe
 and logs every transition. A persistence loss since the last evaluation degrades readiness with
 `sink-unwritable`. `GET /api/health` returns the snapshot as `diagnostics`. `keiko status` prints
 it, and so does `keiko support export` for the exported directory. The desktop footer shows a
