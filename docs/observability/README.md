@@ -631,7 +631,9 @@ A candidate is created in two ways:
   `failure` lifecycle and at least one supported failure class creates one. There is one open
   automatic candidate per defect fingerprint; a recurrence is logged as
   `support.incident.deduplicated`. Each process evaluates at most one failure per fingerprint every
-  60 seconds and at most six per minute.
+  60 seconds and at most six per minute; a new defect dropped only because that shared per-minute cap
+  was already spent is evidenced as `support.incident.rejected` (`evaluation-rate-limited`), at most
+  once per 60-second window so a storm cannot flood the log with one line per dropped evaluation.
 - **By you.** `keiko support incident report` records a problem Keiko did not detect. It needs no
   failure event; every report is its own occurrence.
 

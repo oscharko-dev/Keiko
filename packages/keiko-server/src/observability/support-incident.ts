@@ -208,7 +208,12 @@ const SUPPORT_INCIDENT_REJECTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["quota-exhausted", "store-unavailable", "record-too-large"],
+      values: [
+        "quota-exhausted",
+        "store-unavailable",
+        "record-too-large",
+        "evaluation-rate-limited",
+      ],
     },
     defectFingerprint: { ...FINGERPRINT_FIELD, required: false },
     fingerprintAlgorithm: ALGORITHM_FIELD,
@@ -359,7 +364,8 @@ function deduplicatedEvidence(
   );
 }
 
-export type SupportIncidentRejection = "quota-exhausted" | "store-unavailable" | "record-too-large";
+export type SupportIncidentRejection =
+  "quota-exhausted" | "store-unavailable" | "record-too-large" | "evaluation-rate-limited";
 
 interface RejectionFacts {
   readonly reason: SupportIncidentRejection;
@@ -397,7 +403,7 @@ function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
 function rejectionErrorKind(
   reason: SupportIncidentRejection,
 ): "rate-limited" | "unavailable" | "validation-failed" {
-  if (reason === "quota-exhausted") return "rate-limited";
+  if (reason === "quota-exhausted" || reason === "evaluation-rate-limited") return "rate-limited";
   return reason === "store-unavailable" ? "unavailable" : "validation-failed";
 }
 
@@ -1219,6 +1225,11 @@ let exitFlushInstalled = false;
 const recentFingerprints = new Map<string, number>();
 const recentEvaluations: number[] = [];
 const pendingCandidates: PendingCandidate[] = [];
+// The last time a rate-limited evaluation was evidenced (#3533 audit): throttled by the same
+// SUPPORT_INCIDENT_SUPPRESSION_MS window as everything else here, so a storm that keeps hitting
+// the per-minute cap reports it once per window instead of flooding the log with one line per
+// dropped evaluation.
+let lastRateLimitEvidenceAtMs: number | undefined;
 
 /** Test seam: force the automatic trigger on or off; `undefined` restores the default. */
 export function setSupportIncidentTriggerForTests(enabled: boolean | undefined): void {
@@ -1226,28 +1237,34 @@ export function setSupportIncidentTriggerForTests(enabled: boolean | undefined):
   recentFingerprints.clear();
   recentEvaluations.length = 0;
   pendingCandidates.length = 0;
+  lastRateLimitEvidenceAtMs = undefined;
 }
 
 function triggerEnabled(): boolean {
   return triggerOverride ?? !activityLogTestWriterInstalled();
 }
 
+type EvaluationAdmission = "admitted" | "suppressed" | "rate-limited";
+
 // Bounds the cost a failure storm can add: one fingerprint is re-evaluated at most once per
-// SUPPORT_INCIDENT_SUPPRESSION_MS, and all fingerprints together at most
-// MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE times. The failure lines themselves are always
-// persisted, so a skipped evaluation loses no evidence; the pinned window of the first occurrence
-// and the Activity Log's own retention still hold it.
-function admitEvaluation(fingerprint: string, nowMs: number): boolean {
+// SUPPORT_INCIDENT_SUPPRESSION_MS ("suppressed"), and all fingerprints together at most
+// MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE times ("rate-limited"). A suppressed recurrence
+// loses no evidence -- the failure line itself is always persisted, and the first occurrence's
+// pinned window and the Activity Log's own retention already cover it -- but a rate-limited
+// evaluation can be a defect Keiko has never seen before, dropped purely because the shared cap was
+// already spent; the caller evidences that case explicitly (#3533 audit).
+function admitEvaluation(fingerprint: string, nowMs: number): EvaluationAdmission {
   const last = recentFingerprints.get(fingerprint);
-  if (last !== undefined && nowMs - last < SUPPORT_INCIDENT_SUPPRESSION_MS) return false;
+  if (last !== undefined && nowMs - last < SUPPORT_INCIDENT_SUPPRESSION_MS) return "suppressed";
   while (recentEvaluations.length > 0 && nowMs - (recentEvaluations[0] ?? nowMs) >= MINUTE_MS) {
     recentEvaluations.shift();
   }
-  if (recentEvaluations.length >= MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE) return false;
+  if (recentEvaluations.length >= MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE)
+    return "rate-limited";
   recentEvaluations.push(nowMs);
   if (recentFingerprints.size >= MAX_REMEMBERED_FINGERPRINTS) recentFingerprints.clear();
   recentFingerprints.set(fingerprint, nowMs);
-  return true;
+  return "admitted";
 }
 
 function eventFrames(event: ServerLogEvent): readonly unknown[] | undefined {
@@ -1255,8 +1272,14 @@ function eventFrames(event: ServerLogEvent): readonly unknown[] | undefined {
   return Array.isArray(frames) ? [...(frames as readonly unknown[])] : undefined;
 }
 
-function admittedEvidence(event: ServerLogEvent): SupportIncidentFailureEvidence | undefined {
-  if (!supportIncidentEligibleOperation(event.op)) return undefined;
+type AdmissionOutcome =
+  | { readonly status: "ineligible" }
+  | { readonly status: "admitted"; readonly evidence: SupportIncidentFailureEvidence }
+  | { readonly status: "suppressed" }
+  | { readonly status: "rate-limited"; readonly defectFingerprint: string };
+
+function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
+  if (!supportIncidentEligibleOperation(event.op)) return { status: "ineligible" };
   const evidence: SupportIncidentFailureEvidence = {
     op: event.op,
     errorKind: event.errorKind,
@@ -1264,8 +1287,38 @@ function admittedEvidence(event: ServerLogEvent): SupportIncidentFailureEvidence
     parentCorrelationId: event.parentCorrelationId,
     frames: eventFrames(event),
   };
-  const fingerprint = computeDefectFingerprint(failureFingerprintInput(evidence));
-  return admitEvaluation(fingerprint, Date.now()) ? evidence : undefined;
+  const defectFingerprint = computeDefectFingerprint(failureFingerprintInput(evidence));
+  const admission = admitEvaluation(defectFingerprint, Date.now());
+  if (admission === "admitted") return { status: "admitted", evidence };
+  return admission === "rate-limited"
+    ? { status: "rate-limited", defectFingerprint }
+    : { status: "suppressed" };
+}
+
+// At most one `support.incident.rejected` line per suppression window (see
+// lastRateLimitEvidenceAtMs above), so a sustained storm costs one evidenced line per minute, not
+// one per dropped evaluation. openIncidentCount is a plain listing, never the full expiry sweep:
+// this path exists specifically to stay cheap under a storm.
+function reportRateLimitedEvaluation(
+  stateDir: string,
+  defectFingerprint: string,
+  correlationId: string | undefined,
+): void {
+  const nowMs = Date.now();
+  if (
+    lastRateLimitEvidenceAtMs !== undefined &&
+    nowMs - lastRateLimitEvidenceAtMs < SUPPORT_INCIDENT_SUPPRESSION_MS
+  ) {
+    return;
+  }
+  lastRateLimitEvidenceAtMs = nowMs;
+  rejectedEvidence(stateDir, {
+    reason: "evaluation-rate-limited",
+    trigger: "registered-failure",
+    defectFingerprint,
+    correlationId: correlationId ?? randomUUID(),
+    openIncidentCount: listSupportIncidentEntries(stateDir).length,
+  });
 }
 
 function reportLostCandidate(error: unknown, correlationId: string | undefined): void {
@@ -1314,10 +1367,14 @@ function scheduleDrain(): void {
 export function observeSupportIncidentTrigger(stateDir: string, event: ServerLogEvent): void {
   if (triggerDepth > 0 || event.level !== "error" || !triggerEnabled()) return;
   try {
-    const evidence = admittedEvidence(event);
-    if (evidence === undefined) return;
+    const admission = admittedEvidence(event);
+    if (admission.status === "rate-limited") {
+      reportRateLimitedEvaluation(stateDir, admission.defectFingerprint, event.correlationId);
+      return;
+    }
+    if (admission.status !== "admitted") return;
     const nowMs = Date.now();
-    const draft = registeredFailureDraft(evidence);
+    const draft = registeredFailureDraft(admission.evidence);
     const pin = pinIncidentWindow(stateDir, nowMs, draft.evidenceCorrelationId, process.env);
     pendingCandidates.push({ stateDir, draft: { ...draft, prePinned: pin }, nowMs });
     scheduleDrain();

@@ -660,16 +660,19 @@ describe("SupportIncident candidates", () => {
       expect(listSupportIncidents(stateDir)).toEqual([]);
     });
 
-    it("suppresses a failure storm of one defect to a single evaluation", () => {
+    it("suppresses a failure storm of one defect to a single evaluation, with no rejection evidence", () => {
       setSupportIncidentTriggerForTests(true);
       const sink = createFileServerLogSink(stateDir);
       for (let index = 0; index < 5; index += 1) sink.write(failureEvent());
       drainSupportIncidentCandidates();
       expect(listSupportIncidents(stateDir)).toHaveLength(1);
       expect(lines("support.incident.deduplicated")).toHaveLength(0);
+      // A suppressed recurrence loses no evidence -- the first occurrence already pinned the
+      // window -- so, unlike a rate-limited evaluation, it is not itself an evidenced rejection.
+      expect(lines("support.incident.rejected")).toHaveLength(0);
     });
 
-    it("caps evaluations across distinct defects per rolling minute", () => {
+    it("caps evaluations across distinct defects per rolling minute, evidencing the overflow once (#3533 audit)", () => {
       setSupportIncidentTriggerForTests(true);
       const sink = createFileServerLogSink(stateDir);
       for (let index = 0; index < MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE + 3; index += 1) {
@@ -689,6 +692,20 @@ describe("SupportIncident candidates", () => {
       expect(listSupportIncidents(stateDir)).toHaveLength(
         MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE,
       );
+      // 3 distinct new defects were dropped purely by the shared per-minute cap: evidenced once,
+      // never once per dropped evaluation (#3533 audit: "rate-limited evaluations vanish silently").
+      expect(lines("support.incident.rejected")).toHaveLength(1);
+      const line = expectActivityLogProof(
+        "support.incident.rejected.emitted-line",
+        lines("support.incident.rejected")[0] ?? "",
+      );
+      expect(line).toMatchObject({
+        rejectionReason: "evaluation-rate-limited",
+        trigger: "registered-failure",
+        errorKind: "rate-limited",
+        completeness: "partial",
+        loss: "event-dropped",
+      });
     });
 
     it("never throws into the sink when candidate creation fails", () => {

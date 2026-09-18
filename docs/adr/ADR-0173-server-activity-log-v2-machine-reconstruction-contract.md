@@ -1073,7 +1073,14 @@ never a reason to disable or defer bounded retention.
 An incident is a control artifact over the Activity Log, not a second log (#3533). A local candidate
 is created automatically for a registered failure operation logged at `error` with at least one
 supported failure class, or explicitly by the user (`keiko support incident report`); a closed
-`trigger` records which. Eligibility derives from the registry, never from a UI-side list.
+`trigger` records which. Eligibility derives from the registry, never from a UI-side list. A process
+evaluates at most one failure per defectFingerprint every SUPPORT_INCIDENT_SUPPRESSION_MS and, across
+every fingerprint together, at most MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE per rolling minute.
+The first bound loses no evidence (the fingerprint's own candidate already pins its window), but the
+second can drop a defect Keiko has never seen before, purely because the shared cap was already
+spent; that case is evidenced as `support.incident.rejected` (`evaluation-rate-limited`), throttled
+to at most one line per suppression window so a storm reports the loss once rather than flooding the
+log with one line per dropped evaluation (#3533 audit).
 
 On the registered-failure trigger, the window's Activity Log retention pin (15 minutes before, 5
 minutes after, through D14's pin primitive, across every process instance) is published
