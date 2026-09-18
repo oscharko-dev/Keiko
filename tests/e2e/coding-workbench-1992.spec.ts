@@ -20,6 +20,9 @@ test("live pending approval exposes bounded facts and one-time decision controls
   // its server literal), and no raw diff, credential or path ever does.
   await expect(page.getByText(/^(push|high)$/u)).toHaveCount(0);
   await expect(page.getByText(/diff --git|Bearer|access token|\/Users\//u)).toHaveCount(0);
+  await expect.poll(fixture.editorSnapshotRegistrationCount).toBeGreaterThan(0);
   await page.getByRole("button", { name: "Approve once" }).click();
   await expect(fixture.workbench).toHaveAttribute("data-state", "running");
+  expect(fixture.approvalDecisionCount()).toBe(1);
+  fixture.assertValidRequests();
 });

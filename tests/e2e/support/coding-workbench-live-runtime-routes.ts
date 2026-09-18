@@ -3,8 +3,13 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchValidationResult,
+  EditorAgentSnapshotResponse,
   MemoryAutonomyPolicyWire,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
+  parseEditorAgentSnapshotRequest,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
 import {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -41,6 +46,10 @@ type RuntimeOptions = Required<
     "deploymentCeiling" | "disconnectStreamOnce" | "eventCount" | "runtimeAvailable"
   >
 >;
+
+const FIXTURE_BRIDGE_DECISION_CAPABILITY = "A".repeat(
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
+);
 
 // The clamp is the product invariant under test, so the fixture must not re-implement it: it uses
 // the same contracts resolver the server does. A local copy could drift and let a projection bug
@@ -174,6 +183,34 @@ async function handleCodexSetupRoute(
   return true;
 }
 
+async function handleEditorSnapshotRoute(
+  route: Route,
+  pathname: string,
+  fixture: RuntimeFixtureState,
+): Promise<boolean> {
+  if (route.request().method() !== "POST" || pathname !== "/api/editor/agent/snapshot") {
+    return false;
+  }
+  const parsed = parseEditorAgentSnapshotRequest(route.request().postDataJSON());
+  if (!parsed.ok) {
+    fixture.validationErrors.push(...parsed.errors);
+    await route.fulfill({ status: 400, contentType: "application/json", body: "{}" });
+    return true;
+  }
+  if (!("kind" in parsed.value)) {
+    await fulfillJson(route, { snapshot: null } satisfies EditorAgentSnapshotResponse);
+    return true;
+  }
+  fixture.editorSnapshotRegistrations += 1;
+  const response: EditorAgentSnapshotResponse = {
+    snapshot: parsed.value.snapshot,
+    bridgeDecisionCapability:
+      parsed.value.bridgeDecisionCapability ?? FIXTURE_BRIDGE_DECISION_CAPABILITY,
+  };
+  await fulfillJson(route, response);
+  return true;
+}
+
 async function parsedRequest<T extends { readonly requestId: string }>(
   route: Route,
   parse: (value: unknown) => CodingWorkbenchValidationResult<T>,
@@ -304,6 +341,7 @@ async function handleApprovalCommand(route: Route, fixture: RuntimeFixtureState)
   );
   if (request !== null) {
     expect(request.expectedRevision).toBe(fixture.revision);
+    fixture.approvalDecisions += 1;
     await transition(route, fixture, request.decision === "approved" ? "running" : "cancelled");
   }
   return true;
@@ -374,6 +412,7 @@ export async function installRuntimeRoutes(
       return;
     }
     if (await handleFoundationRoute(route, pathname, authStatus)) return;
+    if (await handleEditorSnapshotRoute(route, pathname, fixture)) return;
     if (await handleCodexSetupRoute(route, pathname, fixture)) return;
     if (route.request().method() === "GET") {
       if (await handleRuntimeGet(route, pathname, searchParams, runtimeOptions, fixture)) return;
