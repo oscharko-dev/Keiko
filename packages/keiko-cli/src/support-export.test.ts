@@ -5,6 +5,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SERVER_LOG_SCHEMA_VERSION } from "@oscharko-dev/keiko-server";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import {
+  ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
+  activityLogPinFileName,
+  activityLogSegmentFileName,
+  orderActivityLogFileNames,
+  type ActivityLogSegmentState,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
 import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
 
@@ -16,7 +23,6 @@ import {
   buildEvidenceManifestSection,
   buildSupportBundleManifest,
   buildUiLogSection,
-  CURRENT_LOG_FILE_NAME,
   DEFAULT_MAX_BUNDLE_BYTES,
   describeErrorKind,
   discoverServerLogFiles,
@@ -46,6 +52,21 @@ function writePrivateLog(path: string, text: string): void {
   writeFileSync(path, text, { mode: 0o600 });
 }
 
+// Segment names come from the shared closed grammar (keiko-contracts `activity-log-files.ts`),
+// never from a hand-written spelling that could drift from what the writer creates.
+const SEGMENT_START_MS = Date.parse("2026-08-21T10:00:00.000Z");
+
+function segmentName(index: number, state: ActivityLogSegmentState = "sealed", pid = 4242): string {
+  return activityLogSegmentFileName(
+    { startMs: SEGMENT_START_MS, pid, instanceId: "a1b2c3d4", index },
+    state,
+  );
+}
+
+// The newest file of a live Activity Log: the writer's active segment, after its sealed sibling.
+const SEALED_SEGMENT = segmentName(1);
+const CURRENT_SEGMENT = segmentName(2, "active");
+
 const HEALTHY_AUDIT: AuditResult = {
   ok: true,
   stateDir: "/tmp/example/.keiko",
@@ -70,6 +91,7 @@ function baseManifestInput(
     installMode: "unknown",
     stateDirSource: "default",
     sourceLogFiles: [],
+    sourceLogFileLines: [],
     truncatedLogFiles: [],
     currentFileTailTruncated: undefined,
     budgetExceeded: false,
@@ -94,19 +116,28 @@ describe("discoverServerLogFiles", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("orders rotated files oldest-first with the current file last", () => {
-    writePrivateLog(join(dir, "server-2026-08-20.log"), "b\n");
-    writePrivateLog(join(dir, "server-2026-08-19.log"), "a\n");
-    writePrivateLog(join(dir, CURRENT_LOG_FILE_NAME), "c\n");
+  // #3530: one logical log spread over legacy files and per-process segments. Discovery must use
+  // the shared logical-log ordering, never the directory's name order: legacy files precede every
+  // segment, and a numerically smaller pid precedes a larger one at the same start time even though
+  // its name sorts later. Pin records and foreign files are not log content.
+  it("orders legacy files and segments in logical-log order, never by name", () => {
+    const logNames = [
+      "server-2026-08-20.log",
+      "server-2026-08-19.log",
+      ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
+      segmentName(1, "sealed", 10_000),
+      segmentName(1, "sealed", 999),
+      segmentName(2, "active", 999),
+    ];
+    for (const name of logNames) writePrivateLog(join(dir, name), "c\n");
+    writePrivateLog(join(dir, activityLogPinFileName("0123456789abcdef01234567")), "{}\n");
     writeFileSync(join(dir, "unrelated.txt"), "ignored\n");
+    const expected = orderActivityLogFileNames(logNames).map((file) => file.name);
+    expect(expected).not.toEqual([...logNames].sort());
 
     const discovery = discoverServerLogFiles(dir);
 
-    expect(discovery.files.map((f) => f.name)).toEqual([
-      "server-2026-08-19.log",
-      "server-2026-08-20.log",
-      CURRENT_LOG_FILE_NAME,
-    ]);
+    expect(discovery.files.map((f) => f.name)).toEqual(expected);
     expect(discovery.files.every((f) => f.sizeBytes === 2)).toBe(true);
     expect(discovery.skippedLogFiles).toEqual([]);
   });
@@ -169,20 +200,22 @@ describe("discoverServerLogFiles", () => {
     if (process.platform === "win32") ctx.skip();
     const victim = join(dir, "victim.txt");
     writePrivateLog(victim, "VICTIM-BYTES\n");
-    writePrivateLog(join(dir, CURRENT_LOG_FILE_NAME), "c\n");
+    writePrivateLog(join(dir, CURRENT_SEGMENT), "c\n");
     symlinkSync(victim, join(dir, "server-2026-08-17.log"));
     symlinkSync(join(dir, "missing-target.log"), join(dir, "server-2026-08-18.log"));
     linkSync(victim, join(dir, "server-2026-08-19.log"));
     writeFileSync(join(dir, "server-2026-08-20.log"), "shared\n", { mode: 0o644 });
+    symlinkSync(victim, join(dir, SEALED_SEGMENT));
 
     const discovery = discoverServerLogFiles(dir);
 
-    expect(discovery.files.map((f) => f.name)).toEqual([CURRENT_LOG_FILE_NAME]);
+    expect(discovery.files.map((f) => f.name)).toEqual([CURRENT_SEGMENT]);
     expect(discovery.skippedLogFiles).toEqual([
       { name: "server-2026-08-17.log", errorKind: "unsafe-target" },
       { name: "server-2026-08-18.log", errorKind: "unsafe-target" },
       { name: "server-2026-08-19.log", errorKind: "unsafe-target" },
       { name: "server-2026-08-20.log", errorKind: "permission-unsafe" },
+      { name: SEALED_SEGMENT, errorKind: "unsafe-target" },
     ]);
   });
 });
@@ -299,18 +332,44 @@ describe("readKeptFiles", () => {
 
   it("reads every kept file's lines, in file order, into one contentLines array", () => {
     const pathA = join(dir, "server-2026-08-19.log");
-    const pathB = join(dir, CURRENT_LOG_FILE_NAME);
+    const pathB = join(dir, CURRENT_SEGMENT);
     writePrivateLog(pathA, '{"ts":"a"}\n');
     writePrivateLog(pathB, '{"ts":"b"}\n');
 
     const result = readKeptFiles([
       { name: "server-2026-08-19.log", path: pathA, sizeBytes: 0 },
-      { name: CURRENT_LOG_FILE_NAME, path: pathB, sizeBytes: 0 },
+      { name: CURRENT_SEGMENT, path: pathB, sizeBytes: 0 },
     ]);
 
     expect(result.contentLines).toEqual(['{"ts":"a"}', '{"ts":"b"}']);
     expect(result.terminalFragment).toBe(false);
     expect(result.skippedLogFiles).toEqual([]);
+  });
+
+  // #3530: a crashed writer leaves a torn last line in ITS segment, and the bundle joins newer files
+  // after it. Each contributing file's line count and torn-tail flag travel in bundle order so the
+  // analyzer can still classify that line as truncated; an empty file adds no lines and no entry.
+  it("records each contributing file's line count and torn tail, in bundle order", () => {
+    const emptySegment = segmentName(1, "sealed", 5_000);
+    const tornPath = join(dir, SEALED_SEGMENT);
+    const emptyPath = join(dir, emptySegment);
+    const currentPath = join(dir, CURRENT_SEGMENT);
+    writePrivateLog(tornPath, '{"ts":"a"}\n{"ts":');
+    writePrivateLog(emptyPath, "");
+    writePrivateLog(currentPath, '{"ts":"b"}\n');
+
+    const result = readKeptFiles([
+      { name: SEALED_SEGMENT, path: tornPath, sizeBytes: 0 },
+      { name: emptySegment, path: emptyPath, sizeBytes: 0 },
+      { name: CURRENT_SEGMENT, path: currentPath, sizeBytes: 0 },
+    ]);
+
+    expect(result.contentLines).toEqual(['{"ts":"a"}', '{"ts":', '{"ts":"b"}']);
+    expect(result.terminalFragment).toBe(false);
+    expect(result.sourceLogFileLines).toEqual([
+      { name: SEALED_SEGMENT, lineCount: 2, terminalFragment: true },
+      { name: CURRENT_SEGMENT, lineCount: 1, terminalFragment: false },
+    ]);
   });
 
   // Regression: a file present in the list `selectLogFilesWithinBudget` kept can still vanish
@@ -321,16 +380,13 @@ describe("readKeptFiles", () => {
   // code), and the surviving file's content still comes through.
   it("skips a kept file that vanishes between discovery and the read, recording its name and error kind", () => {
     const survivingPath = join(dir, "server-2026-08-19.log");
-    const vanishingPath = join(dir, CURRENT_LOG_FILE_NAME);
+    const vanishingPath = join(dir, CURRENT_SEGMENT);
     writePrivateLog(survivingPath, '{"ts":"a"}\n');
     writePrivateLog(vanishingPath, '{"ts":"b"}\n');
 
     const discovery = discoverServerLogFiles(dir);
     const selection = selectLogFilesWithinBudget(discovery.files, DEFAULT_MAX_BUNDLE_BYTES);
-    expect(selection.kept.map((f) => f.name)).toEqual([
-      "server-2026-08-19.log",
-      CURRENT_LOG_FILE_NAME,
-    ]);
+    expect(selection.kept.map((f) => f.name)).toEqual(["server-2026-08-19.log", CURRENT_SEGMENT]);
 
     // The race: the selected current log is removed by another actor before export reads it.
     rmSync(vanishingPath);
@@ -338,7 +394,7 @@ describe("readKeptFiles", () => {
     const result = readKeptFiles(selection.kept);
 
     expect(result.contentLines).toEqual(['{"ts":"a"}']);
-    expect(result.skippedLogFiles).toEqual([{ name: CURRENT_LOG_FILE_NAME, errorKind: "ENOENT" }]);
+    expect(result.skippedLogFiles).toEqual([{ name: CURRENT_SEGMENT, errorKind: "ENOENT" }]);
   });
 
   // #3528: discovery's verified open does not protect the later read — a kept name swapped for a
@@ -349,7 +405,7 @@ describe("readKeptFiles", () => {
     const victim = join(dir, "victim.txt");
     writePrivateLog(victim, "VICTIM-BYTES\n");
     const rotatedPath = join(dir, "server-2026-08-19.log");
-    const currentPath = join(dir, CURRENT_LOG_FILE_NAME);
+    const currentPath = join(dir, CURRENT_SEGMENT);
     writePrivateLog(rotatedPath, '{"ts":"a"}\n');
     writePrivateLog(currentPath, '{"ts":"b"}\n');
     const kept = discoverServerLogFiles(dir).files;
@@ -363,7 +419,7 @@ describe("readKeptFiles", () => {
     expect(result.contentLines).toEqual([]);
     expect(result.skippedLogFiles).toEqual([
       { name: "server-2026-08-19.log", errorKind: "unsafe-target" },
-      { name: CURRENT_LOG_FILE_NAME, errorKind: "unsafe-target" },
+      { name: CURRENT_SEGMENT, errorKind: "unsafe-target" },
     ]);
   });
 
@@ -375,11 +431,11 @@ describe("readKeptFiles", () => {
   // the round trip, in order, with the exact count.
   it("reads a very large kept file without throwing, returning every line in order", () => {
     const lineCount = 300_000;
-    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    const path = join(dir, CURRENT_SEGMENT);
     const text = `${Array.from({ length: lineCount }, (_, i) => `line-${String(i)}`).join("\n")}\n`;
     writePrivateLog(path, text);
 
-    const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 0 }]);
+    const result = readKeptFiles([{ name: CURRENT_SEGMENT, path, sizeBytes: 0 }]);
 
     expect(result.contentLines).toHaveLength(lineCount);
     expect(result.contentLines[0]).toBe("line-0");
@@ -408,15 +464,12 @@ describe("readKeptFiles — current-file tail truncation", () => {
   it("reads only the current file's tail when it alone exceeds the budget, starting on a complete line and staying within budget", () => {
     const lineCount = 20;
     const text = fixedWidthLogText(lineCount); // 12 bytes/line (11 + "\n") = 240 bytes total
-    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    const path = join(dir, CURRENT_SEGMENT);
     writePrivateLog(path, text);
     const sizeBytes = Buffer.byteLength(text, "utf8");
     const tailBudgetBytes = 30; // < sizeBytes; cuts mid-line, so the boundary advance is exercised
 
-    const result = readKeptFiles(
-      [{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes }],
-      tailBudgetBytes,
-    );
+    const result = readKeptFiles([{ name: CURRENT_SEGMENT, path, sizeBytes }], tailBudgetBytes);
 
     // The first kept line is one of the file's own complete lines, never a partial JSON fragment.
     expect(result.contentLines.length).toBeGreaterThan(0);
@@ -427,7 +480,7 @@ describe("readKeptFiles — current-file tail truncation", () => {
     expect(keptBytes).toBeLessThanOrEqual(tailBudgetBytes);
     // (a) the manifest fact is set, name only, with the exact dropped-byte count.
     expect(result.currentFileTailTruncated).toEqual({
-      name: CURRENT_LOG_FILE_NAME,
+      name: CURRENT_SEGMENT,
       droppedBytes: sizeBytes - keptBytes,
     });
     // (b) the tail strategy rescued the export, so the manifest must not claim the budget failed.
@@ -437,7 +490,7 @@ describe("readKeptFiles — current-file tail truncation", () => {
 
   it("keeps every older file's read in full and only tail-reads the current (last) file", () => {
     const rotatedPath = join(dir, "server-2026-08-19.log");
-    const currentPath = join(dir, CURRENT_LOG_FILE_NAME);
+    const currentPath = join(dir, CURRENT_SEGMENT);
     writePrivateLog(rotatedPath, '{"seq":"old"}\n');
     const currentText = fixedWidthLogText(20);
     writePrivateLog(currentPath, currentText);
@@ -446,40 +499,40 @@ describe("readKeptFiles — current-file tail truncation", () => {
     const result = readKeptFiles(
       [
         { name: "server-2026-08-19.log", path: rotatedPath, sizeBytes: 0 },
-        { name: CURRENT_LOG_FILE_NAME, path: currentPath, sizeBytes: currentSizeBytes },
+        { name: CURRENT_SEGMENT, path: currentPath, sizeBytes: currentSizeBytes },
       ],
       30,
     );
 
     expect(result.contentLines[0]).toBe('{"seq":"old"}');
     expect(result.contentLines.slice(1)).toEqual([fixedWidthLine(18), fixedWidthLine(19)]);
-    expect(result.currentFileTailTruncated?.name).toBe(CURRENT_LOG_FILE_NAME);
+    expect(result.currentFileTailTruncated?.name).toBe(CURRENT_SEGMENT);
     expect(result.budgetExceeded).toBe(false);
   });
 
   // (c) A budget smaller than a single line — here, a file that is one giant line with no
   // newline anywhere at all, so no byte offset within it can ever start a complete line.
   it("keeps an empty tail and reports budgetExceeded when the budget is smaller than one line", () => {
-    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    const path = join(dir, CURRENT_SEGMENT);
     const text = `{"seq":"${"x".repeat(1_000)}"}`; // one line, no trailing newline anywhere
     writePrivateLog(path, text);
     const sizeBytes = Buffer.byteLength(text, "utf8");
 
-    const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes }], 5);
+    const result = readKeptFiles([{ name: CURRENT_SEGMENT, path, sizeBytes }], 5);
 
     expect(result.contentLines).toEqual([]);
     expect(result.currentFileTailTruncated).toEqual({
-      name: CURRENT_LOG_FILE_NAME,
+      name: CURRENT_SEGMENT,
       droppedBytes: sizeBytes,
     });
     expect(result.budgetExceeded).toBe(true);
   });
 
   it("never attempts a tail read, and never sets budgetExceeded, when currentFileTailBudgetBytes is undefined", () => {
-    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    const path = join(dir, CURRENT_SEGMENT);
     writePrivateLog(path, fixedWidthLogText(5));
 
-    const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 0 }]);
+    const result = readKeptFiles([{ name: CURRENT_SEGMENT, path, sizeBytes: 0 }]);
 
     expect(result.contentLines).toHaveLength(5);
     expect(result.currentFileTailTruncated).toBeUndefined();
@@ -490,15 +543,15 @@ describe("readKeptFiles — current-file tail truncation", () => {
   // the bounded tail-reader path instead: the file selected for a tail read can still disappear
   // before `openSync` runs.
   it("skips the current file, recording its name and error kind, when it vanishes before the tail read", () => {
-    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    const path = join(dir, CURRENT_SEGMENT);
     writePrivateLog(path, fixedWidthLogText(5));
     rmSync(path);
 
-    const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 1_000 }], 30);
+    const result = readKeptFiles([{ name: CURRENT_SEGMENT, path, sizeBytes: 1_000 }], 30);
 
     expect(result.contentLines).toEqual([]);
     expect(result.currentFileTailTruncated).toBeUndefined();
-    expect(result.skippedLogFiles).toEqual([{ name: CURRENT_LOG_FILE_NAME, errorKind: "ENOENT" }]);
+    expect(result.skippedLogFiles).toEqual([{ name: CURRENT_SEGMENT, errorKind: "ENOENT" }]);
   });
 });
 
@@ -558,6 +611,10 @@ describe("buildSupportBundleManifest", () => {
     const manifest = buildSupportBundleManifest(
       baseManifestInput({
         sourceLogFiles: ["server-2026-08-20.log", "server.log"],
+        sourceLogFileLines: [
+          { name: "server-2026-08-20.log", lineCount: 4, terminalFragment: false },
+          { name: "server.log", lineCount: 1, terminalFragment: true },
+        ],
         truncatedLogFiles: ["server-2026-08-18.log"],
         skippedLogFiles: [{ name: "server-2026-08-17.log", errorKind: "ENOENT" }],
         evidenceIndexCount: 3,
@@ -577,6 +634,10 @@ describe("buildSupportBundleManifest", () => {
       stateDirSource: "default",
       redactionAttested: true,
       sourceLogFiles: ["server-2026-08-20.log", "server.log"],
+      sourceLogFileLines: [
+        { name: "server-2026-08-20.log", lineCount: 4, terminalFragment: false },
+        { name: "server.log", lineCount: 1, terminalFragment: true },
+      ],
       truncatedLogFiles: ["server-2026-08-18.log"],
       budgetExceeded: false,
       skippedLogFiles: [{ name: "server-2026-08-17.log", errorKind: "ENOENT" }],
@@ -674,7 +735,7 @@ describe("buildSupportBundleManifest", () => {
   // `truncatedLogFiles` — the distinct, machine-readable fact that the current file's tail (not
   // its whole content) was exported, naming only the file and the byte count cut, never a path.
   it("propagates currentFileTailTruncated from ManifestInput", () => {
-    const fact = { name: CURRENT_LOG_FILE_NAME, droppedBytes: 123 };
+    const fact = { name: CURRENT_SEGMENT, droppedBytes: 123 };
     expect(
       buildSupportBundleManifest(baseManifestInput({ currentFileTailTruncated: fact }))
         .currentFileTailTruncated,
@@ -768,14 +829,14 @@ describe("serializeBundleLines and bundleText", () => {
 
   it("copies every source line byte-for-byte, unchanged, after the manifest line", () => {
     const rotatedPath = join(dir, "server-2026-08-19.log");
-    const currentPath = join(dir, CURRENT_LOG_FILE_NAME);
+    const currentPath = join(dir, CURRENT_SEGMENT);
     const rotatedLine = '{"ts":"2026-08-19T00:00:00.000Z","category":"http","op":"a\\nb","seq":1}';
     const currentLine = '{"ts":"2026-08-20T00:00:00.000Z","category":"http","op":"c","seq":2}';
     writePrivateLog(rotatedPath, `${rotatedLine}\n`);
     writePrivateLog(currentPath, `${currentLine}\n`);
     const files: readonly LogFileInfo[] = [
       { name: "server-2026-08-19.log", path: rotatedPath, sizeBytes: 0 },
-      { name: CURRENT_LOG_FILE_NAME, path: currentPath, sizeBytes: 0 },
+      { name: CURRENT_SEGMENT, path: currentPath, sizeBytes: 0 },
     ];
     const manifest = buildSupportBundleManifest(baseManifestInput());
     const { contentLines } = readKeptFiles(files);
