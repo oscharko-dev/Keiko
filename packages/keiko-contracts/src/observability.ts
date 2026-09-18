@@ -772,22 +772,38 @@ export function attachActivityLogEventRegistration<Event extends object>(
 
 /**
  * Copies an event with a new correlation id. A plain spread drops the non-enumerable registration
- * marker, which makes the sink reject the copy as unregistered, so every rebind goes through here.
+ * and rejection markers, which makes the sink misclassify the copy (a rejected event would read as
+ * unregistered), so every rebind goes through here.
  */
 export function withActivityLogCorrelation<Event extends object>(
   event: Event,
   correlationId: string,
 ): Event & { readonly correlationId: string } {
-  return attachActivityLogEventRegistration(
+  const rebound = attachActivityLogEventRegistration(
     { ...event, correlationId },
     activityLogEventRegistration(event),
   );
+  const rejection = activityLogEventRejection(event);
+  if (rejection !== undefined) markActivityLogEventRejection(rebound, rejection);
+  return rebound;
 }
 
-function activityLogEventRejection(
-  event: Readonly<Record<PropertyKey, unknown>>,
-): ActivityLogEventFailureKind | undefined {
-  const rejection: unknown = event[ACTIVITY_LOG_EVENT_REJECTION];
+function markActivityLogEventRejection(
+  event: object,
+  rejection: ActivityLogEventFailureKind,
+): void {
+  Object.defineProperty(event, ACTIVITY_LOG_EVENT_REJECTION, {
+    value: rejection,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+}
+
+function activityLogEventRejection(event: object): ActivityLogEventFailureKind | undefined {
+  const rejection: unknown = (event as Readonly<Record<PropertyKey, unknown>>)[
+    ACTIVITY_LOG_EVENT_REJECTION
+  ];
   return ACTIVITY_LOG_EVENT_FAILURE_KIND_SET.has(rejection)
     ? (rejection as ActivityLogEventFailureKind)
     : undefined;
@@ -1003,12 +1019,7 @@ function rejectedActivityLogEvent<Registration extends ActivityLogOperationRegis
     op: "server-log.write-failed",
     extra: { completeness: "unknown", loss: "event-dropped" },
   };
-  Object.defineProperty(event, ACTIVITY_LOG_EVENT_REJECTION, {
-    value: rejection,
-    enumerable: false,
-    configurable: false,
-    writable: false,
-  });
+  markActivityLogEventRejection(event, rejection);
   return event as unknown as BoundActivityLogEvent<Registration>;
 }
 

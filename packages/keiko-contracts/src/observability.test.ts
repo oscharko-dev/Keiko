@@ -580,6 +580,17 @@ describe("canonical Activity Log event validation", () => {
     );
   });
 
+  it("keeps a rejected event's rejection kind when it is rebound to a correlation id", () => {
+    const rejected = chatRequestDispatchEvent({ modelId: "/etc/passwd" });
+    const rebound = withActivityLogCorrelation(rejected, "req-00000001");
+
+    expect(rebound.correlationId).toBe("req-00000001");
+    // Without the marker the sink would log an unregistered operation instead of this rejection.
+    expect(() => validateRegisteredActivityLogEvent(rebound)).toThrow(
+      new ActivityLogEventValidationError("invalid-field-vocabulary"),
+    );
+  });
+
   it("leaves an event without a registration unmarked", () => {
     const rebound = withActivityLogCorrelation({ op: "unregistered.fixture" }, "req-00000001");
 
