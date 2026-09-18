@@ -4,9 +4,9 @@
 // branch here is proven in-process.
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
-// A release.yml publish is open from its dispatch until it completes, including while it waits for
-// the npm-publish approval: that approval is given for the commit the run was dispatched for, so the
-// tag must not move under it. The publish request reads the same set.
+// A release.yml publish is open from its human dispatch until it completes. Authorization and the
+// portable inputs are bound to the commit the run was dispatched for, so the tag must not move under
+// it. The read-only handoff reads the same set.
 export const OPEN_RUN_STATUSES = new Set([
   "requested",
   "waiting",
@@ -15,6 +15,11 @@ export const OPEN_RUN_STATUSES = new Set([
   "in_progress",
 ]);
 const WRITING_ACTIONS = new Set(["create", "move"]);
+export const PORTABLE_BUILD_OWNERS = Object.freeze({
+  DEV_REHEARSAL: "dev-rehearsal",
+  NONE: "none",
+  STABLE_TAG: "stable-tag",
+});
 
 class ReleaseCandidateError extends Error {}
 
@@ -36,7 +41,7 @@ function requireCommitSha(value, label) {
  * @param published         npm or GitHub already carries the version
  * @param remoteTagSha      the commit `v<version>` points at, or undefined when it does not exist
  * @param publishRunActive  a release.yml publish of this tag is open, waiting for approval included
- * @returns {{ action: "skip" | "keep" | "create" | "move", tag: string, reason: string }}
+ * @returns {{ action: "skip" | "keep" | "create" | "move", portableBuild: "none" | "dev-rehearsal" | "stable-tag", tag: string, reason: string }}
  */
 export function releaseCandidatePlan({
   candidateSha,
@@ -50,31 +55,70 @@ export function releaseCandidatePlan({
   requireCommitSha(devHeadSha, "the dev head");
   if (remoteTagSha !== undefined) requireCommitSha(remoteTagSha, "the release tag commit");
   const tag = readiness.releaseTag;
-  if (!readiness.ready) return { action: "skip", tag, reason: readiness.reason };
+  if (!readiness.ready) {
+    return {
+      action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
+      tag,
+      reason: readiness.reason,
+    };
+  }
   if (devHeadSha !== candidateSha) {
     return {
       action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
       tag,
       reason: `dev has moved on to ${devHeadSha}, the newer candidate`,
     };
   }
-  if (published) {
-    return { action: "skip", tag, reason: `${tag} is already published, and its tag never moves` };
-  }
-  if (remoteTagSha === candidateSha) {
-    return { action: "keep", tag, reason: `${tag} already points at ${candidateSha}` };
-  }
-  if (remoteTagSha === undefined) {
-    return { action: "create", tag, reason: `${tag} does not exist yet` };
-  }
+  return currentDevCandidatePlan({
+    candidateSha,
+    publishRunActive,
+    published,
+    remoteTagSha,
+    tag,
+  });
+}
+
+function currentDevCandidatePlan({ candidateSha, publishRunActive, published, remoteTagSha, tag }) {
   if (publishRunActive) {
     return {
       action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
       tag,
-      reason: `a publish of ${tag} is open, so the tag stays at ${remoteTagSha} until it ends`,
+      reason: `a publish of ${tag} is open, so no second portable build may start`,
     };
   }
-  return { action: "move", tag, reason: `${tag} moves from ${remoteTagSha} to the green dev head` };
+  if (published) {
+    return {
+      action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.DEV_REHEARSAL,
+      tag,
+      reason: `${tag} is already published, and its tag never moves`,
+    };
+  }
+  if (remoteTagSha === candidateSha) {
+    return {
+      action: "keep",
+      portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
+      tag,
+      reason: `${tag} already points at ${candidateSha}`,
+    };
+  }
+  if (remoteTagSha === undefined) {
+    return {
+      action: "create",
+      portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
+      tag,
+      reason: `${tag} does not exist yet`,
+    };
+  }
+  return {
+    action: "move",
+    portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
+    tag,
+    reason: `${tag} moves from ${remoteTagSha} to the green dev head`,
+  };
 }
 
 function readGithub(runGh, path) {
@@ -328,7 +372,10 @@ function runInputs(env, mode) {
 
 function reportRun({ appendFile, env, line, mode, plan }) {
   if (mode === "--plan" && env.GITHUB_OUTPUT) {
-    appendFile(env.GITHUB_OUTPUT, `action=${plan.action}\ntag=${plan.tag}\n`);
+    appendFile(
+      env.GITHUB_OUTPUT,
+      `action=${plan.action}\ntag=${plan.tag}\nportable-build=${plan.portableBuild}\n`,
+    );
   }
   if (env.GITHUB_STEP_SUMMARY) appendFile(env.GITHUB_STEP_SUMMARY, `${line}\n`);
 }

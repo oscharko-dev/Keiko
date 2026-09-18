@@ -1,4 +1,4 @@
-# Public API surface — 1.0.1
+# Public API surface — 1.0.5
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -44,6 +44,7 @@ details of the shipped artifact:
 @oscharko-dev/keiko-sdk
 @oscharko-dev/keiko-security
 @oscharko-dev/keiko-server
+@oscharko-dev/keiko-tool-catalog
 @oscharko-dev/keiko-tools
 @oscharko-dev/keiko-verification
 @oscharko-dev/keiko-workflows
@@ -83,6 +84,10 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 - 1.0.1 (2026-09-14): the first published 1.x release, with the 1.0.0 surface unchanged. The
   v1.0.0 GitHub release could not receive its downloads under immutable releases, and its tag
   name can never carry another release, so 1.0.0 was never published.
+- 1.0.2 through 1.0.5 (2026-09-15 through 2026-09-18): release automation, Coding Workbench
+  reliability, update/install hardening and build-tool maintenance changed without adding, removing
+  or renaming a root export, CLI flag or package entry point. The approved external surface remains
+  the 1.0.1 surface described above.
 - 0.3.17 (2026-09-10, PR #3452): the root barrel gains `boundWorkspaceFs` from
   `@oscharko-dev/keiko-workspace` — the filesystem port a consumer should resolve paths through for a
   `WorkspaceInfo` (the owned-root port the managed-worktree prover bound to it, else the caller's

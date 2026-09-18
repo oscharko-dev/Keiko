@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyReleaseCandidatePlan,
+  PORTABLE_BUILD_OWNERS,
   planReleaseCandidate,
   releaseCandidateMain,
   releaseCandidatePlan,
@@ -11,7 +12,7 @@ import {
 
 // ADR-0177 D8. On 2026-09-14 the v1.0.0 tag was cut by hand while dev CI was still running, and every
 // target failed its required-check wait one minute before ci turned green. The candidate workflow now
-// points the tag at a dev head only after CI succeeded, and never at a published version.
+// points the tag at the exact dev head and the stable build waits for that head's required checks.
 
 const REPO = "oscharko-dev/Keiko";
 const CANDIDATE = "a".repeat(40);
@@ -70,6 +71,7 @@ describe("releaseCandidatePlan", () => {
   it("creates the tag for an approved, unpublished version whose dev head is green", () => {
     expect(plan({})).toStrictEqual({
       action: "create",
+      portableBuild: PORTABLE_BUILD_OWNERS.STABLE_TAG,
       tag: TAG,
       reason: `${TAG} does not exist yet`,
     });
@@ -93,6 +95,29 @@ describe("releaseCandidatePlan", () => {
     ["a tag whose publish is open", { publishRunActive: true, remoteTagSha: OLDER }],
   ])("skips %s", (_label, overrides) => {
     expect(plan(overrides).action).toBe("skip");
+  });
+
+  it("assigns exactly one portable build owner for every candidate state", () => {
+    expect(plan({}).portableBuild).toBe(PORTABLE_BUILD_OWNERS.STABLE_TAG);
+    expect(plan({ remoteTagSha: CANDIDATE }).portableBuild).toBe(PORTABLE_BUILD_OWNERS.STABLE_TAG);
+    expect(plan({ published: true }).portableBuild).toBe(PORTABLE_BUILD_OWNERS.DEV_REHEARSAL);
+    expect(plan({ devHeadSha: OLDER }).portableBuild).toBe(PORTABLE_BUILD_OWNERS.NONE);
+    expect(plan({ publishRunActive: true, remoteTagSha: OLDER }).portableBuild).toBe(
+      PORTABLE_BUILD_OWNERS.NONE,
+    );
+  });
+
+  it.each([
+    ["already published", { published: true }],
+    ["tag absent", { remoteTagSha: undefined }],
+    ["tag at candidate", { remoteTagSha: CANDIDATE }],
+    ["tag at an older commit", { remoteTagSha: OLDER }],
+  ])("gives an active publish sole build ownership when the version is %s", (_label, state) => {
+    expect(plan({ ...state, publishRunActive: true })).toMatchObject({
+      action: "skip",
+      portableBuild: PORTABLE_BUILD_OWNERS.NONE,
+      reason: expect.stringContaining("no second portable build"),
+    });
   });
 
   it.each([
@@ -378,7 +403,7 @@ describe("runReleaseCandidate", () => {
     expect(result.plan.action).toBe("create");
     expect(writes).toStrictEqual([]);
     expect(appended).toStrictEqual([
-      ["/out", `action=create\ntag=${TAG}\n`],
+      ["/out", `action=create\ntag=${TAG}\nportable-build=stable-tag\n`],
       ["/summary", `Release candidate ${CANDIDATE}: create, ${TAG} does not exist yet.\n`],
     ]);
   });

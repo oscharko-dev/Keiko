@@ -8,8 +8,9 @@ name: Portable assets
 
 on:
   push:
-    # A dev push rehearses the stable release end to end without publishing it (rehearsal-readiness
-    # decides whether the dev head's version is approved at all); a stable v* tag runs the release.
+    # A stable v* tag owns the one authoritative release build. A dev push rehearses the chain only
+    # after its version is already published; the shared release-candidate planner prevents the same
+    # releasable SHA from running a rehearsal and a tag build in parallel.
     branches:
       - dev
     tags:
@@ -39,14 +40,16 @@ env:
 
 jobs:
   rehearsal-readiness:
-    name: Stable release rehearsal readiness
+    name: Select the portable build owner
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     timeout-minutes: 10
     outputs:
-      ready: ${{ steps.readiness.outputs.ready }}
+      ready: ${{ steps.plan.outputs.portable-build == 'dev-rehearsal' }}
+      owner: ${{ steps.plan.outputs.portable-build }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -57,11 +60,15 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Decide whether this dev head's version is approved for a stable release
-        id: readiness
-        # Not approved yet is a named status, not a failure: the rehearsal jobs below are skipped and
-        # the summary says why, so the lane does not stand red between two releases.
-        run: node scripts/portable-rehearsal-readiness.mjs
+      - name: Select the only workflow that may build this dev commit
+        id: plan
+        # The same planner owns tag creation and rehearsal admission. An approved unpublished
+        # version belongs to its stable-tag build; an already-published version may rehearse future
+        # code on dev. A stale run or open publish owns no build and fails closed.
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-candidate.mjs --plan
 
   stage:
     name: Stage and smoke portable asset (${{ matrix.platform_target }})
@@ -411,9 +418,11 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: portable-stage-*
-          path: portable-release-assets/artifacts
+          path: portable-stage-downloads
+      - name: Create the clean release bundle root
+        run: mkdir portable-release-assets
       - name: Assemble and validate the release asset bundle
-        run: node scripts/assemble-portable-release-assets.mjs --bundle-root portable-release-assets --commit-sha "$GITHUB_SHA" --release-tag "v$(node -p 'require("./package.json").version')" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --version "$(node -p 'require("./package.json").version')"
+        run: node scripts/assemble-portable-release-assets.mjs --bundle-root portable-release-assets --stages-root portable-stage-downloads --commit-sha "$GITHUB_SHA" --release-tag "v$(node -p 'require("./package.json").version')" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --version "$(node -p 'require("./package.json").version')"
       - name: Attest build provenance for portable release artifacts
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
@@ -459,22 +468,21 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  request-publish:
-    name: Request the publish of this stable build
+  publish-handoff:
+    name: Prepare human publish authorization
     needs: assemble
-    # ADR-0177 D8: a stable tag build asks release.yml to publish exactly this run's bundle. The dev
-    # rehearsal and manual dispatches never do, and the publish job keeps its npm-publish approval.
+    # A stable build prepares an exact, read-only handoff after required checks pass. Publishing is
+    # deliberately started by an allowlisted human workflow_dispatch; a GITHUB_TOKEN dispatch is
+    # attributed to github-actions[bot] and cannot satisfy release.yml's human-actor guard.
     if: ${{ !cancelled() && needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
-      # Dispatching release.yml and cancelling an older candidate's publish that still waits for its
-      # approval. Neither can publish: every publish job still needs the npm-publish review.
-      actions: write
+      actions: read
       checks: read
       contents: read
       statuses: read
     # The tag is written on the dev push, so this build runs beside the commit's CI; this job waits
-    # for the six release-required checks (at most 90 minutes) before it asks for a publish.
+    # for the six release-required checks (at most 90 minutes) before it emits the owner handoff.
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -490,11 +498,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: RELEASE_SHA="$GITHUB_SHA" node scripts/verify-release-required-checks.mjs
-      - name: Request the publish of this build
+      - name: Prepare the exact human publish command
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           RUN_ID: ${{ github.run_id }}
           SOURCE_SHA: ${{ github.sha }}
-        run: node scripts/request-release-publish.mjs
+        run: node scripts/release-publish-handoff.mjs

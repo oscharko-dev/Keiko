@@ -1,9 +1,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       publish:
@@ -59,8 +56,8 @@ jobs:
   # portable-assets to conclude on the tag SHA — a time-driven wait for something that has an event
   # source. An event-driven cross-workflow dispatcher was considered and withdrawn: a default
   # GITHUB_TOKEN dispatch attributes triggering_actor to `github-actions[bot]`, which the publish
-  # guard below refuses (correctly — a bot-triggered publish is exactly what the guard exists to
-  # refuse). The button on this workflow is the authoritative dispatch. The publish job still
+  # guard below refuses. No workflow dispatches this workflow automatically: the button (or an
+  # authenticated owner CLI call) is the authoritative human authorization. The publish job still
   # verifies the required checks itself (defence in depth) and never waits for CI inside the
   # approved deployment.
   publish:
@@ -69,28 +66,24 @@ jobs:
     # Two gates keep it safe:
     #   - `!endsWith(github.triggering_actor, '[bot]')`: refuses any bot-triggered dispatch, so a
     #     token holding `actions: write` alone (dependabot, a compromised app) cannot dispatch a
-    #     publish. github.triggering_actor is the account that pressed the button — even when the
-    #     workflow is dispatched from another workflow via GITHUB_TOKEN it carries the human actor.
-    #   - `contains(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS, github.triggering_actor)`: refuses any
+    #     publish. A dispatch from another workflow via GITHUB_TOKEN records github-actions[bot]
+    #     here, regardless of the human who caused the upstream event.
+    #   - exact membership in the JSON-array `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`: refuses any
     #     dispatch by an account that is not in the release-owner allowlist recorded in the repo
-    #     variable. Empty/missing allowlist refuses every dispatch.
-    # The `npm-publish` environment protection still stands as defence in depth until the
-    # product-owner removes its reviewer after the security tests are green.
+    #     variable. Empty, missing, or malformed configuration refuses every dispatch.
+    # The environment scopes the release signing key and npm Trusted Publisher identity. Repository
+    # settings currently impose no required-reviewer rule there, so the allowlisted non-bot dispatch
+    # is the live human-control boundary and must remain explicit.
     if: >-
       github.event_name == 'workflow_dispatch'
       && inputs.publish
       && startsWith(github.ref, 'refs/tags/v')
       && !endsWith(github.triggering_actor, '[bot]')
-      && contains(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS, github.triggering_actor)
+      && contains(fromJSON(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS), github.triggering_actor)
     runs-on: ubuntu-latest
-    # The approval boundary that keeps API-driven dispatch human-controlled: `actions: write` on
-    # any job token in this repository (today only infra-failure-retry; the quality reviewer
-    # holds none since its artifact migration) is enough to call the workflow-dispatch endpoint
-    # with an existing v* tag and publish=true —
-    # so without this environment, a compromised dependency holding that scope could initiate a
-    # production npm publish. The environment requires a human review before any step runs, which
-    # restores the invariant that publishing is a person's decision (ADR-0170 D3 records the
-    # residual-risk analysis that led here). Raised by the Codex reviewer on #2931.
+    # The environment scopes credentials but currently has no reviewer rule. Human control comes
+    # from the job guard above: a compromised job with actions:write dispatches as a bot and this
+    # job never starts. The npm Trusted Publisher remains bound to this workflow and environment.
     environment: npm-publish
     permissions:
       actions: read
@@ -136,8 +129,8 @@ jobs:
       - name: Verify required checks for release SHA
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # The publish request dispatched this run only after every required check passed, so this
-          # re-verifies them and never waits for CI inside the approved deployment.
+          # The stable build emitted the owner handoff only after every required check passed, so
+          # this re-verifies them and never waits for CI inside the authorized deployment.
           RELEASE_CHECK_TIMEOUT_SECONDS: "60"
         run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate publish dist-tag
@@ -196,7 +189,7 @@ jobs:
       - name: Build workspace packages
         # --ignore-scripts builds nothing, and release-publish.mjs imports the portable release trust
         # from @oscharko-dev/keiko-security's packages/*/dist. No publish ran after that import was
-        # added, so this job would have died with ERR_MODULE_NOT_FOUND after the npm-publish approval.
+        # added, so this job would have died with ERR_MODULE_NOT_FOUND after owner authorization.
         run: npm run build:packages
       - name: Publish package
         # No NODE_AUTH_TOKEN/NPM_TOKEN here by design: this job authenticates to the npm

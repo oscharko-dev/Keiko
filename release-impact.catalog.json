@@ -2172,6 +2172,58 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.5",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.5",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": true,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-18-keiko-1.0.5-release-orchestration-hardening",
+      "releaseNoteCategory": "internal-only",
+      "releaseNotePriority": "internal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Release delivery and build tooling only. Keiko 1.0.5 does not add, remove or rename a public export, CLI flag, package entry point, state store or product-runtime behavior. A green approved dev SHA now owns one portable build instead of duplicate dev and tag matrices, the stable build emits a read-only exact handoff for an allowlisted human rather than a bot-attributed dispatch the publisher rejects, and the canonical handoff artifact excludes expanded duplicate payload trees. The reviewed build-tool updates are @babel/preset-env 8.0.5, Vite 8.3.0 and Autoprefixer 10.5.6.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Release delivery: each approved dev SHA is built once, the compact portable handoff keeps only publish-required archives and evidence, and publication starts from an exact allowlisted human dispatch.",
+        "Build tooling: @babel/preset-env 8.0.5, Vite 8.3.0 and Autoprefixer 10.5.6 carry reviewed correctness and performance fixes without changing Keiko's public surface."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-18",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3548",
+        "rationale": "The release owner explicitly requested completion of every follow-up recorded in #3548, consolidation of the current safe Dependabot updates, protected integration through PR #3549, and a fully monitored 1.0.5 release. The version is the production proof that one build owner, the compact immutable bundle and the explicit human authorization boundary work end to end.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }

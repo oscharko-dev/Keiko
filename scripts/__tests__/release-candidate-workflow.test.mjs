@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 // ADR-0177 D8 pins. The release candidate is the one place a workflow may write a release tag, and
-// the stable build's publish request is the one place a workflow may dispatch release.yml, so their
-// triggers, grants, secrets and step order are fixed here.
+// the stable build's read-only handoff is the one place that prepares the exact owner command, so
+// their triggers, grants, secrets and step order are fixed here.
 
 const workflows = resolve(import.meta.dirname, "../../.github/workflows");
 const candidateSource = readFileSync(resolve(workflows, "release-candidate.yml"), "utf8");
@@ -43,8 +43,8 @@ describe("release candidate workflow", () => {
   });
 
   it("writes the tag at once, with a contents-only App token from its environment", () => {
-    // The tag build now runs beside the commit's CI; the release-required checks gate the publish
-    // request at the end of that build instead (see the stable build publish request below).
+    // The tag build runs beside the commit's CI; the release-required checks gate the read-only
+    // human handoff at the end of that build.
     const { tag } = candidate.jobs;
     expect(tag.needs).toBe("plan");
     // Explicit !cancelled() guard added in Epic #3495 (#3502): the tag job needs the plan job,
@@ -119,15 +119,15 @@ describe("release workflow commit binding", () => {
   });
 });
 
-describe("stable build publish request", () => {
-  it("asks for a publish only after a stable tag build assembled, with no secrets", () => {
-    const job = portable.jobs["request-publish"];
+describe("stable build publish handoff", () => {
+  it("prepares human authorization only after a stable tag build assembled, with no write grant", () => {
+    const job = portable.jobs["publish-handoff"];
     expect(job.needs).toBe("assemble");
     expect(job.if).toBe(
       "${{ !cancelled() && needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}",
     );
     expect(job.permissions).toStrictEqual({
-      actions: "write",
+      actions: "read",
       checks: "read",
       contents: "read",
       statuses: "read",
@@ -150,7 +150,7 @@ describe("stable build publish request", () => {
         RUN_ID: "${{ github.run_id }}",
         SOURCE_SHA: "${{ github.sha }}",
       },
-      run: "node scripts/request-release-publish.mjs",
+      run: "node scripts/release-publish-handoff.mjs",
     });
   });
 });
