@@ -36,7 +36,10 @@ import {
   readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
 import { logGitChangeApply } from "../chat-activity.js";
+import { writeActivityLogPolicyRecord } from "./activity-log-store.js";
 import {
+  DEFAULT_ACTIVITY_LOG_PIN_QUOTA_BYTES,
+  DEFAULT_ACTIVITY_LOG_RETENTION_DAYS,
   closeFileServerLogSinks,
   createFileServerLogSink,
   formatServerLogLine,
@@ -224,6 +227,48 @@ describe("Activity Log storage evidence proofs (#3532)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("records one policy-conflict line when a later process's env disagrees with the stored budget (#3554)", () => {
+    const dir = logsDirOf(stateDir);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // A store already governed by a smaller budget than this process's own env.
+    writeActivityLogPolicyRecord(dir, dir, {
+      schemaVersion: 1,
+      retentionBytes: 8 * 1024 * 1024,
+      retentionDays: DEFAULT_ACTIVITY_LOG_RETENTION_DAYS,
+      pinQuotaBytes: DEFAULT_ACTIVITY_LOG_PIN_QUOTA_BYTES,
+    });
+    // A live peer's active segment (this process's own parent, certainly alive), so this process
+    // may only ADOPT the stored policy, never replace it.
+    const peerSegment = activityLogSegmentFileName(
+      { startMs: Date.now(), pid: process.ppid, instanceId: "eeeeeeee", index: 1 },
+      "active",
+    );
+    writeFileSync(join(dir, peerSegment), "", { mode: 0o600 });
+
+    const sink = createFileServerLogSink(stateDir, {
+      level: "debug",
+      env: { KEIKO_LOG_RETENTION_BYTES: String(32 * 1024 * 1024) },
+    });
+    logGitChangeApply(sink, "corr-policy-conflict-01", "preview");
+
+    const [conflictLine] = lines("activity-log.policy.conflict");
+    const conflict = expectActivityLogProof(
+      "activity-log.policy.conflict.emitted-line",
+      conflictLine ?? "",
+    );
+    expect(conflict).toMatchObject({
+      policyResolution: "adopted",
+      conflictingSettings: ["retentionBytes"],
+      storedRetentionBytes: 8 * 1024 * 1024,
+      requestedRetentionBytes: 32 * 1024 * 1024,
+      storedPinQuotaBytes: DEFAULT_ACTIVITY_LOG_PIN_QUOTA_BYTES,
+      requestedPinQuotaBytes: DEFAULT_ACTIVITY_LOG_PIN_QUOTA_BYTES,
+      errorKind: "conflict",
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   it("creates a window pin and persists its evidence through the real pin path", () => {

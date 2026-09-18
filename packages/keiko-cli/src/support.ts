@@ -19,7 +19,10 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
   type ActivityLogFields,
+  ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_DIRECTORY_NAME,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   DIAGNOSTIC_SUFFICIENCY_STATUSES,
   parseActivityLogFileName,
@@ -171,7 +174,11 @@ log more than five minutes behind the analysis clock is reported as stale; bundl
 artifacts and are never presented as live processes.
 --correlation-id narrows to a single id; --json emits the machine-readable form. --clusters prints
 a whole-file view of every parsed line grouped by (category, op, errorKind), independent of
---correlation-id: a count and up to 5 sample correlation ids per group. --seed (requires
+--correlation-id: a count and up to 5 sample correlation ids per group. --clusters --json is a
+deprecated, unversioned bare array kept byte-compatible for existing readers; it prints a one-line
+stderr deprecation notice on every use naming its versioned replacement, the clusters member of
+plain --json (kind keiko.support.analyze, schemaVersion 1), which carries the same data inside a
+versioned envelope. --seed (requires
 --correlation-id) prints a ReproductionSeed — a gatewayScript/httpRequest/storeFingerprint/
 indexingJob/issueToPrJourney/stackFrames/causeChain reconstruction for that one correlationId, plus
 a warnings field naming exactly what could not be reconstructed and why. --emit-fixture PATH (requires
@@ -1814,6 +1821,26 @@ const SUPPORT_ANALYZE_KIND = "keiko.support.analyze";
 const SUPPORT_ANALYZE_TIMELINE_KIND = "keiko.support.analyze-timeline";
 const SUPPORT_ANALYZE_SCHEMA_VERSION = 1;
 
+// The same provenance shape `keiko support query` and `export`'s selection carry (#3531 audit):
+// which build and registry produced this analysis, so a report read later, or on another machine,
+// can be judged against the exact catalog that classified it. Additive: every existing field of
+// both JSON forms stays unchanged.
+interface SupportAnalyzeProvenance {
+  readonly productVersion: string;
+  readonly registryVersion: number;
+  readonly schemaDigest: string;
+  readonly catalogDigest: string;
+}
+
+function analyzeProvenance(): SupportAnalyzeProvenance {
+  return {
+    productVersion: KEIKO_PRODUCT_VERSION,
+    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+  };
+}
+
 function emitSingleTimeline(
   timeline: LogTimeline,
   result: AnalyzeAllResult,
@@ -1825,6 +1852,7 @@ function emitSingleTimeline(
     const payload = {
       kind: SUPPORT_ANALYZE_TIMELINE_KIND,
       schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION,
+      provenance: analyzeProvenance(),
       ...timeline,
       malformedLineCount: result.malformedLineCount,
       sufficiency: timelineSufficiency(result, timeline),
@@ -1838,7 +1866,11 @@ function emitSingleTimeline(
 }
 
 function emitAllTimelines(result: SupportAnalysisReport, json: boolean, io: CliIo): number {
-  const payload = { kind: SUPPORT_ANALYZE_KIND, schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION };
+  const payload = {
+    kind: SUPPORT_ANALYZE_KIND,
+    schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION,
+    provenance: analyzeProvenance(),
+  };
   io.out(
     json
       ? `${JSON.stringify({ ...payload, ...result })}\n`
@@ -1851,7 +1883,21 @@ function emitAllTimelines(result: SupportAnalysisReport, json: boolean, io: CliI
 // of --correlation-id (support-analyze.ts's `renderHumanClusters` docstring reserves it for
 // exactly this flag). Emits the bare `OpCluster[]` under --json, never nested inside a larger
 // envelope, since this is deliberately a focused report, not a slice of the default output.
+//
+// That bare array predates the versioned machine profiles (#3531) and stays byte-compatible: no
+// reader of it breaks. But it is itself unversioned, with no stated compatibility or deprecation
+// path (#3531 Update Impact) — and `keiko support analyze --json`'s own `clusters` member (kind
+// `keiko.support.analyze`, schemaVersion 1) now carries exactly the same `OpCluster[]` data inside
+// a versioned envelope. `--clusters --json` is therefore the explicit deprecation path itself: keep
+// the array exactly as it was, and name the versioned replacement on stderr every time it is used.
 function emitClusters(clusters: readonly OpCluster[], json: boolean, io: CliIo): number {
+  if (json) {
+    io.err(
+      "keiko support analyze: --clusters --json is a deprecated, unversioned bare array; use " +
+        `the clusters member of keiko support analyze --json (${SUPPORT_ANALYZE_KIND} v` +
+        `${String(SUPPORT_ANALYZE_SCHEMA_VERSION)}) instead.\n`,
+    );
+  }
   io.out(json ? `${JSON.stringify(clusters)}\n` : renderHumanClusters(clusters));
   return 0;
 }

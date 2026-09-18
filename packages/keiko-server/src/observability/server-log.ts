@@ -106,6 +106,7 @@ import {
   activityLogPinCovers,
   activityLogSegmentSeqSpan,
   applyActivityLogRetention,
+  clampActivityLogSegmentBytes,
   inspectActivityLogSegmentTail,
   isActivityLogPinId,
   isActivityLogPinScope,
@@ -114,8 +115,11 @@ import {
   planActivityLogPinProtection,
   processIsAlive,
   readActivityLogPins,
+  readActivityLogPolicyRecord,
   removeActivityLogFile,
+  ACTIVITY_LOG_POLICY_SETTINGS,
   resolveActivityLogStorageConfig,
+  resolveActivityLogStorePolicy,
   writeActivityLogPinRecord,
   type ActivityLogDirectoryListing,
   type ActivityLogFileEntry,
@@ -125,6 +129,8 @@ import {
   type ActivityLogPinReason,
   type ActivityLogPinRecord,
   type ActivityLogPinScope,
+  type ActivityLogPolicyConflict,
+  type ActivityLogPolicyValues,
   type ActivityLogRetentionOutcome,
   type ActivityLogSegmentTail,
   type ActivityLogStorageConfig,
@@ -1359,10 +1365,49 @@ const ACTIVITY_LOG_PIN_QUOTA_EXHAUSTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// A cooperating process's own env disagreed with the store's governing policy (#3554): it either
+// adopted the stored bounds, or — the sole live writer, e.g. a clean restart with a changed env —
+// replaced them. Never fired when nothing disagreed.
+const ACTIVITY_LOG_POLICY_CONFLICT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "activity-log.policy.conflict",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.policyConflictEvidence",
+  fields: {
+    policyResolution: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["adopted", "replaced"],
+    },
+    conflictingSettings: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["retentionBytes", "retentionDays", "pinQuotaBytes"],
+      maxItems: 3,
+    },
+    storedRetentionBytes: { type: "integer", dataClass: "count", required: true },
+    requestedRetentionBytes: { type: "integer", dataClass: "count", required: true },
+    storedRetentionDays: { type: "integer", dataClass: "count", required: true },
+    requestedRetentionDays: { type: "integer", dataClass: "count", required: true },
+    storedPinQuotaBytes: { type: "integer", dataClass: "count", required: true },
+    requestedPinQuotaBytes: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-policy"],
+  proofIds: ["activity-log.policy.conflict.emitted-line"],
+  releaseImpact: "patch",
+});
+
 /**
  * The operations the Activity Log store writes about itself (opening, sealing, recovering, pruning,
- * pressure, pins), derived from their registrations. A reader that wants only the producers'
- * evidence filters these out instead of restating the list.
+ * pressure, pins, policy), derived from their registrations. A reader that wants only the
+ * producers' evidence filters these out instead of restating the list.
  */
 export const ACTIVITY_LOG_STORAGE_OPERATIONS: ReadonlySet<string> = new Set([
   SERVER_LOG_SAFE_OPEN_OPERATION.op,
@@ -1373,6 +1418,7 @@ export const ACTIVITY_LOG_STORAGE_OPERATIONS: ReadonlySet<string> = new Set([
   ACTIVITY_LOG_PIN_CREATED_OPERATION.op,
   ACTIVITY_LOG_PIN_EXPIRED_OPERATION.op,
   ACTIVITY_LOG_PIN_QUOTA_EXHAUSTED_OPERATION.op,
+  ACTIVITY_LOG_POLICY_CONFLICT_OPERATION.op,
 ]);
 
 // ─── The one writer per Activity Log directory ─────────────────────────────────────────────────
@@ -1406,7 +1452,17 @@ interface ActiveLog {
   // The Activity Log directory itself is the trust root of every mutation: invariant 15 requires it
   // to be owner-only and non-redirected, and its identity is rechecked around each seal and delete.
   readonly trustedRoot: string;
-  readonly config: ActivityLogStorageConfig;
+  // Mutable: the env-resolved config at creation, merged with the store's governing policy the
+  // first time real storage work happens (`ensureGovernedPolicy`, #3554) — never before, so a sink
+  // that never logs anything past its threshold never touches the policy file.
+  config: ActivityLogStorageConfig;
+  // The config this process resolved from its own env, kept so a refreshed governing policy can be
+  // merged into it again (#3554).
+  readonly envConfig: ActivityLogStorageConfig;
+  // True once `ensureGovernedPolicy` has run for this directory in this process.
+  policyResolved: boolean;
+  // The governing retention and pin-quota values this process currently applies.
+  governed: ActivityLogPolicyValues | undefined;
   segment: ActiveSegment | undefined;
   nextIndex: number;
   lastStartMs: number;
@@ -1450,6 +1506,23 @@ function activeLogKey(directory: string): string {
   }
 }
 
+// Merges the store's governing policy outcome into a per-process, env-resolved config: segment
+// size/age stay per-writer, but retention bytes/days and the pin quota are always the GOVERNED
+// values, re-clamping segmentBytes against them with the exact invariant
+// `resolveActivityLogStorageConfig` itself applies (never restated — #3554).
+function applyGovernedPolicy(
+  envConfig: ActivityLogStorageConfig,
+  governed: ActivityLogPolicyValues,
+): ActivityLogStorageConfig {
+  return {
+    ...envConfig,
+    retentionBytes: governed.retentionBytes,
+    retentionDays: governed.retentionDays,
+    pinQuotaBytes: governed.pinQuotaBytes,
+    segmentBytes: clampActivityLogSegmentBytes(envConfig.segmentBytes, governed.retentionBytes),
+  };
+}
+
 function resolveActiveLog(directory: string, config: ActivityLogStorageConfig): ActiveLog {
   const key = activeLogKey(directory);
   const existing = activeLogs.get(key);
@@ -1458,6 +1531,9 @@ function resolveActiveLog(directory: string, config: ActivityLogStorageConfig): 
     directory,
     trustedRoot: directory,
     config,
+    envConfig: config,
+    policyResolved: false,
+    governed: undefined,
     segment: undefined,
     nextIndex: 1,
     lastStartMs: 0,
@@ -1475,6 +1551,80 @@ function resolveActiveLog(directory: string, config: ActivityLogStorageConfig): 
   };
   activeLogs.set(key, created);
   return created;
+}
+
+// Merges the store's ONE governing policy (#3554) into this directory's config, evidencing a
+// disagreement, the first time real storage work is imminent for it in this process — never at
+// sink creation, so a sink that never logs a passing-threshold event never touches the policy
+// file (the below-threshold burst-cost invariant this file's own header documents). Idempotent:
+// a pin request or durable batch append calls this eagerly (never speculative, unlike sink
+// creation), and an ordinary write calls it once its threshold check has already passed.
+function ensureGovernedPolicy(active: ActiveLog, correlationId: string | undefined): void {
+  if (active.policyResolved) return;
+  active.policyResolved = true;
+  const outcome = resolveActivityLogStorePolicy(
+    active.directory,
+    active.trustedRoot,
+    {
+      retentionBytes: active.config.retentionBytes,
+      retentionDays: active.config.retentionDays,
+      pinQuotaBytes: active.config.pinQuotaBytes,
+    },
+    { pid: process.pid, instanceId: INSTANCE_ID, isAlive: processIsAlive },
+  );
+  active.governed = governedValues(outcome);
+  active.config = applyGovernedPolicy(active.envConfig, outcome);
+  if (outcome.conflict !== undefined) {
+    queueEvidence(active, policyConflictEvidence(outcome.conflict, correlationId));
+  }
+}
+
+function governedValues(values: ActivityLogPolicyValues): ActivityLogPolicyValues {
+  return {
+    retentionBytes: values.retentionBytes,
+    retentionDays: values.retentionDays,
+    pinQuotaBytes: values.pinQuotaBytes,
+  };
+}
+
+// Every maintenance pass re-applies the store's CURRENT governing policy before it deletes anything
+// (#3554). A record another process replaced after this one resolved it (a sole-writer restart while
+// this process held no active segment) governs this process's retention from its next pass on, so
+// no two processes prune under different budgets beyond one pass, and a disagreement with this
+// process's own env is evidenced again.
+function refreshGovernedPolicy(active: ActiveLog, correlationId: string | undefined): void {
+  if (active.governed === undefined) return;
+  const stored = readActivityLogPolicyRecord(active.directory, active.trustedRoot);
+  const current = active.governed;
+  if (
+    stored === undefined ||
+    ACTIVITY_LOG_POLICY_SETTINGS.every((key) => stored[key] === current[key])
+  ) {
+    return;
+  }
+  active.governed = governedValues(stored);
+  active.config = applyGovernedPolicy(active.envConfig, stored);
+  const requested = governedValues(active.envConfig);
+  const conflictingSettings = ACTIVITY_LOG_POLICY_SETTINGS.filter(
+    (key) => stored[key] !== requested[key],
+  );
+  if (conflictingSettings.length === 0) return;
+  queueEvidence(
+    active,
+    policyConflictEvidence(
+      { resolution: "adopted", conflictingSettings, stored: active.governed, requested },
+      correlationId,
+    ),
+  );
+}
+
+// Real storage work is never speculative here (a pin request or a durable batch append IS the
+// work), so this resolves the store's governing policy eagerly instead of waiting for a write that
+// always follows at once.
+function resolveGovernedActiveLog(directory: string, env: ServerLogEnv): ActiveLog {
+  const active = resolveActiveLog(directory, resolveActivityLogStorageConfig(env));
+  ensureGovernedPolicy(active, undefined);
+  return active;
 }
 
 function peekIdentity(
@@ -1947,6 +2097,37 @@ function pinQuotaExhaustedEvidence(
   );
 }
 
+// A cooperating process's own env disagreed with the store's one governing policy: "adopted" means
+// the stored bounds won (this process's own view is overridden); "replaced" means this process was
+// the store's sole live writer and its own bounds now govern (e.g. a clean restart with a changed
+// `KEIKO_LOG_RETENTION_BYTES`).
+function policyConflictEvidence(
+  conflict: ActivityLogPolicyConflict,
+  correlationId: string | undefined,
+): ServerLogEvent {
+  const replaced = conflict.resolution === "replaced";
+  return activityLogEvent(
+    ACTIVITY_LOG_POLICY_CONFLICT_OPERATION,
+    {
+      level: replaced ? "info" : "warn",
+      correlationId: correlationIdOrUnknown(correlationId),
+      ...(replaced ? {} : { errorKind: "conflict" as const }),
+    },
+    {
+      policyResolution: conflict.resolution,
+      conflictingSettings: conflict.conflictingSettings,
+      storedRetentionBytes: conflict.stored.retentionBytes,
+      requestedRetentionBytes: conflict.requested.retentionBytes,
+      storedRetentionDays: conflict.stored.retentionDays,
+      requestedRetentionDays: conflict.requested.retentionDays,
+      storedPinQuotaBytes: conflict.stored.pinQuotaBytes,
+      requestedPinQuotaBytes: conflict.requested.pinQuotaBytes,
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+}
+
 // ─── Maintenance: recovery, pin expiry, retention, quota, pressure ─────────────────────────────
 
 function sharesInode(left: string, right: string): boolean {
@@ -2396,6 +2577,7 @@ function runMaintenance(active: ActiveLog, cursor: WriteCursor, reserveBytes: nu
   if (!durableLogDirectory(active.directory)) {
     throw new SafeArtifactFileError("activity-log", "unsafe-ancestor");
   }
+  refreshGovernedPolicy(active, cursor.correlationId);
   const nowMs = Date.now();
   recoverOrphanedSegments(active, cursor, listActivityLogDirectory(active.directory), nowMs);
   return applyRetention(active, cursor, nowMs, reserveBytes).admitted;
@@ -2871,6 +3053,7 @@ function createFileSinkFacade(
     write(event: ServerLogEvent): void {
       // The threshold check comes before any formatting: a filtered event costs one comparison.
       if (!serverLogLevelEnabled(eventLevel(event), threshold)) return;
+      ensureGovernedPolicy(active, event.correlationId);
       const identity = allocateServerLogIdentity();
       try {
         persistCallerEvent(active, event, {
@@ -3065,7 +3248,7 @@ function createPin(
 function storeForStateDir(stateDir: string, env: ServerLogEnv): ActiveLog {
   const directory = join(stateDir, "logs");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  return resolveActiveLog(directory, resolveActivityLogStorageConfig(env));
+  return resolveGovernedActiveLog(directory, env);
 }
 
 function persistPinLine(
@@ -3339,13 +3522,22 @@ function storageSnapshot(
  * A cheap, read-only snapshot of the Activity Log store: one directory listing, the small pin
  * records, and one `statfs`. Never creates, seals, or deletes anything.
  */
+// Read-only: never publishes or replaces the stored policy, only prefers it when present so a
+// probe run before this process has become a writer (e.g. `keiko status`) still reports the
+// governing budget instead of this process's own unreconciled env view.
+function peekGovernedStorageConfig(directory: string, env: ServerLogEnv): ActivityLogStorageConfig {
+  const envConfig = resolveActivityLogStorageConfig(env);
+  const stored = readActivityLogPolicyRecord(directory, directory);
+  return stored === undefined ? envConfig : applyGovernedPolicy(envConfig, stored);
+}
+
 export function activityLogStorageHealth(
   stateDir: string,
   env: ServerLogEnv = process.env,
 ): ActivityLogStoreHealth {
   const directory = join(stateDir, "logs");
   const active = activeLogs.get(activeLogKey(directory));
-  const config = active?.config ?? resolveActivityLogStorageConfig(env);
+  const config = active?.config ?? peekGovernedStorageConfig(directory, env);
   const snapshot = storageSnapshot(stateDir, directory, config);
   const writer = writerView(active);
   const files = snapshot.listing.files;
@@ -3657,7 +3849,7 @@ function prepareDurableDirectory(
   const logGuard = openLogDirectoryGuard(directory);
   if (logGuard === undefined) return undefined;
   guards.push(logGuard);
-  return resolveActiveLog(directory, resolveActivityLogStorageConfig(process.env));
+  return resolveGovernedActiveLog(directory, process.env);
 }
 
 function inspectAndAppendDurableBatch(

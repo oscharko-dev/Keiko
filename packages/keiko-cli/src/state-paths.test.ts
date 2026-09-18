@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
   activityLogPinFileName,
   activityLogSegmentFileName,
   supportIncidentFileName,
@@ -321,6 +322,7 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "logs", SEALED_SEGMENT));
   touch(join(stateDir, "logs", ACTIVE_SEGMENT));
   touch(join(stateDir, "logs", PIN_RECORD));
+  touch(join(stateDir, "logs", ACTIVITY_LOG_STORE_POLICY_FILE_NAME)); // #3554 store policy record
   touch(join(stateDir, "logs", "activity-not-a-segment.jsonl")); // outside the grammar — retained
   touch(join(stateDir, "logs", "operator-notes.txt")); // a foreign file — must be retained
   mkdirSync(join(stateDir, "logs", "archive"), { recursive: true });
@@ -456,6 +458,9 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, `logs/${SEALED_SEGMENT}`)).toBe("activity-log");
     expect(categoryOf(scan, `logs/${ACTIVE_SEGMENT}`)).toBe("activity-log");
     expect(categoryOf(scan, `logs/${PIN_RECORD}`)).toBe("activity-log");
+    // #3554: the store's one governing policy record is owned (repair/uninstall must claim it)
+    // through the same shared grammar, never a second hand-written name here.
+    expect(categoryOf(scan, `logs/${ACTIVITY_LOG_STORE_POLICY_FILE_NAME}`)).toBe("activity-log");
     // `logsSubtree` is classified, not `whole`: only the Activity Log's closed grammar (segments,
     // pin records, legacy files) is owned. A foreign file, a near-miss name, or an unexpected nested
     // directory under `logs/` must be retained, not claimed by `repair`/`uninstall` (#2902 PR review).

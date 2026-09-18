@@ -32,6 +32,15 @@ and age across every segment and legacy file, with crash recovery, retention pin
 quota, and closed body-free evidence for sealing, recovery, retention, pressure and pins.
 `server-log.rotation` and `server-log.capacity-warning` are retired.
 
+Amended by #3554 on 2026-09-18: several cooperating processes sharing one `logs/` directory
+previously resolved `KEIKO_LOG_RETENTION_BYTES`/`_DAYS`/`KEIKO_LOG_PIN_QUOTA_BYTES` purely from their
+own env, so the byte bound above held only per process, not across them (D14). One closed-grammar
+`store-policy.json` record now holds the values every cooperating process actually enforces: the
+first process to find no valid record publishes it, race-safe; every later process applies the
+STORED values regardless of its own env and records one `activity-log.policy.conflict` line per
+process lifetime when they differ; a process may replace a stale or corrupt record only while it is
+the directory's sole live writer.
+
 Amended by #3529 on 2026-09-17: the heuristic operation inventory is now a non-authoritative
 migration view. Canonical TypeScript-resolved registrations form the versioned production registry,
 derive exact emitter types, and are revalidated at the serialization boundary. Persisted v2
@@ -892,6 +901,7 @@ reader import it; nothing restates it.
 | `activity-<start>-<pid>-<instance>-<index>.jsonl`        | A sealed segment: read-only (`0400`), never rewritten.                 |
 | `server-YYYY-MM-DD.log`, `server.log`                    | Legacy files of the retired daily rotation. Read-only.                 |
 | `pin-<24 hex>.json`                                      | A retention-pin record.                                                |
+| `store-policy.json`                                      | The store's one governing policy record (#3554); never log content.   |
 
 `<start>` is the segment's UTC start time (`YYYYMMDDTHHMMSSmmmZ`), `<pid>` and `<instance>` are the
 envelope's process identity, and `<index>` counts that instance's segments from `000001`. Sealing
@@ -948,6 +958,26 @@ the segment about to open.
   evidence.
 
 Total disk use is therefore at most the byte budget plus the pin quota.
+
+**One governing policy across processes (#3554).** The five variables above are read from each
+process's own env, so several cooperating processes — a long-running server plus a one-off CLI
+invocation, or two server instances across a restart — could previously enforce retention under
+different views of the budget: a smaller one could prune segments a larger one relied on to keep,
+and a larger one was never capped by a stricter peer's limit. `store-policy.json` (deliberately
+outside the grammar above and never read as log content) now holds the retention bytes/days and pin
+quota every cooperating process enforces. The first process that finds no valid record publishes its
+own, race-safe through the same exclusive-create primitive pin records use. Every later process
+applies the STORED values, whatever its own env says, and — when they differ — records one
+`activity-log.policy.conflict` line per process lifetime: the differing setting names, and the
+stored and requested values, as closed and bounded fields. A process may replace a stale or corrupt
+record only while it is the store's sole live writer (every other active segment belongs to a
+confirmed-exited instance), which is what lets a changed `KEIKO_LOG_RETENTION_BYTES` take effect on
+the next clean restart without letting a stray concurrent process silently override a running
+server's governance. Every maintenance pass re-reads the record before it deletes anything, so a
+process that held no active segment while the record was replaced (an idle server) adopts the new
+values on its next pass instead of pruning under its first read. Segment size/age stay per-writer settings, clamped against the governing
+retention bytes with the same invariant as before. Total disk use is therefore at most the ONE
+governing byte budget plus the pin quota, even when cooperating processes' own env values disagree.
 
 **Pins.** `pinActivityLogWindow` protects one of two scopes until an expiry of at most 3650 days:
 
@@ -1102,6 +1132,19 @@ store and rebuilding it reproduces every manifest byte for byte. A stored manife
 when it re-serializes to its own bytes and its digest matches; anything else is rebuilt. Only the
 query, export and rebuild commands write manifests, never the Activity Log writer, and each pass
 removes the manifests of segments that retention deleted, so the store follows the log's own bound.
+
+**Residual same-user manifest forging.** The trust boundary is the same OS user as D14's segments.
+A process already executing as that user could hand-edit a stored manifest — for example, to make
+it falsely claim a segment holds none of a query's correlation keys — and pair the edit with a
+digest recomputed over the forged content, so the manifest's own self-consistency check accepts it:
+the digest binds a manifest to its own bytes, not to the segment it describes. A forged manifest can
+therefore hide a segment from a routine query or export, which trusts a stored manifest without
+re-deriving it from the segment every time. It cannot alter the segment itself: the segment's own
+bytes, and the digest a fresh derivation would compute from them, stay exactly what the writer
+sealed. `keiko support manifest verify` detects the forgery by deriving every manifest again,
+directly from its segment, and reporting any stored manifest that differs from that derivation.
+This residual is part of the same OS-user threat model D14 already states and is never a reason to
+disable or defer manifests.
 
 **A closure is selected whole.** A correlation, an incident or a defect fingerprint selects the
 registered causal closure: the roots, every ancestor over `parentCorrelationId` and every

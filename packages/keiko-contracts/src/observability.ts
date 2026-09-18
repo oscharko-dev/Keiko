@@ -39,6 +39,7 @@ export {
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
   ACTIVITY_LOG_PIN_ID_PATTERN,
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
   activityLogPinFileName,
   activityLogSegmentFileName,
   compareActivityLogFileNames,

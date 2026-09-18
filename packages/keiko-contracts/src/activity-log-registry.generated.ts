@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7b067c4859ec4448275ec01c7bfbd4de2a4b00dde68ad9dab2cf6cb090949544" as const;
+  "8754c47766a21226d07f02675a689088adfbe937de6635b8351e5eea955ce3ca" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -327,6 +327,75 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["activity-log-pin"],
     proofIds: ["activity-log.pin.quota-exhausted.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "activity-log.policy.conflict",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "observability/server-log.policyConflictEvidence",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      policyResolution: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["adopted", "replaced"],
+      },
+      conflictingSettings: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["retentionBytes", "retentionDays", "pinQuotaBytes"],
+        maxItems: 3,
+      },
+      storedRetentionBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      requestedRetentionBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      storedRetentionDays: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      requestedRetentionDays: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      storedPinQuotaBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      requestedPinQuotaBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["activity-log-policy"],
+    proofIds: ["activity-log.policy.conflict.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -22756,6 +22825,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      evidenceLostBeforePin: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
       windowSeconds: {
         type: "integer",
         dataClass: "count",
@@ -25380,8 +25454,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 309,
-  completeClassCount: 309,
+  supportedClassCount: 310,
+  completeClassCount: 310,
   completeness: "complete",
   classes: [
     {
@@ -26047,6 +26121,98 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["activity-log.pin.quota-exhausted.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "activity-log-policy",
+      requirementContract: "activity-log-policy",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["activity-log.policy.conflict"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "activity-log.policy.conflict",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["activity-log.policy.conflict"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "activity-log.policy.conflict",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "conflictingSettings",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "policyResolution",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "requestedPinQuotaBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "requestedRetentionBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "requestedRetentionDays",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "storedPinQuotaBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "storedRetentionBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "storedRetentionDays",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["activity-log.policy.conflict.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -52016,6 +52182,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "evidenceLostBeforePin",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "expiresInSeconds",
               type: "integer",
               dataClass: "count",
@@ -56522,6 +56694,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "activity-log.pin.created": "lifecycle-crash",
     "activity-log.pin.expired": "lifecycle-crash",
     "activity-log.pin.quota-exhausted": "lifecycle-crash",
+    "activity-log.policy.conflict": "lifecycle-crash",
     "activity-log.pressure": "lifecycle-crash",
     "activity-log.readiness": "lifecycle-crash",
     "activity-log.retention.pruned": "lifecycle-crash",

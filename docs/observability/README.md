@@ -79,7 +79,8 @@ Retention runs at startup and before every new segment. It counts every file in 
 including legacy files and other processes' active segments. It deletes the oldest unprotected
 sealed and legacy files first: those older than the retention age, then as many more as the byte
 budget requires. Each pass is recorded as `activity-log.retention.pruned`. Total disk use stays
-within the byte budget plus the pin quota.
+within the byte budget plus the pin quota — the ONE governing budget below, shared by every
+cooperating process, never each process's own unreconciled view (#3554).
 
 | Variable                    | Default | Meaning                                                                          |
 | --------------------------- | ------- | -------------------------------------------------------------------------------- |
@@ -91,6 +92,17 @@ within the byte budget plus the pin quota.
 
 Each value must be a positive whole number within its range. Anything else falls back to the
 default, so a typo never removes the bound.
+
+Several cooperating processes can share one directory — a long-running server plus a one-off CLI
+invocation, or two server instances across a restart — and each reads the five variables above from
+its own environment. One closed-grammar record, `store-policy.json` (never log content), holds the
+retention/pin-quota values every cooperating process actually enforces: the first process to find no
+valid record publishes its own; every later process applies the STORED values regardless of its own
+env, and records one `activity-log.policy.conflict` line when they differ. A process may replace a
+stale or corrupt record only while it is the directory's sole live writer, which is what lets a
+changed `KEIKO_LOG_RETENTION_BYTES` take effect on the next clean restart. Every retention pass reads
+the record again before it deletes anything, so a process that was running idle when the record was
+replaced applies the new values from its next pass on.
 
 A pin protects a time window, or named segments, from retention until it expires, within the pin
 quota. `activity-log.pin.created` and `activity-log.pin.expired` record its lifecycle; a pin released before its expiry is recorded with `expiryReason: "released"`. A pin that
@@ -724,7 +736,12 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   segment's bytes and the build's catalog alone, so a rebuild reproduces it byte for byte. The
   Activity Log writer never writes one: query, export and rebuild do, and they remove the manifests
   of segments retention has deleted. A missing, torn or stale manifest is rebuilt, and deleting the
-  directory is always safe.
+  directory is always safe. Trust is the same OS-user boundary as the segments themselves: a process
+  already running as that user could hand-edit a stored manifest and its digest together — a forged
+  manifest passes its own self-consistency check because the digest binds it to its own bytes, not
+  to the segment it describes — hiding a segment from a routine query. It cannot alter the segment
+  itself, and `keiko support manifest verify` detects the forgery by re-deriving every manifest
+  directly from its segment and reporting any stored one that differs.
 - **Bounds.** Reads use one 64 KiB buffer and hold at most one line of up to 1 MiB. A closure holds
   at most 4096 correlations, a result at most `--max-bytes`. The correlation filter uses about 10
   bits per key (roughly 1% false positives), at most 128 KiB. A checked-in long-history test builds
@@ -742,7 +759,11 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   `keiko.support.analyze` for every timeline and `keiko.support.analyze-timeline` with
   `--correlation-id`, both at version 1. Every field the earlier output had is unchanged, so an
   existing reader such as `keiko investigate --from-timeline` keeps working; `--seed` already
-  carried `schemaVersion`, and `--clusters --json` still prints a bare array.
+  carried `schemaVersion`. `--clusters --json` still prints the same bare, unversioned array
+  byte-for-byte — no existing reader breaks — but it is deprecated: every use prints a one-line
+  stderr notice naming its versioned replacement, the `clusters` member `keiko.support.analyze`
+  (schema version 1) now carries under plain `--json`, which holds exactly the same data inside a
+  versioned envelope.
 - **Analyze streams too.** `keiko support analyze` reads its file through the same bounded line
   reader, including for `--seed` and `--emit-fixture`. A seed's `sourceArtifact.sha256` is the
   SHA-256 of the file's bytes, the value `shasum -a 256` and a report's `.sha256` file state.

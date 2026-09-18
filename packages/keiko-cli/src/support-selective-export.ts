@@ -4,9 +4,11 @@
 //
 // The selection is the one the query engine computes; it adds no field and no content: every
 // exported line is a byte-identical copy of an accepted Activity Log line, and the manifest names
-// the selection's closed, versioned verdict. A selection that cannot fit the budget (`--max-bytes`)
-// or cannot be found is never cut to size: no report is written, the command exits 1, and the
-// verdict is `insufficient` with closed reasons.
+// the selection's closed, versioned verdict. A selection whose diagnostic sufficiency is
+// `insufficient` for ANY closed reason — it cannot fit the budget (`--max-bytes`), it cannot be
+// found, its causal closure is missing an ancestor, or (#3531 audit) a user-reported incident's
+// window holds no registered failure — is never cut to size or exported partially: no report is
+// written, the command exits 1, and the verdict is `insufficient` with closed reasons.
 
 import { randomUUID } from "node:crypto";
 import type { CliIo } from "./runner.js";
@@ -135,7 +137,10 @@ export async function collectSelectedLogContent(
   if (typeof run === "number") return run;
   if (!recordSupportQueryEvidence(context, "export", run)) return 1;
   const { result } = run;
-  if (result.events.length === 0 || result.truncation.state === "budget-exceeded") {
+  // Every closed insufficient reason (report-budget-exceeded, evidence-not-retained,
+  // segment-unreadable, parent-correlation-missing, no-registered-failure, ...) refuses the write:
+  // an incomplete or instrumentation-lacking selection is never exported partially, only declared.
+  if (result.diagnosticSufficiency.status === "insufficient") {
     reportUnwritable(result, io);
     return 1;
   }

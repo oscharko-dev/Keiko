@@ -28,6 +28,7 @@ import {
   activityLogSegmentFileName,
   type ActivityLogSegmentState,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   createInMemoryEvidenceStore,
   type EvidenceManifest,
@@ -2216,6 +2217,92 @@ describe("runSupportCli analyze", () => {
     expect(humanCode).toBe(0);
     expect(humanRun.out()).toContain("Clusters: 2");
     expect(humanRun.out()).toContain("gateway.chat.completed");
+  });
+
+  // Audit (#3531 Update Impact): --clusters --json predates the versioned machine profiles and
+  // carries no stated compatibility/deprecation path. It must stay byte-compatible (no existing
+  // reader breaks) while gaining an explicit path: a one-line stderr notice naming the versioned
+  // replacement, and proof that the replacement (keiko.support.analyze's own `clusters` member)
+  // really does carry the same data.
+  it("keeps --clusters --json byte-compatible and names its versioned replacement on stderr", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+
+    const bareRun = makeIo();
+    const bareCode = await runSupportCli(["analyze", filePath, "--clusters", "--json"], bareRun.io);
+    expect(bareCode).toBe(0);
+    const bareOut = bareRun.out();
+    const bareClusters = JSON.parse(bareOut) as unknown;
+    // Byte-compatible: still a bare array, not an object, not wrapped in kind/schemaVersion.
+    expect(Array.isArray(bareClusters)).toBe(true);
+    expect(bareOut.endsWith("\n")).toBe(true);
+    expect(bareOut.trimEnd().startsWith("[")).toBe(true);
+
+    // The one-line stderr deprecation notice, naming the versioned replacement.
+    const errLines = bareRun.err().split("\n").filter((line) => line.length > 0);
+    expect(errLines).toHaveLength(1);
+    expect(errLines[0]).toContain("--clusters --json");
+    expect(errLines[0]).toContain("deprecated");
+    expect(errLines[0]).toContain("keiko.support.analyze");
+    expect(errLines[0]).toContain("v1");
+
+    // The named replacement actually carries the same data: plain --json's own `clusters` member.
+    const fullRun = makeIo();
+    const fullCode = await runSupportCli(["analyze", filePath, "--json"], fullRun.io);
+    expect(fullCode).toBe(0);
+    const full = JSON.parse(fullRun.out()) as {
+      readonly kind: string;
+      readonly schemaVersion: number;
+      readonly clusters: unknown;
+    };
+    expect(full.kind).toBe("keiko.support.analyze");
+    expect(full.schemaVersion).toBe(1);
+    expect(full.clusters).toEqual(bareClusters);
+    // Plain --json (no --clusters) is not itself deprecated: no notice on stderr.
+    expect(fullRun.err()).toBe("");
+
+    // Human --clusters (no --json) is a text report, not the unversioned machine profile: no notice.
+    const humanRun = makeIo();
+    expect(await runSupportCli(["analyze", filePath, "--clusters"], humanRun.io)).toBe(0);
+    expect(humanRun.err()).toBe("");
+  });
+
+  // Audit (#3531): analyze's JSON lacked the provenance block query and export already carry.
+  // Added additively to both analyze JSON forms: every pre-existing field stays exactly as it was.
+  it("carries provenance (productVersion, registryVersion, schemaDigest, catalogDigest) in both analyze JSON forms", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const expectedProvenance = {
+      productVersion: KEIKO_PRODUCT_VERSION,
+      registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+      schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+      catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+    };
+
+    const wholeFileRun = makeIo();
+    expect(await runSupportCli(["analyze", filePath, "--json"], wholeFileRun.io)).toBe(0);
+    const wholeFile = JSON.parse(wholeFileRun.out()) as {
+      readonly kind: string;
+      readonly provenance: unknown;
+      readonly clusters: unknown;
+    };
+    expect(wholeFile.kind).toBe("keiko.support.analyze");
+    expect(wholeFile.provenance).toEqual(expectedProvenance);
+    // Additive: the field this audit's own test already relies on stays present and unchanged.
+    expect(wholeFile.clusters).toBeDefined();
+
+    const timelineRun = makeIo();
+    expect(
+      await runSupportCli(["analyze", filePath, "--correlation-id", "req-1", "--json"], timelineRun.io),
+    ).toBe(0);
+    const timeline = JSON.parse(timelineRun.out()) as {
+      readonly kind: string;
+      readonly provenance: unknown;
+      readonly correlationId: string;
+    };
+    expect(timeline.kind).toBe("keiko.support.analyze-timeline");
+    expect(timeline.provenance).toEqual(expectedProvenance);
+    expect(timeline.correlationId).toBe("req-1");
   });
 
   it("prints a ReproductionSeed via --seed", async () => {

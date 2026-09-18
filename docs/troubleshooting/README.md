@@ -789,7 +789,8 @@ The Activity Log contains one of these lines:
 - `activity-log.pressure` with `pressureState` `disk-full`, `budget-exceeded`, `backpressure`,
   `low-disk-space` or `retention-blocked`;
 - `activity-log.retention.pruned` with `retentionStatus: "partial"` or `"failed"`;
-- `activity-log.segment.recovered` with `recoveryStatus: "failed"`.
+- `activity-log.segment.recovered` with `recoveryStatus: "failed"`;
+- `activity-log.policy.conflict` (informational, not a failure — see below).
 
 The records carry closed states, counts and byte sizes only; they deliberately contain no filesystem
 path. `droppedEventCount` states how many events were lost.
@@ -807,6 +808,16 @@ One of three conditions:
 
 The triggering product operation continues. The line is evidence that the storage bound needs
 operator attention, not permission to weaken the filesystem checks.
+
+A separate, lower-severity line, `activity-log.policy.conflict` (#3554), is operator-visible but
+never itself a storage failure: it means a cooperating process's own
+`KEIKO_LOG_RETENTION_BYTES`/`_DAYS`/`KEIKO_LOG_PIN_QUOTA_BYTES` differed from the directory's one
+stored governing policy. `policyResolution: "adopted"` means the store kept its existing bounds
+(this process's own env was overridden); `"replaced"` means this process was the directory's sole
+live writer and its own bounds now govern (a clean restart with a changed value taking effect). The
+`stored*`/`requested*` fields name exactly which setting disagreed. Total disk use stayed within the
+one governing budget plus the pin quota either way; the line exists so configuration drift across
+cooperating deployments (a systemd unit, a container env, a shell profile) is visible, never silent.
 
 **Diagnostic Steps**
 
@@ -833,6 +844,11 @@ only while all writers are stopped. Restart Keiko and confirm that the next
 next `activity-log.retention.pruned` reports `pruned`. Never delete, truncate or edit a segment by
 hand to force the usage down. Retention removes the oldest unpinned files itself once the directory
 is safe again.
+
+A `policy.conflict` line needs no storage recovery — the store already kept the total bounded. To
+make an intentionally changed `KEIKO_LOG_RETENTION_BYTES` take effect for the whole directory, align
+every cooperating process's env and restart them one at a time so the last one to start is briefly
+the sole live writer: it republishes the record, and later `adopted` lines stop.
 
 ---
 
