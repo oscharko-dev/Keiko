@@ -55,6 +55,7 @@ import {
 } from "../check-tool-catalog-performance.mjs";
 import {
   regenerateArguments,
+  regenerationOptions,
   regenerateToolCatalogPerformanceEvidence,
 } from "../regenerate-tool-catalog-perf-evidence.mjs";
 import * as sharedNegativeFixture from "../../tests/architecture/fixtures/tool-catalog-negatives/_shared.mjs";
@@ -327,6 +328,24 @@ describe("compiler measurements reuse the existing sample and percentile convent
         rebindCaseIdentity: true,
       }),
     ).toThrow("choose one tool-catalog performance evidence migration");
+  });
+
+  it("parses only the two explicit evidence-migration options", () => {
+    expect(regenerationOptions([])).toEqual({
+      recalibrate: false,
+      rebindCaseIdentity: false,
+    });
+    expect(regenerationOptions(["--recalibrate"])).toEqual({
+      recalibrate: true,
+      rebindCaseIdentity: false,
+    });
+    expect(regenerationOptions(["--rebind-case-identity"])).toEqual({
+      recalibrate: false,
+      rebindCaseIdentity: true,
+    });
+    expect(() => regenerationOptions(["--unknown", "--another"])).toThrow(
+      "unknown argument: --unknown, --another",
+    );
   });
 
   it("refuses to measure a working tree that the clean clone cannot reproduce", () => {

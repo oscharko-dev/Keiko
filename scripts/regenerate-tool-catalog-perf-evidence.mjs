@@ -17,14 +17,17 @@ const CALIBRATION_FILES = [
   "scripts/tool-catalog-performance-budget.json",
 ];
 
-function containerScript({ recalibrate, rebindCaseIdentity }) {
+function migrationCommandFor({ recalibrate, rebindCaseIdentity }) {
   if (recalibrate && rebindCaseIdentity)
     throw new TypeError("choose one tool-catalog performance evidence migration");
-  const migrationCommand = rebindCaseIdentity
-    ? "node scripts/check-tool-catalog-performance.mjs --rebind-case-identity"
-    : recalibrate
-      ? "node scripts/check-tool-catalog-performance.mjs --recalibrate"
-      : undefined;
+  if (rebindCaseIdentity)
+    return "node scripts/check-tool-catalog-performance.mjs --rebind-case-identity";
+  if (recalibrate) return "node scripts/check-tool-catalog-performance.mjs --recalibrate";
+  return undefined;
+}
+
+function containerScript(options) {
+  const migrationCommand = migrationCommandFor(options);
   const measurementCommands = [
     ...(migrationCommand === undefined ? [] : [migrationCommand]),
     "node scripts/check-tool-catalog-performance.mjs --write-measurement",
@@ -97,12 +100,16 @@ export function regenerateToolCatalogPerformanceEvidence(options = {}) {
   return { clone, files, recalibrate, rebindCaseIdentity };
 }
 
-if (isMainModule(import.meta.url)) {
+export function regenerationOptions(arguments_) {
   const acceptedArguments = new Set(["--recalibrate", "--rebind-case-identity"]);
-  const unknown = process.argv.slice(2).filter((argument) => !acceptedArguments.has(argument));
+  const unknown = arguments_.filter((argument) => !acceptedArguments.has(argument));
   if (unknown.length > 0) throw new TypeError(`unknown argument: ${unknown.join(", ")}`);
-  regenerateToolCatalogPerformanceEvidence({
-    recalibrate: process.argv.includes("--recalibrate"),
-    rebindCaseIdentity: process.argv.includes("--rebind-case-identity"),
-  });
+  return {
+    recalibrate: arguments_.includes("--recalibrate"),
+    rebindCaseIdentity: arguments_.includes("--rebind-case-identity"),
+  };
+}
+
+if (isMainModule(import.meta.url)) {
+  regenerateToolCatalogPerformanceEvidence(regenerationOptions(process.argv.slice(2)));
 }
