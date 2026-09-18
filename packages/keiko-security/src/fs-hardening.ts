@@ -288,12 +288,14 @@ function runGuardedDirectoryMutation(
   }
 }
 
-// Removes the name only while it still has the identity the caller verified. Between that check
+// Removes the name only while it still names the inode behind `held`. Between the caller's check
 // and the helper's unlink, a concurrent Keiko process may have replaced a shared name such as
-// server.log; a pathname-only unlink would then delete the new file and the lines in it.
+// server.log; a pathname-only unlink would then delete the new file and the lines in it. The
+// caller keeps `held` open until this returns, so the inode stays allocated and its number cannot
+// be recycled for the replacement; Linux file systems reuse a freed inode number at once.
 function unlinkGuardedPath(
   path: string,
-  entry: EntryIdentity,
+  held: number,
   trustedRoot: string,
   artifactClass: SafeArtifactClass,
   authority: DirectoryGuardAuthority = "standard",
@@ -305,7 +307,7 @@ function unlinkGuardedPath(
     artifactClass,
     undefined,
     authority,
-    entry,
+    fstatSync(held, { bigint: true }),
   );
   if (result === "success") return;
   throw safeFileError(
@@ -414,11 +416,10 @@ function finalizeLinkedArchive(
   if (!linkedArchiveMatches(descriptor, source, target)) {
     throw safeFileError(options.artifactClass, "target-mutated");
   }
-  const archived = fstatSync(descriptor, { bigint: true });
   try {
     unlinkGuardedPath(
       source,
-      archived,
+      descriptor,
       options.trustedRoot,
       options.artifactClass,
       "owner-only-mutation",
@@ -495,21 +496,39 @@ function renameIntoClaimedArchive(
     "owner-only-mutation",
   );
   if (renamed !== "success") {
-    if (pathHasIdentity(target, claim)) {
-      unlinkGuardedPath(
-        target,
-        claim,
-        options.trustedRoot,
-        options.artifactClass,
-        "owner-only-mutation",
-      );
-    }
+    releaseArchiveClaim(target, claim, options);
     throw safeFileError(options.artifactClass, "publish-failed");
   }
   if (!movedArchiveMatches(descriptor, target)) {
     throw safeFileError(options.artifactClass, "publish-failed");
   }
   return "rename-fallback";
+}
+
+// The claim is not held open across the rename, because Windows cannot replace a name that is
+// still open on file systems without POSIX delete semantics. It is re-opened here and held, so its
+// inode number cannot be recycled for a replacement before the guarded unlink checks it.
+function releaseArchiveClaim(
+  target: string,
+  claim: BigIntStats,
+  options: SafeArtifactDirectoryEntryOptions,
+): void {
+  if (!pathHasIdentity(target, claim)) return;
+  const held = openSafeArtifactFile(target, { ...options, mode: "read" });
+  try {
+    const opened = fstatSync(held, { bigint: true });
+    if (opened.dev === claim.dev && opened.ino === claim.ino) {
+      unlinkGuardedPath(
+        target,
+        held,
+        options.trustedRoot,
+        options.artifactClass,
+        "owner-only-mutation",
+      );
+    }
+  } finally {
+    closeDescriptorIgnoringErrors(held);
+  }
 }
 
 function claimArchiveName(
@@ -556,7 +575,7 @@ export function removeSafeArtifactFile(
     verifySafeArtifactFileDescriptor(descriptor, path, options);
     unlinkGuardedPath(
       path,
-      fstatSync(descriptor, { bigint: true }),
+      descriptor,
       options.trustedRoot,
       options.artifactClass,
       "owner-only-mutation",
@@ -1470,7 +1489,7 @@ function removePublicationIntent(
   });
   try {
     verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
-    unlinkGuardedPath(path, fstatSync(descriptor, { bigint: true }), trustedRoot, artifactClass);
+    unlinkGuardedPath(path, descriptor, trustedRoot, artifactClass);
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
     if (error instanceof SafeArtifactFileError) throw error;
@@ -1752,12 +1771,7 @@ function removeVerifiedStage(entry: PreparedPublicationEntry): void {
       artifactClass: entry.artifactClass,
       trustedRoot: entry.trustedRoot,
     });
-    unlinkGuardedPath(
-      entry.stagePath,
-      fstatSync(descriptor, { bigint: true }),
-      entry.trustedRoot,
-      entry.artifactClass,
-    );
+    unlinkGuardedPath(entry.stagePath, descriptor, entry.trustedRoot, entry.artifactClass);
     syncDirectory(dirname(entry.stagePath), entry.trustedRoot, entry.artifactClass);
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
@@ -1852,6 +1866,15 @@ function publishPreparedEntry(entry: PreparedPublicationEntry, recovering: boole
   }
 }
 
+function unlinkLinkedStage(entry: PreparedPublicationEntry): void {
+  const held = openLinkedStage(entry);
+  try {
+    unlinkGuardedPath(entry.stagePath, held, entry.trustedRoot, entry.artifactClass);
+  } finally {
+    closeDescriptorIgnoringErrors(held);
+  }
+}
+
 function cleanupPublishedStage(entry: PreparedPublicationEntry): void {
   if (!pathExists(entry.stagePath, entry.artifactClass)) {
     if (readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot))
@@ -1862,12 +1885,7 @@ function cleanupPublishedStage(entry: PreparedPublicationEntry): void {
     throw safeFileError(entry.artifactClass, "recovery-conflict");
   }
   try {
-    unlinkGuardedPath(
-      entry.stagePath,
-      lstatSync(entry.stagePath, { bigint: true }),
-      entry.trustedRoot,
-      entry.artifactClass,
-    );
+    unlinkLinkedStage(entry);
   } catch {
     restoreRecoveryMarker(entry, dirname(entry.stagePath));
     throw safeFileError(entry.artifactClass, "publish-failed");

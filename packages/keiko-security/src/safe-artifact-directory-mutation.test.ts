@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { lstatSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -148,14 +157,21 @@ describe("safe artifact directory mutation helper", () => {
     const cwd = freshDirectory();
     const entry = join(cwd, "server.log");
     writeFileSync(entry, "verified");
-    const verified = request(cwd, "unlink", "server.log");
-    unlinkSync(entry);
-    writeFileSync(entry, "recreated by a concurrent writer");
+    // Callers hold the verified inode open until the helper returns. Without a holder, Linux gives
+    // the freed inode number straight to the replacement and no identity can tell the files apart.
+    const held = openSync(entry, "r");
+    try {
+      const verified = request(cwd, "unlink", "server.log");
+      unlinkSync(entry);
+      writeFileSync(entry, "recreated by a concurrent writer");
 
-    expect(runHelper(cwd, JSON.stringify(verified)).status).toBe(
-      SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch,
-    );
-    expect(readFileSync(entry, "utf8")).toBe("recreated by a concurrent writer");
+      expect(runHelper(cwd, JSON.stringify(verified)).status).toBe(
+        SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.entryMismatch,
+      );
+      expect(readFileSync(entry, "utf8")).toBe("recreated by a concurrent writer");
+    } finally {
+      closeSync(held);
+    }
   });
 });
 
