@@ -1,13 +1,14 @@
 # Observability: the server activity log
 
-Keiko writes one operator-readable activity log for every local install, unconditionally — there
-is no environment variable that turns it off, only one (`KEIKO_LOG_LEVEL`) that turns its volume
-down. This page documents the log itself, how its lines join together across a request's
-lifecycle, and how to read it with `keiko support export` / `keiko support analyze`. It is the
-consumer-facing counterpart to [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md),
-which records the design decisions behind everything described here.
+Keiko configures one operator-readable activity log for every local install. `KEIKO_LOG_LEVEL`
+controls its threshold and can explicitly disable writes with `silent`; a silent interval has no
+reconstruction evidence and must not be interpreted as an active writer. This page documents the
+log itself, how its lines join together across a request's lifecycle, and how to read it with
+`keiko support export` / `keiko support analyze`. It is the consumer-facing counterpart to
+[ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md), which records
+the design decisions behind everything described here.
 
-## File location, rotation, retention
+## File location, daily rotation, and retention
 
 Normal runtime activity lives at `<stateDir>/logs/server.log` — `<stateDir>` is `./.keiko` by
 default, or wherever `--state-dir` / `KEIKO_STATE_DIR` points. Commands that must audit or remove
@@ -35,17 +36,64 @@ its completion records the state disposition plus body-free affected and retaine
 Each log is JSON Lines: one `JSON.stringify`-serialized object per line, written synchronously so
 that the last line on disk before a hang or a crash is the last line the process actually reached.
 
-Rotation is day-based, keyed to the UTC calendar day, and **hard-link-atomic across processes**:
-at the first write after midnight UTC, the process links the finished day's file to
-`server-<YYYY-MM-DD>.log` (`link(2)`, which fails closed with `EEXIST` if a peer process already
-made that link) before starting a fresh `server.log`. This is why two Keiko processes sharing a
-state directory never race each other into overwriting a finished day's archive — a plain
-`rename` would lose that race; a hard link cannot. On a filesystem with no hard-link support
-(FAT/exFAT removable media), rotation falls back to a guarded rename instead of never rotating.
+When a state directory is configured, failure to create or open its log directory aborts startup
+with a closed safe-artifact error. Keiko never silently substitutes a null sink for a configured
+activity log; an in-memory/null sink exists only where a caller explicitly selected one, such as a
+unit-test composition without a state directory.
 
-Retention is a **rolling 7-day window** of rotated `server-<date>.log` files, pruned oldest-first
-on every rotation. The current, not-yet-rotated `server.log` is never counted against or dropped
-by retention.
+At the first write after each UTC day boundary, Keiko seals the finished current file as exactly one
+`server-YYYY-MM-DD.log` archive and opens a fresh `server.log`. The default retention window is
+seven dated archives; an explicitly configured positive `retentionDays` value replaces that default.
+Pruning recognizes only real calendar dates in the closed archive grammar and never deletes a
+lookalike, backup, stage, or unrelated file.
+
+The filesystem boundary is the operating-system user. The selected state and log directories must
+be owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected owner's inherited
+ACL on Windows). Keiko rechecks their device/inode identity around every link, rename, and unlink.
+Before retention removes an archive, an opened handle must prove that the target is a regular,
+owner-matched, private, single-link file and still names the checked pathname. Every link, rename,
+and unlink also carries its source file's device/inode, taken from a descriptor held open until the
+mutation returns: the mutation helper acts on the name only while it still has that identity, so a
+process can never delete a `server.log` that a concurrent writer recreated, nor publish a file that
+replaced the verified one. Holding the descriptor matters because Linux reuses a freed inode number
+immediately.
+
+Cross-process rotation uses a hard link to publish the dated destination without replacement:
+`EEXIST` means another process won, and the loser preserves that archive. Only errors that state the
+filesystem does not support hard links permit the guarded rename fallback. That fallback first claims
+the dated name with an exclusive no-follow create, so a concurrent rotation that loses the claim
+preserves the winner's archive, and the winner's rename can replace only its own empty claim. A
+failed, unsafe, or ambiguous mutation leaves evidence in place and never escapes into the caller.
+
+`server-log.rotation` records the closed `persistenceStatus`, `rotationReason`, `archivedCount`,
+`retentionStatus`, `prunedCount`, and `retainedCount`. A mutation failure is a body-free
+`durability-failed` event with partial completeness; paths and filenames never enter the event.
+
+There is a documented residual same-user race: Node has no portable descriptor-relative
+link/rename/unlink API, and filesystems that lack hard links offer no no-replace rename, so the
+fallback relies on its exclusive name claim. A process already running as the same OS user can act
+between pathname checks. The
+implementation narrows that window with owner-private directories, held directory/file handles,
+pre/post identity checks, and the non-replacing hard-link winner. This residual risk does not justify
+removing or postponing bounded retention.
+
+As an additional non-mutating capacity safeguard, the sink emits one correlated
+`server-log.capacity-warning` when the current file reaches 256 MiB. The line reports only the
+observed byte count, threshold, `operatorAction: "stop-export-replace"`, and
+`mutationStatus: "not-attempted"`; it does not rotate, truncate, rename, or delete anything. To
+recover capacity safely:
+
+1. Stop every Keiko process using the state directory.
+2. Run `keiko support export --state-dir <stateDir> --out <path-outside-stateDir>` and retain both
+   the export and its integrity sidecar.
+3. With all writers still stopped, verify `logs/server.log` is the expected regular, single-link
+   file, then move it intact to an operator-controlled archive outside `logs/`. Never truncate or
+   replace a live descriptor.
+4. Restart Keiko so the guarded sink creates a new `server.log`; retain the archived original until
+   the applicable evidence policy permits disposal.
+
+Immutable byte-bounded segments may replace daily files later, but the daily retention bound remains
+active until the replacement is complete on the same revision.
 
 ## Log level
 
@@ -59,14 +107,44 @@ disabling the log the operator is trying to read.
 
 ## The op catalog
 
-Every log line's `op` field is a value from a closed, generated vocabulary — never a free string
-an operator has to guess the meaning of. The checked-in catalog,
-[`op-catalog.generated.json`](op-catalog.generated.json), lists every `op` this build can emit
-alongside its `category`, owning package, and call site, and is regenerated and drift-tested by
-`scripts/generate-op-catalog.mjs` whenever a new operation is added. A `<dynamic>` entry marks a
-forwarding call site that receives its `op` value from a caller rather than minting its own; the
-catalog also lists that caller's own literal separately, so the vocabulary is always traceable to
-where it actually originates.
+[`op-catalog.generated.json`](op-catalog.generated.json) is the single generated registry. Its
+`typedRegistry.operations` array is the authoritative production contract: each operation is a
+literal `defineActivityLogOperation` declaration bound to an `activityLogEvent` emitter through
+TypeScript symbol resolution. Non-literal registrations, duplicate operations, unregistered
+emissions, and registrations with no emitter are closed violations with an exact source site and
+corrective action.
+
+The root `entries`/`operations` arrays remain only as a non-authoritative migration input for code
+that still uses the predecessor's bracket scanner. Their `<dynamic>` and `unknown` values are
+reported in `legacyDiscovery`; they can neither register nor authorize a production operation.
+Producers move into the authoritative array operation by operation, without adding a second
+catalog or treating heuristic inference as contract truth.
+
+Each authoritative entry defines the exact flattened fields a producer may emit, including their
+primitive types, maximum lengths/counts, closed values and safe data classes. It also records the
+causal and lifecycle role, analyzer projection, supported failure classes, executable proof ids,
+and release impact. The runtime event constructor derives its TypeScript shape from that entry and
+the physical sink validates the same contract again immediately before serialization. A caller
+therefore cannot add arbitrary metadata, widen a field after construction, or use an unregistered
+operation as an escape hatch.
+
+The generated contracts runtime exports those complete safe operation schemas and the derived
+failure-class coverage alongside the identity digests. Every schema receives mandatory
+`completeness` and `loss` fields centrally; emitters get the safe defaults `complete` and `none` and
+override them only when they observed partial evidence or a known loss.
+
+`typedRegistry.obligationCategories` is the stable machine vocabulary for future implementation
+gates. `typedRegistry.failureClassCoverage` groups the same operation declarations into a generated
+matrix of owning product surfaces, lifecycle transitions, causal edges, safe context fields,
+frame/cause availability, loss signals, analyzer projections, and executable proof or replay
+references. The release expectation is `100%-complete`; a class missing required completeness,
+loss, or proof evidence is an authoritative registry violation.
+
+`typedRegistry.exemptions` is governed by its adjacent `exemptionSchema`. The list is intentionally
+empty by default. A reviewed entry may cover only one exact registered operation/failure-class
+pair at an unavoidable platform or durability boundary, and must include an owner, technical
+reason, linked issue, and expiry. Unknown or broad scope, stale/expired records, and extra keys that
+attempt to authorize fields, prohibited data, silent loss, or incomplete evidence fail closed.
 
 ## Redaction scope, stated honestly
 
@@ -87,13 +165,66 @@ hashes, and shapes.
 
 ## Joining lines across a request's lifecycle
 
-Every `ServerLogEvent` line carries `pid`, `instanceId` (8 hex characters, minted once per process
-start), and a process-wide, monotonically allocated `seq`. Together, `(pid, instanceId, seq)` give
-a **total, gap-free order within one process lifetime** — but that is the full extent of the
-ordering guarantee. There is no true cross-process global order: two different process lifetimes
+Every successfully persisted v2 line carries `schemaVersion`, `registryVersion`, the schema and
+catalog SHA-256 digests, `buildClass`, `releaseClass`, `platformClass`, `productVersion`,
+`compatibilityState`, and `writerCapability`. The central sink stamps these fields; producers cannot
+supply or override them. A current writer persists normal records only with the exact supported
+schema/catalog identity and `supported`/`active` capability.
+
+When validation or persistence fails, the file sink cannot promise to persist a notice about its own
+failure. It instead attempts the existing independent body-free fallback chain: stderr first, then
+`process.emitWarning`. The notice carries `incomplete`/`unavailable` and an explicit loss state, but
+all three channels can be unavailable during the same failure. A later sequence gap can prove that a
+write was attempted; after a hard kill or total channel failure, the exact count may be unrecoverable.
+This is the loss ceiling, not a complete persisted-notice guarantee.
+
+The line also carries `pid`, `instanceId` (8 hex characters, minted once per process start), and a
+process-wide, monotonically allocated `seq`. Together, `(pid, instanceId, seq)` give
+a **total order over persisted lines within one process lifetime**. The sequence may contain gaps
+when an opening or write attempt fails, and the fallback channels attempt to provide the closed
+classification; there is no true cross-process global order. Two different process lifetimes
 each count `seq` from their own start, so a `seq` value from one process is not orderable against
 the same `seq` value from another by the tuple alone. The wall-clock `ts` field is a best-effort
 tiebreak hint only, never a guarantee, and should not be relied on to order lines across processes.
+
+`keiko support analyze` validates the complete identity tuple. It distinguishes supported, legacy,
+unsupported, corrupt, truncated, and incomplete evidence and reports
+sequence gaps, duplicates, decreasing/reset values, and reorder deterministically for each
+`(pid, instanceId)` lifetime. These states are evidence, not warnings to ignore: an unsupported or
+incomplete input cannot be treated as a complete reconstruction.
+
+For current-registry records the analyzer also validates the operation, category, exact flattened
+field set, required fields, and closed error kind against the generated runtime schema. A complete
+but unknown operation or extra field is corrupt evidence; an absent required field is incomplete
+evidence; a mismatched registry/schema/catalog identity is unsupported.
+
+### Closed evidence states
+
+These values are the complete current vocabularies; readers reject additions until the versioned
+contract, analyzer, and proofs change together.
+
+| Dimension            | Closed values                                                                                | Meaning                                                                                                                                        |
+| -------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `completeness`       | `complete`, `partial`, `unknown`                                                             | All required evidence is present; a known subset is present; or completeness cannot be established.                                            |
+| `loss`               | `none`, `event-dropped`, `event-location-unknown`, `publication-unavailable`                 | No known loss; a record was not persisted; durability/location cannot be proven; or a requested support publication could not be made durable. |
+| `writerCapability`   | `active`, `degraded`, `unavailable`                                                          | The primary writer is fully usable; it has an explicit reduced capability; or the primary evidence path cannot write.                          |
+| `compatibilityState` | `supported`, `legacy-supported`, `unsupported-version`, `corrupt`, `truncated`, `incomplete` | The writer's declared compatibility; the analyzer still validates the actual record and may lower trust.                                       |
+
+### Compatibility and deprecation matrix
+
+| Input on disk                                                                                                                    | Contract state / analyzer classification | Reader behavior                                                                                | Retirement rule                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete v2 identity, current registry/schema/catalog, `supported`/`active`                                                      | `supported`                              | Validate the registered operation, exact fields, vocabularies, bounds, and sequence integrity. | Supported for the current contract; a breaking identity or schema change requires a versioned compatibility change.                                                       |
+| Parseable pre-v2 line with no v2 identity                                                                                        | `legacy-supported` / `legacy`            | Preserve it, order it by file position, count it, and emit one legacy warning.                 | Remove only when reviewed release-impact/support baselines and bounded retention prove no supported log can still contain such a line; remove reader/tests/docs together. |
+| Unknown schema version or mismatched registry/schema/catalog identity                                                            | `unsupported-version` / `unsupported`    | Preserve the classification, but do not treat the record as trusted current evidence.          | No implicit upgrade or coercion; support requires the matching versioned contract.                                                                                        |
+| Invalid JSON away from the terminal fragment, invalid types/ranges, or a current-registry record with an unknown operation/field | `corrupt`                                | Report the defect and exclude it from trusted reconstruction.                                  | Never reclassify as legacy merely because parsing partly succeeded.                                                                                                       |
+| An unterminated terminal fragment or explicitly declared truncated evidence                                                      | `truncated`                              | Report truncation and keep the surviving evidence distinguishable from complete input.         | Retained as an explicit loss state; it is not silently normalized away.                                                                                                   |
+| Partial v2 identity, missing required evidence, declared `incomplete`, or any non-`active` writer capability                     | `incomplete`                             | Report the missing capability/evidence and do not claim complete reconstruction.               | Becomes supported only after the producer emits a complete current contract; readers never synthesize the missing fields.                                                 |
+
+The predecessor literal scanner is likewise migration-only. It may be removed only after every
+production producer is represented by canonical typed registration/emission and authoritative
+generation reports no legacy production dependency; remove the scanner, its compatibility tests,
+and its documentation in the same change.
 
 Cross-process (and cross-request) causality is instead established through two id fields:
 
@@ -211,7 +342,8 @@ their process activity is `not-applicable`. Missing or invalid observations rema
 `unknown`; file mtimes and guessed instance ids are never substituted.
 
 A line successfully parsed but missing the full `(pid, instanceId, seq)` triple is a **legacy
-line** — one written before this envelope shipped, still inside the log's 7-day retention window.
+line** — one written before this envelope shipped in the current file or a compatible legacy
+`server-YYYY-MM-DD.log` archive retained by the bounded daily-rotation implementation.
 It is never dropped or misordered; it is ordered by its own file position, counted in
 `legacyLineCount`, and named in exactly one `warnings[]` entry when that count is nonzero. Treat
 that warning as an instruction to read the file position ordering with less confidence for those

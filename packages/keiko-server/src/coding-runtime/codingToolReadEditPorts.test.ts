@@ -431,6 +431,8 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       expect.objectContaining({
         op: "coding-runtime.workspace-read",
         extra: {
+          completeness: "complete",
+          loss: "none",
           state: "completed",
           targetPathSha256: createHash("sha256").update("src/a.ts").digest("hex"),
           startLine: 1,

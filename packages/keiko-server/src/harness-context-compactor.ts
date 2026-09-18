@@ -42,10 +42,36 @@ import type {
   HarnessCompactionPort,
   HarnessEvent,
 } from "@oscharko-dev/keiko-harness";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
 
 const NOTICE_KIND = "keiko.compactedHistoryNotice";
+
+const HARNESS_CONTEXT_COMPACTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "harness.context.compacted",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "harness-context-compactor.logHarnessContextCompactionEvents",
+  fields: {
+    messagesDropped: { type: "integer", dataClass: "count", required: true },
+    bytesBefore: { type: "integer", dataClass: "count", required: true },
+    bytesAfter: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["harness-context-compaction"],
+  proofIds: ["harness.context.compacted.line"],
+  releaseImpact: "patch",
+});
 
 interface Turn {
   readonly messages: readonly ChatMessage[];
@@ -245,18 +271,23 @@ export function logHarnessContextCompactionEvents(
     if (event.type !== "context:compacted") {
       continue;
     }
-    activityLog.write({
-      category: "process",
-      op: "harness.context.compacted",
-      correlationId: event.runId,
-      ...(context.parentCorrelationId === undefined
-        ? {}
-        : { parentCorrelationId: context.parentCorrelationId }),
-      extra: {
-        messagesDropped: event.messagesDropped,
-        bytesBefore: event.bytesBefore,
-        bytesAfter: event.bytesAfter,
-      },
-    });
+    activityLog.write(
+      activityLogEvent(
+        HARNESS_CONTEXT_COMPACTED_OPERATION,
+        {
+          correlationId: event.runId,
+          ...(context.parentCorrelationId === undefined
+            ? {}
+            : { parentCorrelationId: context.parentCorrelationId }),
+        },
+        {
+          messagesDropped: event.messagesDropped,
+          bytesBefore: event.bytesBefore,
+          bytesAfter: event.bytesAfter,
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
   }
 }

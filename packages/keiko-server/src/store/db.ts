@@ -12,6 +12,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatGitChangeScope } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 // Reused directly rather than re-declared: `store/db.ts` lives inside `keiko-server` itself, the
 // same package that owns `ServerLogSink`/`ServerLogEvent`, so — unlike `KnowledgeLogSink`
 // (`keiko-local-knowledge`) or `SecurityLogSink` (`keiko-security`), which each declare their own
@@ -119,6 +123,38 @@ import {
   updateGitHubIssueReaderAuthorization as sqlUpdateGitHubIssueReaderAuthorization,
 } from "./github-issue-reader-authorization.js";
 import { invalidRequest } from "./errors.js";
+
+const STORE_OPENED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "store.opened",
+  category: "setup",
+  owner: "keiko-server",
+  emitter: "store.db.buildUiStoreOpenedEvent",
+  fields: {
+    encryptionMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["plaintext"],
+    },
+    migrationsAppliedCount: { type: "integer", dataClass: "count", required: true },
+    quickCheckOk: { type: "boolean", dataClass: "closed-enum", required: true },
+    store: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ui"],
+    },
+    storeSchemaVersion: { type: "integer", dataClass: "safe-version", required: true },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["ui-store-open"],
+  proofIds: ["store.opened.identity"],
+  releaseImpact: "patch",
+});
 
 const DEFAULT_REDACT = (s: string): string => s;
 
@@ -952,11 +988,10 @@ function startUiStoreOpenTimer(): () => number {
 // time on every production server start.
 function buildUiStoreOpenedEvent(db: DatabaseSync, durationMs: number): ServerLogEvent {
   const schemaVersion = boundedSchemaVersion(safeReadSchemaVersion(db));
-  return {
-    category: "setup",
-    op: "store.opened",
-    durationMs,
-    extra: {
+  return activityLogEvent(
+    STORE_OPENED_OPERATION,
+    { durationMs },
+    {
       store: "ui",
       // Named `storeSchemaVersion`, not `schemaVersion`: the latter is a RESERVED envelope field
       // name on the log line itself (the log schema's own version) and would be silently dropped.
@@ -966,7 +1001,7 @@ function buildUiStoreOpenedEvent(db: DatabaseSync, durationMs: number): ServerLo
       encryptionMode: "plaintext",
       // `keySource` is omitted: this store is never encrypted, so no key is ever resolved.
     },
-  };
+  );
 }
 
 function emitUiStoreOpenedEvent(sink: ServerLogSink | undefined, event: ServerLogEvent): void {

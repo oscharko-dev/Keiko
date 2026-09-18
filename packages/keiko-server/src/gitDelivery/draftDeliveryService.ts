@@ -37,6 +37,7 @@ import {
   proposalRecord,
   storeDraft,
   draftApprovalChanged,
+  logDraftDeliveryActivity,
   type DraftDeliveryCommand,
 } from "./draftDeliveryLedger.js";
 import { resolveDraftDeliveryTemplate } from "./draftDeliveryTemplate.js";
@@ -44,6 +45,9 @@ import { readDraftDeliveryChecks } from "./draftDeliveryChecks.js";
 import { executeDraftDeliveryEffect } from "./draftDeliveryEffects.js";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { errorKindOf } from "../observability/server-log.js";
+import { gitDeliveryActivityErrorKind } from "./execution.js";
+import { logDraftRelatedIssues } from "./draftRelatedIssuesActivity.js";
 
 interface DeliveryGuard {
   readonly check: () => boolean;
@@ -172,26 +176,34 @@ export class DraftDeliveryController implements DraftDeliveryService {
     }
   }
   private busyRefusal(context: DraftDeliveryRunContext): CodingRuntimeDeliveryResult {
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.draft-delivery",
-      correlationId: context.correlationId,
-      level: "warn",
-      extra: { runId: context.runId, phase: "refused", reason: "operation-in-flight" },
-    });
+    logDraftDeliveryActivity(
+      this.options,
+      context.correlationId,
+      { runId: context.runId, phase: "refused", reason: "operation-in-flight" },
+      { errorKind: "conflict" },
+    );
     return unavailable("operation-in-flight");
   }
   private failure(context: DraftDeliveryRunContext, error: unknown): CodingRuntimeDeliveryResult {
     this.proposal = undefined;
     const reason = error instanceof DraftDeliveryFailure ? error.reason : "provider-failed";
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.draft-delivery",
-      correlationId: context.correlationId,
-      level: "warn",
-      errorKind: "internal",
-      extra: { runId: context.runId, phase: "failed", reason, ...describeError(error) },
-    });
+    const failureKind = errorKindOf(error);
+    const detail = describeError(error);
+    logDraftDeliveryActivity(
+      this.options,
+      context.correlationId,
+      {
+        runId: context.runId,
+        phase: "failed",
+        reason,
+        failureKind,
+        errorClass: detail.errorClass,
+        ...(detail.code === undefined ? {} : { code: detail.code }),
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
+      { errorKind: gitDeliveryActivityErrorKind(failureKind) },
+    );
     const current = currentDraft(this.options, context);
     if (current === undefined) return unavailable("provider-unavailable");
     const pullRequest =
@@ -310,14 +322,22 @@ export class DraftDeliveryController implements DraftDeliveryService {
     try {
       return (await this.options.resolveRelatedIssues?.(context)) ?? [];
     } catch (error) {
-      (this.options.execution?.activityLog ?? processServerLogSink()).write({
-        category: "process",
-        op: "git.draft-related-issues",
-        correlationId: context.correlationId,
-        level: "warn",
-        errorKind: "internal",
-        extra: { runId: context.runId, state: "unavailable", count: 0, ...describeError(error) },
-      });
+      const failureKind = errorKindOf(error);
+      const detail = describeError(error);
+      logDraftRelatedIssues(
+        this.options.execution?.activityLog ?? processServerLogSink(),
+        context,
+        {
+          state: "unavailable",
+          count: 0,
+          errorKind: gitDeliveryActivityErrorKind(failureKind),
+          failureKind,
+          errorClass: detail.errorClass,
+          ...(detail.code === undefined ? {} : { code: detail.code }),
+          ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+          ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+        },
+      );
       return [];
     }
   }
@@ -433,16 +453,11 @@ export class DraftDeliveryController implements DraftDeliveryService {
     if (approved?.proposal === proposal) return approved.claim;
     if (this.options.policyAllowsWithoutApproval?.(deliveryAction(proposal)) !== true)
       throw new DraftDeliveryFailure("approval-invalid");
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.draft-delivery",
-      correlationId: context.correlationId,
-      extra: {
-        runId: context.runId,
-        phase: "approval",
-        reason: "policy-authorized",
-        proposalId: proposal.record.proposalId,
-      },
+    logDraftDeliveryActivity(this.options, context.correlationId, {
+      runId: context.runId,
+      phase: "approval",
+      reason: "policy-authorized",
+      proposalId: proposal.record.proposalId,
     });
     return { required: false };
   }

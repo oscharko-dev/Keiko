@@ -21,6 +21,11 @@ import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { UpdateInstallModeKind } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type {
@@ -46,6 +51,7 @@ import {
 // the measured ~410ms per-command module-loading tax (`keiko --version` included).
 // Only type imports may reference the package at module scope here.
 import { loadServer as loadServerModule } from "./lazy-modules.js";
+import { processFatalActivityLogEvent } from "./process-activity-log.js";
 import type { CliIo } from "./runner.js";
 import type { CliSecurityLogSinkFactory } from "./security-log.js";
 import {
@@ -65,6 +71,186 @@ const SQLITE_FLAG = "--experimental-sqlite";
 // server-side only and never sent to the browser.
 const LOCAL_DOTENV_ENV_NAME_ALLOWLIST: ReadonlySet<string> = new Set(["FIGMA_ACCESS_TOKEN"]);
 const DEFAULT_STATE_DIR = ".keiko";
+
+const PROCESS_EXITING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "process.exiting",
+  category: "process",
+  owner: "keiko-cli",
+  emitter: "ui.writeProcessExiting",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["sigint", "sigterm", "server-close", "shutdown-request", "fatal-exception"],
+    },
+    uptimeMs: { type: "number", dataClass: "duration", required: true },
+    onShutdownErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["shutdown-hook-failed", "process-shutdown"],
+  proofIds: ["process.exiting.reason", "process.exiting.uptime"],
+  releaseImpact: "patch",
+});
+
+const PROCESS_HEARTBEAT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "process.heartbeat",
+  category: "process",
+  owner: "keiko-cli",
+  emitter: "ui.writeHeartbeat",
+  fields: {
+    rssBytes: { type: "integer", dataClass: "count", required: true },
+    heapUsedBytes: { type: "integer", dataClass: "count", required: true },
+    heapTotalBytes: { type: "integer", dataClass: "count", required: true },
+    externalBytes: { type: "integer", dataClass: "count", required: true },
+    eventLoopDelayP99Ms: { type: "number", dataClass: "duration", required: true },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["process-stall", "memory-pressure"],
+  proofIds: ["process.heartbeat.resources", "process.heartbeat.event-loop"],
+  releaseImpact: "patch",
+});
+
+const PROCESS_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "process.started",
+  category: "process",
+  owner: "keiko-cli",
+  emitter: "ui.reportProcessStarted",
+  fields: {
+    nodeVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+    platform: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "aix",
+        "android",
+        "cygwin",
+        "darwin",
+        "freebsd",
+        "haiku",
+        "linux",
+        "netbsd",
+        "openbsd",
+        "sunos",
+        "win32",
+      ],
+    },
+    arch: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "arm",
+        "arm64",
+        "ia32",
+        "loong64",
+        "mips",
+        "mipsel",
+        "ppc",
+        "ppc64",
+        "riscv64",
+        "s390",
+        "s390x",
+        "x64",
+      ],
+    },
+    productVersion: {
+      type: "string",
+      dataClass: "safe-version",
+      required: true,
+      maxLength: 64,
+    },
+    host: { type: "string", dataClass: "closed-enum", required: true, values: ["127.0.0.1"] },
+    port: { type: "integer", dataClass: "count", required: true },
+    stateDirSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["default", "env-override", "cli-flag"],
+    },
+    logLevel: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["debug", "info", "warn", "error", "silent"],
+    },
+    installMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "package-manager",
+        "portable-managed",
+        "portable-bootstrap",
+        "portable-setup-failed",
+        "portable-it-managed",
+      ],
+    },
+    installModeErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 64,
+    },
+    gatewayProviderCount: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "none",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["process-startup", "install-mode-probe-failed"],
+  proofIds: ["process.started.runtime", "process.started.configuration"],
+  releaseImpact: "patch",
+});
+
+const LEGACY_UPDATE_IMPORT_DEFERRED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.runtime.legacy-import-deferred",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "ui.importLegacyAuditAfterRecovery",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "source-unsafe",
+        "source-too-large",
+        "source-invalid",
+        "source-mutated",
+        "destination-unsafe",
+        "destination-too-large",
+        "destination-invalid",
+        "destination-mutated",
+        "append-failed",
+        "durability-uncertain",
+      ],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["legacy-update-audit-import"],
+  proofIds: ["update.runtime.legacy-import-deferred.reason"],
+  releaseImpact: "patch",
+});
 
 const USAGE = `Usage:
   keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH] [--launch-id ID]
@@ -484,19 +670,25 @@ async function classifyServerError(error: Error): Promise<DurableServerErrorClas
   }
 }
 
+function safeCliErrorKind(error: unknown): string {
+  try {
+    const candidate = error instanceof Error ? error.name : typeof error;
+    return classifyErrorKind(candidate) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 function writeDurableServerErrorLog(
   activityLog: ServerLogSink | undefined,
   described: DurableServerErrorClassification,
   recovery?: PortableStartupRecoveryRequiredError,
 ): void {
   if (activityLog === undefined) return;
-  activityLog.write({
-    level: "error",
-    category: "process",
-    op: "process.fatal",
-    errorKind: described.code ?? described.errorClass,
-    extra: {
+  activityLog.write(
+    processFatalActivityLogEvent({
       kind: "server-error",
+      failureKind: described.code ?? described.errorClass,
       ...(recovery === undefined
         ? {}
         : {
@@ -505,8 +697,8 @@ function writeDurableServerErrorLog(
           }),
       ...(described.frames === undefined ? {} : { frames: described.frames }),
       ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
-    },
-  });
+    }),
+  );
 }
 
 // Bounded close, mirroring `waitForShutdown`'s SIGINT/SIGTERM grace-then-force sequence: idle
@@ -750,22 +942,24 @@ function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessE
   try {
     activity.onShutdown?.();
   } catch (error) {
-    onShutdownErrorKind = error instanceof Error ? error.name : typeof error;
+    onShutdownErrorKind = safeCliErrorKind(error);
   }
   const { activityLog, startedAt, closeActivityLog } = activity;
   if (activityLog === undefined || startedAt === undefined) {
     if (onShutdownErrorKind !== undefined) warnShutdownHookFailed(onShutdownErrorKind);
     return;
   }
-  activityLog.write({
-    category: "process",
-    op: "process.exiting",
-    extra: {
-      reason,
-      uptimeMs: Date.now() - startedAt,
-      ...(onShutdownErrorKind === undefined ? {} : { onShutdownErrorKind }),
-    },
-  });
+  activityLog.write(
+    activityLogEvent(
+      PROCESS_EXITING_OPERATION,
+      {},
+      {
+        reason,
+        uptimeMs: Math.max(0, Date.now() - startedAt),
+        ...(onShutdownErrorKind === undefined ? {} : { onShutdownErrorKind }),
+      },
+    ),
+  );
   if (closeActivityLog !== undefined) {
     closeActivityLog();
   } else {
@@ -988,20 +1182,23 @@ const NANOSECONDS_PER_MILLISECOND = 1_000_000;
 // leaks into the next one (#2902 PR review).
 function writeHeartbeat(activityLog: ServerLogSink, histogram: EventLoopHistogram): void {
   const memory = process.memoryUsage();
-  const eventLoopDelayP99Ms = histogram.percentile(99) / NANOSECONDS_PER_MILLISECOND;
+  const measuredDelayMs = histogram.percentile(99) / NANOSECONDS_PER_MILLISECOND;
+  const eventLoopDelayP99Ms =
+    Number.isFinite(measuredDelayMs) && measuredDelayMs >= 0 ? measuredDelayMs : 0;
   histogram.reset();
-  activityLog.write({
-    level: "info",
-    category: "process",
-    op: "process.heartbeat",
-    extra: {
-      rssBytes: memory.rss,
-      heapUsedBytes: memory.heapUsed,
-      heapTotalBytes: memory.heapTotal,
-      externalBytes: memory.external,
-      eventLoopDelayP99Ms,
-    },
-  });
+  activityLog.write(
+    activityLogEvent(
+      PROCESS_HEARTBEAT_OPERATION,
+      { level: "info" },
+      {
+        rssBytes: memory.rss,
+        heapUsedBytes: memory.heapUsed,
+        heapTotalBytes: memory.heapTotal,
+        externalBytes: memory.external,
+        eventLoopDelayP99Ms,
+      },
+    ),
+  );
 }
 
 // Started once, right after `process.started` is written; stopped from the SAME callback that
@@ -1063,7 +1260,7 @@ async function probeInstallModeKind(
   try {
     return { installMode: await probe(), installModeErrorKind: undefined };
   } catch (error) {
-    const installModeErrorKind = error instanceof Error ? error.name : typeof error;
+    const installModeErrorKind = safeCliErrorKind(error);
     return { installMode: undefined, installModeErrorKind };
   }
 }
@@ -1105,24 +1302,25 @@ async function reportProcessStarted(
   // writes already carries `instanceId` in its envelope (`identity.instanceId`, stamped at the
   // physical write boundary in `server-log.ts`), so the invariant this field exists for — the
   // manifest and the log agreeing on which process wrote a line — already holds without it.
-  activityLog.write({
-    level: "info",
-    category: "process",
-    op: "process.started",
-    extra: {
-      nodeVersion: process.version,
-      platform: process.platform,
-      arch: process.arch,
-      productVersion: KEIKO_PRODUCT_VERSION,
-      host: UI_HOST,
-      port: parsed.port,
-      stateDirSource,
-      logLevel,
-      ...(installMode === undefined ? {} : { installMode }),
-      ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
-      ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
-    },
-  });
+  activityLog.write(
+    activityLogEvent(
+      PROCESS_STARTED_OPERATION,
+      { level: "info" },
+      {
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        productVersion: KEIKO_PRODUCT_VERSION,
+        host: UI_HOST,
+        port: parsed.port,
+        stateDirSource,
+        logLevel,
+        ...(installMode === undefined ? {} : { installMode }),
+        ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
+        ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
+      },
+    ),
+  );
   return isRealLaunch ? startProcessHeartbeat(activityLog) : undefined;
 }
 
@@ -1311,12 +1509,13 @@ async function importLegacyAuditAfterRecovery(
   if (importer === undefined) return undefined;
   const outcome = await importer({ stateDir: options.stateDir, level: options.logLevel });
   if (outcome.status === "deferred" && outcome.reason !== "log-level-filtered") {
-    activityLog?.write({
-      level: "warn",
-      category: "diagnostic",
-      op: "update.runtime.legacy-import-deferred",
-      extra: { reason: outcome.reason },
-    });
+    activityLog?.write(
+      activityLogEvent(
+        LEGACY_UPDATE_IMPORT_DEFERRED_OPERATION,
+        { level: "warn", errorKind: "unavailable" },
+        { reason: outcome.reason },
+      ),
+    );
     options.io.err(
       "keiko ui: legacy update audit persistence was deferred; retained source will be retried.\n",
     );

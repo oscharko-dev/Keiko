@@ -3,9 +3,22 @@ import {
   isVerifiedCommitResult,
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import {
+  activityLogEvent,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
-import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION } from "./codingRuntimeActivityOperations.js";
+
+class VerifiedCommitRuntimeBindingError extends TypeError {}
+
+function verifiedCommitAuthorityErrorKind(error: unknown): ActivityLogErrorKind {
+  if (error instanceof VerifiedCommitRuntimeBindingError) return "conflict";
+  if (error instanceof TypeError || error instanceof SyntaxError) return "validation-failed";
+  return "internal";
+}
 
 export function assertVerifiedCommitRuntimeBinding(
   snapshot: CodingRuntimeSnapshot,
@@ -17,7 +30,9 @@ export function assertVerifiedCommitRuntimeBinding(
     result.runtimeAuthorityDigest === snapshot.authorityDigest,
     result.issueBindingDigest === snapshot.issueBinding?.bindingDigest,
   ];
-  if (!valid.every(Boolean)) throw new TypeError("verified commit runtime binding mismatch");
+  if (!valid.every(Boolean)) {
+    throw new VerifiedCommitRuntimeBindingError("verified commit runtime binding mismatch");
+  }
 }
 
 /** Internal durable HEAD provenance; proposals and recovery outcomes never replace success. */
@@ -29,14 +44,22 @@ export function readLastSuccessfulVerifiedCommit(
   try {
     return readRetained(db, snapshot);
   } catch (error) {
-    processServerLogSink().write({
-      category: "process",
-      op: "git.verified-commit.authority",
-      level: "warn",
-      correlationId: snapshot.runId,
-      errorKind: "internal",
-      extra: { phase: "read", runId: snapshot.runId, ...describeError(error) },
-    });
+    processServerLogSink().write(
+      activityLogEvent(
+        GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION,
+        {
+          level: "warn",
+          correlationId: snapshot.runId,
+          errorKind: verifiedCommitAuthorityErrorKind(error),
+        },
+        {
+          phase: "read",
+          runId: snapshot.runId,
+          frames: keikoStackFrames(error),
+          causeChain: causeChain(error),
+        },
+      ),
+    );
     throw error;
   }
 }

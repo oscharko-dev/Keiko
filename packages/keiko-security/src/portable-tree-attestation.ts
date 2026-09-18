@@ -13,6 +13,10 @@ import {
 } from "node:fs";
 import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 
 const TREE_HASH_SCHEMA = "KHT1";
@@ -25,6 +29,30 @@ const ASYNC_READS_PER_YIELD = 64;
 const ASYNC_IO_STEPS_PER_YIELD = 256;
 const SHA256 = /^[a-f0-9]{64}$/u;
 
+const SECURITY_PORTABLE_TREE_ATTESTATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.portable-tree-attestation.failed",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "portable-tree-attestation.logAttestationFailure",
+  fields: {
+    driver: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["async", "sync"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["portable-tree-attestation"],
+  proofIds: ["security.portable-tree-attestation.failed.driver"],
+  releaseImpact: "patch",
+});
+
 export interface PortableTreeKht1Operation {
   readonly signal?: AbortSignal | undefined;
   readonly deadline: number;
@@ -34,14 +62,17 @@ export interface PortableTreeKht1Operation {
 }
 
 export class PortableTreeAttestationError extends Error {
-  public constructor(message: string) {
+  public constructor(
+    message: string,
+    public readonly kind: "cancelled" | "integrity" | "timeout" = "integrity",
+  ) {
     super(message);
     this.name = "PortableTreeAttestationError";
   }
 }
 
-function fail(message: string): never {
-  throw new PortableTreeAttestationError(message);
+function fail(message: string, kind: "cancelled" | "integrity" | "timeout" = "integrity"): never {
+  throw new PortableTreeAttestationError(message, kind);
 }
 
 function assertDeadline(deadline: number): void {
@@ -51,12 +82,16 @@ function assertDeadline(deadline: number): void {
 }
 
 function assertAsyncOperation(operation: PortableTreeKht1Operation): void {
-  if (operation.signal?.aborted === true) fail("portable handoff preparation was cancelled");
-  if (operation.now() > operation.deadline) fail("portable handoff preparation timed out");
+  if (operation.signal?.aborted === true) {
+    fail("portable handoff preparation was cancelled", "cancelled");
+  }
+  if (operation.now() > operation.deadline) {
+    fail("portable handoff preparation timed out", "timeout");
+  }
 }
 
 function assertSyncOperation(deadline: number): void {
-  if (Date.now() > deadline) fail("portable handoff preparation timed out");
+  if (Date.now() > deadline) fail("portable handoff preparation timed out", "timeout");
 }
 
 interface TreeBudget {
@@ -572,13 +607,21 @@ function logAttestationFailure(
   driver: "async" | "sync",
   error: unknown,
 ): void {
-  emitSecurityLogEvent(sink, {
-    level: "error",
-    category: "security",
-    op: "security.portable-tree-attestation.failed",
-    errorKind: securityErrorKind(error),
-    extra: { driver },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_PORTABLE_TREE_ATTESTATION_FAILED_OPERATION,
+      { level: "error", errorKind: attestationErrorKind(error) },
+      { driver, failureKind: securityErrorKind(error) },
+    ),
+  );
+}
+
+function attestationErrorKind(error: unknown): "cancelled" | "timeout" | "validation-failed" {
+  if (!(error instanceof PortableTreeAttestationError)) return "validation-failed";
+  if (error.kind === "cancelled") return "cancelled";
+  if (error.kind === "timeout") return "timeout";
+  return "validation-failed";
 }
 
 export async function hashPortableTreeKht1(

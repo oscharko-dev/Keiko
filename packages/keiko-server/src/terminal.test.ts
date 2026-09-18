@@ -316,8 +316,8 @@ describe("listDirectories — deny vocabulary (#3347)", () => {
     expect(sink.events[0]).toMatchObject({
       op: "workspace.root.denied",
       correlationId: "terminal-picker-correlation-0001",
-      errorKind: "WORKSPACE_PATH_DENIED",
-      extra: { decision: "denied" },
+      errorKind: "permission-denied",
+      extra: { decision: "denied", failureKind: "WORKSPACE_PATH_DENIED" },
     });
     expect(JSON.stringify(sink.events)).not.toContain(workspaceRoot);
   });
@@ -493,11 +493,12 @@ describe("TerminalExecutionManager — denials and validation", () => {
     expect(activityEvents[0]).toMatchObject({
       op: "workspace.root.denied",
       correlationId,
-      errorKind: "WORKSPACE_PATH_DENIED",
+      errorKind: "permission-denied",
     });
     expect(activityEvents[0]?.extra).toMatchObject({
       decision: "denied",
       reason: "denied-locus",
+      failureKind: "WORKSPACE_PATH_DENIED",
     });
     expect(JSON.stringify(activityEvents)).not.toContain(fixture);
   });
@@ -750,7 +751,13 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
     // Body-free: exactly the three evidence fields — never the command, argv, or cwd. `childPid`
     // (not the reserved `pid`) so the child identity survives the real redactor — pinned against
     // redactLogFields in command-runner.test.ts.
-    expect(Object.keys(extra).sort()).toEqual(["childPid", "reason", "windowsTreeKill"]);
+    expect(Object.keys(extra).sort()).toEqual([
+      "childPid",
+      "completeness",
+      "loss",
+      "reason",
+      "windowsTreeKill",
+    ]);
   });
 
   it("rejects when MAX_CONCURRENT_EXECUTIONS is reached (D9 cap of 8)", async () => {

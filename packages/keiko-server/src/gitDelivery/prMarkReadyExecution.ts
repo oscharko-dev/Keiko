@@ -31,7 +31,13 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import type { GitDeliveryObservationFailureReason } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogFieldContract,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
   GitPrMarkReadyExecResult,
@@ -47,8 +53,7 @@ import {
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
-import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -57,7 +62,13 @@ import {
 import { processServerLogSink } from "../process-log-sink.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
-import { gitDeliveryTerminationHandler, logGitDeliveryNoSpawnRefusal } from "./execution.js";
+import { logGitDeliveryApprovalEvent } from "./approvalEvents.js";
+import {
+  gitDeliveryActivityErrorKind,
+  gitDeliveryTerminationHandler,
+  logGitDeliveryMutationFailure,
+  logGitDeliveryNoSpawnRefusal,
+} from "./execution.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
   GIT_DELIVERY_LOCAL_OPERATOR_ID,
@@ -87,6 +98,126 @@ import {
   type GitDeliveryRequestErrors,
 } from "./requestPreparation.js";
 import type { GitDeliveryDeliveredPullRequestAdmission } from "./runBoundAuthority.js";
+
+const MARK_READY_OUTCOME_FIELD_CONTRACTS = {
+  prExternalId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+  outcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["succeeded", "failed", "aborted", "partial"],
+  },
+  durationMs: { type: "number", dataClass: "duration", required: true },
+  errorCode: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "provider-rejected",
+      "network-failure",
+      "conflict",
+      "precondition-failed",
+      "signature-failed",
+      "timeout",
+      "internal-error",
+    ],
+  },
+  rejectionReason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "already-exists",
+      "base-missing",
+      "head-unpublished",
+      "validation-error",
+      "permission-denied",
+      "not-found",
+      "rate-limited",
+      "provider-unavailable",
+      "unknown",
+    ],
+  },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
+const MARK_READY_REFRESHED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.pr-mark-ready.readiness-refreshed",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prMarkReadyExecution.logPostTransitionObservation",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    recorded: { type: "boolean", dataClass: "closed-enum", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "observed",
+        "stale-observation",
+        "authority-denied",
+        "store-unavailable",
+        "auth-required",
+        "invalid-binding",
+        "cancelled",
+        "provider-forbidden",
+        "provider-not-found",
+        "rate-limited",
+        "provider-unavailable",
+        "timeout",
+        "pagination-exhausted",
+        "output-truncated",
+        "malformed-response",
+        "visibility-unknown",
+        "requirements-ambiguous",
+        "revision-changed",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-pr-mark-ready-refresh"],
+  proofIds: ["git.delivery.pr-mark-ready.readiness-refreshed"],
+  releaseImpact: "patch",
+});
+
+const MARK_READY_EXECUTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.pr-mark-ready.executed",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prMarkReadyExecution.logMarkReadyOutcome",
+  fields: MARK_READY_OUTCOME_FIELD_CONTRACTS,
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-pr-mark-ready-execution"],
+  proofIds: ["git.delivery.pr-mark-ready.executed"],
+  releaseImpact: "patch",
+});
+
+const MARK_READY_DRIFT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.pr-mark-ready.drift",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prMarkReadyExecution.logMarkReadyOutcome.drift",
+  fields: MARK_READY_OUTCOME_FIELD_CONTRACTS,
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-pr-mark-ready-drift"],
+  proofIds: ["git.delivery.pr-mark-ready.drift"],
+  releaseImpact: "patch",
+});
+
+type MarkReadyRefreshReason =
+  GitDeliveryObservationFailureReason | "observed" | "stale-observation" | "store-unavailable";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -394,15 +525,19 @@ interface PostTransitionObservationInput {
 function logPostTransitionObservation(
   input: PostTransitionObservationInput,
   recorded: boolean,
-  reason: string,
+  reason: MarkReadyRefreshReason,
 ): void {
-  (input.options.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "git.delivery.pr-mark-ready.readiness-refreshed",
-    correlationId: input.correlationId,
-    status: 200,
-    extra: { runId: input.runId, recorded, reason },
-  });
+  (input.options.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      MARK_READY_REFRESHED_OPERATION,
+      { correlationId: input.correlationId, status: 200 },
+      {
+        runId: input.runId,
+        recorded,
+        reason,
+      },
+    ),
+  );
 }
 
 function postTransitionSubject(input: PostTransitionObservationInput):
@@ -450,41 +585,19 @@ async function refreshPostTransitionReadiness(
 
 // ─── Logging ────────────────────────────────────────────────────────────────────────────────────
 
-function log(
-  activityLog: ServerLogSink | undefined,
-  op: string,
-  correlationId: string,
-  status: number,
-  extra: Record<string, unknown>,
-): void {
-  (activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op,
-    correlationId,
-    status,
-    extra,
-  });
-}
-
 function logMarkReadyFailure(
   activityLog: ServerLogSink | undefined,
   correlationId: string,
   phaseReached: "readiness" | "dispatch" | "post-observation",
   error: unknown,
 ): void {
-  (activityLog ?? processServerLogSink()).write({
-    category: "diagnostic",
-    op: "git.delivery.mutation.failed",
+  logGitDeliveryMutationFailure(
+    activityLog ?? processServerLogSink(),
+    "pr-mark-ready",
+    phaseReached,
+    error,
     correlationId,
-    level: "error",
-    errorKind: errorKindOf(error),
-    extra: {
-      actionKind: "pr-mark-ready",
-      phaseReached,
-      frames: keikoStackFrames(error),
-      causeChain: causeChain(error),
-    },
-  });
+  );
 }
 
 function reportPostObservationFailure(input: PostTransitionObservationInput, error: unknown): void {
@@ -552,10 +665,14 @@ export const createHandlePrMarkReadyApprove = (
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: (options.now ?? Date.now)(),
     });
-    log(options.activityLog, "git.delivery.pr-mark-ready.approval.minted", correlationId, 200, {
-      runId: authority.runId,
-      prExternalId: command.prExternalId,
-    });
+    logGitDeliveryApprovalEvent(
+      options.activityLog ?? processServerLogSink(),
+      "git.delivery.pr-mark-ready.approval.minted",
+      "pr-mark-ready",
+      correlationId,
+      authority.runId,
+      { prExternalId: command.prExternalId },
+    );
     const body: GitDeliveryPrMarkReadyApproveResponseBody = {
       schemaVersion: "1",
       approval: issued.approval,
@@ -692,19 +809,26 @@ function logMarkReadyOutcome(
   // GitPullRequestRejectionReason) and the ONLY body-free record of WHY a mark-ready failed. #3390
   // flow 3 (run-53) failed here as provider-rejected/unknown while this line said "failed" and
   // nothing else, so the defect could not be rebuilt from the log alone (ADR-0173 Rule 1).
-  log(
-    options.activityLog,
-    isDrift ? "git.delivery.pr-mark-ready.drift" : "git.delivery.pr-mark-ready.executed",
+  const errorKind =
+    result.outcome === "succeeded"
+      ? undefined
+      : gitDeliveryActivityErrorKind(result.errorCode ?? result.outcome);
+  const envelope = {
     correlationId,
-    200,
-    {
-      prExternalId: command.prExternalId,
-      outcome: result.outcome,
-      durationMs: result.durationMs,
-      ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
-      ...(result.rejectionReason === undefined ? {} : { rejectionReason: result.rejectionReason }),
-    },
-  );
+    status: 200,
+    ...(errorKind === undefined ? {} : { level: "warn" as const, errorKind }),
+  };
+  const fields = {
+    prExternalId: command.prExternalId,
+    outcome: result.outcome,
+    durationMs: result.durationMs,
+    ...(result.errorCode === undefined ? {} : { errorCode: result.errorCode }),
+    ...(result.rejectionReason === undefined ? {} : { rejectionReason: result.rejectionReason }),
+  };
+  const event = isDrift
+    ? activityLogEvent(MARK_READY_DRIFT_OPERATION, envelope, fields)
+    : activityLogEvent(MARK_READY_EXECUTED_OPERATION, envelope, fields);
+  (options.activityLog ?? processServerLogSink()).write(event);
 }
 
 interface MarkReadyDispatchContext {
@@ -797,10 +921,14 @@ async function handleMarkReadyExecute(
   if (verifiedApproval === undefined)
     return errResult(400, "GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST");
   if (!verifiedApproval.required) {
-    log(options.activityLog, "git.delivery.pr-mark-ready.approval.required", correlationId, 200, {
-      runId: authority.runId,
-      prExternalId: command.prExternalId,
-    });
+    logGitDeliveryApprovalEvent(
+      options.activityLog ?? processServerLogSink(),
+      "git.delivery.pr-mark-ready.approval.required",
+      "pr-mark-ready",
+      correlationId,
+      authority.runId,
+      { prExternalId: command.prExternalId },
+    );
     return markReadyApprovalRequiredBlock(deps);
   }
   return dispatchOrBlock(ctx, deps, {

@@ -1,4 +1,9 @@
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { realpath } from "node:fs/promises";
 import {
   GIT_CHANGE_SNAPSHOT_DEFAULT_TTL_MS,
@@ -55,6 +60,95 @@ import { snapshotEntries } from "./gitChangeSnapshotEntries.js";
 import { resolveSnapshotBinaryFiles } from "./gitChangeSnapshotBinary.js";
 import { GitChangeSnapshotRegistry } from "./gitChangeSnapshotRegistry.js";
 import type { GitSnapshotContent } from "./gitChangeSnapshotRegistry.js";
+
+const GIT_SNAPSHOT_CAPTURE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.capture",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotService.logCapture",
+  fields: {
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 16,
+      maxLength: 512,
+    },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    fileCount: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 32,
+      maxLength: 512,
+    },
+    omittedFiles: { type: "integer", dataClass: "count", required: false },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "partial", "unavailable", "failed"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "invalid-ref",
+        "missing-ref",
+        "identical-revisions",
+        "no-merge-base",
+        "head-behind-base",
+        "unsupported-object-format",
+        "head-mismatch",
+        "revision-mismatch",
+        "git-missing",
+        "unsafe-repository",
+        "git-error",
+        "timeout",
+        "cancelled",
+        "metadata-truncated",
+        "malformed-output",
+      ],
+    },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    snapshotDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    truncatedFiles: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-snapshot-capture"],
+  proofIds: ["git.snapshot.capture.outcome"],
+  releaseImpact: "patch",
+});
+
+const GIT_SNAPSHOT_RECHECK_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.recheck",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotService.recheckSnapshot",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["current", "stale", "unavailable", "failed"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-snapshot-recheck"],
+  proofIds: ["git.snapshot.recheck.state"],
+  releaseImpact: "patch",
+});
 
 export interface GitChangeSnapshotCaptureInput {
   /** Server-resolved and already-authorized workspace; never deserialize this from a request. */
@@ -424,31 +518,80 @@ function deadlineFailureReason(error: AbortDeadlineRaceError): "cancelled" | "ti
   return error.reason === "aborted" ? "cancelled" : "timeout";
 }
 
+const CAPTURE_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  cancelled: "cancelled",
+  timeout: "timeout",
+  "git-missing": "unavailable",
+  "unsafe-repository": "unsafe-target",
+  "invalid-ref": "validation-failed",
+  "missing-ref": "validation-failed",
+  "identical-revisions": "validation-failed",
+  "no-merge-base": "validation-failed",
+  "head-behind-base": "validation-failed",
+  "unsupported-object-format": "validation-failed",
+  "head-mismatch": "validation-failed",
+  "revision-mismatch": "validation-failed",
+  "metadata-truncated": "validation-failed",
+  "malformed-output": "validation-failed",
+  "git-error": "internal",
+};
+
+function captureEnvelopeErrorKind(reason: string | undefined): ActivityLogErrorKind | undefined {
+  return reason === undefined ? undefined : (CAPTURE_ERROR_KINDS[reason] ?? "unknown");
+}
+
+function captureErrorFields(error: unknown): {
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+} {
+  const described = describeError(error);
+  return {
+    ...(described.errorClass.length === 0 || described.errorClass.length > 64
+      ? {}
+      : { errorClass: described.errorClass }),
+    ...(described.code === undefined || described.code.length > 64 ? {} : { code: described.code }),
+    ...(described.frames === undefined ? {} : { frames: described.frames }),
+    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+  };
+}
+
 function logCapture(
   log: ServerLogSink,
   input: GitChangeSnapshotCaptureInput,
   snapshot: GitChangeSnapshotResult,
   error?: unknown,
 ): void {
-  log.write({
-    category: "process",
-    op: "git.snapshot.capture",
-    correlationId: input.correlationId,
-    ...(snapshot.outcome === "failed" ? { level: "warn", errorKind: snapshot.errorKind } : {}),
-    extra: {
-      outcome: snapshot.outcome,
-      repositoryId: snapshot.repositoryId,
-      ...(isGitChangeSnapshot(snapshot)
-        ? {
-            snapshotDigest: snapshot.snapshotDigest,
-            fileCount: snapshot.completeness.files,
-            omittedFiles: snapshot.completeness.omittedFiles,
-            truncatedFiles: snapshot.completeness.truncatedFiles,
-          }
-        : { reason: snapshot.reason }),
-      ...(error === undefined ? {} : describeError(error)),
-    },
-  });
+  log.write(
+    activityLogEvent(
+      GIT_SNAPSHOT_CAPTURE_OPERATION,
+      {
+        correlationId: input.correlationId,
+        ...(snapshot.outcome === "failed" || snapshot.outcome === "unavailable"
+          ? {
+              level: "warn" as const,
+              errorKind: captureEnvelopeErrorKind(
+                snapshot.outcome === "failed" ? snapshot.errorKind : snapshot.reason,
+              ),
+            }
+          : {}),
+      },
+      {
+        outcome: snapshot.outcome,
+        repositoryId: snapshot.repositoryId,
+        ...(isGitChangeSnapshot(snapshot)
+          ? {
+              snapshotDigest: snapshot.snapshotDigest,
+              fileCount: snapshot.completeness.files,
+              omittedFiles: snapshot.completeness.omittedFiles,
+              truncatedFiles: snapshot.completeness.truncatedFiles,
+            }
+          : { reason: snapshot.reason }),
+        ...(error === undefined ? {} : captureErrorFields(error)),
+      },
+    ),
+  );
 }
 
 interface ServiceContext {
@@ -507,12 +650,13 @@ async function recheckSnapshot(
   const fresh = await captureSnapshot(ctx, { ...input, limits: retained.snapshot.limits }, false);
   const state = recheckState(retained.snapshot, fresh.snapshot);
   if (state !== "current") ctx.registry.revoke(reference, input.accessScope, input.correlationId);
-  ctx.log.write({
-    category: "process",
-    op: "git.snapshot.recheck",
-    correlationId: input.correlationId,
-    extra: { state },
-  });
+  ctx.log.write(
+    activityLogEvent(
+      GIT_SNAPSHOT_RECHECK_OPERATION,
+      { correlationId: input.correlationId },
+      { state },
+    ),
+  );
   return { state, snapshot: fresh.snapshot };
 }
 

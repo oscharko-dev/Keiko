@@ -152,9 +152,11 @@ describe("catalog invocation settlement races", () => {
       const outcome = await fixture.binder.dispatch(fixture.request, ID);
       expect(outcome.kind === "settled" && outcome.result.reason).toBe("handler-failed");
       expect(release).toHaveBeenCalledOnce();
-      expect(fixture.primary.events.at(-1)?.extra).toMatchObject({
-        status: "failed",
-        errorKind: "TypeError",
+      expect(fixture.primary.events.at(-1)).toMatchObject({
+        errorKind: "internal",
+        extra: {
+          status: "failed",
+        },
       });
       expect(JSON.stringify(fixture.primary.events)).not.toContain("secret-path-and-query");
     },

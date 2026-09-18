@@ -95,7 +95,11 @@ describe("issue preview request lifecycle", () => {
       expect.objectContaining({
         op: "coding-workbench.issue.previewed",
         status,
-        extra: { outcome: status === 413 ? "request-too-large" : "invalid-request" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: status === 413 ? "request-too-large" : "invalid-request",
+        },
       }),
     );
   });
@@ -112,7 +116,11 @@ describe("issue preview request lifecycle", () => {
       expect.objectContaining({
         op: "coding-workbench.issue.previewed",
         status: 409,
-        extra: { outcome: "unknown-repository" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: "unknown-repository",
+        },
       }),
     );
   });
@@ -154,7 +162,11 @@ describe("issue preview request lifecycle", () => {
       expect.objectContaining({
         op: "coding-workbench.issue.previewed",
         correlationId: "preview-cancel",
-        extra: { outcome: "cancelled" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: "cancelled",
+        },
       }),
     );
     expect(f.ctx.req.listenerCount("aborted")).toBe(0);
@@ -173,6 +185,91 @@ describe("issue preview request lifecycle", () => {
     expect(result.body).toMatchObject({ failure: "issue-unavailable" });
     expect(result.body).not.toHaveProperty("failureReason");
     expect(JSON.stringify(result.body)).not.toContain("read-failed");
+  });
+
+  it("preserves a resolver refusal when preview activity logging fails", async () => {
+    const f = fixture();
+    const hostileMessage = "activity sink leaked issue body";
+    const deps = {
+      ...f.deps,
+      activityLog: {
+        write: (): never => {
+          throw new Error(hostileMessage);
+        },
+      },
+    } as UiHandlerDeps;
+    const resolver: GitHubIssueResolver = () =>
+      Promise.resolve({ ok: false, failure: "auth-required" });
+
+    const result = await createCodingWorkbenchIssuePreviewHandler(resolver)(f.ctx, deps);
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ failure: "auth-required" });
+    expect(f.diagnostics).toHaveLength(1);
+    expect(f.diagnostics[0]).toMatchObject({
+      correlationId: f.ctx.correlationId,
+      operation: "coding-workbench.issue.preview",
+      source: "coding-context.issuePreviewRoutes.recordPreview",
+    });
+    expect(JSON.stringify(f.diagnostics)).not.toContain(hostileMessage);
+  });
+
+  it("preserves a valid preview response when preview activity logging fails", async () => {
+    const f = fixture();
+    const loggingFailure = new Error("private activity write failure");
+    const deps = {
+      ...f.deps,
+      redactor: (value: string): string => value,
+      activityLog: {
+        write: (): never => {
+          throw loggingFailure;
+        },
+      },
+    } as UiHandlerDeps;
+    const resolver: GitHubIssueResolver = () =>
+      Promise.resolve({
+        ok: true,
+        binding: {
+          schemaVersion: "1",
+          repositoryId: "repo-1",
+          remoteDigest: "a".repeat(64),
+          issueNumber: 42,
+          issueIdDigest: "b".repeat(64),
+          defaultBaseRef: "dev",
+          contentRevisionDigest: "c".repeat(64),
+          bindingDigest: "d".repeat(64),
+        },
+        preview: {
+          untrusted: true,
+          title: "Issue title",
+          bodyExcerpt: "Issue excerpt",
+          bodyExcerptTruncated: false,
+          commentCount: 0,
+          state: "open",
+          provenance: {
+            ownerAndRepo: "owner/repo",
+            issueNumber: 42,
+            url: "https://github.com/owner/repo/issues/42",
+          },
+        },
+        contextObject: {
+          source: "github",
+          objectKind: "issue",
+          objectId: "42",
+          title: "Issue title",
+          body: "Issue excerpt",
+          comments: [],
+        },
+      });
+
+    const result = await createCodingWorkbenchIssuePreviewHandler(resolver)(f.ctx, deps);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ binding: { issueNumber: 42 } });
+    expect(f.diagnostics).toHaveLength(1);
+    expect(JSON.stringify({ result, diagnostics: f.diagnostics })).not.toContain(
+      loggingFailure.message,
+    );
   });
 
   it("reports a transient gh read failure as a distinct, retry-worded status (B5-13)", async () => {
@@ -218,7 +315,11 @@ describe("issue preview request lifecycle", () => {
         op: "coding-workbench.issue.previewed",
         correlationId: f.ctx.correlationId,
         status: 403,
-        extra: { outcome: "authority-denied" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: "authority-denied",
+        },
       }),
     );
   });

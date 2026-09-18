@@ -2,7 +2,8 @@
 // #445-#448 service test files (provisioning/lifecycle/reconciliation/repair/cleanup .test.ts)
 // proves this module is actually WIRED into that service's own central `emit` helper, at an
 // integration level, over a real store/adapter. This file proves the mapping `logWorkspaceLifecycle`
-// itself performs, in isolation: op/category, the info/warn level split, `errorKind` resolution
+// itself performs, in isolation: op/category, the info/warn level split, global `errorKind`
+// classification plus exact `extra.failureKind` preservation
 // (explicit override vs. outcome fallback vs. success-omits-it), the correlationId shape guard, and
 // the default fallback to the process-wide sink when a caller supplies none.
 
@@ -53,6 +54,8 @@ describe("logWorkspaceLifecycle", () => {
       workspaceId: "ws_test",
       attempt: 1,
       worktreeCount: 0,
+      completeness: "complete",
+      loss: "none",
     });
   });
 
@@ -72,12 +75,13 @@ describe("logWorkspaceLifecycle", () => {
     },
   );
 
-  it("raises level to warn and sets errorKind to the outcome itself for a failure-classified outcome with no explicit code", () => {
+  it("classifies and preserves a failure outcome with no explicit code", () => {
     const activityLog = createBufferedServerLogSink();
     logWorkspaceLifecycle({ activityLog }, { ...BASE, outcome: "blocked" });
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("blocked");
+    expect(line?.errorKind).toBe("validation-failed");
+    expect(line?.extra?.failureKind).toBe("blocked");
   });
 
   it("prefers an explicit errorCode over the bare outcome when both are failure-classified", () => {
@@ -88,7 +92,8 @@ describe("logWorkspaceLifecycle", () => {
     );
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("LOCK_CONTENTION");
+    expect(line?.errorKind).toBe("conflict");
+    expect(line?.extra?.failureKind).toBe("LOCK_CONTENTION");
   });
 
   // Reconciliation's own evidence `outcome` is always the fixed "reconciled" (a success-classified
@@ -103,8 +108,22 @@ describe("logWorkspaceLifecycle", () => {
     );
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("drifted");
+    expect(line?.errorKind).toBe("target-mutated");
+    expect(line?.extra?.failureKind).toBe("drifted");
     expect(line?.extra?.outcome).toBe("reconciled");
+  });
+
+  it.each([
+    ["INVALID_BASE_BRANCH", "validation-failed"],
+    ["UNSAFE_PATH", "unsafe-target"],
+    ["EXISTING_UNMANAGED_PATH", "target-exists"],
+    ["OPERATOR_APPROVAL_REQUIRED", "authority-denied"],
+    ["REPOSITORY_UNREACHABLE", "unavailable"],
+    ["PROVISIONING_FAILED", "write-failed"],
+  ] as const)("maps %s to the closed %s activity kind", (errorCode, expected) => {
+    const activityLog = createBufferedServerLogSink();
+    logWorkspaceLifecycle({ activityLog }, { ...BASE, outcome: "failed", errorCode });
+    expect(activityLog.events[0]?.errorKind).toBe(expected);
   });
 
   it("never invents an errorKind out of nothing for a plain success with no errorCode", () => {

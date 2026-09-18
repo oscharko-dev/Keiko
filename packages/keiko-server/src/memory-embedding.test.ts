@@ -784,7 +784,10 @@ describe("memory embedding activity log", () => {
     expect(event?.op).toBe("embedding.memory.failed");
     expect(event?.errorKind).toBe("rate-limited");
     expect(event?.status).toBe(429);
-    expect(event?.extra).toMatchObject({ modelId: EMBEDDING_MODEL });
+    expect(event?.extra).toMatchObject({
+      modelId: EMBEDDING_MODEL,
+      failureKind: "rate-limited",
+    });
     expect(sink.lines().join("\n")).not.toContain("the user prefers tabs");
   });
 
@@ -797,8 +800,37 @@ describe("memory embedding activity log", () => {
 
     expect(await embedMemoryText(deps, "a durable preference")).toBeNull();
 
-    expect(sink.events[0]?.errorKind).toBe("ENOTFOUND");
+    expect(sink.events[0]?.errorKind).toBe("unknown");
+    expect(sink.events[0]?.extra?.failureKind).toBe("ENOTFOUND");
     expect(sink.lines().join("\n")).not.toContain("getaddrinfo");
+  });
+
+  it("reduces a 128-character machine token to the registered failure-kind vocabulary", async () => {
+    const failureKind = `E${"X".repeat(127)}`;
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.reject(Object.assign(new Error("secret"), { code: failureKind })),
+    });
+    const sink = capture("info");
+
+    await expect(embedMemoryText(deps, "a durable preference")).resolves.toBeNull();
+
+    expect(sink.events[0]?.extra?.failureKind).toBe("unknown");
+    expect(sink.lines().join("\n")).not.toContain(failureKind);
+  });
+
+  it("hashes a non-machine model id without breaking never-throw degradation", async () => {
+    const modelId = "Llama Embedding 3.1 8B Instruct";
+    const deps = makeDeps({
+      modelId,
+      embeddingRequest: () => Promise.reject(new Error("provider unavailable")),
+    });
+    const sink = capture("info");
+
+    await expect(embedMemoryText(deps, "a durable preference")).resolves.toBeNull();
+
+    expect(sink.events[0]?.extra?.modelId).toMatch(/^model-[a-f0-9]{64}$/u);
+    expect(sink.lines().join("\n")).not.toContain(modelId);
   });
 
   it("keeps an unconfigured install at debug and reports the dimensions of a success there too", async () => {
@@ -816,6 +848,8 @@ describe("memory embedding activity log", () => {
 
     expect(opsIn(atDebug)).toEqual(["embedding.memory.unavailable", "embedding.memory.succeeded"]);
     expect(atDebug.events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       reason: "no-embedding-capable-model",
       providerCount: 0,
     });
@@ -902,10 +936,11 @@ describe("memory embedding activity log", () => {
         category: "memory",
         op: "memory.embedding.store-rejected",
         correlationId: undefined,
+        parentCorrelationId: undefined,
         durationMs: undefined,
         status: undefined,
-        errorKind: "EDIMENSION",
-        extra: undefined,
+        errorKind: "unknown",
+        extra: { completeness: "complete", failureKind: "EDIMENSION", loss: "none" },
       },
     ]);
     expect(sink.lines().join("\n")).not.toContain("dimension mismatch");
@@ -928,6 +963,10 @@ describe("memory embedding activity log", () => {
     expect(vault.getEmbedding(stored.id)).toBeUndefined();
     expect(opsIn(sink)).toEqual(["memory.embedding.invalidated"]);
     expect(sink.events[0]?.level).toBe("warn");
-    expect(sink.events[0]?.extra).toEqual({ reason: "no-embedding" });
+    expect(sink.events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "no-embedding",
+    });
   });
 });

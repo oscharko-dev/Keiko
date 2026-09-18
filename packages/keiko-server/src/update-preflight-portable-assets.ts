@@ -7,7 +7,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayEgressConfig } from "./deps.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { recordPortableFetchFailure } from "./update-preflight-activity.js";
 import { resolvePortableAsset } from "./update-preflight-portable-evidence.js";
 import {
   type GitHubAsset,
@@ -190,22 +190,6 @@ async function fetchLatestRelease(deps: UiHandlerDeps): Promise<LatestReleaseFet
   return release === undefined ? { status: "malformed" } : { status: "ok", release };
 }
 
-function recordPortableFetchFailure(
-  deps: UiHandlerDeps,
-  error: unknown,
-  target: UpdatePortableTarget,
-  assetKind: "release-evidence" | "release-metadata",
-): void {
-  deps.activityLog?.write({
-    category: "diagnostic",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    errorKind: "PORTABLE_FETCH_FAILURE",
-    level: "warn",
-    op: "update.portable-fetch.failed",
-    extra: { assetKind, reason: portableFetchFailureReason(error), target },
-  });
-}
-
 function notNeededOutcome(
   release: PortableReleaseMetadata,
   target: UpdatePortableTarget,
@@ -229,12 +213,19 @@ export async function fetchPortableGitHubReleaseAssets(
   deps: UiHandlerDeps,
   currentVersion: string,
   target: UpdatePortableTarget,
+  correlationId?: string,
 ): Promise<PortableGitHubReleaseOutcome> {
   let result: LatestReleaseFetch;
   try {
     result = await fetchLatestRelease(deps);
   } catch (error) {
-    recordPortableFetchFailure(deps, error, target, "release-metadata");
+    recordPortableFetchFailure(
+      deps.activityLog,
+      target,
+      "release-metadata",
+      portableFetchFailureReason(error),
+      correlationId,
+    );
     return unavailableOutcome();
   }
   if (result.status === "unavailable") return unavailableOutcome();
@@ -243,7 +234,7 @@ export async function fetchPortableGitHubReleaseAssets(
     return notNeededOutcome(result.release, target);
   }
   try {
-    const resolution = await resolvePortableAsset(deps, result.release, target);
+    const resolution = await resolvePortableAsset(deps, result.release, target, correlationId);
     return {
       status: "live",
       targetVersion: result.release.targetVersion,
@@ -253,7 +244,13 @@ export async function fetchPortableGitHubReleaseAssets(
       warnings: resolution.warnings,
     };
   } catch (error) {
-    recordPortableFetchFailure(deps, error, target, "release-evidence");
+    recordPortableFetchFailure(
+      deps.activityLog,
+      target,
+      "release-evidence",
+      portableFetchFailureReason(error),
+      correlationId,
+    );
     return unavailableOutcome();
   }
 }

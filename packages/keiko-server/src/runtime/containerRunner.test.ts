@@ -376,6 +376,8 @@ describe("ContainerRunnerManager — execution", () => {
     // pinned against redactLogFields in command-runner.test.ts.
     expect(Object.keys(terminated?.extra ?? {}).sort()).toEqual([
       "childPid",
+      "completeness",
+      "loss",
       "reason",
       "windowsTreeKill",
     ]);

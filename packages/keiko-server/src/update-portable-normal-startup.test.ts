@@ -860,7 +860,12 @@ describe("portable normal startup recovery", () => {
       expect.objectContaining({
         op: "portable.normal-startup-recovery.completed",
         correlationId: fixture.session.correlationId,
-        extra: { outcome: "unaccepted-settled", target: "windows-x64" },
+        extra: {
+          outcome: "unaccepted-settled",
+          target: "windows-x64",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
   });
@@ -929,7 +934,12 @@ describe("portable normal startup recovery", () => {
       expect.objectContaining({
         op: "portable.normal-startup-recovery.completed",
         correlationId: fixture.session.correlationId,
-        extra: { outcome: "native-recovered", target: "windows-x64" },
+        extra: {
+          outcome: "native-recovered",
+          target: "windows-x64",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
     const auditEvent = events.find((event) => event.op === "update.runtime.event");
@@ -1274,8 +1284,12 @@ describe("portable normal startup recovery", () => {
       expect.objectContaining({
         op: "portable.normal-startup-recovery.required",
         correlationId: fixture.session.correlationId,
-        errorKind: "PortableNormalStartupRecoveryRequired",
-        extra: { reason: "ownership-live-or-mismatch" },
+        errorKind: "conflict",
+        extra: {
+          reason: "ownership-live-or-mismatch",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
     expect(JSON.stringify(events)).not.toContain(fixture.stateDir);

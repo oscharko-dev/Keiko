@@ -1,7 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  activityLogEvent,
+  activityLogEventRegistration,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { REDACTED_KEY } from "./log-redaction.js";
 import {
@@ -20,6 +25,7 @@ import {
   setServerLogger,
   startLogTimer,
 } from "./server-logger.js";
+import { updateRuntimeActivityEvent } from "../update-runtime-activity.js";
 
 function throwingSink(): ServerLogSink {
   return {
@@ -77,6 +83,49 @@ describe("server logger levels", () => {
 });
 
 describe("server logger bound context", () => {
+  it("preserves a typed registration while applying level and bound context", () => {
+    const operation = defineActivityLogOperation({
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "test.server-logger.registered",
+      category: "diagnostic",
+      owner: "keiko-server",
+      emitter: "observability/server-logger.test",
+      fields: {
+        outcome: {
+          type: "string",
+          dataClass: "closed-enum",
+          required: true,
+          values: ["accepted"],
+        },
+      },
+      causal: "none",
+      lifecycle: "state",
+      analyzerProjection: "timeline",
+      failureClasses: ["test"],
+      proofIds: ["server-logger.registration-preserved"],
+      releaseImpact: "none",
+    } as const);
+    const sink = createBufferedServerLogSink();
+    const logger = createServerLogger({ sink, level: "debug" }).child({
+      correlationId: "req-registered",
+      undeclaredChildField: "must-not-reach-registered-extra",
+    });
+
+    logger.info(activityLogEvent(operation, {}, { outcome: "accepted" }));
+
+    const event = sink.events[0];
+    expect(event).toMatchObject({
+      level: "info",
+      correlationId: "req-registered",
+      op: "test.server-logger.registered",
+      extra: { outcome: "accepted" },
+    });
+    expect(
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toBe(operation);
+  });
+
   it("merges the bound context into every event so callers name it once", () => {
     const sink = createBufferedServerLogSink();
     const logger = createServerLogger({ sink, level: "debug" }).child({
@@ -256,7 +305,7 @@ describe("server logger failure isolation", () => {
       level: "error",
       category: "diagnostic",
       op: "server-log.write-failed",
-      errorKind: "Error",
+      errorKind: "internal",
       failedOp: "gateway.chat.failed",
       correlationId: "job-4f2a",
     });
@@ -273,7 +322,7 @@ describe("server logger failure isolation", () => {
 
     expect(stderr).toHaveBeenCalledTimes(1);
     const notice = stderrNotice(stderr.mock.calls[0]?.[0]);
-    expect(notice).toMatchObject({ op: "server-log.write-failed", errorKind: "TypeError" });
+    expect(notice).toMatchObject({ op: "server-log.write-failed", errorKind: "internal" });
     // The event never existed, so there is nothing honest to say about which op failed.
     expect(notice.failedOp).toBeUndefined();
   });
@@ -347,12 +396,80 @@ describe("process-wide server logger", () => {
     }).not.toThrow();
   });
 
-  it("writes to <stateDir>/logs/server.log when the CLI configured one", () => {
+  it("recovers after the activity-log directory becomes writable", () => {
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
-    getServerLogger().warn({ category: "indexing", op: "indexing.job.skipped" });
+    writeFileSync(join(stateDir, "logs"), "occupied");
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    stderr.mockClear();
+
+    expect(() => {
+      getServerLogger().error({ category: "indexing", op: "unreachable-after-init-failure" });
+    }).not.toThrow();
+    expect(getServerLogger().level).toBe("silent");
+    expect(stderrNotice(stderr.mock.calls[0]?.[0])).toMatchObject({
+      op: "server-log.write-failed",
+      failedOp: "server-log.initialize",
+      writerCapability: "unavailable",
+      completeness: "unknown",
+      loss: "event-dropped",
+    });
+    expect(stderr).toHaveBeenCalledTimes(1);
+
+    rmSync(join(stateDir, "logs"));
+    const recovered = getServerLogger();
+    recovered.info(
+      updateRuntimeActivityEvent("request-init-recovered", {
+        eventId: "event-init-recovered",
+        type: "user-confirmed",
+        occurredAt: "2026-09-18T00:00:00.000Z",
+        status: "succeeded",
+      }),
+    );
+
+    expect(recovered.level).toBe("debug");
+    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).toContain(
+      '"eventId":"event-init-recovered"',
+    );
+    expect(stderr).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists registered initialization evidence and rejects an unregistered call", () => {
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    stderr.mockClear();
+    getServerLogger().warn({ category: "indexing", op: "test.unregistered-operation" });
     const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-    expect(raw).toContain("indexing.job.skipped");
-    expect(raw).toContain('"level":"warn"');
+    expect(raw).toContain('"op":"server-log.safe-open"');
+    expect(raw).toContain('"writerCapability":"active"');
+    expect(raw).not.toContain("test.unregistered-operation");
+    expect(stderrNotice(stderr.mock.calls[0]?.[0])).toMatchObject({
+      op: "server-log.write-failed",
+      rejectionKind: "unregistered-operation",
+    });
+  });
+
+  it("persists a registered child event after dropping undeclared bound fields", () => {
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+
+    getServerLogger()
+      .child({
+        correlationId: "request-child-bound-registered",
+        undeclaredChildField: "must-not-reach-disk",
+      })
+      .info(
+        updateRuntimeActivityEvent("request-child-bound-registered", {
+          eventId: "event-child-bound-registered",
+          type: "user-confirmed",
+          occurredAt: "2026-09-18T00:00:00.000Z",
+          status: "succeeded",
+        }),
+      );
+
+    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    expect(raw).toContain('"op":"update.runtime.event"');
+    expect(raw).toContain('"eventId":"event-child-bound-registered"');
+    expect(raw).not.toContain("undeclaredChildField");
+    expect(raw).not.toContain("must-not-reach-disk");
   });
 
   it("returns the same instance until it is reset", () => {

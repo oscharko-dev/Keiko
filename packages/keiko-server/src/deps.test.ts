@@ -102,6 +102,7 @@ import {
   setServerLogger,
 } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import type { RuntimeShutdownCleanup } from "./deps-activity.js";
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
@@ -699,6 +700,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         state: "started",
         activeRunCount: 0,
         openSseStreamCount: openStreamsAtTeardown,
+        completeness: "complete",
+        loss: "none",
       },
     });
     expect(shutdown[1]).toMatchObject({
@@ -713,6 +716,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         // leave only the `started` half behind (CodeRabbit review, 2026-09-10).
         cleanup: "completed",
         durationMs: expect.any(Number) as unknown,
+        completeness: "complete",
+        loss: "none",
       },
     });
     // One id joins the pair, so `keiko support analyze --correlation-id <id>` reads the teardown.
@@ -726,7 +731,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   // shape: the faulted cleanup is recorded with its full body-free description either way, an earlier
   // failure is never masked, and the cleanup's own error surfaces when nothing else was failing.
   it("keeps the earlier failure when the cleanup also faults, and records why it faulted", async (): Promise<void> => {
-    const records: Readonly<Record<string, unknown>>[] = [];
+    const records: RuntimeShutdownCleanup[] = [];
     const earlier = new Error("orchestrator shutdown failed");
     const cleanupError = new Error("cleanup failed", { cause: new TypeError("inner") });
     const teardown = async (): Promise<void> => {
@@ -752,7 +757,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   });
 
   it("surfaces the cleanup's own error when the shutdown itself succeeded", async (): Promise<void> => {
-    const records: Readonly<Record<string, unknown>>[] = [];
+    const records: RuntimeShutdownCleanup[] = [];
     const cleanupError = new Error("cleanup failed");
 
     await expect(
@@ -1031,7 +1036,12 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         expect.objectContaining({
           op: "task-workspace.repository.registered",
           correlationId: "provision-correlation-1",
-          extra: { repositoryId: instance.repositoryId, granted: false },
+          extra: {
+            repositoryId: instance.repositoryId,
+            granted: false,
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       ]);
       // The operator grants the repository through the existing surface; the next exposure derives.
@@ -1108,6 +1118,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
               extra: {
                 repositoryId: instance.repositoryId,
                 reason: "ui-database-inside-repository",
+                completeness: "complete",
+                loss: "none",
               },
             }),
       ]);
@@ -2167,7 +2179,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         category: "memory",
         op: "memory.audit.state-cache.seeded",
         correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
-        extra: { recordCount: 1 },
+        extra: { recordCount: 1, completeness: "complete", loss: "none" },
       }),
     );
     expect(
@@ -2257,8 +2269,8 @@ describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#33
       level: "warn",
       category: "security",
       correlationId,
-      errorKind: "WORKSPACE_PATH_DENIED",
-      extra: { decision: "denied" },
+      errorKind: "permission-denied",
+      extra: { decision: "denied", failureKind: "WORKSPACE_PATH_DENIED" },
     });
     // Body-free: the denied path itself never enters the logged event.
     expect(JSON.stringify(denialEvents[0])).not.toContain(deniedRoot);

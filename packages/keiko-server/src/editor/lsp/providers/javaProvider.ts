@@ -15,6 +15,11 @@ import type {
   LanguageServiceOperation,
   ManagedLspJavaConfiguration,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
 import {
@@ -35,8 +40,65 @@ import type { HostLanguageProviderSpec } from "../hostLanguageProviders.js";
 import { resolveExecutableOutsideWorkspace } from "../lspNodeAdapter.js";
 import type { LspSpawnPreparation, LspSpawnPreparationInput } from "../lspProcessManager.js";
 import { UNKNOWN_CORRELATION_ID } from "../../../correlation.js";
-import { errorKindOf, startLogTimer } from "../../../observability/index.js";
+import { startLogTimer } from "../../../observability/index.js";
 import { logCommandTermination, processServerLogSink } from "../../../process-log-sink.js";
+
+const LSP_JAVA_VERSION_PROBE_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.java.version-probe.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.providers.javaProvider.logJavaVersionValidation",
+  fields: {
+    executionBoundary: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-pre-spawn"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "supported",
+        "unsupported-version",
+        "malformed-output",
+        "nonzero-exit",
+        "output-cap",
+        "timeout",
+        "spawn-error",
+        "invocation-failed",
+        "cancelled",
+      ],
+    },
+    platform: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "aix",
+        "android",
+        "cygwin",
+        "darwin",
+        "freebsd",
+        "haiku",
+        "linux",
+        "netbsd",
+        "openbsd",
+        "sunos",
+        "win32",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["lsp-java-version-probe"],
+  proofIds: ["lsp.java-version-probe-completed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 const JAVA_OPERATIONS: readonly LanguageServiceOperation[] = Object.freeze([
   "diagnostics",
@@ -328,6 +390,23 @@ class JavaVersionProbeError extends Error {
   }
 }
 
+function javaProbeActivityErrorKind(
+  outcome: JavaVersionValidationOutcome,
+): ActivityLogErrorKind | undefined {
+  if (outcome === "supported") return undefined;
+  if (outcome === "timeout") return "timeout";
+  if (outcome === "cancelled") return "cancelled";
+  if (outcome === "spawn-error") return "unavailable";
+  if (
+    outcome === "unsupported-version" ||
+    outcome === "malformed-output" ||
+    outcome === "nonzero-exit" ||
+    outcome === "output-cap"
+  )
+    return "validation-failed";
+  return "internal";
+}
+
 function logJavaVersionValidation(
   platform: NodeJS.Platform,
   outcome: JavaVersionValidationOutcome,
@@ -335,19 +414,19 @@ function logJavaVersionValidation(
   error?: unknown,
   status?: number,
 ): void {
-  processServerLogSink().write({
-    category: "diagnostic",
-    op: "lsp.java.version-probe.completed",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    durationMs,
-    ...(status === undefined ? {} : { status }),
-    ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
-    extra: {
-      executionBoundary: "governed-pre-spawn",
-      outcome,
-      platform,
-    },
-  });
+  const errorKind = error === undefined ? undefined : javaProbeActivityErrorKind(outcome);
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_JAVA_VERSION_PROBE_COMPLETED_OPERATION,
+      {
+        correlationId: UNKNOWN_CORRELATION_ID,
+        durationMs,
+        ...(status === undefined ? {} : { status }),
+        ...(errorKind === undefined ? {} : { errorKind }),
+      },
+      { executionBoundary: "governed-pre-spawn", outcome, platform },
+    ),
+  );
 }
 
 function failJavaVersionValidation(

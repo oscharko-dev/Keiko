@@ -37,8 +37,22 @@ import {
   RedactingError,
   DIR_MODE,
   FILE_MODE,
+  MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES,
+  MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
+  SAFE_ARTIFACT_CLASSES,
+  SAFE_ARTIFACT_FILE_FAILURE_KINDS,
+  SafeArtifactFileError,
+  acknowledgeSafeArtifactFileSet,
   ensureDirHardened,
   chmodIfPresent,
+  openSafeArtifactFile,
+  publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
+  replaceSafeArtifactFile,
+  safeArtifactContainmentAssurance,
+  safeArtifactPermissionAssurance,
+  safeArtifactPublicationSlot,
+  verifySafeArtifactFileDescriptor,
   bindSecurityLogCorrelation,
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
   WINDOWS_ATOMIC_RENAME_RETRY_CODES,
@@ -135,8 +149,23 @@ describe("keiko-security package surface", () => {
   it("exposes the shared fs-hardening primitives", () => {
     expect(DIR_MODE).toBe(0o700);
     expect(FILE_MODE).toBe(0o600);
+    expect(MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES).toBeLessThanOrEqual(
+      MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
+    );
     expect(typeof ensureDirHardened).toBe("function");
     expect(typeof chmodIfPresent).toBe("function");
+    expect(SAFE_ARTIFACT_CLASSES).toContain("activity-log");
+    expect(SAFE_ARTIFACT_FILE_FAILURE_KINDS).toContain("unsafe-target");
+    expect(typeof SafeArtifactFileError).toBe("function");
+    expect(typeof openSafeArtifactFile).toBe("function");
+    expect(typeof verifySafeArtifactFileDescriptor).toBe("function");
+    expect(typeof publishSafeArtifactFileSet).toBe("function");
+    expect(typeof recoverSafeArtifactFileSet).toBe("function");
+    expect(typeof acknowledgeSafeArtifactFileSet).toBe("function");
+    expect(typeof safeArtifactPublicationSlot).toBe("function");
+    expect(typeof replaceSafeArtifactFile).toBe("function");
+    expect(typeof safeArtifactContainmentAssurance).toBe("function");
+    expect(typeof safeArtifactPermissionAssurance).toBe("function");
   });
 
   it("exposes the shared atomic-publish rename primitives", () => {

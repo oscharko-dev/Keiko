@@ -4,6 +4,11 @@ import { isDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/dra
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   GitJourneyReader,
   GitJourneyFactsResult,
@@ -13,6 +18,177 @@ import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { captureJourneyFacts, produceJourneyOutcome } from "./journeyOutcome.js";
+
+const JOURNEY_OBSERVATION_OPERATION_BASE = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.journey-observation",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/journeyObservationService.logJourneyObservationActivity",
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-journey-observation"],
+  proofIds: ["git.journey-observation"],
+  releaseImpact: "patch",
+} as const;
+
+const JOURNEY_REASON_VALUES = [
+  "authority-denied",
+  "draft-unavailable",
+  "observation-in-flight",
+  "observation-superseded",
+  "provider-unavailable",
+  "ready-approval-required",
+  "technical-ready",
+  "human-review-ready",
+  "required-reviews-missing",
+  "changes-requested",
+  "unresolved-conversations",
+  "review-visibility-unknown",
+  "issue-closure-pending",
+  "merge-and-closure-observed",
+  "closed-unmerged",
+  "issue-closed-without-merge",
+  "retargeted",
+  "head-changed",
+  "readiness-unavailable",
+  "readiness-stale",
+  "checks-not-ready",
+  "description-unavailable",
+  "description-stale",
+  "description-not-applied",
+  "cancelled",
+  "ready-effect-uncertain",
+] as const;
+
+const JOURNEY_STATE_VALUES = [
+  "awaiting-ready-approval",
+  "keiko-technical-ready",
+  "ready-for-human-review",
+  "awaiting-human-requirements",
+  "merged-awaiting-issue-closure",
+  "completed",
+  "blocked",
+  "cancelled",
+  "recovery-required",
+] as const;
+
+const OPTIONAL_ERROR_KIND_FIELD = {
+  type: "string",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 64,
+} as const;
+
+const JOURNEY_FAILURE_FIELDS = {
+  failureKind: OPTIONAL_ERROR_KIND_FIELD,
+  errorClass: OPTIONAL_ERROR_KIND_FIELD,
+  code: OPTIONAL_ERROR_KIND_FIELD,
+  frames: {
+    type: "string-array",
+    dataClass: "safe-platform-class",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;
+
+const JOURNEY_OBSERVATION_FIELDS = {
+  phase: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["started", "observed", "unavailable"],
+  },
+  runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+  reason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: JOURNEY_REASON_VALUES,
+  },
+  state: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: JOURNEY_STATE_VALUES,
+  },
+  evidenceRef: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+  headSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  remoteDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  merged: { type: "boolean", dataClass: "closed-enum", required: false },
+  unresolvedCount: { type: "integer", dataClass: "count", required: false },
+  issueState: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["open", "closed"],
+  },
+  descriptionState: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["current", "partial", "fallback", "blocked", "stale", "failed"],
+  },
+  complete: { type: "boolean", dataClass: "closed-enum", required: false },
+  ...JOURNEY_FAILURE_FIELDS,
+} as const;
+
+const JOURNEY_OBSERVATION_OPERATION = defineActivityLogOperation({
+  ...JOURNEY_OBSERVATION_OPERATION_BASE,
+  fields: {
+    ...JOURNEY_OBSERVATION_FIELDS,
+  },
+});
+
+export interface JourneyObservationActivityFields {
+  readonly phase: "started" | "observed" | "unavailable";
+  readonly runId?: string;
+  readonly reason?:
+    | Extract<JourneyObservationResult, { status: "unavailable" }>["reason"]
+    | JourneyOutcome["reason"];
+  readonly state?: JourneyOutcome["state"];
+  readonly evidenceRef?: string;
+  readonly headSha?: string;
+  readonly remoteDigest?: string;
+  readonly merged?: boolean;
+  readonly unresolvedCount?: number;
+  readonly issueState?: "open" | "closed";
+  readonly descriptionState?: PrDescriptionApplicationStatus["state"];
+  readonly complete?: boolean;
+  readonly failureKind?: string;
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+export function logJourneyObservationActivity(
+  log: ServerLogSink,
+  correlationId: string,
+  fields: JourneyObservationActivityFields,
+  failure?: { readonly errorKind: ActivityLogErrorKind },
+): void {
+  log.write(
+    activityLogEvent(
+      JOURNEY_OBSERVATION_OPERATION,
+      {
+        correlationId,
+        ...(failure === undefined ? {} : { level: "warn", errorKind: failure.errorKind }),
+      },
+      fields,
+    ),
+  );
+}
 
 /** Read authority from the selected workspace/connection; not a resumed coding-runtime mutation lease. */
 export interface JourneyObservationContext {
@@ -160,41 +336,51 @@ export class JourneyObservationController {
     return this.record(context, { status: "observed", outcome });
   }
   private started(context: JourneyObservationContext): void {
-    (this.options.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.journey-observation",
-      correlationId: context.correlationId,
-      extra: {
+    logJourneyObservationActivity(
+      this.options.activityLog ?? processServerLogSink(),
+      context.correlationId,
+      {
         phase: "started",
         runId: context.draft.binding.runId,
         headSha: context.draft.binding.headSha,
         remoteDigest: context.draft.binding.remoteDigest,
       },
-    });
+    );
   }
   private record(
     context: JourneyObservationContext | undefined,
     result: JourneyObservationResult,
     error?: unknown,
   ): JourneyObservationResult {
-    (this.options.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.journey-observation",
-      correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
-      level: error === undefined ? "info" : "warn",
-      ...(error === undefined ? {} : { errorKind: "internal" }),
-      extra: {
+    logJourneyObservationActivity(
+      this.options.activityLog ?? processServerLogSink(),
+      context?.correlationId ?? UNKNOWN_CORRELATION_ID,
+      {
         phase: result.status,
-        runId: context?.draft.binding.runId,
+        ...(context === undefined ? {} : { runId: context.draft.binding.runId }),
         ...observationFields(result),
-        ...(error === undefined ? {} : describeError(error)),
+        ...(error === undefined ? {} : journeyFailureFields(error)),
       },
-    });
+      error === undefined ? undefined : { errorKind: "internal" },
+    );
     return result;
   }
 }
 
-function observationFields(result: JourneyObservationResult): Readonly<Record<string, unknown>> {
+function journeyFailureFields(error: unknown): Partial<JourneyObservationActivityFields> {
+  const detail = describeError(error);
+  return {
+    failureKind: detail.errorClass,
+    errorClass: detail.errorClass,
+    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
+}
+
+function observationFields(
+  result: JourneyObservationResult,
+): Omit<JourneyObservationActivityFields, "phase" | "runId" | "remoteDigest"> {
   if (result.status === "unavailable") return { reason: result.reason };
   const outcome = result.outcome;
   return {
@@ -203,9 +389,13 @@ function observationFields(result: JourneyObservationResult): Readonly<Record<st
     evidenceRef: outcome.evidenceRef,
     headSha: outcome.binding.headSha,
     merged: outcome.remote !== null && outcome.remote.mergedAt !== null,
-    unresolvedCount: outcome.remote?.reviewConversations.unresolved,
-    issueState: outcome.remote?.issue.state,
-    descriptionState: outcome.description?.state,
+    ...(outcome.remote === null
+      ? {}
+      : {
+          unresolvedCount: outcome.remote.reviewConversations.unresolved,
+          issueState: outcome.remote.issue.state,
+        }),
+    ...(outcome.description === null ? {} : { descriptionState: outcome.description.state }),
     complete: outcome.keikoDescriptionApplied,
   };
 }

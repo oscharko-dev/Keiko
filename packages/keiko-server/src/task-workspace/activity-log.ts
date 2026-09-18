@@ -32,23 +32,32 @@
 // for eight operations × outcome-class). The single write site below uses a top-level literal const,
 // so the op-catalog generator resolves the closed op without dynamic string construction. An agent
 // reconstructing a run filters this one op by `extra.operation` (`provision`/`activate`/.../`cleanup`),
-// then by `extra.outcome` for settled outcomes or `errorKind` for a thrown rejection.
+// then by `extra.outcome` for settled outcomes or `extra.failureKind` for a thrown rejection.
 //
-// `errorKind` on a failure-classified outcome is always a short identifier/taxonomy code, never a
-// sentence. Lowercase hyphenated `WorkspaceLifecycleOutcome`/`WorkspaceReconciliationStatus`
-// members and uppercase `TaskWorkspaceError.code` members are both intentionally accepted by the
-// shared `ERROR_KIND_PATTERN` (keiko-contracts/observability.ts, ADR-0173 D11). No second vocabulary
-// is needed; each caller's existing closed code set already conforms.
+// `errorKind` uses the global closed activity-log taxonomy. The exact, domain-specific
+// `WorkspaceLifecycleOutcome`, `WorkspaceReconciliationStatus`, or `TaskWorkspaceError.code` is
+// retained independently in `extra.failureKind`, so reconstruction keeps both the cross-domain
+// failure class and the original task-workspace verdict.
 
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
-import type { TaskWorkspaceDriftMarker } from "@oscharko-dev/keiko-contracts";
+import type {
+  TaskWorkspaceDriftMarker,
+  WorkspaceCleanupRefusalReason,
+  WorkspaceReconciliationStatus,
+} from "@oscharko-dev/keiko-contracts";
 import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { processServerLogSink } from "../process-log-sink.js";
-import { TaskWorkspaceError } from "./errors.js";
+import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import {
   appendWorkspaceLifecycleEvidence,
   type WorkspaceLifecycleEvidenceRecord,
@@ -60,10 +69,143 @@ import {
 // op rather than one per operation. Declared as a top-level UPPER_SNAKE const so the op-catalog
 // generator resolves it as a literal (`generate-op-catalog.mjs`'s `collectConstStrings`) even though
 // the `.write()` call references the constant rather than restating the string.
-const TASK_WORKSPACE_LIFECYCLE_OP = "task-workspace.lifecycle";
 const EVIDENCE_PERSISTENCE_ERROR_KIND = "EVIDENCE_PERSISTENCE_FAILED";
 const WORKSPACE_LOG_IDENTITY_PREFIX = "wsref_";
 const RECORDED_FAILURE_LOG_KEYS = new WeakMap<TaskWorkspaceError, Set<string>>();
+
+const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "task-workspace.lifecycle",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "task-workspace/activity-log.writeWorkspaceLog",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "provision",
+        "activate",
+        "pause",
+        "resume",
+        "handoff",
+        "reconcile",
+        "repair",
+        "cleanup",
+        "health",
+        "verify-head",
+      ],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "provisioned",
+        "activated",
+        "resumed",
+        "paused",
+        "handoff-prepared",
+        "blocked",
+        "failed",
+        "retry-required",
+        "reconciled",
+        "repaired",
+        "operator-required",
+        "cleanup-requested",
+        "cleanup-completed",
+        "cleanup-refused",
+      ],
+    },
+    workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    workspaceIdentity: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 64,
+    },
+    eventId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    attempt: { type: "integer", dataClass: "count", required: false },
+    worktreeCount: { type: "integer", dataClass: "count", required: false },
+    driftMarker: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "worktree-missing",
+        "gitdir-mismatch",
+        "head-moved",
+        "branch-deleted",
+        "uncommitted-changes",
+        "lock-stale",
+        "path-escape",
+        "pointer-stale",
+        "identity-schema-retired",
+        "identity-unsupported",
+      ],
+    },
+    evidencePersistence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["failed"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["task-workspace-lifecycle", "evidence-persistence"],
+  proofIds: ["task-workspace.lifecycle.line"],
+  releaseImpact: "patch",
+});
+
+const TASK_WORKSPACE_IDENTITY_PROBE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "task-workspace.identity.creation-time-probe",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "task-workspace/activity-log.logWorkspaceIdentityProbe",
+  fields: {
+    managedRoot: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["durable", "aliased", "absent", "inconclusive"],
+    },
+    repository: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["durable", "aliased", "absent", "inconclusive", "same-volume"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["workspace-identity-capability"],
+  proofIds: ["task-workspace.identity.creation-time-probe.line"],
+  releaseImpact: "patch",
+});
 
 // Every #445-#448 service deps bundle carries this OPTIONAL seam, mirroring
 // `GitDeliveryTerminationLogSeam` (gitDelivery/execution.ts): production falls back to the process-wide
@@ -104,7 +246,7 @@ export interface WorkspaceLifecycleLogInput {
   // evidence `outcome` is a fixed "reconciled" regardless of what the live pass found, so its own
   // classification has to travel through this field or it is lost entirely. Omitted, it falls back to
   // `outcome` itself, but only when `outcome` is failure-classified — a plain success never invents an
-  // `errorKind` out of nothing.
+  // failure classification out of nothing.
   readonly errorCode?: string | undefined;
   // The failure itself, when the caller has it in scope. The settled failure line is the ONLY line a
   // classified provisioning failure leaves — the rethrow path's operation-local tracker suppresses
@@ -154,7 +296,89 @@ function writeWorkspaceLog(
   event: Omit<ServerLogEvent, "category" | "op">,
 ): void {
   const sink = seam.activityLog ?? processServerLogSink();
-  sink.write({ ...event, category: "diagnostic", op: TASK_WORKSPACE_LIFECYCLE_OP });
+  const fields = {
+    ...event.extra,
+    ...(event.errorKind === undefined ? {} : { failureKind: event.errorKind }),
+    completeness: "complete",
+    loss: "none",
+  } as ActivityLogFields<typeof TASK_WORKSPACE_LIFECYCLE_OPERATION>;
+  sink.write(
+    activityLogEvent(
+      TASK_WORKSPACE_LIFECYCLE_OPERATION,
+      {
+        ...(event.level === undefined ? {} : { level: event.level }),
+        ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
+        ...(event.parentCorrelationId === undefined
+          ? {}
+          : { parentCorrelationId: event.parentCorrelationId }),
+        ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+        ...(event.errorKind === undefined
+          ? {}
+          : { errorKind: closedWorkspaceErrorKind(event.errorKind) }),
+      },
+      fields,
+    ),
+  );
+}
+
+const TASK_WORKSPACE_ERROR_KINDS = {
+  INVALID_REQUEST: "invalid-request",
+  MISSING_REPOSITORY: "unavailable",
+  INVALID_BASE_BRANCH: "validation-failed",
+  UNSAFE_PATH: "unsafe-target",
+  BRANCH_CONFLICT: "conflict",
+  EXISTING_UNMANAGED_PATH: "target-exists",
+  LOCK_CONTENTION: "conflict",
+  POINTER_DRIFT: "target-mutated",
+  PROVISIONING_FAILED: "write-failed",
+  WORKSPACE_NOT_FOUND: "unavailable",
+  ILLEGAL_TRANSITION: "conflict",
+  OPERATOR_APPROVAL_REQUIRED: "authority-denied",
+  REPAIR_NOT_APPLICABLE: "validation-failed",
+  REPAIR_FAILED: "write-failed",
+  CLEANUP_NOT_ELIGIBLE: "conflict",
+  CLEANUP_FAILED: "write-failed",
+  IDENTITY_PROOF_FAILED: "read-failed",
+  REPOSITORY_UNREACHABLE: "unavailable",
+} as const satisfies Record<TaskWorkspaceErrorCode, ActivityLogErrorKind>;
+
+const RECONCILIATION_ERROR_KINDS = {
+  healthy: "internal",
+  missing: "unavailable",
+  drifted: "target-mutated",
+  locked: "conflict",
+  "partially-created": "target-mutated",
+  "stale-pointer": "target-mutated",
+  "unmanaged-path": "unsafe-target",
+  "recovery-required": "target-mutated",
+} as const satisfies Record<WorkspaceReconciliationStatus, ActivityLogErrorKind>;
+
+const CLEANUP_REFUSAL_ERROR_KINDS = {
+  "ownership-unproven": "authority-denied",
+  "path-escape": "unsafe-target",
+  "lock-live": "conflict",
+  "worktree-dirty": "conflict",
+  "not-eligible-state": "conflict",
+} as const satisfies Record<WorkspaceCleanupRefusalReason, ActivityLogErrorKind>;
+
+const ROUTINE_WORKSPACE_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  blocked: "validation-failed",
+  failed: "internal",
+  "retry-required": "unavailable",
+  "operator-required": "authority-denied",
+  "cleanup-refused": "conflict",
+};
+
+const WORKSPACE_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  ...TASK_WORKSPACE_ERROR_KINDS,
+  ...RECONCILIATION_ERROR_KINDS,
+  ...CLEANUP_REFUSAL_ERROR_KINDS,
+  ...ROUTINE_WORKSPACE_ERROR_KINDS,
+};
+
+function closedWorkspaceErrorKind(errorKind: string): ActivityLogErrorKind {
+  if (errorKind === EVIDENCE_PERSISTENCE_ERROR_KIND) return "durability-failed";
+  return WORKSPACE_ERROR_KINDS[errorKind] ?? "internal";
 }
 
 // The ONE projection for a settled #445-#448 lifecycle outcome. `recordWorkspaceLifecycle` below owns
@@ -323,11 +547,14 @@ export function logWorkspaceIdentityProbe(
   const durable =
     input.support.managedRoot === "durable" &&
     (input.support.repository === "durable" || input.support.repository === "same-volume");
-  sink.write({
-    category: "diagnostic",
-    op: "task-workspace.identity.creation-time-probe",
-    level: durable ? "info" : "warn",
-    correlationId: correlationIdOrUnknown(input.correlationId),
-    extra: { managedRoot: input.support.managedRoot, repository: input.support.repository },
-  });
+  sink.write(
+    activityLogEvent(
+      TASK_WORKSPACE_IDENTITY_PROBE_OPERATION,
+      {
+        level: durable ? "info" : "warn",
+        correlationId: correlationIdOrUnknown(input.correlationId),
+      },
+      { managedRoot: input.support.managedRoot, repository: input.support.repository },
+    ),
+  );
 }

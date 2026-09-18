@@ -12,10 +12,14 @@
 // ./workspaceTrust/canonicalTrustIdentity.ts; the row persistence lives in the UiStore.
 
 import { createHash } from "node:crypto";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   projectCommandTaskTrustState,
   validateWorkspaceTrustRecord,
@@ -59,6 +63,120 @@ const TRUST_POLICY_VERSION = "m11.trust.1";
 // Bounded number of persisted per-root trust records. Canonical roots are few, but a long-lived
 // install must never grow this table without limit; pruning keeps the most-recently-updated rows.
 const MAX_TRUST_RECORDS = 4_096;
+
+const WORKSPACE_SCRIPT_TRUST_OPERATION_BASE = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "security",
+  owner: "keiko-server",
+  analyzerProjection: "timeline",
+  releaseImpact: "patch",
+} as const;
+
+const COMPLETE_ACTIVITY_LOG_FIELDS = {
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const;
+
+const OPTIONAL_MANIFEST_DIGEST_FIELD = {
+  type: "string",
+  dataClass: "digest",
+  required: false,
+  maxLength: 64,
+} as const;
+
+const WORKSPACE_SCRIPT_TRUST_DECISION_OPERATION_BASE = {
+  ...WORKSPACE_SCRIPT_TRUST_OPERATION_BASE,
+  fields: {
+    basis: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["known", "unknown", "unavailable", "absent"],
+    },
+    manifestDigest: OPTIONAL_MANIFEST_DIGEST_FIELD,
+    revision: { type: "integer", dataClass: "count", required: true },
+    ...COMPLETE_ACTIVITY_LOG_FIELDS,
+  },
+  causal: "correlation",
+  failureClasses: ["workspace-script-trust"],
+} as const;
+
+const RUN_MANIFEST_OPERATION_BASE = {
+  ...WORKSPACE_SCRIPT_TRUST_OPERATION_BASE,
+  causal: "parent-correlation",
+  failureClasses: ["workspace-script-trust-admission"],
+} as const;
+
+const WORKSPACE_SCRIPT_TRUST_GRANTED_OPERATION = defineActivityLogOperation({
+  ...WORKSPACE_SCRIPT_TRUST_DECISION_OPERATION_BASE,
+  op: "workspace-script-trust.granted",
+  emitter: "workspace-script-trust.recordHumanDecision.granted",
+  lifecycle: "state",
+  proofIds: ["workspace-script-trust.granted.line"],
+});
+
+const WORKSPACE_SCRIPT_TRUST_REVOKED_OPERATION = defineActivityLogOperation({
+  ...WORKSPACE_SCRIPT_TRUST_DECISION_OPERATION_BASE,
+  op: "workspace-script-trust.revoked",
+  emitter: "workspace-script-trust.recordHumanDecision.revoked",
+  lifecycle: "end",
+  proofIds: ["workspace-script-trust.revoked.line"],
+});
+
+const RUN_MANIFEST_NOT_ADMITTED_OPERATION = defineActivityLogOperation({
+  ...RUN_MANIFEST_OPERATION_BASE,
+  op: "workspace-script-trust.run-manifest-not-admitted",
+  emitter: "workspace-script-trust.admitRunManifest.refused",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "authority-expired",
+        "root-unresolvable",
+        "root-unregistered",
+        "manifest-unreadable",
+      ],
+    },
+    ...COMPLETE_ACTIVITY_LOG_FIELDS,
+  },
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  proofIds: ["workspace-script-trust.run-manifest-not-admitted.line"],
+});
+
+const RUN_MANIFEST_ADMITTED_OPERATION = defineActivityLogOperation({
+  ...RUN_MANIFEST_OPERATION_BASE,
+  op: "workspace-script-trust.run-manifest-admitted",
+  emitter: "workspace-script-trust.admitRunManifest",
+  fields: {
+    basis: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["known", "absent"],
+    },
+    manifestDigest: OPTIONAL_MANIFEST_DIGEST_FIELD,
+    expiresAt: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+    ...COMPLETE_ACTIVITY_LOG_FIELDS,
+  },
+  lifecycle: "state",
+  proofIds: ["workspace-script-trust.run-manifest-admitted.line"],
+});
+
+const RUN_MANIFEST_REVOKED_OPERATION = defineActivityLogOperation({
+  ...RUN_MANIFEST_OPERATION_BASE,
+  op: "workspace-script-trust.run-manifest-revoked",
+  emitter: "workspace-script-trust.revokeRunAdmissions",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...COMPLETE_ACTIVITY_LOG_FIELDS,
+  },
+  lifecycle: "end",
+  proofIds: ["workspace-script-trust.run-manifest-revoked.line"],
+});
 
 export const WORKSPACE_SCRIPT_TRUST_ERROR_CODES = {
   PROJECT_NOT_FOUND: "PROJECT_NOT_FOUND",
@@ -132,6 +250,7 @@ export interface WorkspaceScriptTrustService {
     root: string,
     runId: string,
     expiresAt: string,
+    parentCorrelationId?: string,
   ) => WorkspaceRunManifestAdmission | undefined;
   /**
    * True while the root's current package-script basis is exactly the one its live run's last
@@ -141,7 +260,7 @@ export interface WorkspaceScriptTrustService {
    */
   readonly holdsRunAdmissionForRoot: (root: string) => boolean;
   /** Drops every admission the run holds and returns how many there were. */
-  readonly revokeRunAdmissions: (runId: string) => number;
+  readonly revokeRunAdmissions: (runId: string, parentCorrelationId?: string) => number;
   readonly recomputeForRoots?: (roots: readonly string[]) => readonly WorkspaceTrustLevel[];
   // #2628 — additive listener registration so composition-time consumers (buildPeripherals
   // wires managed-LSP restriction propagation this way) receive every persisted restriction
@@ -667,29 +786,27 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     revision: number,
     correlationId: string | undefined,
   ): void {
-    const joined = correlationId ?? UNKNOWN_CORRELATION_ID;
-    const extra = {
+    const joined = correlationIdOrUnknown(correlationId);
+    const fields = {
       basis: basis.outcome,
       ...(basis.outcome === "known" ? { manifestDigest: basis.value } : {}),
       revision,
+      completeness: "complete" as const,
+      loss: "none" as const,
     };
-    // Two literal `op` sites, never a computed one: the generated op catalog can only enumerate a
-    // literal, and a computed op would enter it as `<dynamic>`, hiding a rename from its drift check.
     if (decision === "granted") {
-      this.activityLog.write({
-        category: "security",
-        op: "workspace-script-trust.granted",
-        correlationId: joined,
-        extra,
-      });
+      this.activityLog.write(
+        activityLogEvent(
+          WORKSPACE_SCRIPT_TRUST_GRANTED_OPERATION,
+          { correlationId: joined },
+          fields,
+        ),
+      );
       return;
     }
-    this.activityLog.write({
-      category: "security",
-      op: "workspace-script-trust.revoked",
-      correlationId: joined,
-      extra,
-    });
+    this.activityLog.write(
+      activityLogEvent(WORKSPACE_SCRIPT_TRUST_REVOKED_OPERATION, { correlationId: joined }, fields),
+    );
   }
 
   public readonly grant = (
@@ -845,17 +962,23 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     root: string,
     runId: string,
     expiresAt: string,
+    parentCorrelationId?: string,
   ): WorkspaceRunManifestAdmission | undefined => {
     const candidate = this.runAdmissionCandidate(root, expiresAt);
     if ("refusal" in candidate) {
       // A refused admission is why the NEXT verification of this worktree may pause for a human
       // decision although the run is autonomous — it must be reconstructible from the log.
-      this.activityLog.write({
-        category: "security",
-        op: "workspace-script-trust.run-manifest-not-admitted",
-        correlationId: runId,
-        extra: { reason: candidate.refusal },
-      });
+      this.activityLog.write(
+        activityLogEvent(
+          RUN_MANIFEST_NOT_ADMITTED_OPERATION,
+          {
+            correlationId: correlationIdOrUnknown(runId),
+            parentCorrelationId: correlationIdOrUnknown(parentCorrelationId),
+            errorKind: "authority-denied",
+          },
+          { reason: candidate.refusal, completeness: "complete", loss: "none" },
+        ),
+      );
       return undefined;
     }
     const { canonicalRoot, basis, expiresAtMs } = candidate;
@@ -864,12 +987,24 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       basis.outcome === "known"
         ? { basis: "known", manifestDigest: basis.value }
         : { basis: "absent" };
-    this.activityLog.write({
-      category: "security",
-      op: "workspace-script-trust.run-manifest-admitted",
-      correlationId: runId,
-      extra: { ...admission, expiresAt },
-    });
+    this.activityLog.write(
+      activityLogEvent(
+        RUN_MANIFEST_ADMITTED_OPERATION,
+        {
+          correlationId: correlationIdOrUnknown(runId),
+          parentCorrelationId: correlationIdOrUnknown(parentCorrelationId),
+        },
+        {
+          basis: admission.basis,
+          ...(admission.manifestDigest === undefined
+            ? {}
+            : { manifestDigest: admission.manifestDigest }),
+          expiresAt,
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
     return admission;
   };
 
@@ -921,7 +1056,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     }
   };
 
-  public readonly revokeRunAdmissions = (runId: string): number => {
+  public readonly revokeRunAdmissions = (runId: string, parentCorrelationId?: string): number => {
     let revoked = 0;
     for (const [canonicalRoot, admission] of this.runAdmissions) {
       if (admission.runId !== runId) continue;
@@ -929,12 +1064,16 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       revoked += 1;
     }
     if (revoked > 0) {
-      this.activityLog.write({
-        category: "security",
-        op: "workspace-script-trust.run-manifest-revoked",
-        correlationId: runId,
-        extra: { count: revoked },
-      });
+      this.activityLog.write(
+        activityLogEvent(
+          RUN_MANIFEST_REVOKED_OPERATION,
+          {
+            correlationId: correlationIdOrUnknown(runId),
+            parentCorrelationId: correlationIdOrUnknown(parentCorrelationId),
+          },
+          { count: revoked, completeness: "complete", loss: "none" },
+        ),
+      );
     }
     return revoked;
   };

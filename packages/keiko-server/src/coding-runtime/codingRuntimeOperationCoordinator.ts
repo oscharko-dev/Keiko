@@ -5,6 +5,12 @@ import type {
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type { CodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { parseCodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
+import {
+  activityLogErrorKindOr,
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
@@ -21,7 +27,11 @@ import type {
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import {
+  errorKindOf,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
 
@@ -50,6 +60,126 @@ interface RuntimeOperationCoordinatorDeps {
   readonly manager: CodingRuntimeManager;
   readonly activityLog?: ServerLogSink | undefined;
 }
+
+const CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOperationCoordinator.transportFailure",
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  releaseImpact: "patch",
+} as const;
+
+const CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS = {
+  runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+  frames: {
+    type: "string-array",
+    dataClass: "opaque-id",
+    required: true,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: true,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;
+
+const CODING_RUNTIME_FOLLOW_UP_DISPATCH_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
+  op: "coding-runtime.follow-up.dispatch-failed",
+  fields: {
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: { type: "string", dataClass: "closed-enum", required: true, values: ["follow-up"] },
+  },
+  failureClasses: ["coding-runtime-follow-up-dispatch"],
+  proofIds: ["coding-runtime.follow-up.dispatch-failed.emitted-line"],
+});
+
+const CODING_RUNTIME_QUESTION_LIST_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
+  op: "coding-runtime.question.list-failed",
+  fields: {
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: { type: "string", dataClass: "closed-enum", required: true, values: ["list"] },
+  },
+  failureClasses: ["coding-runtime-question-list"],
+  proofIds: ["coding-runtime.question.list-failed.emitted-line"],
+});
+
+const CODING_RUNTIME_QUESTION_AUTHORITY_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
+  op: "coding-runtime.question.authority-resolution-failed",
+  fields: {
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["answer", "reject"],
+    },
+  },
+  failureClasses: ["coding-runtime-question-authority"],
+  proofIds: ["coding-runtime.question.authority-resolution-failed.emitted-line"],
+});
+
+const CODING_RUNTIME_INITIAL_TURN_DISPATCH_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
+  op: "coding-runtime.initial-turn.dispatch-failed",
+  fields: {
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["initial-turn-dispatch"],
+    },
+  },
+  failureClasses: ["coding-runtime-initial-turn-dispatch"],
+  proofIds: ["coding-runtime.initial-turn.dispatch-failed.emitted-line"],
+});
+
+const CODING_RUNTIME_INITIAL_TURN_STOP_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_TRANSPORT_FAILURE_REGISTRATION,
+  op: "coding-runtime.initial-turn.stop-failed",
+  fields: {
+    ...CODING_RUNTIME_TRANSPORT_FAILURE_FIELDS,
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["initial-turn-stop"],
+    },
+  },
+  failureClasses: ["coding-runtime-initial-turn-stop"],
+  proofIds: ["coding-runtime.initial-turn.stop-failed.emitted-line"],
+});
+
+const CODING_RUNTIME_QUESTION_LIST_REVISION_REBOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.question.list-revision-rebound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOperationCoordinator.recordQuestionListRevisionRebound",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    expectedRevision: { type: "integer", dataClass: "count", required: true },
+    currentRevision: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-question-revision-rebound"],
+  proofIds: ["coding-runtime.question.list-revision-rebound.emitted-line"],
+  releaseImpact: "patch",
+});
 
 interface RuntimeOperationReservation {
   readonly requestId: string;
@@ -228,7 +358,6 @@ export class CodingRuntimeOperationCoordinator {
       return { result, generation };
     } catch (error) {
       recordRuntimeOperationTransportFailure(this.deps.activityLog, {
-        op: "coding-runtime.follow-up.dispatch-failed",
         runId,
         correlationId,
         operation: "follow-up",
@@ -265,7 +394,6 @@ export class CodingRuntimeOperationCoordinator {
         questions = await this.deps.questionPort.list(operationRequest(runId, operation));
       } catch (error) {
         recordRuntimeOperationTransportFailure(this.deps.activityLog, {
-          op: "coding-runtime.question.list-failed",
           runId,
           correlationId,
           operation: "list",
@@ -355,7 +483,6 @@ export class CodingRuntimeOperationCoordinator {
       dispatched = await this.deps.taskDispatcher.dispatch(input);
     } catch (error) {
       recordRuntimeOperationTransportFailure(this.deps.activityLog, {
-        op: "coding-runtime.initial-turn.dispatch-failed",
         runId: input.runId,
         operation: "initial-turn-dispatch",
         error,
@@ -373,7 +500,6 @@ export class CodingRuntimeOperationCoordinator {
       return stopped.ok ? "failed" : "recovery-required";
     } catch (error) {
       recordRuntimeOperationTransportFailure(this.deps.activityLog, {
-        op: "coding-runtime.initial-turn.stop-failed",
         runId: input.runId,
         operation: "initial-turn-stop",
         error,
@@ -495,7 +621,6 @@ export class CodingRuntimeOperationCoordinator {
         return { ok: false, reason: "question-answer-rejected" };
       }
       recordRuntimeOperationTransportFailure(this.deps.activityLog, {
-        op: "coding-runtime.question.authority-resolution-failed",
         runId,
         correlationId,
         operation: "answer",
@@ -527,7 +652,6 @@ export class CodingRuntimeOperationCoordinator {
       // incompatible-answer case of its own, so every exception here is a genuine authority
       // failure and is logged the same way.
       recordRuntimeOperationTransportFailure(this.deps.activityLog, {
-        op: "coding-runtime.question.authority-resolution-failed",
         runId,
         correlationId,
         operation: "reject",
@@ -730,28 +854,70 @@ class RuntimeOperationReplayCoordinator {
 // -- then to the sanctioned unknown marker -- only when no valid per-request id was supplied.
 function recordRuntimeOperationTransportFailure(
   activityLog: ServerLogSink | undefined,
-  input: {
-    readonly op: string;
-    readonly runId: string;
-    readonly correlationId?: string | undefined;
-    readonly operation:
-      "follow-up" | "list" | "answer" | "reject" | "initial-turn-dispatch" | "initial-turn-stop";
-    readonly error: unknown;
-  },
+  input: RuntimeOperationTransportFailure,
 ): void {
-  (activityLog ?? processServerLogSink()).write({
-    category: "process",
-    level: "warn",
-    op: input.op,
+  (activityLog ?? processServerLogSink()).write(runtimeOperationTransportEvent(input));
+}
+
+interface RuntimeOperationTransportFailure {
+  readonly runId: string;
+  readonly correlationId?: string | undefined;
+  readonly operation:
+    "follow-up" | "list" | "answer" | "reject" | "initial-turn-dispatch" | "initial-turn-stop";
+  readonly error: unknown;
+}
+
+function runtimeTransportErrorKind(error: unknown): ActivityLogErrorKind {
+  const classified = errorKindOf(error);
+  const registered = activityLogErrorKindOr(classified, "internal");
+  if (registered !== "internal" || classified === "internal") return registered;
+  const normalized = classified.toLowerCase();
+  if (/timeout|timedout/u.test(normalized)) return "timeout";
+  if (/abort|cancel/u.test(normalized)) return "cancelled";
+  if (/permission|denied|eacces|eperm/u.test(normalized)) return "permission-denied";
+  if (/unavailable|network|connection|econn|enotfound/u.test(normalized)) return "unavailable";
+  return "internal";
+}
+
+function runtimeOperationTransportEvent(input: RuntimeOperationTransportFailure): ServerLogEvent {
+  const envelope = {
+    level: "warn" as const,
     correlationId: correlationIdOrUnknown(input.correlationId ?? input.runId),
-    errorKind: errorKindOf(input.error),
-    extra: {
-      runId: input.runId,
-      operation: input.operation,
-      frames: keikoStackFrames(input.error),
-      causeChain: causeChain(input.error),
-    },
-  });
+    errorKind: runtimeTransportErrorKind(input.error),
+  };
+  const details = {
+    runId: input.runId,
+    frames: keikoStackFrames(input.error),
+    causeChain: causeChain(input.error),
+  };
+  switch (input.operation) {
+    case "follow-up":
+      return activityLogEvent(CODING_RUNTIME_FOLLOW_UP_DISPATCH_FAILED_OPERATION, envelope, {
+        ...details,
+        operation: input.operation,
+      });
+    case "list":
+      return activityLogEvent(CODING_RUNTIME_QUESTION_LIST_FAILED_OPERATION, envelope, {
+        ...details,
+        operation: input.operation,
+      });
+    case "answer":
+    case "reject":
+      return activityLogEvent(CODING_RUNTIME_QUESTION_AUTHORITY_FAILED_OPERATION, envelope, {
+        ...details,
+        operation: input.operation,
+      });
+    case "initial-turn-dispatch":
+      return activityLogEvent(CODING_RUNTIME_INITIAL_TURN_DISPATCH_FAILED_OPERATION, envelope, {
+        ...details,
+        operation: input.operation,
+      });
+    case "initial-turn-stop":
+      return activityLogEvent(CODING_RUNTIME_INITIAL_TURN_STOP_FAILED_OPERATION, envelope, {
+        ...details,
+        operation: input.operation,
+      });
+  }
 }
 
 function recordQuestionListRevisionRebound(
@@ -763,17 +929,20 @@ function recordQuestionListRevisionRebound(
     readonly currentRevision: number;
   },
 ): void {
-  (activityLog ?? processServerLogSink()).write({
-    category: "process",
-    level: "info",
-    op: "coding-runtime.question.list-revision-rebound",
-    correlationId: correlationIdOrUnknown(input.correlationId ?? input.runId),
-    extra: {
-      runId: input.runId,
-      expectedRevision: input.expectedRevision,
-      currentRevision: input.currentRevision,
-    },
-  });
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_QUESTION_LIST_REVISION_REBOUND_OPERATION,
+      {
+        level: "info",
+        correlationId: correlationIdOrUnknown(input.correlationId ?? input.runId),
+      },
+      {
+        runId: input.runId,
+        expectedRevision: input.expectedRevision,
+        currentRevision: input.currentRevision,
+      },
+    ),
+  );
 }
 
 function operationRequest(

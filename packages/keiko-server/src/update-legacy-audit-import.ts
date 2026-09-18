@@ -17,6 +17,12 @@ import {
   type ServerLogEvent,
   type ServerLogThreshold,
 } from "./observability/server-log.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  updateLegacySnapshotImportedEvent,
+  updateRuntimeActivityEvent,
+  type UpdateRuntimeActivityFields,
+} from "./update-runtime-activity.js";
 
 const SOURCE_FILE = "update-audit.jsonl";
 const MAX_SOURCE_BYTES = 1024 * 1024;
@@ -41,12 +47,22 @@ const INSTANCE_ID = /^[0-9a-f]{8}$/u;
 const LOG_ENVELOPE_FIELDS = [
   "ts",
   "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
   "pid",
   "instanceId",
   "seq",
   "level",
   "category",
   "op",
+  "correlationId",
 ] as const;
 
 const LEGACY_FIELDS = [
@@ -83,6 +99,8 @@ const IMPORTED_LOG_FIELD_SET = new Set<string>([
   "sourceSchemaVersion",
   "eventId",
   "legacyEventId",
+  "completeness",
+  "loss",
   ...LEGACY_FIELDS.slice(2),
 ]);
 const COMPLETION_LOG_FIELD_SET = new Set<string>([
@@ -93,6 +111,8 @@ const COMPLETION_LOG_FIELD_SET = new Set<string>([
   "sourceDigest",
   "importedIdSetDigest",
   "importedCount",
+  "completeness",
+  "loss",
 ]);
 // Frozen schema-1 vocabulary. This is intentionally local: the current contracts evolve, while
 // the only source accepted by this one-way compatibility reader is the retired schema exactly as
@@ -579,6 +599,12 @@ function canonicalLegacyValue(record: Readonly<Record<string, unknown>>): Record
 }
 
 function validLegacyTextFields(record: Readonly<Record<string, unknown>>): boolean {
+  if (
+    (typeof record.targetVersion === "string" && record.targetVersion.length > 64) ||
+    (typeof record.portableSidecarVersion === "string" && record.portableSidecarVersion.length > 64)
+  ) {
+    return false;
+  }
   const patterns: readonly [string, RegExp][] = [
     ["targetVersion", SEMVER],
     ["snapshotId", MACHINE_UUID],
@@ -743,25 +769,20 @@ function importedEventExtra(event: LegacyEvent): Record<string, unknown> | undef
 
 function importedEventLog(event: LegacyEvent): ServerLogEvent | undefined {
   const extra = importedEventExtra(event);
+  // `parseLegacyLine` has already closed every field and vocabulary before this adapter is reached;
+  // the cast crosses that one-way schema-1 compatibility boundary into the current typed emitter.
   return extra === undefined
     ? undefined
-    : { level: "info", category: "diagnostic", op: "update.runtime.event", extra };
+    : updateRuntimeActivityEvent(undefined, extra as unknown as UpdateRuntimeActivityFields);
 }
 
 function completionLog(prepared: PreparedImport): ServerLogEvent {
-  return {
-    level: "info",
-    category: "diagnostic",
-    op: "update.runtime.legacy-snapshot-imported",
-    extra: {
-      historical: true,
-      sourceSchemaVersion: 1,
-      importId: prepared.importId,
-      sourceDigest: prepared.sourceDigest,
-      importedIdSetDigest: prepared.importedIdSetDigest,
-      importedCount: prepared.events.length,
-    },
-  };
+  return updateLegacySnapshotImportedEvent({
+    importId: prepared.importId,
+    sourceDigest: prepared.sourceDigest,
+    importedIdSetDigest: prepared.importedIdSetDigest,
+    importedCount: prepared.events.length,
+  });
 }
 
 function logFileNames(directory: string): readonly string[] | undefined {
@@ -838,6 +859,9 @@ function validImportedRecordHeader(record: Readonly<Record<string, unknown>>): b
     hasOnlyFields(record, IMPORTED_LOG_FIELD_SET) &&
     record.historical === true &&
     record.sourceSchemaVersion === 1 &&
+    record.correlationId === UNKNOWN_CORRELATION_ID &&
+    record.completeness === "complete" &&
+    record.loss === "none" &&
     safeText(record.legacyEventId, 128) &&
     typeof record.eventId === "string" &&
     IMPORTED_EVENT_ID.test(record.eventId)
@@ -856,19 +880,35 @@ function legacyFromImportedRecord(
   return event?.importedId === record.eventId ? event : undefined;
 }
 
+function validCompletionRecord(record: Readonly<Record<string, unknown>>): boolean {
+  return (
+    validEnvelope(record, "update.runtime.legacy-snapshot-imported") &&
+    hasOnlyFields(record, COMPLETION_LOG_FIELD_SET) &&
+    record.historical === true &&
+    record.sourceSchemaVersion === 1 &&
+    record.completeness === "complete" &&
+    record.loss === "none"
+  );
+}
+
+function completionMatchesPrepared(
+  record: Readonly<Record<string, unknown>>,
+  prepared: PreparedImport,
+): boolean {
+  return (
+    record.sourceDigest === prepared.sourceDigest &&
+    record.importedIdSetDigest === prepared.importedIdSetDigest &&
+    record.importedCount === prepared.events.length
+  );
+}
+
 function matchingCompletion(
   record: Readonly<Record<string, unknown>>,
   prepared: PreparedImport,
 ): boolean | "conflict" {
   if (record.op !== "update.runtime.legacy-snapshot-imported") return false;
   if (record.importId !== prepared.importId) return false;
-  return validEnvelope(record, "update.runtime.legacy-snapshot-imported") &&
-    hasOnlyFields(record, COMPLETION_LOG_FIELD_SET) &&
-    record.historical === true &&
-    record.sourceSchemaVersion === 1 &&
-    record.sourceDigest === prepared.sourceDigest &&
-    record.importedIdSetDigest === prepared.importedIdSetDigest &&
-    record.importedCount === prepared.events.length
+  return validCompletionRecord(record) && completionMatchesPrepared(record, prepared)
     ? true
     : "conflict";
 }

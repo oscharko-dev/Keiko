@@ -361,7 +361,8 @@ describe("recordVerifiedManagedHead (#3382)", () => {
     // Refused, never silent.
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
-    expect(line.errorKind).toBe("LOCK_CONTENTION");
+    expect(line.errorKind).toBe("conflict");
+    expect(line.extra?.failureKind).toBe("LOCK_CONTENTION");
     expect(line.correlationId).toBe("req-restamp-abandoned");
   });
 
@@ -394,7 +395,9 @@ describe("recordVerifiedManagedHead (#3382)", () => {
     ).resolves.toBe(false);
 
     expect(listings).toBe(0);
-    expect(lastActivityLogEvent(activityLog).errorKind).toBe("LOCK_CONTENTION");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.errorKind).toBe("conflict");
+    expect(line.extra?.failureKind).toBe("LOCK_CONTENTION");
   });
 
   it("refuses and logs when no managed row resolves the requested root", async () => {
@@ -408,7 +411,8 @@ describe("recordVerifiedManagedHead (#3382)", () => {
 
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
-    expect(line.errorKind).toBe("WORKSPACE_NOT_FOUND");
+    expect(line.errorKind).toBe("unavailable");
+    expect(line.extra?.failureKind).toBe("WORKSPACE_NOT_FOUND");
     expect(line.correlationId).toBe("req-restamp-2");
   });
 
@@ -429,7 +433,8 @@ describe("recordVerifiedManagedHead (#3382)", () => {
     ).resolves.toBe(false);
 
     const line = lastActivityLogEvent(activityLog);
-    expect(line.errorKind).toBe("REPOSITORY_UNREACHABLE");
+    expect(line.errorKind).toBe("unavailable");
+    expect(line.extra?.failureKind).toBe("REPOSITORY_UNREACHABLE");
     expect(line.correlationId).toBe("req-restamp-3");
     // A refused restamp writes nothing: the baseline the next pass classifies against is untouched.
     expect(persisted(instance.workspaceId).lastVerifiedHead).toBe(baseline);

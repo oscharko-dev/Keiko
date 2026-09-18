@@ -23,7 +23,14 @@
 // counts, and hashes only). A keychain service/account name, a vault reference, a shard file path,
 // and secret material never reach a field on this event.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createHash } from "node:crypto";
+
+import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  withActivityLogCorrelation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type SecurityLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -112,6 +119,29 @@ export function securityErrorKind(error: unknown): string {
 const REPORTED_FAILED_SINKS = new WeakSet<SecurityLogSink>();
 const BOUND_SINK_UNDERLYING = new WeakMap<SecurityLogSink, SecurityLogSink>();
 
+const SECURITY_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.log.sink-failed",
+  category: "diagnostic",
+  owner: "keiko-security",
+  emitter: "log-port.reportFailedSecurityLogSink",
+  fields: {
+    droppedOpDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "loss",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-sink"],
+  proofIds: ["security.log.sink-failed.body-free"],
+  releaseImpact: "patch",
+});
+
+function operationDigest(op: string): string {
+  return createHash("sha256").update(op).digest("hex").slice(0, 16);
+}
+
 function sinkIdentity(sink: SecurityLogSink): SecurityLogSink {
   return BOUND_SINK_UNDERLYING.get(sink) ?? sink;
 }
@@ -135,7 +165,7 @@ export function bindSecurityLogCorrelation(
   if (sink === undefined) return undefined;
   const bound: SecurityLogSink = {
     write(event): void {
-      sink.write({ ...event, correlationId });
+      sink.write(withActivityLogCorrelation(event, correlationId));
     },
   };
   BOUND_SINK_UNDERLYING.set(bound, sinkIdentity(sink));
@@ -151,28 +181,29 @@ function reportFailedSecurityLogSink(
   if (REPORTED_FAILED_SINKS.has(identity)) return;
   REPORTED_FAILED_SINKS.add(identity);
   const errorKind = securityErrorKind(cause);
+  const droppedOpDigest = operationDigest(droppedOp);
   try {
-    sink.write({
-      level: "error",
-      category: "diagnostic",
-      op: "security.log.sink-failed",
-      errorKind,
-      extra: { droppedOp },
-    });
+    sink.write(
+      activityLogEvent(
+        SECURITY_LOG_SINK_FAILED_OPERATION,
+        { level: "error", errorKind: "unavailable" },
+        { droppedOpDigest, failureKind: errorKind },
+      ),
+    );
     return;
   } catch {
     // The transport refuses this shape too, so it is the transport that is down — fall through to
     // the only channel left.
   }
-  warnFailedSecurityLogSink(droppedOp, errorKind);
+  warnFailedSecurityLogSink(droppedOpDigest, errorKind);
 }
 
-function warnFailedSecurityLogSink(droppedOp: string, errorKind: string): void {
+function warnFailedSecurityLogSink(droppedOpDigest: string, errorKind: string): void {
   try {
     process.emitWarning("Keiko security log sink is failing; log lines are being dropped.", {
       type: "KeikoActivityLog",
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: `op=${droppedOp} errorKind=${errorKind}`,
+      detail: `opDigest=${droppedOpDigest} errorKind=${errorKind}`,
     });
   } catch {
     // The process warning channel is the last one there is; a report beyond it does not exist.

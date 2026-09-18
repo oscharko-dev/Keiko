@@ -51,6 +51,10 @@ import {
   GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
   validateGatewaySetupAuditRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway-setup-audit";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   GatewayModelUnsupportedReason,
   GatewaySetupAuditRecord,
@@ -89,7 +93,7 @@ import type {
   VerifiedModelCapabilityFields,
 } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -128,6 +132,37 @@ const MISTRAL_TOOL_CALLING_LIMITATION =
   "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
 const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
+
+const GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-calling.verification",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-setup.logToolCallingVerification",
+  fields: {
+    verificationStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["verified", "unsupported", "unverified"],
+    },
+    configurationFingerprint: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["gateway-tool-calling-capability"],
+  proofIds: ["gateway.tool-calling.verification.line"],
+  releaseImpact: "patch",
+});
 const FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS = 15_000;
 const FIGMA_CREDENTIAL_SMOKE_RESPONSE_BYTES = 64_000;
 const SETUP_SMOKE_CONCURRENCY = 4;
@@ -1861,28 +1896,29 @@ async function setupToolCallingObservations(
       const modelId = testedModelIds[index];
       if (modelId === undefined) continue;
       const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-      if (provider === undefined) {
-        observations[index] = { modelId, status: "unverified", checkedAt };
-        continue;
-      }
-      const status = await probeGatewayToolCalling(
-        config,
-        provider,
-        undefined,
-        (error) => {
-          reportSetupVerificationFailure(
-            deps,
-            error,
-            correlationId,
-            "gateway.setup.tool-calling-probe",
-          );
-        },
-        {
-          env: deps.env,
-          capability: findConfiguredCapability(config, modelId),
-          correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-        },
-      );
+      // A model without a provider stays unverified; that conclusion takes the same log line below
+      // as every probe result instead of being recorded silently.
+      const status =
+        provider === undefined
+          ? "unverified"
+          : await probeGatewayToolCalling(
+              config,
+              provider,
+              undefined,
+              (error) => {
+                reportSetupVerificationFailure(
+                  deps,
+                  error,
+                  correlationId,
+                  "gateway.setup.tool-calling-probe",
+                );
+              },
+              {
+                env: deps.env,
+                capability: findConfiguredCapability(config, modelId),
+                correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+              },
+            );
       observations[index] = {
         modelId,
         status,
@@ -4709,8 +4745,22 @@ interface ChatAdmission {
   readonly unverifiedModelIds: readonly string[];
 }
 
-function temporaryChatAdmission(candidateModels: SetupCandidateModels): ChatAdmission {
+function temporaryChatAdmission(
+  input: SetupVerificationInput,
+  candidateModels: SetupCandidateModels,
+  candidateConfig: GatewayConfig,
+): ChatAdmission {
   const checkedAt = new Date().toISOString();
+  // The persisted "unverified" proof is a tool-calling conclusion like any probe result, so it
+  // leaves the same activity-log line the probe path writes.
+  for (const modelId of candidateModels.chatModelIds) {
+    logToolCallingVerification(
+      candidateConfig,
+      modelId,
+      "unverified",
+      input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+  }
   return {
     testResult: {
       testedModelIds: [],
@@ -5005,7 +5055,7 @@ async function admitChatCandidatesOrDefer(
         admittedModels,
         candidateConfig,
         embeddingAdmission,
-        temporaryChatAdmission(candidateModels),
+        temporaryChatAdmission(input, candidateModels, candidateConfig),
       ),
     );
   }
@@ -6395,17 +6445,22 @@ function logToolCallingVerification(
   const fingerprint =
     configurationFingerprint ??
     (provider === undefined ? undefined : toolCallingConfigurationFingerprint(provider));
-  processServerLogSink().write({
-    category: "gateway",
-    op: "gateway.tool-calling.verification",
-    correlationId,
-    status: status === "verified" ? 200 : 503,
-    ...(status === "verified" ? {} : { errorKind: status }),
-    extra: {
-      verificationStatus: status,
-      ...(fingerprint === undefined ? {} : { configurationFingerprint: fingerprint }),
-    },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        status: status === "unverified" ? 503 : 200,
+        ...(status === "unverified" ? { errorKind: "unavailable" as const } : {}),
+      },
+      {
+        verificationStatus: status,
+        ...(fingerprint === undefined ? {} : { configurationFingerprint: fingerprint }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 /** Applies only generation-current live observations after an explicit, human-confirmed request. */

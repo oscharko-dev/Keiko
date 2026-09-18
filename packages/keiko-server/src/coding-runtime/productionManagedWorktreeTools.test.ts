@@ -139,7 +139,7 @@ describe("production managed worktree tools", () => {
       expect.objectContaining({
         op: "coding-runtime.tool-result",
         correlationId: "run-proposal-drift",
-        errorKind: "Error",
+        errorKind: "authority-denied",
         extra: expect.objectContaining({
           actionKind: "commit",
           proposalId: "proposal-drift",
@@ -220,6 +220,8 @@ describe("production managed worktree tools", () => {
           op: "coding-runtime.tool-result",
           correlationId: "run-verification-3",
           extra: {
+            completeness: "complete",
+            loss: "none",
             actionKind: "git-stage",
             proposalId: "stage-3384",
             state: "approval-wait-settled",
@@ -1204,7 +1206,14 @@ describe("production managed worktree tools", () => {
     expect(log).toContainEqual(
       expect.objectContaining({
         op: "coding-runtime.verification",
-        extra: { state: "not-run", stepCount: 1, steps: ["typecheck:script-missing"] },
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          state: "not-run",
+          stepCount: 1,
+          steps: ["typecheck:script-missing"],
+        },
       }),
     );
   });
@@ -1315,7 +1324,19 @@ describe("production managed worktree tools", () => {
       expect(log).toContainEqual(
         expect.objectContaining({
           op: "coding-runtime.verification",
-          extra: { state: "not-run", stepCount: 1, steps: [`typecheck:${reason}`] },
+          errorKind:
+            reason === "cancelled"
+              ? "cancelled"
+              : reason === "denied"
+                ? "authority-denied"
+                : "unavailable",
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            state: "not-run",
+            stepCount: 1,
+            steps: [`typecheck:${reason}`],
+          },
         }),
       );
     },
@@ -1406,6 +1427,8 @@ describe("production managed worktree tools", () => {
         op: "coding-runtime.verification",
         correlationId: "run-verification-3",
         extra: {
+          completeness: "complete",
+          loss: "none",
           state: "target-bound",
           verifierId: "targeted-test",
           targetCount: 1,
@@ -2003,6 +2026,8 @@ describe("production managed worktree tools", () => {
       expect.objectContaining({
         op: "coding-runtime.tool-result",
         extra: {
+          completeness: "complete",
+          loss: "none",
           actionKind: "commit",
           proposalId: "commit-3390-ready",
           state: "proposal-ready",
@@ -2284,7 +2309,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     const failure = events.find(
       (event) => event.op === "coding-runtime.repository-rerank" && event.level === "warn",
     );
-    expect(failure?.errorKind).toBeDefined();
+    expect(failure?.errorKind).toBe("unavailable");
     expect(failure?.extra).toMatchObject({ reason: "pod-query-failed" });
     expect(Array.isArray((failure?.extra as { frames?: unknown }).frames)).toBe(true);
     expect(records.map((record) => record.operation)).toContain("coding-runtime.repository-rerank");
@@ -2553,7 +2578,7 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     const extra = event.extra ?? {};
     expect(event.op).toBe("coding-runtime.tool-availability.failed");
     expect(event.correlationId).toBe(runId);
-    expect(event.errorKind).toBe("Error");
+    expect(event.errorKind).toBe("internal");
     expect(extra.runId).toBe(runId);
     expect(extra.optionalTool).toBe("keiko_research_fetch");
     expect(extra.stage).toBe("research-egress-config");
@@ -2713,7 +2738,7 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     expect(events[0]).toMatchObject({
       op: "coding-runtime.tool-availability.failed",
       correlationId: runId,
-      errorKind: "Error",
+      errorKind: "internal",
       extra: {
         runId,
         optionalTool: "keiko_child_agent",

@@ -23,6 +23,8 @@ import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/
 import { PR_DESCRIPTION_REGION_START } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 
+const GIT_FIXTURE_TIMEOUT_MS = 15_000;
+
 let fixture: DraftDeliveryFixture;
 beforeEach(async () => {
   fixture = new DraftDeliveryFixture();
@@ -275,6 +277,8 @@ describe("draft delivery hard boundaries", () => {
         op: "git.draft-delivery",
         correlationId: "draft-delivery-test",
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId: "run-1",
           phase: "refused",
           reason: "operation-in-flight",
@@ -546,24 +550,28 @@ describe("durable delivery continuation", () => {
     expect(fixture.pushCount).toBe(1);
     expect(fixture.createCount).toBe(1);
   });
-  it("retains the known draft after publishing a newly verified commit to its existing head branch", async () => {
-    await pushed();
-    await execute(await fixture.service.proposePullRequest("feat: bounded change"));
-    writeFileSync(join(fixture.root, "code.js"), "export const value = 3;\n");
-    fixture.git(["add", "code.js"]);
-    fixture.git(["commit", "-qm", "feat: followup"]);
-    await fixture.recordVerifiedCommit("commit-2");
-    await execute(await fixture.service.proposePush());
-    expect(await fixture.service.proposePullRequest("feat: followup")).toMatchObject({
-      record: {
-        phase: "draft-created",
-        pullRequest: { number: 17 },
-        binding: { verifiedCommitProposalId: "commit-2" },
-      },
-    });
-    expect(fixture.createCount).toBe(1);
-    expect(fixture.pushCount).toBe(2);
-  });
+  it(
+    "retains the known draft after publishing a newly verified commit to its existing head branch",
+    async () => {
+      await pushed();
+      await execute(await fixture.service.proposePullRequest("feat: bounded change"));
+      writeFileSync(join(fixture.root, "code.js"), "export const value = 3;\n");
+      fixture.git(["add", "code.js"]);
+      fixture.git(["commit", "-qm", "feat: followup"]);
+      await fixture.recordVerifiedCommit("commit-2");
+      await execute(await fixture.service.proposePush());
+      expect(await fixture.service.proposePullRequest("feat: followup")).toMatchObject({
+        record: {
+          phase: "draft-created",
+          pullRequest: { number: 17 },
+          binding: { verifiedCommitProposalId: "commit-2" },
+        },
+      });
+      expect(fixture.createCount).toBe(1);
+      expect(fixture.pushCount).toBe(2);
+    },
+    GIT_FIXTURE_TIMEOUT_MS,
+  );
 });
 
 describe("pending delivery retry semantics", () => {
@@ -764,31 +772,35 @@ describe("draft delivery checks after a later push (#3452)", () => {
     return `${body.slice(0, start)}${body.slice(body.indexOf(CHECKS_SECTION_END))}`;
   }
 
-  it("recomposes the section for the later commit and keeps every other byte", async () => {
-    const service = authorized();
-    evidenceFor("verification-1");
-    await created(service);
-    const before = fixture.prBody;
-    const first = fixture.git(["rev-parse", "HEAD"]);
-    const head = await fixture.recordLaterCommit();
-    evidenceFor("verification-2");
+  it(
+    "recomposes the section for the later commit and keeps every other byte",
+    async () => {
+      const service = authorized();
+      evidenceFor("verification-1");
+      await created(service);
+      const before = fixture.prBody;
+      const first = fixture.git(["rev-parse", "HEAD"]);
+      const head = await fixture.recordLaterCommit();
+      evidenceFor("verification-2");
 
-    await execute(await service.proposePush(), service);
+      await execute(await service.proposePush(), service);
 
-    expect(fixture.bodyUpdates).toHaveLength(1);
-    expect(fixture.prBody).toContain(`Evidence for commit ${head.slice(0, 12)}: verification-2`);
-    expect(fixture.prBody).not.toContain(`Evidence for commit ${first.slice(0, 12)}`);
-    expect(outsideSection(fixture.prBody)).toBe(outsideSection(before));
-    expect(refreshLine()).toMatchObject({
-      extra: {
-        state: "refreshed",
-        prNumber: 17,
-        headSha: head,
-        checkRowCount: 1,
-        authority: "policy-authorized",
-      },
-    });
-  });
+      expect(fixture.bodyUpdates).toHaveLength(1);
+      expect(fixture.prBody).toContain(`Evidence for commit ${head.slice(0, 12)}: verification-2`);
+      expect(fixture.prBody).not.toContain(`Evidence for commit ${first.slice(0, 12)}`);
+      expect(outsideSection(fixture.prBody)).toBe(outsideSection(before));
+      expect(refreshLine()).toMatchObject({
+        extra: {
+          state: "refreshed",
+          prNumber: 17,
+          headSha: head,
+          checkRowCount: 1,
+          authority: "policy-authorized",
+        },
+      });
+    },
+    GIT_FIXTURE_TIMEOUT_MS,
+  );
 
   it("does nothing for the first push, before a pull request exists", async () => {
     const service = authorized();

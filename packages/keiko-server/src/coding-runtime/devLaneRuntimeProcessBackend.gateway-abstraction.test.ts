@@ -243,7 +243,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       level: "info",
       op: "runtime.confinement.unavailable",
       correlationId: "run-2951",
-      extra: IDENTITY,
+      extra: { ...IDENTITY, completeness: "complete", loss: "none" },
     });
     expect(activityLog.events.some((event) => event.op === "runtime.confinement.failed")).toBe(
       false,
@@ -306,10 +306,13 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       level: "error",
       op: "runtime.confinement.failed",
       correlationId: "run-2951",
-      errorKind: "host-relay-failed",
+      errorKind: "internal",
       extra: {
+        completeness: "complete",
+        loss: "none",
         backend: "bubblewrap",
         diagnosticSource: "linux-gateway-launcher",
+        diagnosticKind: "host-relay-failed",
         frames: [],
         causeChain: [],
       },
@@ -371,7 +374,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     expect(activityLog.events).toContainEqual(
       expect.objectContaining({
         op: "runtime.confinement.failed",
-        errorKind: "host-relay-failed",
+        errorKind: "internal",
       }),
     );
     control.diagnostics?.emit("end");

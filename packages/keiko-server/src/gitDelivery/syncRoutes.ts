@@ -38,6 +38,7 @@ import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "../task-workspace/workspace-root-access.js";
 import { logGitDeliveryNoSpawnRefusal } from "./execution.js";
+import { logGitDeliveryApprovalEvent } from "./approvalEvents.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
   GIT_DELIVERY_LOCAL_OPERATOR_ID,
@@ -57,6 +58,7 @@ import {
 import {
   gitDeliveryAuthorityContinuityGuard,
   gitDeliveryAuthorityGate,
+  logGitDeliveryAuthorityAdmission,
   prepareGitDeliveryRequest,
   type GitDeliveryAuthorityContinuityDenialCapture,
   type GitDeliveryAuthorityGate as GitDeliveryAuthorityGateResult,
@@ -386,13 +388,13 @@ function logSyncApprovalMinted(
   operation: GitSyncOperation,
   runId: string,
 ): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.sync.approval.minted",
+  logGitDeliveryApprovalEvent(
+    activityLog,
+    "git.delivery.sync.approval.minted",
+    operation,
     correlationId,
-    status: 200,
-    extra: { operation, runId },
-  });
+    runId,
+  );
 }
 
 export const createHandleSyncApprove = (
@@ -526,13 +528,13 @@ function logUserInitiatedSyncAdmission(
   operation: GitSyncOperation,
   seams: GitDeliverySyncSeams,
 ): void {
-  (seams.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "git.delivery.authority.admitted",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 200,
-    extra: { operation, phase: "admission", source: "local-user" },
-  });
+  logGitDeliveryAuthorityAdmission(
+    ctx,
+    operation,
+    "admission",
+    seams.activityLog ?? processServerLogSink(),
+    { source: "local-user" },
+  );
 }
 
 function admitSyncExecute({

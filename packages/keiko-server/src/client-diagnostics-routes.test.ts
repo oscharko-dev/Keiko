@@ -3,6 +3,7 @@ import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clientDiagnosticNoteDigest,
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
 } from "./client-diagnostics-routes.js";
@@ -94,22 +95,46 @@ describe("POST /api/diagnostics/client", () => {
     const [event] = events;
     expect(event?.category).toBe("diagnostic");
     expect(event?.correlationId).toBe("original-request-correlation-id");
-    expect(event?.errorKind).toBe("boundary");
+    expect(event?.errorKind).toBe("internal");
+    expect(event?.extra).toMatchObject({
+      clientKind: "boundary",
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
-  // FATAL-FLAW FIX #2 (graft from the reuse-maximal design): `"message"` is on
-  // `log-redaction.ts`'s DENIED_FIELD_NAMES and would collapse to `[redacted:key]` even though the
-  // value is already bounded — the wire field named `message` must never reach the log line under
-  // that same name.
-  it("projects the wire field literally named 'message' onto extra.clientNote, never extra.message", async () => {
+  it.each([
+    ["boundary", "internal"],
+    ["unhandled-rejection", "internal"],
+    ["sse-error", "unavailable"],
+    ["other", "unknown"],
+  ] as const)("maps the closed %s client kind to %s", async (kind, errorKind) => {
     const sink = captureServerLog();
-    const body = JSON.stringify({ message: "boundary caught TypeError", clientTs: CLIENT_TS });
+    const body = JSON.stringify({ message: "bounded client failure", clientTs: CLIENT_TS, kind });
+
+    await expect(handleClientDiagnosticIngest(context(body))).resolves.toEqual({
+      status: 204,
+      body: null,
+    });
+
+    expect(clientDiagnosticEvents(sink)[0]).toMatchObject({
+      errorKind,
+      extra: { clientKind: kind },
+    });
+  });
+
+  it("projects the hostile message only as a digest", async () => {
+    const sink = captureServerLog();
+    const message = "boundary caught TypeError";
+    const body = JSON.stringify({ message, clientTs: CLIENT_TS });
 
     await handleClientDiagnosticIngest(context(body));
 
     const line = clientDiagnosticLine(sink);
     expect(line).not.toHaveProperty("message");
-    expect(line.clientNote).toBe("boundary caught TypeError");
+    expect(line).not.toHaveProperty("clientNote");
+    expect(line.clientNoteDigest).toBe(clientDiagnosticNoteDigest(message));
+    expect(JSON.stringify(line)).not.toContain(message);
   });
 
   it("preserves a validated git-change response identity on the originating timeline", async () => {
@@ -235,7 +260,7 @@ describe("POST /api/diagnostics/client", () => {
     expect(clientDiagnosticEvents(sink)).toEqual([]);
   });
 
-  it("redacts a hostile message carrying an email address", async () => {
+  it("digests a hostile message carrying an email address", async () => {
     const sink = captureServerLog();
     const body = JSON.stringify({
       message: "contact jane.doe@example.com for help",
@@ -244,10 +269,12 @@ describe("POST /api/diagnostics/client", () => {
 
     await handleClientDiagnosticIngest(context(body));
 
-    expect(clientDiagnosticLine(sink).clientNote).toBe("[redacted:personal]");
+    const line = clientDiagnosticLine(sink);
+    expect(line.clientNoteDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(line)).not.toContain("jane.doe@example.com");
   });
 
-  it("redacts a hostile message carrying an API-key-shaped secret", async () => {
+  it("digests a hostile message carrying an API-key-shaped secret", async () => {
     const sink = captureServerLog();
     // The secret pattern is anchored at the start of the value, so the message must BEGIN with a
     // recognised key prefix rather than merely contain one.
@@ -255,7 +282,20 @@ describe("POST /api/diagnostics/client", () => {
 
     await handleClientDiagnosticIngest(context(body));
 
-    expect(clientDiagnosticLine(sink).clientNote).toBe("[redacted:secret]");
+    const line = clientDiagnosticLine(sink);
+    expect(line.clientNoteDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(line)).not.toContain("sk-ant-");
+  });
+
+  it("never persists an arbitrary sentence that passes the generic value guards", async () => {
+    const sink = captureServerLog();
+    const message = "transfer account 1234";
+
+    await handleClientDiagnosticIngest(context(JSON.stringify({ message, clientTs: CLIENT_TS })));
+
+    const line = clientDiagnosticLine(sink);
+    expect(line.clientNoteDigest).toBe(clientDiagnosticNoteDigest(message));
+    expect(JSON.stringify(line)).not.toContain(message);
   });
 
   // Regression for the confusable-shape trust-boundary finding: a parsed JSON body that happens to
@@ -301,5 +341,8 @@ describe("POST /api/diagnostics/client", () => {
     expect(
       sink.events.find((event) => event.op === "client.diagnostic.rate-limited")?.correlationId,
     ).toBe(CORRELATION_ID);
+    expect(
+      sink.events.find((event) => event.op === "client.diagnostic.rate-limited")?.extra,
+    ).toMatchObject({ completeness: "complete", loss: "event-dropped" });
   });
 });

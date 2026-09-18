@@ -58,6 +58,9 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
 
 import {
   executeGovernedMutation,
+  gitDeliveryActivityCode,
+  gitDeliveryActivityErrorKind,
+  gitDeliveryActivityFailureKind,
   gitDeliveryMutationResponse,
   gitDeliveryTerminationHandler,
   GitDeliveryRootAuthorityRevokedError,
@@ -70,6 +73,14 @@ import {
   executionFailureDetail,
   logGitDeliveryMutation,
 } from "./execution.js";
+
+describe("git delivery activity failure classification", () => {
+  it("keeps rate limits distinct and bounds native failure fields", () => {
+    expect(gitDeliveryActivityErrorKind("rate-limited")).toBe("rate-limited");
+    expect(gitDeliveryActivityFailureKind(`E${"X".repeat(90)}`)).toBe("internal");
+    expect(gitDeliveryActivityCode(`E${"X".repeat(90)}`)).toBeUndefined();
+  });
+});
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -105,6 +116,62 @@ function configureSshCommitSigning(repoRoot: string, signingHome: string, email:
 
 function expectLastCommitSigned(): void {
   expect(git(["log", "-1", "--format=%G?"]).trim()).toBe("G");
+}
+
+function expectWorktreeReadFailureEvent(
+  activity: ReturnType<typeof captureActivityLog>,
+  bare: string,
+): void {
+  expect(activity.events).toHaveLength(1);
+  expect(activity.events[0]).toMatchObject({
+    level: "error",
+    category: "diagnostic",
+    op: "git.delivery.mutation.failed",
+    correlationId: "request-correlation-2",
+    errorKind: "internal",
+    extra: { actionKind: "branch-switch", phaseReached: "snapshot" },
+  });
+  expect(typeof activity.events[0]?.extra?.failureKind).toBe("string");
+  expect(JSON.stringify(activity.events)).not.toContain(bare);
+}
+
+function expectRestampFailure(
+  activity: ReturnType<typeof captureActivityLog>,
+  errorKind: "conflict" | "unavailable",
+  failureKind: "LOCK_CONTENTION" | "REPOSITORY_UNREACHABLE",
+  correlationId: string,
+): ServerLogEvent {
+  const failures = activity.events.filter((event) => event.op === "task-workspace.lifecycle");
+  expect(failures).toHaveLength(1);
+  expect(failures[0]).toMatchObject({
+    errorKind,
+    correlationId,
+    extra: { operation: "verify-head", failureKind },
+  });
+  const [failure] = failures;
+  if (failure === undefined) throw new TypeError("Expected one task-workspace lifecycle failure");
+  return failure;
+}
+
+async function expectWorktreeReadFailure(): Promise<void> {
+  const bare = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-nonrepo-")));
+  const deps = { evidenceStore: captureStore().store, redactor: buildRedactor({}) };
+  const activity = captureActivityLog();
+  try {
+    await expect(
+      executeGovernedMutation(
+        { kind: "branch-switch", branchName: "main" },
+        { required: false },
+        workspaceInfo(bare),
+        deps,
+        { ...REAL_SEAMS, activityLog: activity.sink },
+        "request-correlation-2",
+      ),
+    ).rejects.toBeTruthy();
+    expectWorktreeReadFailureEvent(activity, bare);
+  } finally {
+    rmSync(bare, { recursive: true, force: true });
+  }
 }
 
 function workspaceInfo(rootPath: string): WorkspaceInfo {
@@ -324,34 +391,8 @@ describe("executeGovernedMutation — real git through the default seams", () =>
     expect(KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK.defaultRule?.decision).toBe("constrained");
   });
 
-  it("surfaces a worktree read failure as a thrown error outside a git repository", async () => {
-    const bare = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-nonrepo-")));
-    const deps = { evidenceStore: captureStore().store, redactor: buildRedactor({}) };
-    const activity = captureActivityLog();
-    try {
-      await expect(
-        executeGovernedMutation(
-          { kind: "branch-switch", branchName: "main" },
-          { required: false },
-          workspaceInfo(bare),
-          deps,
-          { ...REAL_SEAMS, activityLog: activity.sink },
-          "request-correlation-2",
-        ),
-      ).rejects.toBeTruthy();
-      const event = activity.events[0];
-      expect(event?.level).toBe("error");
-      expect(event?.category).toBe("diagnostic");
-      expect(event?.op).toBe("git.delivery.mutation.failed");
-      expect(event?.correlationId).toBe("request-correlation-2");
-      expect(typeof event?.errorKind).toBe("string");
-      expect(event?.extra?.actionKind).toBe("branch-switch");
-      expect(event?.extra?.phaseReached).toBe("snapshot");
-      expect(JSON.stringify(activity.events)).not.toContain(bare);
-    } finally {
-      rmSync(bare, { recursive: true, force: true });
-    }
-  });
+  it("surfaces a worktree read failure as a thrown error outside a git repository", () =>
+    expectWorktreeReadFailure());
 });
 
 // ─── runCommand termination-evidence correlation (audit finding: readWorktreeSnapshotFor/adapterFor
@@ -393,6 +434,7 @@ describe("logGitDeliveryUpstreamTrackingFailed — content-free diagnostic for t
     expect(activity.events[0]?.op).not.toBe("git.delivery.mutation.failed");
     expect(activity.events[0]?.category).toBe("diagnostic");
     expect(activity.events[0]?.level).toBe("warn");
+    expect(activity.events[0]?.errorKind).toBe("unavailable");
     expect(activity.events[0]?.correlationId).toBe("request-correlation-9");
   });
 
@@ -562,6 +604,9 @@ describe("executionFailureDetail — closed provider failure words on the mutati
       identityIssue: "shape-invalid",
     });
     expect(executionFailureDetail(failed({ ...base, failureClass: "Free text here" }))).toEqual({});
+    expect(executionFailureDetail(failed({ ...base, failureClass: "plausible-token" }))).toEqual(
+      {},
+    );
   });
 
   it("admits the detail the PR path hands in beside the result's own words", () => {
@@ -854,6 +899,7 @@ describe("executeGovernedMutation — managed-root re-proof at the spawn boundar
       });
       const noSpawn = activity.events.find((e) => e.op === "git.delivery.dispatch.no-spawn");
       expect(noSpawn?.correlationId).toBe("request-correlation-revoked");
+      expect(noSpawn?.errorKind).toBe("authority-denied");
       expect(noSpawn?.extra?.operation).toBe("branch-create");
       expect(
         activity.events.some(
@@ -1124,12 +1170,13 @@ describe("executeGovernedMutation — verified-head restamp (#3382)", () => {
       ).toBe("succeeded");
 
       // Exactly one classified line for the failed restamp — not silent, and body-free.
-      const failures = activity.events.filter((e) => e.op === "task-workspace.lifecycle");
-      expect(failures).toHaveLength(1);
-      expect(failures[0]?.errorKind).toBe("REPOSITORY_UNREACHABLE");
-      expect(failures[0]?.correlationId).toBe("request-correlation-restamp-rejects");
-      expect(failures[0]?.extra?.operation).toBe("verify-head");
-      expect(failures[0]?.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+      const failure = expectRestampFailure(
+        activity,
+        "unavailable",
+        "REPOSITORY_UNREACHABLE",
+        "request-correlation-restamp-rejects",
+      );
+      expect(failure.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
       expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
     } finally {
       fixture.dispose();
@@ -1183,11 +1230,12 @@ describe("executeGovernedMutation — verified-head restamp (#3382)", () => {
       ).toBe("succeeded");
 
       // Exactly one classified line for the expiry, body-free, under this request's correlation id.
-      const failures = activity.events.filter((e) => e.op === "task-workspace.lifecycle");
-      expect(failures).toHaveLength(1);
-      expect(failures[0]?.errorKind).toBe("LOCK_CONTENTION");
-      expect(failures[0]?.correlationId).toBe("request-correlation-restamp-hangs");
-      expect(failures[0]?.extra?.operation).toBe("verify-head");
+      expectRestampFailure(
+        activity,
+        "conflict",
+        "LOCK_CONTENTION",
+        "request-correlation-restamp-hangs",
+      );
       expect(JSON.stringify(activity.events)).not.toContain(fixture.managedWorktreePath);
 
       // The port was handed the deadline's signal and it is aborted, so the abandoned attempt can

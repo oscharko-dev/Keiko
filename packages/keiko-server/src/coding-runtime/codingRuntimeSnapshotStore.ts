@@ -22,6 +22,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   ciReadinessFromRow,
   readinessMatchesDraft,
@@ -49,6 +50,7 @@ import {
   assertVerifiedCommitRuntimeBinding,
   readLastSuccessfulVerifiedCommit,
 } from "./codingRuntimeVerifiedCommitAuthorityStore.js";
+import { GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 const MAX_ROWS = 10_000;
 type SnapshotSqlValue = string | number | null;
@@ -561,17 +563,18 @@ function recordVerifiedCommit(
     );
   if (Number(update.changes) !== 1) throw new TypeError("concurrent verified commit update");
   if (retained !== undefined)
-    processServerLogSink().write({
-      category: "process",
-      op: "git.verified-commit.authority",
-      correlationId: result.runId,
-      extra: {
-        phase: "retained",
-        runId: result.runId,
-        proposalId: retained.proposalId,
-        headSha: retained.headSha,
-      },
-    });
+    processServerLogSink().write(
+      activityLogEvent(
+        GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION,
+        { correlationId: result.runId },
+        {
+          phase: "retained",
+          runId: result.runId,
+          proposalId: retained.proposalId,
+          ...(retained.headSha === undefined ? {} : { headSha: retained.headSha }),
+        },
+      ),
+    );
   return requireSnapshot(read(result.runId));
 }
 

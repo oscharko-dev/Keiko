@@ -21,6 +21,7 @@ import {
   redactLogFields,
   redactLogString,
 } from "./log-redaction.js";
+import { ACTIVITY_LOG_FRAME_FIELD_NAME } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 // Credential-shaped fixtures are ASSEMBLED at runtime, never written as literals. A literal here
 // is a genuine finding for the repository secret scanner, and silencing that scanner to keep a
@@ -582,7 +583,9 @@ describe("frames field guard (ADR-0173 D4)", () => {
       VALID_ROOT_BIN_SRC_FRAME,
     ];
 
-    expect(redactLogFields({ frames })).toStrictEqual({ frames });
+    expect(redactLogFields({ [ACTIVITY_LOG_FRAME_FIELD_NAME]: frames })).toStrictEqual({
+      [ACTIVITY_LOG_FRAME_FIELD_NAME]: frames,
+    });
   });
 
   it.each([

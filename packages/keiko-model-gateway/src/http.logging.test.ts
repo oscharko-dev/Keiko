@@ -65,11 +65,12 @@ describe("gatewayFetch — activity log", () => {
     expect(started.level).toBe("info");
     expect(started.category).toBe("http");
     expect(started.extra).toMatchObject({
-      endpoint: "https://gateway.example:8443",
+      endpointClass: "hostname",
       method: "POST",
       requestBytes: 33,
       timeoutMs: 4_000,
     });
+    expect(started.extra).not.toHaveProperty("endpointDigest");
     // The body is measured, never carried; the query string carried a key.
     expect(JSON.stringify(started)).not.toContain("private document text");
     expect(JSON.stringify(started)).not.toContain("sk-live");
@@ -141,7 +142,7 @@ describe("gatewayFetch — activity log", () => {
   });
 
   // The port's level predicate, from the transport's side: a sink that declines `debug` must
-  // never be handed one — the `logEndpointHost` parse behind the route-planning line is pure waste
+  // never be handed one — the endpoint parse behind the route-planning line is pure waste
   // when nobody is reading at that level.
   it("materialises no debug event at all for a sink that declines debug", async () => {
     const events: ModelGatewayLogEvent[] = [];
@@ -185,10 +186,11 @@ describe("gatewayFetch — activity log", () => {
     expect(planned.level).toBe("debug");
     expect(planned.category).toBe("http");
     expect(planned.extra).toMatchObject({
-      endpoint: "https://gateway.example:8443",
+      endpointClass: "hostname",
       proxied: false,
       transport: "injected",
     });
+    expect(planned.extra).not.toHaveProperty("endpointDigest");
     // The query string carried a key; it must not reach the line.
     expect(JSON.stringify(planned)).not.toContain("sk-live");
   });
@@ -229,10 +231,12 @@ describe("gatewayFetch — activity log", () => {
       body: "{}",
       fetchImpl: respondWith(200),
       log: log.sink,
-      logContext: { correlationId: "run-42" },
+      logContext: { correlationId: "run-0042" },
     });
     expect(log.events.length).toBeGreaterThan(1);
-    expect(log.events.map((event) => event.correlationId)).toEqual(log.events.map(() => "run-42"));
+    expect(log.events.map((event) => event.correlationId)).toEqual(
+      log.events.map(() => "run-0042"),
+    );
     expect(ops(log.events)).toContain("http.gateway.fetch.completed");
   });
 
@@ -243,10 +247,10 @@ describe("gatewayFetch — activity log", () => {
         fetchImpl: respondWith(200),
         egress: { denyLoopback: true },
         log: refused.sink,
-        logContext: { correlationId: "run-43" },
+        logContext: { correlationId: "run-0043" },
       }),
     ).rejects.toBeInstanceOf(OutboundHttpEgressError);
-    expect(eventFor(refused.events, "http.gateway.fetch.failed").correlationId).toBe("run-43");
+    expect(eventFor(refused.events, "http.gateway.fetch.failed").correlationId).toBe("run-0043");
 
     const broken = recorder();
     const failing: typeof fetch = () => Promise.reject(new Error("no route"));
@@ -254,10 +258,10 @@ describe("gatewayFetch — activity log", () => {
       gatewayFetch("https://gateway.example/v1/x", {
         fetchImpl: failing,
         log: broken.sink,
-        logContext: { correlationId: "run-44" },
+        logContext: { correlationId: "run-0044" },
       }),
     ).rejects.toThrow();
-    expect(eventFor(broken.events, "http.gateway.fetch.failed").correlationId).toBe("run-44");
+    expect(eventFor(broken.events, "http.gateway.fetch.failed").correlationId).toBe("run-0044");
   });
 
   it("leaves the lines uncorrelated when the caller supplies no context", async () => {
@@ -308,8 +312,10 @@ describe("gatewayFetch — activity log", () => {
     ).rejects.toBeInstanceOf(OutboundHttpEgressError);
     const failed = eventFor(log.events, "http.gateway.fetch.failed");
     expect(failed.level).toBe("warn");
-    expect(failed.errorKind).toBe("PROXY_BLOCKED_BY_POLICY");
-    expect(failed.extra).toMatchObject({ endpoint: "http://127.0.0.1:9" });
+    expect(failed.errorKind).toBe("permission-denied");
+    expect(failed.extra?.endpointClass).toBe("loopback");
+    expect(failed.extra).not.toHaveProperty("endpointDigest");
+    expect(JSON.stringify(failed)).not.toContain("127.0.0.1");
     expect(ops(log.events)).not.toContain("http.gateway.fetch.completed");
   });
 
@@ -325,7 +331,7 @@ describe("gatewayFetch — activity log", () => {
       gatewayFetch("https://gateway.example/v1/x", { fetchImpl: failing, log: log.sink }),
     ).rejects.toThrow();
     const failed = eventFor(log.events, "http.gateway.fetch.failed");
-    expect(failed.errorKind).toBe("ECONNREFUSED");
+    expect(failed.errorKind).toBe("unavailable");
     expect(JSON.stringify(failed)).not.toContain("sk-in-message");
   });
 

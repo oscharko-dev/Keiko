@@ -5,6 +5,10 @@ import {
   parseUpdateGitHubIssueReaderAuthorizationWire,
   UNKNOWN_REPOSITORY_ERROR_CODE,
 } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -14,6 +18,26 @@ import { githubIssueReaderRepositoryId } from "./githubIssueReaderAuthorization.
 
 // A grant carries two booleans and a counter. Anything larger is not this request.
 const MAX_BODY_BYTES = 1_024;
+
+const GITHUB_AUTHORIZATION_CHANGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-context.github-authorization.changed",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-context/githubAuthorizationRoutes.handlePutGitHubIssueReaderAuthorization",
+  fields: {
+    repositoryId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    authorized: { type: "boolean", dataClass: "closed-enum", required: true },
+    revision: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["github-issue-reader-authorization"],
+  proofIds: ["coding-context.github-authorization.changed.line"],
+  releaseImpact: "patch",
+});
 
 /**
  * Settings surface for the repository-scoped GitHub issue reader (#3385).
@@ -176,12 +200,13 @@ export async function handlePutGitHubIssueReaderAuthorization(
   }
   // A change to who may read an external repository is exactly the kind of decision a support
   // timeline must be able to reconstruct (ADR-0173). Body-free: identity, direction and revision.
-  processServerLogSink().write({
-    category: "security",
-    op: "coding-context.github-authorization.changed",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: { repositoryId, authorized: stored.authorized, revision: stored.revision },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      GITHUB_AUTHORIZATION_CHANGED_OPERATION,
+      { correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+      { repositoryId, authorized: stored.authorized, revision: stored.revision },
+    ),
+  );
   return {
     status: 200,
     body: {

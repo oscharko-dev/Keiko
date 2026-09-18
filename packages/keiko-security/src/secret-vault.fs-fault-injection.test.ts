@@ -6,7 +6,9 @@
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SecurityLogEvent } from "./log-port.js";
 import {
   createLocalSecretVault,
   createShardedLocalSecretVault,
@@ -16,6 +18,8 @@ import {
 let blockedOpenDir = "";
 let blockedRenameDest = "";
 let blockedOpenSyncHits = 0;
+const blockedRenameAfterHits = new Map<string, number>();
+const renameHits = new Map<string, number>();
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -45,7 +49,11 @@ vi.mock("node:fs", async (importOriginal) => {
     // proof (secret-vault.test.ts), which works because sharded `set()` never reads its target
     // first. This scoped mock fails only the rename itself, leaving the preceding read untouched.
     renameSync: (oldPath: unknown, newPath: unknown): void => {
-      if (newPath === blockedRenameDest) {
+      const destination = String(newPath);
+      const hits = (renameHits.get(destination) ?? 0) + 1;
+      renameHits.set(destination, hits);
+      const allowedHits = blockedRenameAfterHits.get(destination);
+      if (newPath === blockedRenameDest || (allowedHits !== undefined && hits > allowedHits)) {
         throw Object.assign(new Error("simulated: rename destination refused"), {
           code: "EACCES",
         });
@@ -56,13 +64,24 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const KEY = Buffer.alloc(32, 7);
+const VAULT_FRAME_PATTERN = /^packages\/keiko-security\/(?:dist|src)\/.+\.(?:js|ts):\d+:\d+$/u;
 const REAL_TMPDIR = realpathSync(tmpdir());
 const dirs: string[] = [];
+
+function isVaultFrameArray(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((frame: unknown) => typeof frame === "string" && VAULT_FRAME_PATTERN.test(frame))
+  );
+}
 
 afterEach(() => {
   blockedOpenDir = "";
   blockedRenameDest = "";
   blockedOpenSyncHits = 0;
+  blockedRenameAfterHits.clear();
+  renameHits.clear();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -117,5 +136,50 @@ describe("createLocalSecretVault — writeStore leaves no temp file behind when 
     // The temp file the failed rename left behind must not survive — best-effort cleanup runs in
     // writeStore's `finally`, exercising the branch where `existsSync(tempPath)` is true.
     expect(readdirSync(dir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+describe("createShardedLocalSecretVault — rollback failure evidence", () => {
+  it("emits body-free frames when a failed batch cannot restore an earlier shard", () => {
+    const dir = tempDir("secret-vault-rollback-fail-");
+    const storeDir = join(dir, "sharded");
+    const events: SecurityLogEvent[] = [];
+    const vault = createShardedLocalSecretVault({
+      key: KEY,
+      storeDir,
+      sink: { write: (event): void => void events.push(event) },
+    });
+    vault.set("cred:a", "original-a");
+    const pathA = join(storeDir, `entry-${Buffer.from("cred:a").toString("hex")}.sealed`);
+    const pathB = join(storeDir, `entry-${Buffer.from("cred:b").toString("hex")}.sealed`);
+    renameHits.clear();
+    blockedRenameAfterHits.set(resolve(pathA), 1);
+    blockedRenameAfterHits.set(resolve(pathB), 0);
+
+    expect(() => {
+      vault.setMany(
+        new Map([
+          ["cred:a", "updated-a"],
+          ["cred:b", "never-stored"],
+        ]),
+      );
+    }).toThrow("simulated: rename destination refused");
+
+    const rollback = events.find((event) => event.op === "security.vault.entries-rollback-failed");
+    expect(rollback).toMatchObject({
+      level: "error",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      errorKind: "durability-failed",
+      extra: {
+        count: 1,
+        failureKind: "EACCES",
+      },
+    });
+    expect(isVaultFrameArray(rollback?.extra?.frames)).toBe(true);
+    expect(JSON.stringify(rollback)).not.toContain("rename destination refused");
+    expect(JSON.stringify(rollback)).not.toContain(storeDir);
+    expect(
+      events.find((event) => event.op === "security.vault.entries-merge-failed"),
+    ).toBeDefined();
   });
 });

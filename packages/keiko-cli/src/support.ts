@@ -10,13 +10,32 @@
 // selection, manifest assembly, parsing, grouping, ordering, rendering — lives in
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { emitSecurityLogEvent, securityErrorKind } from "@oscharko-dev/keiko-security";
+import {
+  acknowledgeSafeArtifactFileSet,
+  isSafeArtifactClass,
+  isSafeArtifactFailureKind,
+  openSafeArtifactFile,
+  publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
+  safeArtifactPublicationSlot,
+  type SafeArtifactClass,
+  type SafeArtifactFileFailureKind,
+  type SafeArtifactPublicationResult,
+} from "@oscharko-dev/keiko-security/fs-hardening";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
 import { flagValue } from "./cli-arg-parsing.js";
@@ -48,6 +67,7 @@ import {
   renderHumanClusters,
   renderHumanReproductionSeed,
   renderHumanTimeline,
+  type ActivityLogEvidenceClassification,
   type AnalyzeAllResult,
   type ProcessSummary,
   type SourceKind,
@@ -63,10 +83,12 @@ import {
   buildUiLogSection,
   bundleSha256Hex,
   bundleText,
+  CURRENT_LOG_FILE_NAME,
   DEFAULT_MAX_BUNDLE_BYTES,
   describeErrorKind,
   discoverServerLogFiles,
   readKeptFiles,
+  readVerifiedLogText,
   selectLogFilesWithinBudget,
   serializeBundleLines,
   sha256SidecarPath,
@@ -98,6 +120,10 @@ export. Default --out is ./keiko-support-<timestamp>.jsonl (colons replaced with
 always named in the manifest's truncatedLogFiles. The current log file is never dropped; if it
 alone still exceeds the cap, only its tail is exported instead, named in the manifest's
 currentFileTailTruncated. A <output>.sha256 sidecar carries a SHA-256 digest of the bundle's bytes.
+Publication exclusively creates the report and sidecar and never replaces an existing destination.
+If a process stops mid-publication, rerun the same explicit --out command; for the default output,
+rerun from the same working directory. Keiko recovers the durable prior bytes before taking a new
+clock or log snapshot, or fails closed when the bounded recovery slot conflicts.
 
 <state-dir>/ui.log (the UI/BFF process's raw, unredacted stdout+stderr) is excluded by default and
 always named in the manifest's sectionsExcluded — attaching it requires BOTH --include-ui-log AND
@@ -161,6 +187,34 @@ interface Assessment<T> {
   readonly warning?: string | undefined;
 }
 
+const CLI_SUPPORT_EXPORT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.support.export.failed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "support.emitSupportInstallLayoutRefusal",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unsafe-state-root", "activity-log-unavailable", "state-root-validation-failed"],
+    },
+    targetSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["cli-support-export"],
+  proofIds: ["cli.support.export.install-layout-refusal"],
+  releaseImpact: "patch",
+});
+
+type SupportInstallLayoutFailureReason =
+  "unsafe-state-root" | "activity-log-unavailable" | "state-root-validation-failed";
+
 interface SupportRefusalContext {
   readonly stateDir: string;
   readonly controlStateDir: string;
@@ -170,8 +224,8 @@ interface SupportRefusalContext {
 
 function emitSupportInstallLayoutRefusal(
   context: SupportRefusalContext,
-  errorKind: string,
-  reason: string,
+  failureKind: string,
+  reason: SupportInstallLayoutFailureReason,
 ): void {
   try {
     if (cliControlStateConflictsWithTarget(context.controlStateDir, context.stateDir)) return;
@@ -183,21 +237,30 @@ function emitSupportInstallLayoutRefusal(
     context.factory,
     context.correlationId,
   );
-  emitSecurityLogEvent(sink, {
-    level: "error",
-    category: "diagnostic",
-    op: "cli.support.export.failed",
-    errorKind,
-    extra: { reason, targetSha256: cliTargetIdentitySha256(context.stateDir) },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      CLI_SUPPORT_EXPORT_FAILED_OPERATION,
+      {
+        level: "error",
+        correlationId: context.correlationId,
+        errorKind: reason === "unsafe-state-root" ? "unsafe-target" : "unavailable",
+      },
+      {
+        reason,
+        targetSha256: cliTargetIdentitySha256(context.stateDir),
+        failureKind,
+      },
+    ),
+  );
 }
 
 function refuseSupportInstallLayout(
   context: SupportRefusalContext,
-  errorKind: string,
-  reason: string,
+  failureKind: string,
+  reason: SupportInstallLayoutFailureReason,
 ): "refused" {
-  emitSupportInstallLayoutRefusal(context, errorKind, reason);
+  emitSupportInstallLayoutRefusal(context, failureKind, reason);
   return "refused";
 }
 
@@ -425,9 +488,18 @@ function defaultOutFileName(generatedAt: Date): string {
   return `keiko-support-${generatedAt.toISOString().replaceAll(":", "-")}.jsonl`;
 }
 
-function resolveOutPath(cwd: string, outArg: string | undefined, generatedAt: Date): string {
+export function resolveOutPath(cwd: string, outArg: string | undefined, generatedAt: Date): string {
   const value = outArg ?? defaultOutFileName(generatedAt);
   return isAbsolute(value) ? value : resolve(cwd, value);
+}
+
+function supportDestinationCollidesWithActivityLog(
+  cwd: string,
+  stateDir: string,
+  outArg: string | undefined,
+): boolean {
+  if (outArg === undefined) return false;
+  return resolve(cwd, outArg) === resolve(stateDir, "logs", CURRENT_LOG_FILE_NAME);
 }
 
 // Never throws: a missing or unreadable evidence directory means zero evidence to report, never a
@@ -469,6 +541,7 @@ function resolveExportInstallMode(server: Awaited<ReturnType<typeof loadServer>>
 
 interface LogContent {
   readonly contentLines: readonly string[];
+  readonly terminalFragment: boolean;
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
   readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
@@ -477,11 +550,12 @@ interface LogContent {
 }
 
 // Discovers, budget-selects, and reads the state dir's server*.log files in one pass, tolerating
-// the sink's own rotation/retention pruning at both boundaries it can race
-// (support-export.ts's `discoverServerLogFiles`, between `readdirSync` and `statSync`, and
+// concurrent removal of the current file or a compatible legacy archive at both boundaries
+// (support-export.ts's `discoverServerLogFiles`, between `readdirSync` and the verified open, and
 // `readKeptFiles`, between selection and the actual read): `sourceLogFiles` names only the files
-// that actually contributed content; `skippedLogFiles` names every file that vanished at either
-// boundary, by name only, never by its absolute path. `budgetExceeded` and
+// that actually contributed content; `skippedLogFiles` names every file that vanished or was
+// refused (a link or non-regular entry) at either boundary, by name only, never by its absolute
+// path. `budgetExceeded` and
 // `currentFileTailTruncated` come from `readKeptFiles`, not `selection`: only the read step knows
 // whether a tail read of the current file actually managed to keep a complete line, which is what
 // decides whether the size budget was, in the end, honoured.
@@ -495,6 +569,7 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
     .filter((name) => !readSkipped.has(name));
   return {
     contentLines: read.contentLines,
+    terminalFragment: read.terminalFragment,
     sourceLogFiles,
     truncatedLogFiles: selection.truncatedLogFiles,
     currentFileTailTruncated: read.currentFileTailTruncated,
@@ -510,18 +585,589 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
 // generic prefix didn't already say. Returns undefined on success, an exit code on failure.
 // Also writes the `<output>.sha256` sidecar (design doc §6.2's closing addendum): a cheap
 // integrity story for an artifact that crosses a customer-machine-to-agent trust boundary, computed
-// over the EXACT bytes just written to `outPath`. A failure writing either file reports the same
-// content-free outcome and writes neither half — a bundle without its sidecar, or a sidecar for
-// bytes that were never actually persisted, are both worse than refusing the export.
-function writeBundleOrExitCode(outPath: string, contents: string, io: CliIo): number | undefined {
+// over the EXACT report bytes. A crash can leave a bounded, intent-owned partial publication;
+// the next invocation recovers those original bytes before reading a new clock or log snapshot.
+type BundlePublicationOutcome =
+  | {
+      readonly status: "published";
+      readonly result: SafeArtifactPublicationResult;
+      readonly reportBytes: number;
+      readonly reportSha256: string;
+      readonly recoveryState: "none" | "rolled-back";
+    }
+  | {
+      readonly status: "recovered";
+      readonly result: SafeArtifactPublicationResult & {
+        readonly status: "recovered";
+        readonly commitPath: string;
+      };
+      readonly reportBytes: number;
+      readonly reportSha256: string;
+      readonly recoveryState: "recovered";
+    }
+  | {
+      readonly status: "failed";
+      readonly errorKind: SafeArtifactFileFailureKind | "unknown";
+      readonly failedArtifactClass: SupportFailedArtifactClass;
+      readonly recoveryState: "conflict" | "none" | "rolled-back";
+    };
+
+type CompletedBundlePublicationOutcome = Extract<
+  BundlePublicationOutcome,
+  { readonly status: "published" | "recovered" }
+>;
+
+interface AcknowledgementFailedOutcome {
+  readonly status: "acknowledgement-failed";
+  readonly errorKind: SafeArtifactFileFailureKind | "unknown";
+  readonly publication: CompletedBundlePublicationOutcome;
+}
+
+interface RolledBackRecoveryOutcome {
+  readonly status: "rolled-back";
+  readonly recoveryState: "rolled-back";
+}
+
+type SupportFailedArtifactClass = "support-report" | "integrity-artifact" | "manifest";
+
+function safeArtifactFailureRecord(error: unknown):
+  | {
+      readonly artifactClass: SafeArtifactClass;
+      readonly kind: SafeArtifactFileFailureKind;
+    }
+  | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const artifactClass: unknown = Reflect.get(error, "artifactClass");
+  const kind: unknown = Reflect.get(error, "kind");
+  if (!isSafeArtifactClass(artifactClass) || !isSafeArtifactFailureKind(kind)) return undefined;
+  return { artifactClass, kind };
+}
+
+type SupportPublicationEvidenceOutcome =
+  BundlePublicationOutcome | AcknowledgementFailedOutcome | RolledBackRecoveryOutcome;
+
+export function supportPublicationErrorKind(
+  error: unknown,
+): SafeArtifactFileFailureKind | "unknown" {
   try {
-    writeFileSync(outPath, contents, "utf8");
-    writeFileSync(sha256SidecarPath(outPath), `${bundleSha256Hex(contents)}\n`, "utf8");
+    return safeArtifactFailureRecord(error)?.kind ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function supportPublicationFailure(
+  error: unknown,
+): Pick<
+  Extract<BundlePublicationOutcome, { readonly status: "failed" }>,
+  "errorKind" | "failedArtifactClass"
+> {
+  try {
+    const failure = safeArtifactFailureRecord(error);
+    if (failure !== undefined) {
+      const failedArtifactClass =
+        failure.artifactClass === "integrity-artifact" || failure.artifactClass === "manifest"
+          ? failure.artifactClass
+          : "support-report";
+      return { errorKind: failure.kind, failedArtifactClass };
+    }
+  } catch {
+    return { errorKind: "unknown", failedArtifactClass: "support-report" };
+  }
+  return { errorKind: "unknown", failedArtifactClass: "support-report" };
+}
+
+interface SupportPublicationContext {
+  readonly root: string;
+  readonly slot: string;
+}
+
+export function supportPublicationContext(
+  cwd: string,
+  outArg: string | undefined,
+): SupportPublicationContext {
+  const explicitPath = outArg === undefined ? undefined : resolve(cwd, outArg);
+  const root = explicitPath === undefined ? resolve(cwd) : dirname(explicitPath);
+  const namespace =
+    explicitPath === undefined ? "support-export/default" : "support-export/explicit";
+  return { root, slot: safeArtifactPublicationSlot(namespace, explicitPath ?? root) };
+}
+
+function publishSupportBundle(
+  outPath: string,
+  contents: string,
+  io: CliIo,
+  context: SupportPublicationContext,
+  recoveryState: "none" | "rolled-back",
+): BundlePublicationOutcome {
+  const reportSha256 = bundleSha256Hex(contents);
+  try {
+    const result = publishSafeArtifactFileSet(
+      [
+        { path: outPath, contents, artifactClass: "support-report" },
+        {
+          path: sha256SidecarPath(outPath),
+          contents: `${reportSha256}\n`,
+          artifactClass: "integrity-artifact",
+        },
+      ],
+      {
+        commitPath: outPath,
+        publicationSlot: context.slot,
+        trustedRoot: context.root,
+      },
+    );
+    return {
+      status: "published",
+      result,
+      reportBytes: Buffer.byteLength(contents),
+      reportSha256,
+      recoveryState,
+    };
+  } catch (error) {
+    const failure = supportPublicationFailure(error);
+    const { errorKind } = failure;
+    io.err(`keiko support export: could not write the bundle: ${errorKind}\n`);
+    return { status: "failed", ...failure, recoveryState };
+  }
+}
+
+type SupportRecoveryOutcome =
+  | { readonly status: "none" }
+  | RolledBackRecoveryOutcome
+  | Extract<BundlePublicationOutcome, { readonly status: "recovered" | "failed" }>;
+
+function recoverSupportBundle(
+  context: SupportPublicationContext,
+  io: CliIo,
+): SupportRecoveryOutcome {
+  try {
+    const result = recoverSafeArtifactFileSet({
+      publicationSlot: context.slot,
+      trustedRoot: context.root,
+    });
+    if (result.status === "rolled-back") {
+      return { status: "rolled-back", recoveryState: "rolled-back" };
+    }
+    if (result.status !== "recovered") return { status: "none" };
+    return {
+      status: "recovered",
+      result,
+      reportBytes: result.commitByteCount,
+      reportSha256: result.commitSha256,
+      recoveryState: "recovered",
+    };
+  } catch (error) {
+    const failure = supportPublicationFailure(error);
+    const { errorKind } = failure;
+    io.err(`keiko support export: could not recover the prior publication: ${errorKind}\n`);
+    return { status: "failed", ...failure, recoveryState: "conflict" };
+  }
+}
+
+function acknowledgeSupportPublication(
+  context: SupportPublicationContext,
+  io: CliIo,
+): SafeArtifactFileFailureKind | "unknown" | undefined {
+  try {
+    acknowledgeSafeArtifactFileSet({
+      publicationSlot: context.slot,
+      trustedRoot: context.root,
+    });
     return undefined;
   } catch (error) {
-    io.err(`keiko support export: could not write the bundle: ${describeErrorKind(error)}\n`);
-    return 1;
+    const errorKind = supportPublicationErrorKind(error);
+    io.err(`keiko support export: could not acknowledge publication: ${errorKind}\n`);
+    return errorKind;
   }
+}
+
+type LoadedServer = Awaited<ReturnType<typeof loadServer>>;
+
+const SUPPORT_EXPORT_PUBLICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "support.export.publication",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "support.emitSupportPublicationEvidence",
+  fields: {
+    publicationArtifactClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["support-report"],
+    },
+    artifactCount: { type: "integer", dataClass: "count", required: true },
+    visibleArtifactCount: { type: "integer", dataClass: "count", required: false },
+    persistenceStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["published", "recovered", "rolled-back", "acknowledgement-failed", "failed"],
+    },
+    publicationPersistenceStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["published", "recovered", "rolled-back", "acknowledgement-failed", "failed"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    publicationCompleteness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+    publicationLoss: { type: "string", dataClass: "loss-state", required: true },
+    recoveryState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "rolled-back", "recovered", "conflict"],
+    },
+    publicationStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["published", "recovered"],
+    },
+    permissionAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["verified-private", "platform-inherited"],
+    },
+    durabilityAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["verified", "directory-sync-unavailable"],
+    },
+    reportBytes: { type: "integer", dataClass: "count", required: false },
+    reportSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    receiptState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["consumed", "acknowledgement-uncertain", "unknown"],
+    },
+    failedArtifactClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["support-report", "integrity-artifact", "manifest"],
+    },
+    failureKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "invalid-publication",
+        "close-failed",
+        "durability-failed",
+        "open-failed",
+        "permission-failed",
+        "permission-unsafe",
+        "publish-failed",
+        "publish-unsupported",
+        "read-failed",
+        "recovery-conflict",
+        "replace-failed",
+        "target-exists",
+        "target-mutated",
+        "unsafe-ancestor",
+        "unsafe-target",
+        "write-failed",
+        "unknown",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["support-publication", "support-publication-acknowledgement"],
+  proofIds: ["support.export.publication-evidence", "support.export.commit-last"],
+  releaseImpact: "patch",
+});
+
+const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "support.analyze.classified",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "support.emitSupportAnalysisEvidence",
+  fields: {
+    sourceKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["bundle", "raw-log"],
+    },
+    evidenceClassification: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["supported", "legacy", "unsupported", "corrupt", "truncated", "incomplete"],
+    },
+    supportedLineCount: { type: "integer", dataClass: "count", required: true },
+    legacyLineCount: { type: "integer", dataClass: "count", required: true },
+    unsupportedLineCount: { type: "integer", dataClass: "count", required: true },
+    corruptLineCount: { type: "integer", dataClass: "count", required: true },
+    truncatedLineCount: { type: "integer", dataClass: "count", required: true },
+    incompleteLineCount: { type: "integer", dataClass: "count", required: true },
+    sequenceAnomalyCount: { type: "integer", dataClass: "count", required: true },
+    malformedLineCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["support-analysis"],
+  proofIds: ["support.analyze.classification-evidence"],
+  releaseImpact: "patch",
+});
+
+type SupportAnalysisIntegrity = Pick<
+  ActivityLogFields<typeof SUPPORT_ANALYZE_CLASSIFICATION_OPERATION>,
+  "completeness" | "loss"
+>;
+
+// ADR-0173 D10's closed vocabularies, derived from the analyzer's own verdict instead of the
+// constructor defaults. Only supported or legacy evidence (which implies no malformed line) is
+// complete; a truncated or corrupt artifact is a known, counted subset whose unreadable bytes stand
+// where a record should be; unsupported lines are preserved but excluded; incomplete identity or
+// writer evidence means completeness cannot be established at all.
+const SUPPORT_ANALYSIS_INTEGRITY: Readonly<
+  Record<ActivityLogEvidenceClassification, SupportAnalysisIntegrity>
+> = {
+  supported: { completeness: "complete", loss: "none" },
+  legacy: { completeness: "complete", loss: "none" },
+  unsupported: { completeness: "partial", loss: "none" },
+  corrupt: { completeness: "partial", loss: "event-dropped" },
+  truncated: { completeness: "partial", loss: "event-dropped" },
+  incomplete: { completeness: "unknown", loss: "none" },
+};
+
+type SupportPublicationEvidenceFields = ActivityLogFields<
+  typeof SUPPORT_EXPORT_PUBLICATION_OPERATION
+>;
+
+function completedPublicationEvidenceFields(
+  publication: CompletedBundlePublicationOutcome,
+  persistenceStatus: "published" | "recovered" | "acknowledgement-failed",
+  receiptState: "consumed" | "acknowledgement-uncertain",
+): SupportPublicationEvidenceFields {
+  return {
+    publicationArtifactClass: "support-report",
+    artifactCount: 2,
+    visibleArtifactCount: 2,
+    persistenceStatus,
+    publicationPersistenceStatus: persistenceStatus,
+    completeness: "complete",
+    publicationCompleteness: "complete",
+    loss: "none",
+    publicationLoss: "none",
+    recoveryState: publication.recoveryState,
+    publicationStatus: publication.result.status,
+    permissionAssurance: publication.result.permissionAssurance,
+    durabilityAssurance: publication.result.durabilityAssurance,
+    reportBytes: publication.reportBytes,
+    reportSha256: publication.reportSha256,
+    receiptState,
+  };
+}
+
+function failedPublicationEvidenceFields(
+  outcome: Extract<BundlePublicationOutcome, { readonly status: "failed" }>,
+): SupportPublicationEvidenceFields {
+  return {
+    publicationArtifactClass: "support-report",
+    artifactCount: 2,
+    persistenceStatus: "failed",
+    publicationPersistenceStatus: "failed",
+    completeness: "unknown",
+    publicationCompleteness: "unknown",
+    loss: "publication-unavailable",
+    publicationLoss: "publication-unavailable",
+    recoveryState: outcome.recoveryState,
+    receiptState: "unknown",
+    failedArtifactClass: outcome.failedArtifactClass,
+    failureKind: outcome.errorKind,
+  };
+}
+
+function supportPublicationActivityErrorKind(
+  failure: SafeArtifactFileFailureKind | "unknown",
+): ActivityLogErrorKind {
+  switch (failure) {
+    case "invalid-publication":
+      return "validation-failed";
+    case "permission-failed":
+      return "permission-denied";
+    case "permission-unsafe":
+    case "unsafe-ancestor":
+      return "unsafe-target";
+    case "publish-failed":
+    case "replace-failed":
+      return "write-failed";
+    case "recovery-conflict":
+      return "conflict";
+    case "close-failed":
+      return "durability-failed";
+    default:
+      return failure;
+  }
+}
+
+function emitSupportPublicationEvidence(
+  server: LoadedServer,
+  stateDir: string,
+  correlationId: string,
+  outcome: SupportPublicationEvidenceOutcome,
+): void {
+  const activityLog = server.createFileServerLogSink(stateDir);
+  try {
+    if (outcome.status === "rolled-back") {
+      writeRolledBackRecovery(activityLog, correlationId, outcome);
+      return;
+    }
+    if (outcome.status === "acknowledgement-failed") {
+      writeAcknowledgementFailure(activityLog, correlationId, outcome);
+      return;
+    }
+    if (outcome.status !== "failed") {
+      writeCompletedPublication(activityLog, correlationId, outcome);
+      return;
+    }
+    writeFailedPublication(activityLog, correlationId, outcome);
+  } finally {
+    activityLog.close?.();
+  }
+}
+
+type SupportActivityLog = ReturnType<LoadedServer["createFileServerLogSink"]>;
+
+function emitSupportAnalysisEvidence(
+  server: LoadedServer,
+  stateDir: string,
+  result: AnalyzeAllResult,
+): void {
+  const activityLog = server.createFileServerLogSink(stateDir);
+  try {
+    activityLog.write(
+      activityLogEvent(
+        SUPPORT_ANALYZE_CLASSIFICATION_OPERATION,
+        { correlationId: randomUUID() },
+        {
+          sourceKind: result.sourceKind,
+          evidenceClassification: result.evidence.classification,
+          supportedLineCount: result.evidence.supportedLineCount,
+          legacyLineCount: result.evidence.legacyLineCount,
+          unsupportedLineCount: result.evidence.unsupportedLineCount,
+          corruptLineCount: result.evidence.corruptLineCount,
+          truncatedLineCount: result.evidence.truncatedLineCount,
+          incompleteLineCount: result.evidence.incompleteLineCount,
+          sequenceAnomalyCount: result.evidence.sequenceAnomalies.length,
+          malformedLineCount: result.malformedLineCount,
+          ...SUPPORT_ANALYSIS_INTEGRITY[result.evidence.classification],
+        },
+      ),
+    );
+  } finally {
+    activityLog.close?.();
+  }
+}
+
+function writeRolledBackRecovery(
+  activityLog: SupportActivityLog,
+  correlationId: string,
+  outcome: RolledBackRecoveryOutcome,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      SUPPORT_EXPORT_PUBLICATION_OPERATION,
+      { correlationId },
+      {
+        publicationArtifactClass: "support-report",
+        artifactCount: 2,
+        visibleArtifactCount: 0,
+        persistenceStatus: "rolled-back",
+        publicationPersistenceStatus: "rolled-back",
+        completeness: "complete",
+        publicationCompleteness: "complete",
+        loss: "none",
+        publicationLoss: "none",
+        recoveryState: outcome.recoveryState,
+        receiptState: "consumed",
+      },
+    ),
+  );
+}
+
+function writeAcknowledgementFailure(
+  activityLog: SupportActivityLog,
+  correlationId: string,
+  outcome: AcknowledgementFailedOutcome,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      SUPPORT_EXPORT_PUBLICATION_OPERATION,
+      {
+        level: "error",
+        correlationId,
+        errorKind: supportPublicationActivityErrorKind(outcome.errorKind),
+      },
+      {
+        ...completedPublicationEvidenceFields(
+          outcome.publication,
+          "acknowledgement-failed",
+          "acknowledgement-uncertain",
+        ),
+        failedArtifactClass: "manifest",
+        failureKind: outcome.errorKind,
+      },
+    ),
+  );
+}
+
+function writeCompletedPublication(
+  activityLog: SupportActivityLog,
+  correlationId: string,
+  outcome: CompletedBundlePublicationOutcome,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      SUPPORT_EXPORT_PUBLICATION_OPERATION,
+      { correlationId },
+      completedPublicationEvidenceFields(outcome, outcome.status, "consumed"),
+    ),
+  );
+}
+
+function writeFailedPublication(
+  activityLog: SupportActivityLog,
+  correlationId: string,
+  outcome: Extract<BundlePublicationOutcome, { readonly status: "failed" }>,
+): void {
+  activityLog.write(
+    activityLogEvent(
+      SUPPORT_EXPORT_PUBLICATION_OPERATION,
+      {
+        level: "error",
+        correlationId,
+        errorKind: supportPublicationActivityErrorKind(outcome.errorKind),
+      },
+      failedPublicationEvidenceFields(outcome),
+    ),
+  );
 }
 
 // Finding 1 (minor): store fingerprint collection runs a synchronous full-DB `quick_check` plus
@@ -534,19 +1180,17 @@ function reportStoreFingerprintProgress(io: CliIo): void {
   );
 }
 
+// Body-free like every other failure line in this file: an auditor error's text can quote the
+// state tree it was reading, so only the closed `AuditLoadError` reason or the error's kind is
+// printed, never its message.
 function reportAuditFailure(error: unknown, io: CliIo): number {
-  if (error instanceof AuditLoadError) {
-    io.err(
-      `keiko support export: local-state audit could not produce a result (${error.reason}); ` +
-        "refusing to write a bundle without an audit summary.\n",
-    );
-    return 1;
-  }
-  if (error instanceof Error) {
-    io.err(`keiko support export: ${error.message}\n`);
-    return 1;
-  }
-  throw error;
+  if (!(error instanceof Error)) throw error;
+  const reason = error instanceof AuditLoadError ? error.reason : describeErrorKind(error);
+  io.err(
+    `keiko support export: local-state audit could not produce a result (${reason}); ` +
+      "refusing to write a bundle without an audit summary.\n",
+  );
+  return 1;
 }
 
 type ManifestInput = Parameters<typeof buildSupportBundleManifest>[0];
@@ -597,11 +1241,13 @@ function logContentManifestFields(
   };
 }
 
-// A missing or unreadable ui.log (no `keiko start` has ever run against this state dir, or a
-// permission error) means there is nothing to attach — never a failed export.
+// A missing, unreadable, or unsafe ui.log (no `keiko start` has ever run against this state dir, a
+// permission error, or a symlink/hard link/non-regular entry the verified read refuses) means there
+// is nothing to attach — never a failed export, and never a read through a link. The manifest's
+// `sectionsExcluded` still names the section.
 function readUiLogContentOrUndefined(stateDir: string): string | undefined {
   try {
-    return readFileSync(join(stateDir, UI_LOG_FILE_NAME), "utf8");
+    return readVerifiedLogText(join(stateDir, UI_LOG_FILE_NAME), stateDir);
   } catch {
     return undefined;
   }
@@ -632,32 +1278,35 @@ function resolveUiLogInclusion(stateDir: string, args: ExportArgs): UiLogInclusi
 // heuristics alone is not enough either — they do not catch, for example, a hex-only secret (no
 // uppercase character, so the high-entropy check never fires) or any other operator-chosen
 // credential shape they were never designed to enumerate. This is therefore a second, independent
-// gate at the COLLECTION layer: a credential-shaped segment anywhere in the name (split on `_`)
-// refuses the field outright, before its value is ever read into the snapshot at all.
-const CREDENTIAL_NAME_SEGMENTS = new Set<string>([
+// gate at the COLLECTION layer: a credential word (optionally plural) ENDING any `_`-separated
+// segment refuses the field outright, before its value is ever read into the snapshot at all —
+// whether the word stands alone (`KEIKO_API_KEY`) or is fused onto a qualifier
+// (`KEIKO_CLIENTSECRET`, `KEIKO_APITOKEN`). The segment end, not any substring, is deliberate:
+// `KEIKO_LOCAL_KNOWLEDGE_TOKENIZER` names a tokenizer mode, not a token.
+const CREDENTIAL_NAME_WORDS = [
   "key",
-  "keys",
-  "apikey",
-  "apikeys",
   "secret",
-  "secrets",
   "token",
-  "tokens",
   "credential",
-  "credentials",
   "password",
   "passwd",
   "pwd",
   "auth",
   "cert",
   "certificate",
-]);
+] as const;
+
+function isCredentialNameSegment(segment: string): boolean {
+  return CREDENTIAL_NAME_WORDS.some(
+    (word) => segment.endsWith(word) || segment.endsWith(`${word}s`),
+  );
+}
 
 function isCredentialShapedEnvName(key: string): boolean {
   return key
     .toLowerCase()
     .split("_")
-    .some((segment) => CREDENTIAL_NAME_SEGMENTS.has(segment));
+    .some((segment) => isCredentialNameSegment(segment));
 }
 
 // "The resolved runtime configuration" scoped to what this CLI itself resolves from the
@@ -724,6 +1373,190 @@ function assembleWave6Sections(
     : [configSnapshot, ...evidenceSections, uiLog.section];
 }
 
+async function recordRolledBackRecovery(
+  recovery: RolledBackRecoveryOutcome,
+  stateDir: string,
+): Promise<void> {
+  emitSupportPublicationEvidence(await loadServer(), stateDir, randomUUID(), recovery);
+}
+
+async function recoveredSupportExportExitCode(
+  recovery: Extract<SupportRecoveryOutcome, { readonly status: "recovered" | "failed" }>,
+  stateDir: string,
+  io: CliIo,
+  context: SupportPublicationContext,
+): Promise<number> {
+  const server = await loadServer();
+  if (recovery.status === "failed") {
+    emitSupportPublicationEvidence(server, stateDir, randomUUID(), recovery);
+    return 1;
+  }
+  return completeSupportPublication(
+    recovery,
+    server,
+    stateDir,
+    io,
+    context,
+    `Recovered support report at ${recovery.result.commitPath}\n`,
+  );
+}
+
+// Success is claimed only once the receipt is acknowledged: an unacknowledged publication exits 1
+// without a success line, and the next run recovers and announces the same durable report.
+function completeSupportPublication(
+  publication: CompletedBundlePublicationOutcome,
+  server: LoadedServer,
+  stateDir: string,
+  io: CliIo,
+  context: SupportPublicationContext,
+  successLine: string,
+): number {
+  const correlationId = randomUUID();
+  const errorKind = acknowledgeSupportPublication(context, io);
+  if (errorKind === undefined) {
+    io.out(successLine);
+    emitSupportPublicationEvidence(server, stateDir, correlationId, publication);
+    return 0;
+  }
+  emitSupportPublicationEvidence(server, stateDir, correlationId, {
+    status: "acknowledgement-failed",
+    errorKind,
+    publication,
+  });
+  return 1;
+}
+
+function publishedSupportExportExitCode(
+  publication: BundlePublicationOutcome,
+  server: LoadedServer,
+  stateDir: string,
+  lineCount: number,
+  outPath: string,
+  io: CliIo,
+  context: SupportPublicationContext,
+): number {
+  if (publication.status === "failed") {
+    emitSupportPublicationEvidence(server, stateDir, randomUUID(), publication);
+    return 1;
+  }
+  return completeSupportPublication(
+    publication,
+    server,
+    stateDir,
+    io,
+    context,
+    `Wrote ${String(lineCount)} lines to ${outPath}\n`,
+  );
+}
+
+interface FreshSupportExportContext {
+  readonly cwd: string;
+  readonly now: () => Date;
+  readonly stateDir: string;
+  readonly stateDirSource: ReturnType<typeof resolveStateDirSource>;
+  readonly publication: SupportPublicationContext;
+  readonly recoveryState: "none" | "rolled-back";
+}
+
+interface FreshSupportData {
+  readonly logContent: LogContent;
+  readonly evidenceIndexCount: number;
+  readonly server: LoadedServer;
+  readonly auditSummary: Awaited<ReturnType<typeof auditLocalStateResult>>;
+  readonly stores: Awaited<ReturnType<LoadedServer["collectStoreFingerprints"]>>;
+  readonly uiLog: UiLogInclusion;
+  readonly evidenceSections: readonly SupportBundleEvidenceManifestSection[];
+  readonly generatedAtDate: Date;
+}
+
+async function collectFreshSupportData(
+  args: ExportArgs,
+  io: CliIo,
+  env: EnvSource,
+  deps: SupportCliDeps,
+  context: FreshSupportExportContext,
+): Promise<FreshSupportData | number> {
+  const logContent = collectLogContent(
+    join(context.stateDir, "logs"),
+    args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
+  );
+  const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? join(context.stateDir, "evidence");
+  const evidenceIndexCount = await resolveEvidenceIndexCount(evidenceDir, deps);
+  const server = await loadServer();
+  try {
+    const activityLog = server.createFileServerLogSink(context.stateDir);
+    activityLog.close?.();
+  } catch (error) {
+    io.err(
+      `keiko support export: Activity Log unavailable: ${supportPublicationErrorKind(error)}\n`,
+    );
+    return 1;
+  }
+  let auditSummary;
+  try {
+    auditSummary = await auditLocalStateResult(context.stateDir, env, deps.auditDeps ?? {});
+  } catch (error) {
+    return reportAuditFailure(error, io);
+  }
+  reportStoreFingerprintProgress(io);
+  const stores = await server.collectStoreFingerprints({ stateDir: context.stateDir, env });
+  const uiLog = resolveUiLogInclusion(context.stateDir, args);
+  const evidenceSections = await resolveIncludedEvidenceSections(
+    evidenceDir,
+    args.includeEvidenceRunIds,
+    deps,
+  );
+  return {
+    logContent,
+    evidenceIndexCount,
+    server,
+    auditSummary,
+    stores,
+    uiLog,
+    evidenceSections,
+    generatedAtDate: context.now(),
+  };
+}
+
+async function publishFreshSupportExport(
+  args: ExportArgs,
+  io: CliIo,
+  env: EnvSource,
+  deps: SupportCliDeps,
+  context: FreshSupportExportContext,
+): Promise<number> {
+  const data = await collectFreshSupportData(args, io, env, deps, context);
+  if (typeof data === "number") return data;
+  const manifest = buildSupportBundleManifest({
+    ...processProvenance(data.server, data.generatedAtDate, context.stateDirSource),
+    ...logContentManifestFields(data.logContent),
+    auditSummary: data.auditSummary,
+    evidenceIndexCount: data.evidenceIndexCount,
+    storeFingerprints: data.stores.fingerprints,
+    storesUnavailable: data.stores.unavailable,
+    sectionsExcluded: data.uiLog.excluded ? [UI_LOG_SECTION] : [],
+  });
+  const sections = assembleWave6Sections(env, data.server, data.uiLog, data.evidenceSections);
+  const lines = serializeBundleLines(manifest, sections, data.logContent.contentLines);
+  const outPath = resolveOutPath(context.cwd, args.out, data.generatedAtDate);
+  const publication = publishSupportBundle(
+    outPath,
+    bundleText(lines, data.logContent.terminalFragment),
+    io,
+    context.publication,
+    context.recoveryState,
+  );
+  return publishedSupportExportExitCode(
+    publication,
+    data.server,
+    context.stateDir,
+    lines.length,
+    outPath,
+    io,
+    context.publication,
+  );
+}
+
 async function runSupportExport(
   args: ExportArgs,
   io: CliIo,
@@ -734,51 +1567,25 @@ async function runSupportExport(
   const now = deps.now ?? ((): Date => new Date());
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
   if (!prepareSupportInstallLayoutEvidence(stateDir, env, deps, io)) return 1;
-  const logContent = collectLogContent(
-    join(stateDir, "logs"),
-    args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
-  );
-  const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? join(stateDir, "evidence");
-  const evidenceIndexCount = await resolveEvidenceIndexCount(evidenceDir, deps);
-  // Not a hot path (`support analyze` never reaches this function), so loading the server module
-  // graph here is not the GEN-PERF-CLI-001 cost `ui.ts` guards against on every command dispatch.
-  const server = await loadServer();
-
-  let auditSummary;
-  try {
-    auditSummary = await auditLocalStateResult(stateDir, env, deps.auditDeps ?? {});
-  } catch (error) {
-    return reportAuditFailure(error, io);
+  const stateDirSource = resolveStateDirSource(env, args.stateDir);
+  if (supportDestinationCollidesWithActivityLog(cwd, stateDir, args.out)) {
+    io.err("keiko support export: destination collides with the Activity Log\n");
+    return 1;
   }
-
-  // Deferred until after the audit's own fail-closed check: opening three real stores is real
-  // I/O, wasted if the export is about to be refused anyway.
-  reportStoreFingerprintProgress(io);
-  const storeFingerprintCollection = await server.collectStoreFingerprints({ stateDir, env });
-  const uiLog = resolveUiLogInclusion(stateDir, args);
-  const evidenceSections = await resolveIncludedEvidenceSections(
-    evidenceDir,
-    args.includeEvidenceRunIds,
-    deps,
-  );
-  const generatedAtDate = now();
-  const manifest = buildSupportBundleManifest({
-    ...processProvenance(server, generatedAtDate, resolveStateDirSource(env, args.stateDir)),
-    ...logContentManifestFields(logContent),
-    auditSummary,
-    evidenceIndexCount,
-    storeFingerprints: storeFingerprintCollection.fingerprints,
-    storesUnavailable: storeFingerprintCollection.unavailable,
-    sectionsExcluded: uiLog.excluded ? [UI_LOG_SECTION] : [],
+  const publicationContext = supportPublicationContext(cwd, args.out);
+  const recovery = recoverSupportBundle(publicationContext, io);
+  if (recovery.status === "recovered" || recovery.status === "failed") {
+    return recoveredSupportExportExitCode(recovery, stateDir, io, publicationContext);
+  }
+  if (recovery.status === "rolled-back") await recordRolledBackRecovery(recovery, stateDir);
+  return publishFreshSupportExport(args, io, env, deps, {
+    cwd,
+    now,
+    stateDir,
+    stateDirSource,
+    publication: publicationContext,
+    recoveryState: recovery.status,
   });
-
-  const sections = assembleWave6Sections(env, server, uiLog, evidenceSections);
-  const lines = serializeBundleLines(manifest, sections, logContent.contentLines);
-  const outPath = resolveOutPath(cwd, args.out, generatedAtDate);
-  const failureCode = writeBundleOrExitCode(outPath, bundleText(lines), io);
-  if (failureCode !== undefined) return failureCode;
-  io.out(`Wrote ${String(lines.length)} lines to ${outPath}\n`);
-  return 0;
 }
 
 function reportMissingCorrelationId(correlationId: string, io: CliIo): number {
@@ -974,22 +1781,35 @@ function resolveFixturePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
 }
 
-// Fail-closed (disclosed gap #1's fix): never overwrites an existing file — a fixture is meant to
-// be hand-edited after generation, and silently clobbering that would destroy real work — and
-// creates the parent directory so `--emit-fixture some/new/dir/fixture.ts` does not require the
-// operator to `mkdir -p` first. Content-free error reporting, same discipline as
-// `writeBundleOrExitCode`: an fs error's message can quote the path it was writing.
+// Fail-closed (disclosed gap #1's fix): never overwrites or follows an existing entry — a fixture
+// is meant to be hand-edited after generation, and silently clobbering that would destroy real
+// work. The one file is created exclusively in place through the shared hardened primitive, with
+// the trust root a user-chosen `--out` report uses (the destination's own directory): a live or
+// dangling symlink, hard link, or FIFO at PATH is refused as an existing target, nothing is ever
+// created at a link's target, and no staging or recovery files are left beside it. The parent
+// directory is created first so `--emit-fixture some/new/dir/fixture.ts` does not require the
+// operator to `mkdir -p`. Content-free error reporting: only the closed failure kind is printed.
 function writeFixtureOrExitCode(path: string, contents: string, io: CliIo): number | undefined {
-  if (existsSync(path)) {
-    io.err(`keiko support analyze: refusing to overwrite existing file: ${path}\n`);
-    return 1;
-  }
   try {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, contents, "utf8");
+    const descriptor = openSafeArtifactFile(path, {
+      artifactClass: "replay-fixture",
+      mode: "exclusive-create",
+      trustedRoot: dirname(path),
+    });
+    try {
+      writeFileSync(descriptor, contents, "utf8");
+    } finally {
+      closeSync(descriptor);
+    }
     return undefined;
   } catch (error) {
-    io.err(`keiko support analyze: could not write fixture: ${describeErrorKind(error)}\n`);
+    const kind = describeErrorKind(error);
+    io.err(
+      kind === "target-exists"
+        ? `keiko support analyze: refusing to overwrite existing file: ${path}\n`
+        : `keiko support analyze: could not write fixture: ${kind}\n`,
+    );
     return 1;
   }
 }
@@ -1111,9 +1931,70 @@ async function loadToolAnalysisOptions(
   }
 }
 
+async function persistSupportAnalysisEvidence(
+  result: AnalyzeAllResult,
+  cwd: string,
+  env: EnvSource,
+  io: CliIo,
+): Promise<boolean> {
+  // Analysis input is immutable evidence. Persist the operator action to the CLI's local Activity
+  // Log instead of appending to a raw input file, which may itself end in the crash fragment being
+  // diagnosed.
+  const stateDir = resolveStateDir(cwd, env);
+  try {
+    const server = await loadServer();
+    emitSupportAnalysisEvidence(server, stateDir, result);
+    return true;
+  } catch (error) {
+    io.err(
+      `keiko support analyze: Activity Log unavailable: ${supportPublicationErrorKind(error)}\n`,
+    );
+    return false;
+  }
+}
+
+interface AnalyzedSupportResultContext {
+  readonly text: string;
+  readonly args: AnalyzeArgs;
+  readonly cwd: string;
+  readonly filePath: string;
+  readonly io: CliIo;
+  readonly env: EnvSource;
+  readonly deps: SupportCliDeps;
+  readonly options: SupportAnalyzeOptions;
+}
+
+async function emitAnalyzedSupportResult(
+  result: AnalyzeAllResult,
+  context: AnalyzedSupportResultContext,
+): Promise<number> {
+  if (!(await persistSupportAnalysisEvidence(result, context.cwd, context.env, context.io)))
+    return 1;
+  if (context.args.clusters) return emitClusters(result.clusters, context.args.json, context.io);
+  if (context.args.seed || context.args.emitFixture !== undefined) {
+    return runSeedAndFixture(context.text, context.args, context.cwd, context.io, context.options);
+  }
+  const report = buildAnalysisReport(result, context.filePath, context.deps);
+  if (context.args.correlationId === undefined) {
+    return emitAllTimelines(report, context.args.json, context.io);
+  }
+  const timeline = findTimeline(result, context.args.correlationId);
+  if (timeline === undefined) {
+    return reportMissingCorrelationId(context.args.correlationId, context.io);
+  }
+  return emitSingleTimeline(
+    timeline,
+    result.malformedLineCount,
+    report.analysisContext,
+    context.args.json,
+    context.io,
+  );
+}
+
 async function runSupportAnalyze(
   args: AnalyzeArgs,
   io: CliIo,
+  env: EnvSource,
   deps: SupportCliDeps,
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
@@ -1125,24 +2006,16 @@ async function runSupportAnalyze(
   const options = await loadToolAnalysisOptions(basic, io);
   const result =
     options.toolLifecycleValidator === undefined ? basic : analyzeLogText(text, options);
-  if (args.clusters) return emitClusters(result.clusters, args.json, io);
-  if (args.seed || args.emitFixture !== undefined) {
-    return runSeedAndFixture(text, args, cwd, io, options);
-  }
-  const report = buildAnalysisReport(result, filePath, deps);
-
-  if (args.correlationId === undefined) {
-    return emitAllTimelines(report, args.json, io);
-  }
-  const timeline = findTimeline(result, args.correlationId);
-  if (timeline === undefined) return reportMissingCorrelationId(args.correlationId, io);
-  return emitSingleTimeline(
-    timeline,
-    result.malformedLineCount,
-    report.analysisContext,
-    args.json,
+  return emitAnalyzedSupportResult(result, {
+    text,
+    args,
+    cwd,
+    filePath,
     io,
-  );
+    env,
+    deps,
+    options,
+  });
 }
 
 export async function runSupportCli(
@@ -1163,5 +2036,5 @@ export async function runSupportCli(
   if (parsed.kind === "export") {
     return runSupportExport(parsed.value, io, env, deps);
   }
-  return runSupportAnalyze(parsed.value, io, deps);
+  return runSupportAnalyze(parsed.value, io, env, deps);
 }

@@ -13,7 +13,6 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { resolveGitHubIssue } from "../coding-context/githubIssueResolution.js";
 import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
-import { describeError } from "../diagnostics-log.js";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import type {
   DraftDeliveryDependencies,
@@ -601,6 +600,8 @@ describe("production draft delivery dependencies", () => {
     });
     expect(JSON.stringify(f.events)).not.toContain("private push failure");
     expect(JSON.stringify(f.events)).not.toContain("https://secret.example");
+    args?.onPreparationFailure?.(new Error("git-publish-private-root-overlap"));
+    expect(f.events.at(-1)?.extra?.reason).toBe("git-publish-private-root-overlap");
   });
   it("preserves liveness at the gateway and adapter's actual spawn boundary", async () => {
     const f = await fixture();
@@ -707,7 +708,13 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       op: "git.draft-related-issues",
       correlationId: "delivery-42",
     });
-    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "unavailable", count: 0 });
+    expect(f.events.at(-1)?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      runId: "run-42",
+      state: "unavailable",
+      count: 0,
+    });
     expect(vi.mocked(resolvedLinkedIssueNumbers)).not.toHaveBeenCalled();
   });
   it("returns unavailable and logs zero count when the freshly re-read issue has drifted", async () => {
@@ -719,7 +726,13 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       op: "git.draft-related-issues",
       correlationId: "delivery-42",
     });
-    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "unavailable", count: 0 });
+    expect(f.events.at(-1)?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      runId: "run-42",
+      state: "unavailable",
+      count: 0,
+    });
     expect(vi.mocked(resolvedLinkedIssueNumbers)).not.toHaveBeenCalled();
   });
   it("returns unavailable and logs the classified failure body-free when resolution throws", async () => {
@@ -735,10 +748,13 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       errorKind: "internal",
     });
     expect(f.events.at(-1)?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       runId: "run-42",
       state: "unavailable",
       count: 0,
-      ...describeError(failure),
+      frames: expect.any(Array) as unknown,
+      causeChain: expect.any(Array) as unknown,
     });
     expect(JSON.stringify(f.events)).not.toContain("private failure detail");
   });
@@ -759,6 +775,12 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       op: "git.draft-related-issues",
       correlationId: "delivery-42",
     });
-    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "resolved", count: 2 });
+    expect(f.events.at(-1)?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      runId: "run-42",
+      state: "resolved",
+      count: 2,
+    });
   });
 });

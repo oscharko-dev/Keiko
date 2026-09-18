@@ -63,13 +63,15 @@ describe("portable release metadata response ownership", () => {
         expect.objectContaining({
           category: "diagnostic",
           correlationId: UNKNOWN_CORRELATION_ID,
-          errorKind: "PORTABLE_FETCH_FAILURE",
+          errorKind: "timeout",
           level: "warn",
           op: "update.portable-fetch.failed",
           extra: {
             assetKind: "release-metadata",
             reason: "deadline-exceeded",
             target: "windows-x64",
+            completeness: "complete",
+            loss: "none",
           },
         }),
       );

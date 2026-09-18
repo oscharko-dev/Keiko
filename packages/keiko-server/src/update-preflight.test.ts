@@ -14,6 +14,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_PORTABLE_TARGET_ASSET_NAMES } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
   compareSemver,
@@ -769,6 +770,8 @@ describe("update preflight service", () => {
           metadataVersion: 987_654_321,
           status: "succeeded",
           target,
+          completeness: "complete",
+          loss: "none",
         },
       }),
     );
@@ -814,9 +817,16 @@ describe("update preflight service", () => {
       expect.objectContaining({
         category: "security",
         correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: "unsafe-target",
         level: "warn",
         op: "update.portable-asset.redirect-refused",
-        extra: { assetKind: "manifest", reason: "unsafe-target", target },
+        extra: {
+          assetKind: "manifest",
+          reason: "unsafe-target",
+          target,
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
     deps.store.close();
@@ -844,11 +854,15 @@ describe("update preflight service", () => {
     });
 
     try {
-      const pending = runUpdatePreflight(deps, {
-        currentVersion: "0.2.10",
-        bundledCatalog: baseCatalog(),
-        installMode: () => portableMode(target),
-      });
+      const pending = runUpdatePreflight(
+        deps,
+        {
+          currentVersion: "0.2.10",
+          bundledCatalog: baseCatalog(),
+          installMode: () => portableMode(target),
+        },
+        "request-portable-timeout-0001",
+      );
       await vi.runAllTimersAsync();
       const report = await pending;
 
@@ -858,11 +872,17 @@ describe("update preflight service", () => {
       expect(events).toContainEqual(
         expect.objectContaining({
           category: "diagnostic",
-          correlationId: UNKNOWN_CORRELATION_ID,
-          errorKind: "PORTABLE_FETCH_FAILURE",
+          correlationId: "request-portable-timeout-0001",
+          errorKind: "timeout",
           level: "warn",
           op: "update.portable-fetch.failed",
-          extra: { assetKind: "manifest", reason: "deadline-exceeded", target },
+          extra: {
+            assetKind: "manifest",
+            reason: "deadline-exceeded",
+            target,
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
       expect(JSON.stringify(events)).not.toContain("sensitive timeout detail");
@@ -1064,7 +1084,10 @@ describe("update preflight service", () => {
       }
       return Promise.resolve(new Response("not found", { status: 404 }));
     });
-    const deps = depsWith(fetchImpl);
+    const events: ServerLogEvent[] = [];
+    const deps = depsWith(fetchImpl, {
+      activityLog: { write: (event): void => void events.push(event) },
+    });
 
     const report = await runUpdatePreflight(deps, {
       currentVersion: "0.2.10",
@@ -1081,6 +1104,16 @@ describe("update preflight service", () => {
           "The portable update has neither valid Keiko release trust nor optional native signing evidence.",
       }),
     );
+    const releaseTrustEvent = events.find(({ op }) => op === "update.release-trust.verify");
+    expect(releaseTrustEvent).toMatchObject({
+      level: "warn",
+      errorKind: "validation-failed",
+    });
+    expect(releaseTrustEvent?.extra).toMatchObject({
+      status: "failed",
+      target,
+      reason: "metadata-malformed",
+    });
     deps.store.close();
   });
 

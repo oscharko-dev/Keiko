@@ -22,7 +22,13 @@
 // opaque identifiers. Memory bodies, summaries, reviewer notes, and any other record content
 // never reach a field on this event.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createHash } from "node:crypto";
+
+import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type ConsolidationLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -92,6 +98,29 @@ export function consolidationErrorKind(error: unknown): string {
 //      never once per event, so a run with many fallbacks cannot flood stderr.
 const REPORTED_FAILED_SINKS = new WeakSet<ConsolidationLogSink>();
 
+const CONSOLIDATION_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "consolidation.log.sink-failed",
+  category: "diagnostic",
+  owner: "keiko-memory-consolidation",
+  emitter: "log-port.reportFailedConsolidationLogSink",
+  fields: {
+    droppedOpDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "loss",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-sink"],
+  proofIds: ["consolidation.log.sink-failed.body-free"],
+  releaseImpact: "patch",
+});
+
+function operationDigest(op: string): string {
+  return createHash("sha256").update(op).digest("hex").slice(0, 16);
+}
+
 export function emitConsolidationLogEvent(
   sink: ConsolidationLogSink | undefined,
   event: ConsolidationLogEvent,
@@ -112,28 +141,29 @@ function reportFailedConsolidationLogSink(
   if (REPORTED_FAILED_SINKS.has(sink)) return;
   REPORTED_FAILED_SINKS.add(sink);
   const errorKind = consolidationErrorKind(cause);
+  const droppedOpDigest = operationDigest(droppedOp);
   try {
-    sink.write({
-      level: "error",
-      category: "diagnostic",
-      op: "consolidation.log.sink-failed",
-      errorKind,
-      extra: { droppedOp },
-    });
+    sink.write(
+      activityLogEvent(
+        CONSOLIDATION_LOG_SINK_FAILED_OPERATION,
+        { level: "error", errorKind: "unavailable" },
+        { droppedOpDigest, failureKind: errorKind },
+      ),
+    );
     return;
   } catch {
     // The transport refuses this shape too, so it is the transport that is down — fall through to
     // the only channel left.
   }
-  warnFailedConsolidationLogSink(droppedOp, errorKind);
+  warnFailedConsolidationLogSink(droppedOpDigest, errorKind);
 }
 
-function warnFailedConsolidationLogSink(droppedOp: string, errorKind: string): void {
+function warnFailedConsolidationLogSink(droppedOpDigest: string, errorKind: string): void {
   try {
     process.emitWarning("Keiko activity log sink is failing; log lines are being dropped.", {
       type: "KeikoActivityLog",
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: `op=${droppedOp} errorKind=${errorKind}`,
+      detail: `opDigest=${droppedOpDigest} errorKind=${errorKind}`,
     });
   } catch {
     // The process warning channel is the last one there is; a report beyond it does not exist.

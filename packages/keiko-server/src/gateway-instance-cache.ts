@@ -3,6 +3,10 @@ import {
   type GatewayConfig,
   type GatewaySpendBudget,
 } from "@oscharko-dev/keiko-model-gateway";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { getServerLogger } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
@@ -50,6 +54,7 @@ type RuntimeSelectionReason =
   | "created" // first lookup for this source
   | "recovered" // the previous lookup found no config at all
   | "generation-changed"; // runtime setup replaced the config: breaker and request state discarded
+type LifecycleResetReason = Extract<RuntimeSelectionReason, "recovered" | "generation-changed">;
 
 // The two reasons that DISCARD live circuit-breaker and in-flight request state. A Set rather than
 // an array membership test (SonarJS S7776).
@@ -57,6 +62,100 @@ const LIFECYCLE_RESET_REASONS = new Set<RuntimeSelectionReason>([
   "recovered",
   "generation-changed",
 ]);
+
+function isLifecycleResetReason(reason: RuntimeSelectionReason): reason is LifecycleResetReason {
+  return LIFECYCLE_RESET_REASONS.has(reason);
+}
+
+const GATEWAY_INSTANCE_OPERATION_BASE = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "gateway",
+  owner: "keiko-server",
+  causal: "none",
+  lifecycle: "state",
+  releaseImpact: "patch",
+} as const;
+
+const GATEWAY_INSTANCE_GENERATION_FIELD = {
+  type: "integer",
+  dataClass: "count",
+  required: true,
+} as const;
+
+const GATEWAY_INSTANCE_LIFECYCLE_RESET_FIELD = {
+  type: "boolean",
+  dataClass: "closed-enum",
+  required: true,
+} as const;
+
+const GATEWAY_INSTANCE_REUSED_OPERATION = defineActivityLogOperation({
+  ...GATEWAY_INSTANCE_OPERATION_BASE,
+  op: "gateway.instance.reused",
+  emitter: "gateway-instance-cache.logRuntimeSelection.reused",
+  fields: {
+    generation: GATEWAY_INSTANCE_GENERATION_FIELD,
+  },
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-instance-lifecycle"],
+  proofIds: ["gateway.instance.reused.line"],
+});
+
+const GATEWAY_INSTANCE_RESET_OPERATION = defineActivityLogOperation({
+  ...GATEWAY_INSTANCE_OPERATION_BASE,
+  op: "gateway.instance.reset",
+  emitter: "gateway-instance-cache.logRuntimeSelection.reset",
+  fields: {
+    generation: GATEWAY_INSTANCE_GENERATION_FIELD,
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["recovered", "generation-changed"],
+    },
+    lifecycleReset: GATEWAY_INSTANCE_LIFECYCLE_RESET_FIELD,
+  },
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-instance-lifecycle"],
+  proofIds: ["gateway.instance.reset.line"],
+});
+
+const GATEWAY_INSTANCE_BOUND_OPERATION = defineActivityLogOperation({
+  ...GATEWAY_INSTANCE_OPERATION_BASE,
+  op: "gateway.instance.bound",
+  emitter: "gateway-instance-cache.logRuntimeSelection.bound",
+  fields: {
+    generation: GATEWAY_INSTANCE_GENERATION_FIELD,
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["created", "rebound"],
+    },
+    lifecycleReset: GATEWAY_INSTANCE_LIFECYCLE_RESET_FIELD,
+  },
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-instance-lifecycle"],
+  proofIds: ["gateway.instance.bound.line"],
+});
+
+const GATEWAY_INSTANCE_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  ...GATEWAY_INSTANCE_OPERATION_BASE,
+  op: "gateway.instance.unavailable",
+  emitter: "gateway-instance-cache.logRuntimeUnavailable",
+  fields: {
+    generation: GATEWAY_INSTANCE_GENERATION_FIELD,
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["still-unconfigured", "unconfigured", "config-withdrawn"],
+    },
+  },
+  analyzerProjection: "capability",
+  failureClasses: ["gateway-instance-unavailable"],
+  proofIds: ["gateway.instance.unavailable.line"],
+});
 
 function runtimeSelectionReason(
   existing: RuntimeGatewayEntry | undefined,
@@ -81,19 +180,23 @@ function logRuntimeSelection(
       : root.child({ correlationId: initializationCorrelationId });
   if (reason === "reused") {
     // The steady state, once per gateway-touching request. Deferred so it costs nothing at `info`.
-    log.debug(() => ({
-      category: "gateway",
-      op: "gateway.instance.reused",
-      extra: { generation },
-    }));
+    log.debug(() => activityLogEvent(GATEWAY_INSTANCE_REUSED_OPERATION, {}, { generation }));
     return;
   }
-  const lifecycleReset = LIFECYCLE_RESET_REASONS.has(reason);
-  log.info({
-    category: "gateway",
-    op: lifecycleReset ? "gateway.instance.reset" : "gateway.instance.bound",
-    extra: { generation, reason, lifecycleReset },
-  });
+  const lifecycleReset = isLifecycleResetReason(reason);
+  if (lifecycleReset) {
+    log.info(
+      activityLogEvent(
+        GATEWAY_INSTANCE_RESET_OPERATION,
+        {},
+        { generation, reason, lifecycleReset },
+      ),
+    );
+    return;
+  }
+  log.info(
+    activityLogEvent(GATEWAY_INSTANCE_BOUND_OPERATION, {}, { generation, reason, lifecycleReset }),
+  );
 }
 
 function logRuntimeUnavailable(
@@ -103,18 +206,22 @@ function logRuntimeUnavailable(
   const log = getServerLogger();
   if (existing?.kind === "unavailable") {
     // Already known unavailable: an unconfigured install would otherwise warn on every request.
-    log.debug(() => ({
-      category: "gateway",
-      op: "gateway.instance.unavailable",
-      extra: { generation, reason: "still-unconfigured" },
-    }));
+    log.debug(() =>
+      activityLogEvent(
+        GATEWAY_INSTANCE_UNAVAILABLE_OPERATION,
+        {},
+        { generation, reason: "still-unconfigured" },
+      ),
+    );
     return;
   }
-  log.warn({
-    category: "gateway",
-    op: "gateway.instance.unavailable",
-    extra: { generation, reason: existing === undefined ? "unconfigured" : "config-withdrawn" },
-  });
+  log.warn(
+    activityLogEvent(
+      GATEWAY_INSTANCE_UNAVAILABLE_OPERATION,
+      {},
+      { generation, reason: existing === undefined ? "unconfigured" : "config-withdrawn" },
+    ),
+  );
 }
 
 class GatewayInstanceCache {
@@ -147,7 +254,7 @@ class GatewayInstanceCache {
     // A runtime generation change invalidates circuit-breaker and request state even when a caller
     // reused the same parsed config object. A config change inside the SAME generation is not an
     // invalidation, so it must still converge with direct callers on the config-keyed instance.
-    const gateway = LIFECYCLE_RESET_REASONS.has(reason)
+    const gateway = isLifecycleResetReason(reason)
       ? newGateway(config, this.spendBudget)
       : this.forConfig(config, initializationCorrelationId);
     this.byRuntimeConfig.set(source, { kind: "available", config, gateway, generation });

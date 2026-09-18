@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, type Stats } from "node:fs";
 import { basename, dirname, isAbsolute, normalize } from "node:path";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   planStrictDebugCapsule,
   type BackendAvailability,
   type DebugCapsuleImmutableMount,
@@ -46,6 +50,33 @@ const NPM_GLOBAL_CONFIG_PATH = "/opt/keiko-debug/npm-global-config" as const;
 const NPM_CLI_PATH = "/opt/keiko-runtime/npm/bin/npm-cli.js" as const;
 const NPM_RUNTIME_ROOT = "/opt/keiko-runtime/npm" as const;
 const PLAN_TTL_MS = 30_000;
+
+const DAP_DEBUG_RUNTIME_SELECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "dap.debug-runtime.selected",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.dap.debugLaunchPlan.recordRuntimeSelection",
+  fields: {
+    targetKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["catalog", "file"],
+    },
+    selectedArtifactCount: { type: "integer", dataClass: "count", required: true },
+    provisionedArtifactCount: { type: "integer", dataClass: "count", required: true },
+    runtimeIdentityDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    provisioningDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["debug-runtime-selection"],
+  proofIds: ["dap.debug-runtime-selected.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export interface ApprovedDebugArtifact {
   readonly hostPath: string;
@@ -728,21 +759,24 @@ function recordRuntimeSelection(
   selectedArtifactCount: number,
   plan: Layer2DebugCapsulePlan,
 ): void {
-  activityLog?.write({
-    category: "process",
-    op: "dap.debug-runtime.selected",
-    correlationId:
-      correlationId !== undefined && isValidCorrelationId(correlationId)
-        ? correlationId
-        : UNKNOWN_CORRELATION_ID,
-    extra: {
-      targetKind,
-      selectedArtifactCount,
-      provisionedArtifactCount: plan.spawnEnvelope.artifacts.length,
-      runtimeIdentityDigest: plan.runtimeIdentityDigest,
-      provisioningDigest: plan.provisioningDigest,
-    },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      DAP_DEBUG_RUNTIME_SELECTED_OPERATION,
+      {
+        correlationId:
+          correlationId !== undefined && isValidCorrelationId(correlationId)
+            ? correlationId
+            : UNKNOWN_CORRELATION_ID,
+      },
+      {
+        targetKind,
+        selectedArtifactCount,
+        provisionedArtifactCount: plan.spawnEnvelope.artifacts.length,
+        runtimeIdentityDigest: plan.runtimeIdentityDigest,
+        provisioningDigest: plan.provisioningDigest,
+      },
+    ),
+  );
 }
 
 function assertExecutionPolicy(

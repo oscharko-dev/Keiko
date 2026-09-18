@@ -278,7 +278,8 @@ function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
 function expectLoggedRejection(
   sink: BufferedServerLogSink,
   operation: "provision" | "activate",
-  errorKind: TaskWorkspaceErrorCode,
+  failureKind: TaskWorkspaceErrorCode,
+  errorKind: "invalid-request" | "unavailable",
   rawIdentitySeed: string,
 ): void {
   expect(sink.events).toHaveLength(1);
@@ -287,7 +288,7 @@ function expectLoggedRejection(
     op: "task-workspace.lifecycle",
     category: "diagnostic",
     errorKind,
-    extra: { operation },
+    extra: { operation, failureKind },
   });
   expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[a-f0-9]{24}$/u);
   expect(sink.lines().join("\n")).not.toContain(rawIdentitySeed);
@@ -501,10 +502,9 @@ describe("provision success (AC1, AC4)", () => {
     expect(extra.taskId).toBeUndefined();
   });
 
-  // A failure path carries a structured, closed-vocabulary `errorKind` — the TaskWorkspaceError code
-  // — not merely the coarser evidence `outcome`, so an agent grepping the log can tell LOCK_CONTENTION
-  // from POINTER_DRIFT from a bare "blocked"/"retry-required".
-  it("carries the TaskWorkspaceError code as errorKind on a blocked provision", async () => {
+  // A failure path carries a global `errorKind` plus the exact TaskWorkspaceError code in
+  // `extra.failureKind`, so an agent can tell INVALID_BASE_BRANCH from other internal failures.
+  it("classifies a blocked provision and preserves its TaskWorkspaceError code", async () => {
     const activityLog = createBufferedServerLogSink();
     const service = makeService(undefined, undefined, activityLog);
     await expect(
@@ -518,7 +518,8 @@ describe("provision success (AC1, AC4)", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.level).toBe("warn");
-    expect(line.errorKind).toBe("INVALID_BASE_BRANCH");
+    expect(line.errorKind).toBe("validation-failed");
+    expect(line.extra?.failureKind).toBe("INVALID_BASE_BRANCH");
     expect(line.extra?.outcome).toBe("blocked");
     expect(activityLog.events).toHaveLength(1);
   });
@@ -1056,7 +1057,7 @@ describe("pre-write rejections (AC2)", () => {
   });
 });
 
-// The settled provision failure line used to carry only `errorKind`: the classified cause the
+// The settled provision failure line used to carry only a classification: the cause the
 // operation-local tracker then suppressed on the rethrow path was lost for good, so a bind that
 // failed after `git worktree add` had succeeded (a refused identity registration, 2026-09-10) left
 // `PROVISIONING_FAILED` in the log and nothing an agent could reconstruct the cause from (ADR-0173,
@@ -1085,9 +1086,11 @@ describe("settled failure trace", () => {
     );
 
     const failed = activityLog.events.find(
-      (event) => event.errorKind === "PROVISIONING_FAILED" && event.extra?.outcome === "failed",
+      (event) =>
+        event.extra?.failureKind === "PROVISIONING_FAILED" && event.extra.outcome === "failed",
     );
     expect(failed).toBeDefined();
+    expect(failed?.errorKind).toBe("write-failed");
     expect(failed?.correlationId).toBe("provision-trace-1");
     expect(failed?.extra?.causeChain).toEqual([expect.stringMatching(/^Error/u)]);
     expect(activityLog.lines().join("\n")).not.toContain("identity registration exploded");
@@ -1113,7 +1116,7 @@ describe("early rejection activity logging", () => {
       "INVALID_REQUEST",
     );
 
-    expectLoggedRejection(activityLog, "provision", "INVALID_REQUEST", taskId);
+    expectLoggedRejection(activityLog, "provision", "INVALID_REQUEST", "invalid-request", taskId);
     expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-invalid-request-1");
   });
 
@@ -1141,7 +1144,7 @@ describe("early rejection activity logging", () => {
       "MISSING_REPOSITORY",
     );
 
-    expectLoggedRejection(activityLog, "provision", "MISSING_REPOSITORY", taskId);
+    expectLoggedRejection(activityLog, "provision", "MISSING_REPOSITORY", "unavailable", taskId);
     expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-missing-repository-1");
   });
 
@@ -1162,7 +1165,13 @@ describe("early rejection activity logging", () => {
       "INVALID_REQUEST",
     );
 
-    expectLoggedRejection(activityLog, "activate", "INVALID_REQUEST", workspaceId);
+    expectLoggedRejection(
+      activityLog,
+      "activate",
+      "INVALID_REQUEST",
+      "invalid-request",
+      workspaceId,
+    );
     expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-invalid-request-1");
   });
 
@@ -1183,7 +1192,13 @@ describe("early rejection activity logging", () => {
       "WORKSPACE_NOT_FOUND",
     );
 
-    expectLoggedRejection(activityLog, "activate", "WORKSPACE_NOT_FOUND", workspaceId);
+    expectLoggedRejection(
+      activityLog,
+      "activate",
+      "WORKSPACE_NOT_FOUND",
+      "unavailable",
+      workspaceId,
+    );
     expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-missing-workspace-1");
   });
 });
@@ -1546,7 +1561,9 @@ describe("activate", () => {
     expect(store.getById(provisioned.instance.workspaceId)?.lifecycleState).toBe(
       "recovery-required",
     );
-    expect(activityLog.events.some((event) => event.errorKind === "LOCK_CONTENTION")).toBe(true);
+    expect(activityLog.events.some((event) => event.extra?.failureKind === "LOCK_CONTENTION")).toBe(
+      true,
+    );
   });
 
   // Both measurements on the resumed activation's evidence line were placeholder zeros before the
@@ -1845,8 +1862,12 @@ describe("activate", () => {
     expect(after?.driftMarkers).toContain("worktree-missing");
     expect(activityLog.events).toHaveLength(1);
     expect(lastActivityLogEvent(activityLog)).toMatchObject({
-      errorKind: "POINTER_DRIFT",
-      extra: { operation: "activate", outcome: "retry-required" },
+      errorKind: "target-mutated",
+      extra: {
+        operation: "activate",
+        outcome: "retry-required",
+        failureKind: "POINTER_DRIFT",
+      },
     });
     // The one line this path leaves carries the classified error's Keiko frames, like every other
     // settled failure line (review of PR #3452): the rethrow path's second, trace-carrying line is
@@ -1937,8 +1958,10 @@ describe("activation re-proves the managed identity", () => {
     expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
     const line = activityLog.events.find(
       (event) =>
-        event.correlationId === "activate-retired-0001" && event.errorKind === "POINTER_DRIFT",
+        event.correlationId === "activate-retired-0001" &&
+        event.extra?.failureKind === "POINTER_DRIFT",
     );
+    expect(line?.errorKind).toBe("target-mutated");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "retry-required",
@@ -1972,8 +1995,10 @@ describe("activation re-proves the managed identity", () => {
     // path while the row keeps it would otherwise stay invisible (PR #3381 review).
     const line = activityLog.events.find(
       (event) =>
-        event.correlationId === "activate-changed-0001" && event.errorKind === "POINTER_DRIFT",
+        event.correlationId === "activate-changed-0001" &&
+        event.extra?.failureKind === "POINTER_DRIFT",
     );
+    expect(line?.errorKind).toBe("target-mutated");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "retry-required",

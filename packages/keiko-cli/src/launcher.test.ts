@@ -311,7 +311,12 @@ describe("runLauncherCli install — refusals (security)", () => {
       expect.objectContaining({
         op: "cli.install-layout.normalized",
         correlationId,
-        extra: { overriddenCount: 1, overriddenKinds: ["cli-bin"] },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          overriddenCount: 1,
+          overriddenKinds: ["cli-bin"],
+        },
       }),
     ]);
   });
@@ -359,9 +364,9 @@ describe("runLauncherCli install — refusals (security)", () => {
     expect(stateDirs).toEqual([h.stateDir]);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      errorKind: securityErrorKind(error),
+      errorKind: error instanceof WindowsSystemDirectoryError ? "unsafe-target" : "unavailable",
       op,
-      extra: { surface: "launcher-install" },
+      extra: { surface: "launcher-install", failureKind: securityErrorKind(error) },
     });
     expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(JSON.stringify(events)).not.toContain("attack-marker");

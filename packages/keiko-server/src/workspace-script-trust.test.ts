@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import {
@@ -344,6 +345,8 @@ describe("WorkspaceScriptTrustService", () => {
           basis: "known",
           manifestDigest: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown,
           revision: expect.any(Number) as unknown,
+          completeness: "complete",
+          loss: "none",
         },
       }),
       expect.objectContaining({
@@ -353,6 +356,11 @@ describe("WorkspaceScriptTrustService", () => {
         extra: expect.objectContaining({ basis: "known" }) as unknown,
       }),
     ]);
+    for (const record of records) {
+      expect(
+        activityLogEventRegistration(record as unknown as Readonly<Record<PropertyKey, unknown>>),
+      ).toBeDefined();
+    }
     expect(JSON.stringify(records)).not.toContain(root);
   });
 
@@ -1145,8 +1153,9 @@ describe("managed task worktrees below the state directory", () => {
       writeFileSync(join(fixture.worktreeRoot, "package.json"), rewritten);
       const admission = trust.admitRunManifest(
         fixture.worktreeRoot,
-        "run-1",
+        "run-trust-0001",
         "2026-09-10T20:00:00.000Z",
+        "request-script-trust-0001",
       );
       expect(admission).toEqual({ basis: "known", manifestDigest: expect.any(String) as string });
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
@@ -1154,11 +1163,14 @@ describe("managed task worktrees below the state directory", () => {
         expect.objectContaining({
           category: "security",
           op: "workspace-script-trust.run-manifest-admitted",
-          correlationId: "run-1",
+          correlationId: "run-trust-0001",
+          parentCorrelationId: "request-script-trust-0001",
           extra: {
             basis: "known",
             manifestDigest: admission?.manifestDigest,
             expiresAt: "2026-09-10T20:00:00.000Z",
+            completeness: "complete",
+            loss: "none",
           },
         }),
       );
@@ -1177,18 +1189,19 @@ describe("managed task worktrees below the state directory", () => {
       nowMs = Date.parse("2026-09-10T20:00:00.000Z");
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
       nowMs = Date.parse("2026-09-10T19:00:00.000Z");
-      trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T20:00:00.000Z");
+      trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z");
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
 
       // And with the run itself; a second run's admissions are untouched by the first run's end.
-      expect(trust.revokeRunAdmissions("run-2")).toBe(0);
-      expect(trust.revokeRunAdmissions("run-1")).toBe(1);
+      expect(trust.revokeRunAdmissions("run-trust-0002")).toBe(0);
+      expect(trust.revokeRunAdmissions("run-trust-0001", "request-script-revoke-0001")).toBe(1);
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
       expect(events).toContainEqual(
         expect.objectContaining({
           op: "workspace-script-trust.run-manifest-revoked",
-          correlationId: "run-1",
-          extra: { count: 1 },
+          correlationId: "run-trust-0001",
+          parentCorrelationId: "request-script-revoke-0001",
+          extra: { count: 1, completeness: "complete", loss: "none" },
         }),
       );
     } finally {
@@ -1203,8 +1216,9 @@ describe("managed task worktrees below the state directory", () => {
     function expectRefusalLogged(reason: WorkspaceRunManifestAdmissionRefusal): void {
       expect(events.at(-1)).toMatchObject({
         op: "workspace-script-trust.run-manifest-not-admitted",
-        correlationId: "run-1",
-        extra: { reason },
+        correlationId: "run-trust-0001",
+        errorKind: "authority-denied",
+        extra: { reason, completeness: "complete", loss: "none" },
       });
     }
     try {
@@ -1217,30 +1231,30 @@ describe("managed task worktrees below the state directory", () => {
       });
       // The worktree is not a registered project yet.
       expect(
-        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T20:00:00.000Z"),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
       ).toBeUndefined();
       expectRefusalLogged("root-unregistered");
       managedStore.createProject(fixture.worktreeRoot, "worktree");
       // Authority already expired: nothing to admit under it.
       expect(
-        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T18:00:00.000Z"),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T18:00:00.000Z"),
       ).toBeUndefined();
       expectRefusalLogged("authority-expired");
       expect(
-        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "not-an-instant"),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "not-an-instant"),
       ).toBeUndefined();
       expectRefusalLogged("authority-expired");
       // An unparseable manifest is an unknown basis and admits nothing.
       writeFileSync(join(fixture.worktreeRoot, "package.json"), "{ not json");
       expect(
-        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T20:00:00.000Z"),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
       ).toBeUndefined();
       expectRefusalLogged("manifest-unreadable");
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
       // No manifest at all is a legitimate, admitted basis (no package scripts to run).
       rmSync(join(fixture.worktreeRoot, "package.json"));
       expect(
-        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T20:00:00.000Z"),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
       ).toEqual({ basis: "absent" });
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
     } finally {

@@ -133,12 +133,20 @@ function recordStage(
   }
 }
 
-function recordFailure(options: PortableUpdateStagerOptions, targetVersion: string): void {
-  options.localState?.recordAuditEvent("portable-staging-result", {
-    targetVersion,
-    store: "package-install",
-    status: "failed",
-  });
+function recordFailure(
+  options: PortableUpdateStagerOptions,
+  targetVersion: string,
+  error: unknown,
+): void {
+  options.localState?.recordAuditEvent(
+    "portable-staging-result",
+    {
+      targetVersion,
+      store: "package-install",
+      status: "failed",
+    },
+    error,
+  );
 }
 
 function recordSidecarVerification(
@@ -287,10 +295,10 @@ export function createPortableUpdateStager(
       } catch (error) {
         if (error instanceof PortableSidecarVerificationError) {
           recordSidecarFailure(options, input.targetVersion, error);
-          recordFailure(options, input.targetVersion);
+          recordFailure(options, input.targetVersion, error);
           throw new PortableUpdateStagingError(error.reason, error.message);
         }
-        recordFailure(options, input.targetVersion);
+        recordFailure(options, input.targetVersion, error);
         if (error instanceof PortableUpdateStagingError) throw error;
         throw new PortableUpdateStagingError("portable-staging-failed", "portable staging failed");
       }

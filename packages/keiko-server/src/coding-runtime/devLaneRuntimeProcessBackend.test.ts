@@ -185,7 +185,7 @@ describe("dev-lane runtime process backend", () => {
         expect.objectContaining({
           op: "runtime.confinement.failed",
           correlationId: request.runId,
-          errorKind: "Error",
+          errorKind: "conflict",
         }),
       );
       expect(JSON.stringify(activityLog.events)).not.toContain(fixture.runtimeRoot);
@@ -366,7 +366,7 @@ describe("dev-lane runtime process backend", () => {
       level: "info",
       op: "runtime.confinement.unavailable",
       correlationId: "run-2475",
-      extra: LINUX_IDENTITY,
+      extra: { ...LINUX_IDENTITY, completeness: "complete", loss: "none" },
     });
   });
 

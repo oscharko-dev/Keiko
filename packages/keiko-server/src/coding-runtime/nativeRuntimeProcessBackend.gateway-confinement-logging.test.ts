@@ -125,7 +125,13 @@ describe("native runtime process backend gateway-confinement refusal logging", (
         level: "info",
         op: "runtime.confinement.unavailable",
         correlationId: "run-2951-log",
-        extra: { platform: "win32", arch: "x64", backend: "windows-job-object" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          platform: "win32",
+          arch: "x64",
+          backend: "windows-job-object",
+        },
       }),
     );
     // Body-free: no path, no helper/runtime executable location anywhere in the line.

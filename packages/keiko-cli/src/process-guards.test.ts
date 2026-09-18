@@ -153,7 +153,7 @@ function fakeServerModule(described: {
 }
 
 describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", () => {
-  it("writes one process.fatal activity-log line before stderr, code-first errorKind", async () => {
+  it("writes one process.fatal line before stderr with a classified code-first failureKind", async () => {
     vi.stubEnv("KEIKO_STATE_DIR", "/fake/state/dir");
     const { module, writes, createFileServerLogSink } = fakeServerModule({
       errorClass: "GatewayError",
@@ -182,11 +182,14 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
         level: "error",
         category: "process",
         op: "process.fatal",
-        errorKind: "ECONNRESET",
+        errorKind: "unavailable",
         extra: {
           kind: "unhandled-rejection",
+          failureKind: "ECONNRESET",
           frames: ["packages/keiko-cli/dist/run.js:12:4"],
           causeChain: ["TypeError"],
+          completeness: "complete",
+          loss: "none",
         },
       });
       // The activity-log write must land before stderr, which must land before exit.
@@ -199,7 +202,7 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
     }
   });
 
-  it("falls back to the error class in errorKind when no code is present", async () => {
+  it("falls back to the error class in failureKind when no code is present", async () => {
     vi.stubEnv("KEIKO_STATE_DIR", "/fake/state/dir");
     const { module, writes } = fakeServerModule({ errorClass: "TypeError" });
     const sink: ProcessGuardSink = {
@@ -214,8 +217,38 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
         expect(writes).toHaveLength(1);
       });
       const [event] = writes as [{ errorKind: string; extra: Record<string, unknown> }];
-      expect(event.errorKind).toBe("TypeError");
-      expect(event.extra).toEqual({ kind: "uncaught-exception" });
+      expect(event.errorKind).toBe("internal");
+      expect(event.extra).toEqual({
+        kind: "uncaught-exception",
+        failureKind: "TypeError",
+        completeness: "complete",
+        loss: "none",
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("preserves a closed fatal failureKind in the envelope", async () => {
+    vi.stubEnv("KEIKO_STATE_DIR", "/fake/state/dir");
+    const { module, writes } = fakeServerModule({
+      errorClass: "GatewayError",
+      code: "timeout",
+    });
+    const sink: ProcessGuardSink = {
+      err: vi.fn(),
+      exit: vi.fn(),
+      loadServer: () => Promise.resolve(module),
+    };
+    const { rejection, cleanup } = installAndCapture(sink);
+    try {
+      rejection?.(new Error("boom"));
+      await vi.waitFor(() => {
+        expect(writes).toHaveLength(1);
+      });
+      const [event] = writes as [{ errorKind: string; extra: Record<string, unknown> }];
+      expect(event.errorKind).toBe("timeout");
+      expect(event.extra.failureKind).toBe("timeout");
     } finally {
       cleanup();
     }
@@ -339,7 +372,7 @@ describe("installProcessGuards — a hung classifier import never keeps the proc
 // exit code and stderr. An unref'd timeout would let Node's empty-event-loop exit fire first: the
 // subprocess would exit 0 near-instantly with no stderr line at all, silently swallowing the
 // crash this file exists to report.
-const PROCESS_GUARDS_SOURCE_URL = new URL("./process-guards.ts", import.meta.url);
+const PROCESS_GUARDS_SOURCE_URL = new URL("../dist/process-guards.js", import.meta.url);
 
 function hungImportCrashScript(): string {
   const modulePath = JSON.stringify(PROCESS_GUARDS_SOURCE_URL.pathname);
@@ -431,7 +464,7 @@ describe("writeStderrDrained — the default sink actually drains (comment 38652
   // `process.exit()` reliably truncates to one buffer's worth, while draining through the write's
   // own callback (as `writeStderrDrained` does) reliably delivers every byte.
   it("delivers a full multi-megabyte write to a piped child before resolving", async () => {
-    const modulePath = JSON.stringify(new URL("./process-guards.ts", import.meta.url).pathname);
+    const modulePath = JSON.stringify(PROCESS_GUARDS_SOURCE_URL.pathname);
     const script = [
       `import { writeStderrDrained } from ${modulePath};`,
       "const big = Buffer.alloc(5 * 1024 * 1024, 88);", // 5 MiB of 'X'

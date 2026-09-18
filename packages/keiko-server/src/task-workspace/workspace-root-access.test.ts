@@ -432,7 +432,10 @@ describe("resolveManagedWorkspaceRootAccess", () => {
   it("logs a correlated workspace.root.denied event when the managed-root re-proof itself throws, instead of silently returning undefined", () => {
     const activityLog = createBufferedServerLogSink();
     const realStat = nodeWorkspaceFs.stat.bind(nodeWorkspaceFs);
-    const simulatedRace = new Error("simulated stat failure racing a concurrent cleanup");
+    const simulatedRace = Object.assign(
+      new Error("simulated stat failure racing a concurrent cleanup"),
+      { code: "EACCES" },
+    );
     const statSpy = vi.spyOn(nodeWorkspaceFs, "stat").mockImplementation((path: string) => {
       if (path === workspaceRoot) throw simulatedRace;
       return realStat(path);
@@ -456,6 +459,7 @@ describe("resolveManagedWorkspaceRootAccess", () => {
       level: "warn",
       category: "security",
       correlationId: "wra-catch-000001",
+      errorKind: "permission-denied",
       extra: { decision: "denied" },
     });
     // Body-free: the simulated failure's own message never enters the logged event.
@@ -583,7 +587,7 @@ describe("resolveManagedWorkspaceRootAccess", () => {
   it("records an I/O failure inside the proof as a resolution failure, not an identity denial", () => {
     vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
       kind: "failed",
-      cause: new Error("EIO: input/output error"),
+      cause: Object.assign(new Error("input/output error"), { code: "EIO" }),
     });
     const activityLog = createBufferedServerLogSink();
 
@@ -591,7 +595,12 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     expect(denialEvents(activityLog)).toHaveLength(1);
     expect(denialEvents(activityLog)[0]).toMatchObject({
       correlationId: "wra-failed-0001",
-      extra: { decision: "denied", reason: "managed-root-resolution-failed" },
+      errorKind: "read-failed",
+      extra: {
+        decision: "denied",
+        reason: "managed-root-resolution-failed",
+        failureKind: "read-failed",
+      },
     });
     expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain("managed-root-identity");
   });
@@ -654,7 +663,10 @@ describe("resolveManagedWorkspaceRootAccess", () => {
   it("logs a correlated workspace.root.denied event when the lifecycle-maintenance re-proof throws", () => {
     const activityLog = createBufferedServerLogSink();
     const realStat = nodeWorkspaceFs.stat.bind(nodeWorkspaceFs);
-    const simulatedRace = new Error("simulated stat failure racing a concurrent sweep");
+    const simulatedRace = Object.assign(
+      new Error("simulated stat failure racing a concurrent sweep"),
+      { code: "ENOENT" },
+    );
     const statSpy = vi.spyOn(nodeWorkspaceFs, "stat").mockImplementation((path: string) => {
       if (path === workspaceRoot) throw simulatedRace;
       return realStat(path);
@@ -677,6 +689,7 @@ describe("resolveManagedWorkspaceRootAccess", () => {
       level: "warn",
       category: "security",
       correlationId: "wra-lifecycle-catch",
+      errorKind: "unavailable",
       extra: { decision: "denied", reason: "managed-root-lifecycle-resolution-failed" },
     });
     expect(JSON.stringify(denialEvents(activityLog)[0])).not.toContain(simulatedRace.message);

@@ -243,6 +243,7 @@ describe("app-session lifecycle lines (F65)", () => {
         category: "http",
         op: "coding-app-session.paired",
         correlationId: "pair-correlation",
+        extra: { completeness: "complete", loss: "none" },
       },
     ]);
   });
@@ -262,6 +263,7 @@ describe("app-session lifecycle lines (F65)", () => {
         category: "http",
         op: "coding-app-session.local-session.issued",
         correlationId: "local-correlation",
+        extra: { completeness: "complete", loss: "none" },
       },
     ]);
   });

@@ -6,6 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   causeChain as productionCauseChain,
   createFileServerLogSink,
   keikoStackFrames,
@@ -13,6 +18,7 @@ import {
   type ServerLogSink,
 } from "@oscharko-dev/keiko-server";
 import { redactLogFields } from "@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle";
+import { formatServerLogLine } from "../../keiko-server/src/observability/server-log.js";
 
 import {
   analyzeLogText,
@@ -35,7 +41,11 @@ import {
 } from "./support-analyze.js";
 
 function line(fields: Record<string, unknown>): string {
-  return JSON.stringify(fields);
+  const carriesIdentity = ["pid", "instanceId", "seq"].some((key) => fields[key] !== undefined);
+  return JSON.stringify({
+    ...(carriesIdentity && fields.schemaVersion === undefined ? { schemaVersion: 2 } : {}),
+    ...fields,
+  });
 }
 
 // ─── Driving the timeline contract from the production emitters, not from hand-written JSON ───────
@@ -91,18 +101,30 @@ function productionLogCategory(op: string): ServerLogCategory {
   return category;
 }
 
-// Writes through the real file sink and returns what actually landed in `<stateDir>/logs/server.log`
-// — the same bytes `keiko support analyze` is handed — so redaction, field hoisting and the v2
-// envelope are all exercised rather than assumed.
+// The file sink contributes its real registered safe-open line. The supplied fixtures then cross
+// the production formatter without the physical sink's registration gate: this analyzer suite
+// deliberately needs legacy and adversarial record shapes, while server-log.test.ts separately
+// proves that those shapes cannot reach a current production file.
 function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => void): string {
   const stateDir = mkdtempSync(join(tmpdir(), prefix));
-  const sink = createFileServerLogSink(stateDir, { level: "debug" });
+  const fileSink = createFileServerLogSink(stateDir, { level: "debug" });
+  const fixtureLines: string[] = [];
+  let primed = false;
+  const fixtureSink: ServerLogSink = {
+    write(event): void {
+      if (!primed) {
+        fileSink.write(event);
+        primed = true;
+      }
+      fixtureLines.push(formatServerLogLine(event));
+    },
+  };
   try {
-    write(sink);
-    sink.close?.();
-    return readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    write(fixtureSink);
+    fileSink.close?.();
+    return `${readFileSync(join(stateDir, "logs", "server.log"), "utf8")}${fixtureLines.join("")}`;
   } finally {
-    sink.close?.();
+    fileSink.close?.();
     rmSync(stateDir, { recursive: true, force: true });
   }
 }
@@ -120,6 +142,24 @@ const T0 = "2026-08-21T00:00:00.000Z";
 const T1 = "2026-08-21T00:00:01.000Z";
 const T2 = "2026-08-21T00:00:02.000Z";
 const T3 = "2026-08-21T00:00:03.000Z";
+
+const SAFE_OPEN_EXTRA = {
+  artifactClass: "activity-log",
+  persistenceStatus: "opened",
+  permissionAssurance: "verified-private",
+  containmentAssurance: "private-root-guarded",
+  completeness: "complete",
+  loss: "none",
+} as const;
+
+function expectCorrelatedSafeOpen(view: ServerLogLineView | undefined): void {
+  expect(view).toMatchObject({
+    category: "diagnostic",
+    op: "server-log.safe-open",
+  });
+  expect(view?.errorKind).toBeUndefined();
+  expect(view?.extra).toEqual(SAFE_OPEN_EXTRA);
+}
 
 describe("detectSourceKind", () => {
   it("recognises a bundle's manifest first line", () => {
@@ -189,14 +229,16 @@ describe("analyzeLogText — governed update attempts", () => {
       sessionId,
       correlationIds: [candidateId, requestId, recoveryId],
     });
+    expectCorrelatedSafeOpen(attempt?.lines[0]);
     expect(attempt?.lines.map((entry) => entry.op)).toEqual([
+      "server-log.safe-open",
       UPDATE_CANDIDATE_ISSUED,
       UPDATE_CANDIDATE_CONSUMED,
       UPDATE_SESSION_LIFECYCLE,
       UPDATE_RUNTIME_EVENT,
       UPDATE_RUNTIME_EVENT,
     ]);
-    expect(attempt?.lines[3]).toMatchObject({
+    expect(attempt?.lines[4]).toMatchObject({
       parentCorrelationId: requestId,
       status: "recovery-required",
       extra: { type: "portable-relaunch-result" },
@@ -469,10 +511,8 @@ describe("analyzeLogText — raw log", () => {
   const result = analyzeLogText(FIXTURE_TEXT);
 
   it("reconstructs a serialized task-workspace lifecycle failure with correlation and taxonomy", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "keiko-support-task-workspace-"));
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
     const correlationId = "0123456789abcdef0123456789abcdef";
-    try {
+    const serialized = serializedActivityLog("keiko-support-task-workspace-", (sink) => {
       sink.write({
         level: "warn",
         category: "diagnostic",
@@ -487,27 +527,20 @@ describe("analyzeLogText — raw log", () => {
           worktreeCount: 1,
         },
       });
-      sink.close?.();
-
-      const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const timeline = findTimeline(analyzeLogText(serialized), correlationId);
-      expect(timeline?.correlationId).toBe(correlationId);
-      expect(timeline?.errorKinds).toEqual(["LOCK_CONTENTION"]);
-      expect(timeline?.lines[0]).toMatchObject({
-        category: "diagnostic",
-        op: "task-workspace.lifecycle",
-        errorKind: "LOCK_CONTENTION",
-        extra: { operation: "provision", outcome: "blocked", attempt: 2, worktreeCount: 1 },
-      });
-    } finally {
-      sink.close?.();
-      rmSync(stateDir, { recursive: true, force: true });
-    }
+    });
+    const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+    expect(timeline?.correlationId).toBe(correlationId);
+    expect(timeline?.errorKinds).toEqual(["LOCK_CONTENTION"]);
+    expectCorrelatedSafeOpen(timeline?.lines[0]);
+    expect(timeline?.lines[1]).toMatchObject({
+      category: "diagnostic",
+      op: "task-workspace.lifecycle",
+      errorKind: "LOCK_CONTENTION",
+      extra: { operation: "provision", outcome: "blocked", attempt: 2, worktreeCount: 1 },
+    });
   });
 
   it("reconstructs connected-context work diagnostics on one support timeline", () => {
-    const stateDir = mkdtempSync(join(tmpdir(), "keiko-support-connected-context-"));
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
     const correlationId = "connected-context-support-timeline-0001";
     const scopeIdentitySha256 = "a".repeat(64);
     const queryIdentitySha256 = "b".repeat(64);
@@ -576,7 +609,7 @@ describe("analyzeLogText — raw log", () => {
       contentReadCalls: 64,
       contentReadBytes: 98_304,
     } as const;
-    try {
+    const serialized = serializedActivityLog("keiko-support-connected-context-", (sink) => {
       sink.write({
         category: productionLogCategory(CONNECTED_CONTEXT_STARTED),
         op: CONNECTED_CONTEXT_STARTED,
@@ -640,47 +673,45 @@ describe("analyzeLogText — raw log", () => {
           },
         },
       });
-      sink.close?.();
+    });
 
-      const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const timeline = findTimeline(analyzeLogText(serialized), correlationId);
-      expect(timeline?.lines.map((entry) => entry.op)).toEqual([
-        CONNECTED_CONTEXT_STARTED,
-        CONNECTED_CONTEXT_COMPLETED,
-      ]);
-      expect(timeline?.lines.map((entry) => entry.category)).toEqual([
-        productionLogCategory(CONNECTED_CONTEXT_STARTED),
-        productionLogCategory(CONNECTED_CONTEXT_COMPLETED),
-      ]);
-      expect(timeline?.lines[0]?.extra).toMatchObject({
-        explicitConnection: true,
-        scopeIdentitySha256,
-        ...requestShape,
-      });
-      expect(timeline?.lines[1]?.extra).toMatchObject({
-        activityDetailStatus: "complete",
-        explicitConnection: true,
-        scopeIdentitySha256,
-        ...requestShape,
-        plannedRingCount: 2,
-        selectionCounts: { selectedFileCount: 16, omittedCount: 4 },
-        structural: structuralCounters,
-        workspaceIndex: workspaceIndexCounters,
-        workspaceIo: workspaceIoCounters,
-        coverage: {
-          coverageStatus: "incomplete",
-          coverageReasons: ["file-cap"],
-          ...coverageCounters,
-        },
-        uncertainty: {
-          scopeIncompleteUncertaintyCount: 2,
-          toolUnavailableUncertaintyCount: 1,
-        },
-      });
-    } finally {
-      sink.close?.();
-      rmSync(stateDir, { recursive: true, force: true });
-    }
+    const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+    expectCorrelatedSafeOpen(timeline?.lines[0]);
+    expect(timeline?.lines.map((entry) => entry.op)).toEqual([
+      "server-log.safe-open",
+      CONNECTED_CONTEXT_STARTED,
+      CONNECTED_CONTEXT_COMPLETED,
+    ]);
+    expect(timeline?.lines.map((entry) => entry.category)).toEqual([
+      "diagnostic",
+      productionLogCategory(CONNECTED_CONTEXT_STARTED),
+      productionLogCategory(CONNECTED_CONTEXT_COMPLETED),
+    ]);
+    expect(timeline?.lines[1]?.extra).toMatchObject({
+      explicitConnection: true,
+      scopeIdentitySha256,
+      ...requestShape,
+    });
+    expect(timeline?.lines[2]?.extra).toMatchObject({
+      activityDetailStatus: "complete",
+      explicitConnection: true,
+      scopeIdentitySha256,
+      ...requestShape,
+      plannedRingCount: 2,
+      selectionCounts: { selectedFileCount: 16, omittedCount: 4 },
+      structural: structuralCounters,
+      workspaceIndex: workspaceIndexCounters,
+      workspaceIo: workspaceIoCounters,
+      coverage: {
+        coverageStatus: "incomplete",
+        coverageReasons: ["file-cap"],
+        ...coverageCounters,
+      },
+      uncertainty: {
+        scopeIncompleteUncertaintyCount: 2,
+        toolUnavailableUncertaintyCount: 1,
+      },
+    });
   });
 
   it("ranks process lifetimes by first appearance and orders each lifetime by seq; a pre-v2 line ranks by its own file position", () => {
@@ -818,7 +849,8 @@ describe("support timeline contract — the #3347 workspace-authority security o
     });
 
     const timeline = findTimeline(analyzeLogText(serialized), CORRELATION_ID);
-    expect(timeline?.lines[0]).toMatchObject({
+    expectCorrelatedSafeOpen(timeline?.lines[0]);
+    expect(timeline?.lines[1]).toMatchObject({
       category: "security",
       op: WORKSPACE_ROOT_DENIED,
       errorKind: error.code,
@@ -827,8 +859,8 @@ describe("support timeline contract — the #3347 workspace-authority security o
     // `frames`/`causeChain` are written INSIDE `extra` by the emitter and hoisted onto the line by
     // the sink's own formatter — which is the only reason `keiko support analyze --seed` finds them
     // as typed evidence instead of leaving them buried in `extra`.
-    expect(timeline?.lines[0]?.frames).toEqual(frames);
-    expect(timeline?.lines[0]?.causeChain).toEqual(causes);
+    expect(timeline?.lines[1]?.frames).toEqual(frames);
+    expect(timeline?.lines[1]?.causeChain).toEqual(causes);
     expect(timeline?.errorKinds).toEqual([error.code]);
   });
 
@@ -854,16 +886,22 @@ describe("support timeline contract — the #3347 workspace-authority security o
     });
 
     const timeline = findTimeline(analyzeLogText(serialized), CORRELATION_ID);
+    expectCorrelatedSafeOpen(timeline?.lines[0]);
     expect(timeline?.lines.map((entry) => entry.op)).toEqual([
+      "server-log.safe-open",
       WORKSPACE_ROOT_DENIED,
       WATCH_AUTHORITY_REVOKED,
     ]);
-    expect(timeline?.lines.map((entry) => entry.category)).toEqual(["security", "security"]);
+    expect(timeline?.lines.map((entry) => entry.category)).toEqual([
+      "diagnostic",
+      "security",
+      "security",
+    ]);
     expect(timeline?.errorKinds).toEqual([error.code, "WATCH_AUTHORITY_REVOKED"]);
-    expect(timeline?.lines[1]?.extra).toEqual({ decision: "revoked", rootToken: "a".repeat(24) });
+    expect(timeline?.lines[2]?.extra).toEqual({ decision: "revoked", rootToken: "a".repeat(24) });
     // The revocation carries no path, no endpoint and no client identity — only a decision and the
     // body-free root token the watch session is joined on.
-    expect(JSON.stringify(timeline?.lines[1]?.extra)).not.toContain("/");
+    expect(JSON.stringify(timeline?.lines[2]?.extra)).not.toContain("/");
   });
 
   it("turns the denial into a reproduction seed whose stack frames are the emitter's own", () => {
@@ -885,7 +923,7 @@ describe("support timeline contract — the #3347 workspace-authority security o
     expect(seed?.causeChain).toEqual(causes);
   });
 
-  it("drops the operation from every timeline when an emitter writes no correlationId at all", () => {
+  it("keeps an uncorrelated caller out of timelines while accounting for safe-open fallback", () => {
     // The sanctioned fallback is `UNKNOWN_CORRELATION_ID`, never an absent field: an emitter that
     // omits the id entirely loses its own timeline, and this pin makes that cost visible instead of
     // letting a future emitter discover it in production. The line is still ACCOUNTED for — it is
@@ -902,9 +940,17 @@ describe("support timeline contract — the #3347 workspace-authority security o
 
     const result = analyzeLogText(serialized);
 
-    expect(result.timelines).toEqual([]);
+    expect(result.timelines).toEqual([
+      expect.objectContaining({
+        correlationId: "unknown-correlation-id",
+        lines: [expect.objectContaining({ op: "server-log.safe-open" })],
+      }),
+    ]);
     expect(result.malformedLineCount).toBe(0);
-    expect(result.clusters.map((cluster) => cluster.op)).toEqual([WATCH_AUTHORITY_REVOKED]);
+    expect(result.clusters.map((cluster) => cluster.op)).toEqual([
+      "server-log.safe-open",
+      WATCH_AUTHORITY_REVOKED,
+    ]);
   });
 
   it("fails closed when an op this contract covers is no longer emitted anywhere in production", () => {
@@ -1038,7 +1084,8 @@ describe("analyzeLogText — extra fields and frames", () => {
     });
 
     const timeline = findTimeline(analyzeLogText(serialized), correlationId);
-    expect(timeline?.lines[0]).toMatchObject({
+    expectCorrelatedSafeOpen(timeline?.lines[0]);
+    expect(timeline?.lines[1]).toMatchObject({
       op: "client.diagnostic",
       extra: {
         repositoryId: "repository-a",
@@ -1075,7 +1122,12 @@ describe("analyzeLogText — extra fields and frames", () => {
     });
 
     const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+    expectCorrelatedSafeOpen(timeline?.lines[0]);
     expect(timeline?.lines.map(({ op: lineOp, extra }) => ({ op: lineOp, extra }))).toEqual([
+      {
+        op: "server-log.safe-open",
+        extra: SAFE_OPEN_EXTRA,
+      },
       {
         op,
         extra: {
@@ -1118,7 +1170,9 @@ describe("analyzeLogText — extra fields and frames", () => {
       });
     });
 
-    expect(findTimeline(analyzeLogText(serialized), correlationId)?.lines[0]).toMatchObject({
+    const timeline = findTimeline(analyzeLogText(serialized), correlationId);
+    expectCorrelatedSafeOpen(timeline?.lines[0]);
+    expect(timeline?.lines[1]).toMatchObject({
       op,
       extra: { state: "completed", targetPathSha256, startLine: 4, maxLines: 20 },
     });
@@ -1313,6 +1367,240 @@ describe("analyzeLogText — legacy line accounting and warnings", () => {
     expect(result.legacyLineCount).toBe(2);
     expect(result.warnings).toEqual([
       "2 line(s) predate the v2 envelope and were ordered by file position",
+      "2 corrupt Activity Log line(s)",
+    ]);
+  });
+});
+
+describe("analyzeLogText — strict v2 identity and compatibility classification", () => {
+  const base = {
+    ts: T0,
+    level: "info",
+    category: "gateway",
+    op: "gateway.instance.reused",
+    generation: 1,
+    completeness: "complete",
+    loss: "none",
+    schemaVersion: 2,
+    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+    buildClass: "node-esm",
+    releaseClass: "stable",
+    platformClass: "linux-x64",
+    productVersion: "1.0.0",
+    compatibilityState: "supported",
+    writerCapability: "active",
+    pid: 4242,
+    instanceId: "deadbeef",
+    seq: 1,
+  };
+
+  it("distinguishes supported, legacy, unsupported, corrupt, truncated, and incomplete evidence", () => {
+    const records = [
+      line(base),
+      line({ ts: T0, category: "process", op: "legacy.none" }),
+      line({ ...base, schemaVersion: 7, op: "future.unsupported" }),
+      line({ ...base, pid: 0, op: "identity.corrupt" }),
+      line({ ...base, seq: undefined, op: "identity.incomplete" }),
+      "{truncated",
+    ];
+
+    const result = analyzeLogText(records.join("\n"));
+
+    expect(result.evidence).toMatchObject({
+      classification: "corrupt",
+      supportedLineCount: 1,
+      legacyLineCount: 1,
+      unsupportedLineCount: 1,
+      corruptLineCount: 1,
+      truncatedLineCount: 1,
+      incompleteLineCount: 1,
+    });
+    expect(result.malformedLineCount).toBe(3);
+    expect(result.legacyLineCount).toBe(1);
+    expect(result.timelines).toEqual([]);
+  });
+
+  it.each([
+    ["missing schemaVersion", { schemaVersion: undefined }, "incomplete"],
+    ["missing pid", { pid: undefined }, "incomplete"],
+    ["missing instanceId", { instanceId: undefined }, "incomplete"],
+    ["missing seq", { seq: undefined }, "incomplete"],
+    ["invalid pid with missing seq", { pid: "attacker", seq: undefined }, "corrupt"],
+    ["fractional schemaVersion", { schemaVersion: 2.5 }, "corrupt"],
+    ["zero pid", { pid: 0 }, "corrupt"],
+    ["fractional pid", { pid: 1.5 }, "corrupt"],
+    ["oversized pid", { pid: 2_147_483_648 }, "corrupt"],
+    ["empty instanceId", { instanceId: "" }, "corrupt"],
+    ["unsafe instanceId", { instanceId: "contains space" }, "corrupt"],
+    ["noncanonical instanceId", { instanceId: "journey1" }, "corrupt"],
+    ["zero seq", { seq: 0 }, "corrupt"],
+    ["fractional seq", { seq: 1.5 }, "corrupt"],
+    ["future schemaVersion", { schemaVersion: 3 }, "unsupported"],
+  ] as const)("classifies %s without accepting it as legacy", (_name, override, expected) => {
+    const result = analyzeLogText(`${line({ ...base, ...override })}\n`);
+
+    expect(result.evidence.classification).toBe(expected);
+    expect(result.evidence.legacyLineCount).toBe(0);
+    expect(result.processes).toEqual([]);
+  });
+
+  it.each([
+    ["catalog digest mismatch", { catalogDigest: "0".repeat(64) }, "unsupported"],
+    ["partial registry identity", { writerCapability: undefined }, "incomplete"],
+    ["degraded writer", { writerCapability: "degraded" }, "incomplete"],
+    ["unknown writer capability", { writerCapability: "future" }, "corrupt"],
+    ["unknown compatibility state", { compatibilityState: "future" }, "corrupt"],
+    ["unknown operation", { op: "gateway.instance.unknown" }, "corrupt"],
+    ["missing registered field", { generation: undefined }, "incomplete"],
+    ["unknown registered field", { unexpected: "value" }, "corrupt"],
+    ["unknown error kind", { errorKind: "provider prose is forbidden" }, "corrupt"],
+    ["missing persisted level", { level: undefined }, "corrupt"],
+    ["non-ISO timestamp", { ts: "September 17, 2026" }, "corrupt"],
+  ] as const)("classifies %s from the generated registry contract", (_name, override, expected) => {
+    const result = analyzeLogText(`${line({ ...base, ...override })}\n`);
+
+    expect(result.evidence.classification).toBe(expected);
+    expect(result.timelines).toEqual([]);
+  });
+
+  it("validates a registered string status as an operation field while preserving it in extra", () => {
+    const correlationId = "request-status-0123456789abcdef";
+    const record = {
+      ...base,
+      category: "diagnostic",
+      op: "git.delivery.mutation.completed",
+      correlationId,
+      generation: undefined,
+      completeness: "complete",
+      loss: "none",
+      actionId: "action-0123456789abcdef",
+      actionKind: "commit",
+      status: "blocked",
+      phaseReached: "result",
+      policyOutcome: "blocked",
+      preflightFindingCount: 1,
+      preflightBlockingCount: 1,
+      requiredApproverCount: 0,
+    };
+
+    const result = analyzeLogText(`${line(record)}\n`);
+
+    expect(result.evidence.classification).toBe("supported");
+    const view = findTimeline(result, correlationId)?.lines[0];
+    expect(view?.status).toBeUndefined();
+    expect(view?.extra).toMatchObject({ status: "blocked", actionKind: "commit" });
+  });
+
+  it("keeps a registered numeric status in the envelope rather than operation fields", () => {
+    const correlationId = "request-http-status-0123456789";
+    const result = analyzeLogText(`${line({ ...base, correlationId, status: 204 })}\n`);
+
+    expect(result.evidence.classification).toBe("supported");
+    const view = findTimeline(result, correlationId)?.lines[0];
+    expect(view?.status).toBe(204);
+    expect(view?.extra).not.toHaveProperty("status");
+  });
+
+  it("classifies an invalid terminal fragment as truncated but invalid terminated JSON as corrupt", () => {
+    const truncated = analyzeLogText("{partial");
+    const corrupt = analyzeLogText("{partial\n");
+
+    expect(truncated.evidence).toMatchObject({
+      classification: "truncated",
+      truncatedLineCount: 1,
+      corruptLineCount: 0,
+    });
+    expect(corrupt.evidence).toMatchObject({
+      classification: "corrupt",
+      truncatedLineCount: 0,
+      corruptLineCount: 1,
+    });
+  });
+
+  it("retains a copied terminal-fragment signal in a support bundle", () => {
+    const bundle = `${line({ $section: "manifest" })}\n${line({
+      $section: "config-snapshot",
+    })}\n{"ts":`;
+
+    expect(analyzeLogText(bundle).evidence).toMatchObject({
+      classification: "truncated",
+      truncatedLineCount: 1,
+      corruptLineCount: 0,
+    });
+  });
+});
+
+describe("analyzeLogText — process sequence integrity", () => {
+  it("reports each gap, duplicate, decrease, and reset exactly once", () => {
+    const event = (seq: number, op: string): string =>
+      line({
+        ts: T0,
+        category: "process",
+        op,
+        pid: 5151,
+        instanceId: "abc12345",
+        seq,
+      });
+    const result = analyzeLogText(
+      `${[event(1, "one"), event(3, "three"), event(3, "duplicate"), event(2, "down"), event(1, "reset")].join("\n")}\n`,
+    );
+
+    expect(result.evidence.classification).toBe("incomplete");
+    expect(result.evidence.sequenceAnomalies).toEqual([
+      expect.objectContaining({
+        kind: "gap",
+        fileIndex: 1,
+        previousSeq: 1,
+        seq: 3,
+        missingFrom: 2,
+        missingTo: 2,
+      }),
+      expect.objectContaining({ kind: "duplicate", fileIndex: 2, previousSeq: 3, seq: 3 }),
+      expect.objectContaining({ kind: "decreasing", fileIndex: 3, previousSeq: 3, seq: 2 }),
+      expect.objectContaining({ kind: "duplicate", fileIndex: 4, previousSeq: 2, seq: 1 }),
+      expect.objectContaining({ kind: "reset", fileIndex: 4, previousSeq: 2, seq: 1 }),
+      expect.objectContaining({ kind: "decreasing", fileIndex: 4, previousSeq: 2, seq: 1 }),
+    ]);
+    expect(renderHumanAllTimelines(result)).toContain(
+      "gap pid=5151 instanceId=abc12345 fileIndex=1 previousSeq=1 seq=3 missing=2-2",
+    );
+  });
+
+  it("reports a missing lifetime prefix as a gap from sequence one", () => {
+    const result = analyzeLogText(
+      `${line({ ts: T0, category: "process", op: "late", pid: 8, instanceId: "feedface", seq: 4 })}\n`,
+    );
+
+    expect(result.evidence.sequenceAnomalies).toEqual([
+      expect.objectContaining({
+        kind: "gap",
+        previousSeq: 0,
+        seq: 4,
+        missingFrom: 1,
+        missingTo: 3,
+      }),
+    ]);
+    expect(result.evidence.classification).toBe("supported");
+  });
+
+  it("does not mistake process-wide allocations in another state directory for missing evidence", () => {
+    const event = (seq: number): string =>
+      line({
+        ts: T0,
+        category: "process",
+        op: `state-a-${String(seq)}`,
+        pid: 5151,
+        instanceId: "c0c0d1a0",
+        seq,
+      });
+
+    const result = analyzeLogText(`${event(1)}\n${event(3)}\n`);
+
+    expect(result.evidence.classification).toBe("supported");
+    expect(result.evidence.sequenceAnomalies).toEqual([
+      expect.objectContaining({ kind: "gap", previousSeq: 1, seq: 3 }),
     ]);
   });
 });
@@ -1415,7 +1703,7 @@ describe("analyzeLogText — line-splitting and value-shape edge cases", () => {
     expect(findTimeline(result, "req-dup")?.errorKinds).toEqual(["TIMEOUT"]);
   });
 
-  it("falls back to a zero durationMs when the group's timestamps do not parse as dates", () => {
+  it("rejects non-ISO timestamps before timeline duration calculation", () => {
     const first = line({
       ts: "garbage-ts",
       category: "http",
@@ -1431,7 +1719,11 @@ describe("analyzeLogText — line-splitting and value-shape edge cases", () => {
 
     const result = analyzeLogText(`${first}\n${second}\n`);
 
-    expect(findTimeline(result, "req-garbage-ts")?.durationMs).toBe(0);
+    expect(findTimeline(result, "req-garbage-ts")).toBeUndefined();
+    expect(result.evidence).toMatchObject({
+      classification: "corrupt",
+      corruptLineCount: 2,
+    });
   });
 });
 
@@ -1557,6 +1849,16 @@ describe("human-readable rendering", () => {
         latestInstanceId: undefined,
         timelines: [],
         malformedLineCount: 0,
+        evidence: {
+          classification: "supported",
+          supportedLineCount: 0,
+          legacyLineCount: 0,
+          unsupportedLineCount: 0,
+          corruptLineCount: 0,
+          truncatedLineCount: 0,
+          incompleteLineCount: 0,
+          sequenceAnomalies: [],
+        },
         processes: [],
         legacyLineCount: 0,
         warnings: [],
@@ -1643,24 +1945,50 @@ describe("renderHumanClusters", () => {
 });
 
 describe("buildGatewayReplayScript — outcome classification and attempt fallbacks", () => {
-  it("classifies GATEWAY_TIMEOUT as timeout and GATEWAY_TRANSPORT as transport-error", () => {
+  it("classifies typed and legacy timeout kinds while retaining legacy transport detail", () => {
     const timeoutLine: ServerLogLineView = {
       ts: T0,
       category: "gateway",
       op: "gateway.chat.failed",
+      errorKind: "timeout",
+    };
+    const legacyTimeoutLine: ServerLogLineView = {
+      ts: T1,
+      category: "gateway",
+      op: "gateway.stream.failed",
       errorKind: "GATEWAY_TIMEOUT",
     };
     const transportLine: ServerLogLineView = {
-      ts: T1,
+      ts: T2,
       category: "gateway",
       op: "gateway.stream.failed",
       errorKind: "GATEWAY_TRANSPORT",
     };
 
-    const script = buildGatewayReplayScript([timeoutLine, transportLine]);
+    const script = buildGatewayReplayScript([timeoutLine, legacyTimeoutLine, transportLine]);
 
     expect(script?.attempts[0]?.outcome).toBe("timeout");
-    expect(script?.attempts[1]?.outcome).toBe("transport-error");
+    expect(script?.attempts[1]?.outcome).toBe("timeout");
+    expect(script?.attempts[2]?.outcome).toBe("transport-error");
+  });
+
+  it("classifies typed and retained legacy rate-limit kinds", () => {
+    const typedLine: ServerLogLineView = {
+      ts: T0,
+      category: "gateway",
+      op: "gateway.retry.scheduled",
+      errorKind: "rate-limited",
+    };
+    const legacyLine: ServerLogLineView = {
+      ts: T1,
+      category: "gateway",
+      op: "gateway.retry.scheduled",
+      errorKind: "GATEWAY_RATE_LIMIT",
+    };
+
+    const script = buildGatewayReplayScript([typedLine, legacyLine]);
+
+    expect(script?.attempts.map(({ outcome }) => outcome)).toEqual(["rate-limit", "rate-limit"]);
   });
 
   it("falls back to unknown-model, a zero durationMs, and no firstTokenMs when the line carries no extra", () => {
@@ -1901,7 +2229,7 @@ describe("issueToPrJourney — epic #3384 reconstruction", () => {
     correlationId: string,
     fields: Record<string, unknown>,
   ): string {
-    return line({ ts: T0, pid: 9001, instanceId: "journey1", seq, correlationId, ...fields });
+    return line({ ts: T0, pid: 9001, instanceId: "a0b0c0d0", seq, correlationId, ...fields });
   }
 
   describe("a successful journey across every phase", () => {

@@ -38,7 +38,12 @@ describe("publishStagedArchiveTree", () => {
       expect.objectContaining({
         op: "security.fs.atomic-rename-retried",
         correlationId: "b".repeat(32),
-        extra: { attempts: 2 },
+        extra: {
+          attempts: 2,
+          completeness: "complete",
+          failureKind: "EPERM",
+          loss: "none",
+        },
       }),
     ]);
   });

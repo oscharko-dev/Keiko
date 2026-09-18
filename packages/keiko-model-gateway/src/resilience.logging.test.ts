@@ -60,7 +60,7 @@ describe("executeWithRetry — activity log", () => {
       executeWithRetry(attempt, RETRY_CONFIG, stubClock(), undefined, () => 0.5, {
         sink: log.sink,
         modelId: "example-chat-model",
-        correlationId: "corr-1",
+        correlationId: "corr-0001",
       }),
     ).rejects.toBeInstanceOf(TransportError);
 
@@ -72,8 +72,8 @@ describe("executeWithRetry — activity log", () => {
     const scheduled = eventFor(log.events, "gateway.retry.scheduled");
     expect(scheduled.category).toBe("gateway");
     expect(scheduled.level).toBe("warn");
-    expect(scheduled.correlationId).toBe("corr-1");
-    expect(scheduled.errorKind).toBe("GATEWAY_TRANSPORT");
+    expect(scheduled.correlationId).toBe("corr-0001");
+    expect(scheduled.errorKind).toBe("internal");
     expect(scheduled.extra).toMatchObject({
       modelId: "example-chat-model",
       attempt: 1,
@@ -203,7 +203,7 @@ describe("executeWithRetry — activity log", () => {
     ).rejects.toBeInstanceOf(RateLimitError);
     const budget = eventFor(log.events, "gateway.retry.budget-exhausted");
     expect(budget.level).toBe("warn");
-    expect(budget.errorKind).toBe("GATEWAY_RATE_LIMIT");
+    expect(budget.errorKind).toBe("rate-limited");
     expect(budget.extra).toMatchObject({
       modelId: "m",
       hadPriorFailure: true,
@@ -266,6 +266,7 @@ describe("CircuitBreaker — activity log", () => {
     const opened = eventFor(log.events, "gateway.circuit.opened");
     expect(opened.level).toBe("warn");
     expect(opened.category).toBe("gateway");
+    expect(opened.errorKind).toBe("unavailable");
     expect(opened.extra).toMatchObject({
       modelId: "m",
       previousState: "closed",
@@ -301,6 +302,7 @@ describe("CircuitBreaker — activity log", () => {
       "debug",
       "debug",
     ]);
+    expect(rejections.every((event) => event.errorKind === "unavailable")).toBe(true);
     expect(rejections[0]?.extra).toMatchObject({
       modelId: "m",
       state: "open",
@@ -442,14 +444,14 @@ describe("CircuitBreaker — caller correlation", () => {
     const log = recorder();
     const clock: Clock = { now: () => 0, sleep: () => Promise.resolve() };
     const breaker = new CircuitBreaker("m", BREAKER_CONFIG, clock, log.sink);
-    breaker.recordFailure("run-1");
-    breaker.recordFailure("run-2");
-    expect(eventFor(log.events, "gateway.circuit.opened").correlationId).toBe("run-2");
+    breaker.recordFailure("run-0001");
+    breaker.recordFailure("run-0002");
+    expect(eventFor(log.events, "gateway.circuit.opened").correlationId).toBe("run-0002");
     expect(() => {
-      breaker.assertAllowed("run-3");
+      breaker.assertAllowed("run-0003");
     }).toThrow();
     const rejected = eventFor(log.events, "gateway.circuit.rejected");
-    expect(rejected.correlationId).toBe("run-3");
+    expect(rejected.correlationId).toBe("run-0003");
     expect(rejected.extra).toMatchObject({ modelId: "m", state: "open", reason: "cooldown" });
   });
 

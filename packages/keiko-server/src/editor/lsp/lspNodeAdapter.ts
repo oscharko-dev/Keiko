@@ -24,6 +24,12 @@ import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, isAbsolute, join } from "node:path";
 import {
+  activityLogErrorKindOr,
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   isCommandAllowed,
   isSelfOrParentPid,
   nodeWindowsTreeKill,
@@ -52,6 +58,191 @@ import { errorKindOf } from "../../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../../observability/stack-frames.js";
 import type { LspSpawnHandle } from "./lspTransport.js";
 
+const LSP_SPAWN_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.spawn.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspNodeAdapter.logLspSpawnCompleted",
+  fields: {
+    windowsWrapperEngaged: { type: "boolean", dataClass: "closed-enum", required: true },
+    platform: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "aix",
+        "android",
+        "cygwin",
+        "darwin",
+        "freebsd",
+        "haiku",
+        "linux",
+        "netbsd",
+        "openbsd",
+        "sunos",
+        "win32",
+      ],
+    },
+    childPid: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["lsp-process-spawn"],
+  proofIds: ["lsp.spawn-completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const LSP_SPAWN_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.spawn.failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspNodeAdapter.logLspSpawnFailed",
+  fields: {
+    platform: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "aix",
+        "android",
+        "cygwin",
+        "darwin",
+        "freebsd",
+        "haiku",
+        "linux",
+        "netbsd",
+        "openbsd",
+        "sunos",
+        "win32",
+      ],
+    },
+    childPid: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["lsp-process-spawn"],
+  proofIds: ["lsp.spawn-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const LSP_PROCESS_RUNTIME_ERROR_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.process.runtime-error",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspNodeAdapter.logLspRuntimeError",
+  fields: {
+    childPid: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["lsp-process-runtime"],
+  proofIds: ["lsp.process-runtime-error.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const LSP_PROCESS_TERMINATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "lsp.process.terminated",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.lsp.lspNodeAdapter.logLspProcessTerminated",
+  fields: {
+    childPid: { type: "integer", dataClass: "count", required: true },
+    signal: { type: "string", dataClass: "opaque-id", required: true, maxLength: 16 },
+    windowsTreeKill: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "succeeded",
+        "failed",
+        "unknown",
+        "budget-exhausted",
+        "blocked-untrusted-system-root",
+        "refused-self-pid",
+        "root-not-found",
+        "not-attempted",
+      ],
+    },
+    treeContainment: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["confirmed", "unconfirmed"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["lsp-process-termination"],
+  proofIds: ["lsp.process-terminated.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const LSP_ACTIVITY_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  CANCELLED: "cancelled",
+  ABORT_ERR: "cancelled",
+  INITIALIZE_TIMEOUT: "timeout",
+  REQUEST_TIMED_OUT: "timeout",
+  SHUTDOWN_TIMEOUT: "timeout",
+  ETIMEDOUT: "timeout",
+  EACCES: "permission-denied",
+  EPERM: "permission-denied",
+  ERR_INVALID_ARG_VALUE: "invalid-request",
+  EXECUTABLE_NOT_FOUND: "unavailable",
+  ENOENT: "unavailable",
+  RESOURCE_BUDGET_EXCEEDED: "unavailable",
+  DISPOSED: "unavailable",
+};
+
+function lspActivityErrorKind(
+  error: unknown,
+  fallback?: LspProcessErrorCode,
+): ActivityLogErrorKind {
+  const raw = error === undefined ? fallback : errorKindOf(error);
+  const registered = activityLogErrorKindOr(raw, "internal");
+  if (registered !== "internal" || raw === "internal") return registered;
+  return raw === undefined ? "internal" : (LSP_ACTIVITY_ERROR_KINDS[raw] ?? "internal");
+}
+
 // AGENTS.md §8 Rule 1 (PR reviewer finding): this adapter's two platform-dependent decision
 // branches — whether the win32 hardened cmd.exe wrapper engaged at spawn (issue #3350) and
 // whether the win32 taskkill.exe tree-kill engaged on termination (same defect/fix as runCommand's
@@ -69,16 +260,17 @@ import type { LspSpawnHandle } from "./lspTransport.js";
 // unable to join this line to the child tree. Fired on the child's real 'spawn' event, not on
 // spawn() returning: dispatch is not success, ENOENT arrives asynchronously via 'error'.
 function logLspSpawnCompleted(windowsWrapperEngaged: boolean, childPid: number | undefined): void {
-  processServerLogSink().write({
-    category: "diagnostic",
-    op: "lsp.spawn.completed",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    extra: {
-      windowsWrapperEngaged,
-      platform: process.platform,
-      ...(childPid !== undefined ? { childPid } : {}),
-    },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_SPAWN_COMPLETED_OPERATION,
+      { correlationId: UNKNOWN_CORRELATION_ID },
+      {
+        windowsWrapperEngaged,
+        platform: process.platform,
+        ...(childPid !== undefined ? { childPid } : {}),
+      },
+    ),
+  );
 }
 
 // F2 (PR reviewer finding): the two async/sync spawn-failure call sites below each already catch a
@@ -103,36 +295,42 @@ function logLspSpawnCompleted(windowsWrapperEngaged: boolean, childPid: number |
 function logLspSpawnFailed(code: LspProcessErrorCode, error?: unknown, childPid?: number): void {
   const frames = keikoStackFrames(error);
   const chain = causeChain(error);
-  processServerLogSink().write({
-    level: "error",
-    category: "diagnostic",
-    op: "lsp.spawn.failed",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    errorKind: error === undefined ? code : errorKindOf(error),
-    extra: {
-      platform: process.platform,
-      ...(childPid !== undefined ? { childPid } : {}),
-      ...(frames.length > 0 ? { frames } : {}),
-      ...(chain.length > 0 ? { causeChain: chain } : {}),
-    },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_SPAWN_FAILED_OPERATION,
+      {
+        level: "error",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: lspActivityErrorKind(error, code),
+      },
+      {
+        platform: process.platform,
+        ...(childPid !== undefined ? { childPid } : {}),
+        ...(frames.length > 0 ? { frames } : {}),
+        ...(chain.length > 0 ? { causeChain: chain } : {}),
+      },
+    ),
+  );
 }
 
 function logLspRuntimeError(error: unknown, childPid: number | undefined): void {
   const frames = keikoStackFrames(error);
   const chain = causeChain(error);
-  processServerLogSink().write({
-    level: "error",
-    category: "diagnostic",
-    op: "lsp.process.runtime-error",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    errorKind: errorKindOf(error),
-    extra: {
-      ...(childPid !== undefined ? { childPid } : {}),
-      ...(frames.length > 0 ? { frames } : {}),
-      ...(chain.length > 0 ? { causeChain: chain } : {}),
-    },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_PROCESS_RUNTIME_ERROR_OPERATION,
+      {
+        level: "error",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: lspActivityErrorKind(error),
+      },
+      {
+        ...(childPid !== undefined ? { childPid } : {}),
+        ...(frames.length > 0 ? { frames } : {}),
+        ...(chain.length > 0 ? { causeChain: chain } : {}),
+      },
+    ),
+  );
 }
 
 // Fires on every kill() call, including the SIGTERM-then-SIGKILL escalation `escalateKill` drives —
@@ -149,12 +347,13 @@ function logLspProcessTerminated(
   windowsTreeKill: WindowsTreeKillDisposition,
   treeContainment: LspTreeContainment,
 ): void {
-  processServerLogSink().write({
-    category: "diagnostic",
-    op: "lsp.process.terminated",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    extra: { childPid, signal, windowsTreeKill, treeContainment },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      LSP_PROCESS_TERMINATED_OPERATION,
+      { correlationId: UNKNOWN_CORRELATION_ID },
+      { childPid, signal, windowsTreeKill, treeContainment },
+    ),
+  );
 }
 
 // Typed failure carrying only a content-free `LspProcessErrorCode` — never a path, server output, or

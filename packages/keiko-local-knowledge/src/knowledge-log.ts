@@ -21,7 +21,12 @@
 // text, document text, extracted content, prompts, embeddings, api keys, endpoints, and
 // absolute filesystem paths never reach a field on this event.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createHash } from "node:crypto";
+import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type KnowledgeLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -59,6 +64,17 @@ export function nullKnowledgeLogSink(): KnowledgeLogSink {
 export function startKnowledgeLogTimer(): () => number {
   const startedAt = performance.now();
   return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
+}
+
+const ACTIVITY_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/u;
+
+// Injected test and embedding-job id sources predate the v2 envelope bound. The job-owning
+// boundary calls this once, preserves valid ids verbatim, and carries the resulting stable,
+// body-free correlation key through every downstream logging and gateway layer.
+export function knowledgeLogCorrelationId(value: string): string {
+  return ACTIVITY_CORRELATION_ID.test(value)
+    ? value
+    : createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 // The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
@@ -137,6 +153,29 @@ export function knowledgeErrorKind(error: unknown): string {
 // a test double never inherits another test's state, and nothing is retained.
 const REPORTED_FAILED_SINKS = new WeakSet<KnowledgeLogSink>();
 
+const KNOWLEDGE_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "knowledge.log.sink-failed",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "knowledge-log.reportFailedKnowledgeLogSink",
+  fields: {
+    droppedOpDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "loss",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-sink"],
+  proofIds: ["knowledge.log.sink-failed.body-free"],
+  releaseImpact: "patch",
+});
+
+function operationDigest(op: string): string {
+  return createHash("sha256").update(op).digest("hex").slice(0, 16);
+}
+
 export function emitKnowledgeLogEvent(
   sink: KnowledgeLogSink | undefined,
   event: KnowledgeLogEvent,
@@ -157,28 +196,29 @@ function reportFailedKnowledgeLogSink(
   if (REPORTED_FAILED_SINKS.has(sink)) return;
   REPORTED_FAILED_SINKS.add(sink);
   const errorKind = knowledgeErrorKind(cause);
+  const droppedOpDigest = operationDigest(droppedOp);
   try {
-    sink.write({
-      level: "error",
-      category: "diagnostic",
-      op: "knowledge.log.sink-failed",
-      errorKind,
-      extra: { droppedOp },
-    });
+    sink.write(
+      activityLogEvent(
+        KNOWLEDGE_LOG_SINK_FAILED_OPERATION,
+        { level: "error", errorKind: "unavailable" },
+        { droppedOpDigest, failureKind: errorKind },
+      ),
+    );
     return;
   } catch {
     // The transport refuses this shape too, so it is the transport that is down — fall through to
     // the only channel left.
   }
-  warnFailedKnowledgeLogSink(droppedOp, errorKind);
+  warnFailedKnowledgeLogSink(droppedOpDigest, errorKind);
 }
 
-function warnFailedKnowledgeLogSink(droppedOp: string, errorKind: string): void {
+function warnFailedKnowledgeLogSink(droppedOpDigest: string, errorKind: string): void {
   try {
     process.emitWarning("Keiko activity log sink is failing; log lines are being dropped.", {
       type: "KeikoActivityLog",
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: `op=${droppedOp} errorKind=${errorKind}`,
+      detail: `opDigest=${droppedOpDigest} errorKind=${errorKind}`,
     });
   } catch {
     // The process warning channel is the last one there is; a report beyond it does not exist.

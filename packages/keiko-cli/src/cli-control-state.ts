@@ -40,8 +40,15 @@ function canonicalizeWithMissingTail(path: string): string {
   return resolve(realpathSync.native(cursor), ...missing);
 }
 
-function isAtOrBelow(candidate: string, target: string): boolean {
-  const fromTarget = relative(target, candidate);
+function pathForComparison(path: string, platform: NodeJS.Platform): string {
+  return platform === "darwin" || platform === "win32" ? path.toLowerCase() : path;
+}
+
+function isAtOrBelow(candidate: string, target: string, platform: NodeJS.Platform): boolean {
+  const fromTarget = relative(
+    pathForComparison(target, platform),
+    pathForComparison(candidate, platform),
+  );
   return (
     fromTarget === "" ||
     (fromTarget !== ".." && !fromTarget.startsWith(`..${sep}`) && !isAbsolute(fromTarget))
@@ -52,8 +59,9 @@ function isAtOrBelow(candidate: string, target: string): boolean {
 export function cliControlStateConflictsWithTarget(
   controlStateDir: string,
   targetDir: string,
+  platform: NodeJS.Platform = process.platform,
 ): boolean {
   const control = canonicalizeWithMissingTail(controlStateDir);
   const target = canonicalizeWithMissingTail(targetDir);
-  return isAtOrBelow(control, target) || isAtOrBelow(target, control);
+  return isAtOrBelow(control, target, platform) || isAtOrBelow(target, control, platform);
 }

@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogEventEnvelope,
+  type ActivityLogFields,
+  type RegisteredActivityLogEvent,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 const ROOT_PACKAGE_NAME = "@oscharko-dev/keiko";
@@ -23,14 +30,40 @@ export interface InstallLayoutOverrideEvidence {
   readonly overriddenKinds: readonly InstallLayoutOverrideKind[];
 }
 
+export const INSTALL_LAYOUT_NORMALIZED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.install-layout.normalized",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "install-layout.installLayoutOverrideActivityLogEvent",
+  fields: {
+    overriddenCount: { type: "integer", dataClass: "count", required: true },
+    overriddenKinds: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["cli-bin", "ui-static-root", "local-state-auditor"],
+      maxItems: 3,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["cli-install-layout-normalization"],
+  proofIds: ["cli.install-layout.normalized-before-support-snapshot"],
+  releaseImpact: "patch",
+});
+
+export type InstallLayoutNormalizedActivityLogEvent = RegisteredActivityLogEvent<
+  typeof INSTALL_LAYOUT_NORMALIZED_OPERATION
+> &
+  ActivityLogEventEnvelope & {
+    readonly extra: ActivityLogFields<typeof INSTALL_LAYOUT_NORMALIZED_OPERATION>;
+  };
+
 interface InstallLayoutEvidenceSink {
-  readonly write: (event: {
-    readonly level: "info";
-    readonly category: "diagnostic";
-    readonly op: string;
-    readonly correlationId: string;
-    readonly extra: Readonly<Record<string, unknown>>;
-  }) => void;
+  readonly write: (event: InstallLayoutNormalizedActivityLogEvent) => void;
 }
 
 type InstallLayoutEvidenceSinkFactory = (stateDir: string) => InstallLayoutEvidenceSink;
@@ -69,22 +102,26 @@ export function installLayoutOverrideEvidence(
   return { correlationId, overriddenKinds };
 }
 
+export function installLayoutOverrideActivityLogEvent(
+  evidence: InstallLayoutOverrideEvidence,
+): InstallLayoutNormalizedActivityLogEvent {
+  return activityLogEvent(
+    INSTALL_LAYOUT_NORMALIZED_OPERATION,
+    { level: "info", correlationId: evidence.correlationId },
+    {
+      overriddenCount: evidence.overriddenKinds.length,
+      overriddenKinds: evidence.overriddenKinds,
+    },
+  );
+}
+
 export function writeInstallLayoutOverrideEvidence(
   sink: InstallLayoutEvidenceSink | undefined,
   env: EnvSource,
 ): boolean {
   const evidence = installLayoutOverrideEvidence(env);
   if (sink === undefined || evidence === undefined) return false;
-  sink.write({
-    level: "info",
-    category: "diagnostic",
-    op: "cli.install-layout.normalized",
-    correlationId: evidence.correlationId,
-    extra: {
-      overriddenCount: evidence.overriddenKinds.length,
-      overriddenKinds: evidence.overriddenKinds,
-    },
-  });
+  sink.write(installLayoutOverrideActivityLogEvent(evidence));
   Reflect.deleteProperty(env, INSTALL_LAYOUT_OVERRIDES_ENV);
   Reflect.deleteProperty(env, INSTALL_LAYOUT_CORRELATION_ID_ENV);
   return true;

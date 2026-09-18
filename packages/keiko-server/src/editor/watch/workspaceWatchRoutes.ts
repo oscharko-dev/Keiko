@@ -5,6 +5,10 @@ import type {
   EditorM7WatchSnapshot,
   EditorM11SettingsSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { correlationIdOrUnknown } from "../../correlation.js";
@@ -38,6 +42,36 @@ function watchRootToken(root: string): string {
 // before any subscriber exists; `stream` is a live subscriber losing authority mid-stream.
 type WatchAuthorityDenialPhase = "admission" | "stream";
 
+const EDITOR_WORKSPACE_WATCH_AUTHORITY_REVOKED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.workspace-watch.authority-revoked",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "editor.watch.workspaceWatchRoutes.recordWatchAuthorityRevoked",
+  fields: {
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["revoked"],
+    },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["admission", "stream"],
+    },
+    rootToken: { type: "string", dataClass: "digest", required: true, maxLength: 24 },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["editor-workspace-watch-authority"],
+  proofIds: ["editor.workspace-watch-authority-revoked.emitted-line"],
+  releaseImpact: "patch",
+});
+
 // AGENTS.md §8 Rule 1: a watch that is denied or disappears mid-stream must be reconstructable from
 // the activity log alone. `onAuthorityRevoked` (wired below) previously aborted the controller and
 // closed the response with no catalogued op, no errorKind, and no correlation id — indistinguishable
@@ -49,14 +83,17 @@ function recordWatchAuthorityRevoked(
   root: string,
   phase: WatchAuthorityDenialPhase,
 ): void {
-  processServerLogSink().write({
-    level: "warn",
-    category: "security",
-    op: "editor.workspace-watch.authority-revoked",
-    correlationId: correlationIdOrUnknown(ctx.correlationId),
-    errorKind: "WATCH_AUTHORITY_REVOKED",
-    extra: { decision: "revoked", phase, rootToken: watchRootToken(root) },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      EDITOR_WORKSPACE_WATCH_AUTHORITY_REVOKED_OPERATION,
+      {
+        level: "warn",
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        errorKind: "authority-denied",
+      },
+      { decision: "revoked", phase, rootToken: watchRootToken(root) },
+    ),
+  );
 }
 
 function eventName(event: EditorM7WatchEvent): string {

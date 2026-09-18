@@ -38,6 +38,11 @@ import {
 import { randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isSealed, openString, sealString } from "./secretbox.js";
 import { atomicPublishRename } from "./fs-atomic-rename.js";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: this package now owns the 0o700/0o600 hardening
@@ -62,6 +67,255 @@ import {
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
 const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
+const MAX_VAULT_STACK_CHARS = 16 * 1024;
+const MAX_VAULT_STACK_LINES = 64;
+const MAX_VAULT_FRAMES = 8;
+const MAX_VAULT_CAUSES = 5;
+const VAULT_FRAME_ANCHOR = "/packages/keiko-security/";
+const VAULT_FRAME_RELATIVE_PATTERN = /^(?:dist|src)\/[A-Za-z0-9_./-]{1,160}\.(?:js|ts)$/u;
+const LINE_OR_COLUMN_PATTERN = /^\d{1,6}$/u;
+
+interface VaultFailureEvidence {
+  readonly failureKind: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+class SecretVaultUnsafeTargetError extends Error {
+  public override readonly name = "SecretVaultUnsafeTargetError";
+  public readonly code = "unsafe-target";
+}
+
+function vaultEnvelopeErrorKind(
+  error: unknown,
+  fallback: ActivityLogErrorKind,
+): ActivityLogErrorKind {
+  const failureKind = securityErrorKind(error);
+  if (failureKind === "unsafe-target") return "unsafe-target";
+  if (failureKind === "EACCES" || failureKind === "EPERM" || failureKind === "EROFS") {
+    return "permission-denied";
+  }
+  return fallback;
+}
+
+function safeErrorProperty(error: unknown, property: string): unknown {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
+    return undefined;
+  }
+  try {
+    return Reflect.get(error, property);
+  } catch {
+    return undefined;
+  }
+}
+
+function frameLocation(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("at ")) return undefined;
+  const value = trimmed.slice(3);
+  if (!value.endsWith(")")) return value;
+  const openIndex = value.lastIndexOf("(");
+  return openIndex === -1 ? undefined : value.slice(openIndex + 1, -1);
+}
+
+function anchoredVaultFrame(line: string): string | undefined {
+  const location = frameLocation(line)
+    ?.replaceAll("\\", "/")
+    .replace(/^file:\/\//u, "");
+  if (location === undefined) return undefined;
+  const columnSeparator = location.lastIndexOf(":");
+  const lineSeparator = location.lastIndexOf(":", columnSeparator - 1);
+  if (columnSeparator <= 0 || lineSeparator <= 0) return undefined;
+  const lineNumber = location.slice(lineSeparator + 1, columnSeparator);
+  const column = location.slice(columnSeparator + 1);
+  if (!LINE_OR_COLUMN_PATTERN.test(lineNumber) || !LINE_OR_COLUMN_PATTERN.test(column)) {
+    return undefined;
+  }
+  const path = location.slice(0, lineSeparator);
+  const anchorIndex = path.lastIndexOf(VAULT_FRAME_ANCHOR);
+  if (anchorIndex === -1) return undefined;
+  const relative = path.slice(anchorIndex + VAULT_FRAME_ANCHOR.length);
+  if (!VAULT_FRAME_RELATIVE_PATTERN.test(relative) || relative.includes("../")) return undefined;
+  return `packages/keiko-security/${relative}:${lineNumber}:${column}`;
+}
+
+function vaultStackFrames(error: unknown): readonly string[] {
+  const stack = safeErrorProperty(error, "stack");
+  if (typeof stack !== "string") return [];
+  const bounded = stack.slice(0, MAX_VAULT_STACK_CHARS);
+  return bounded
+    .split("\n")
+    .slice(1, MAX_VAULT_STACK_LINES + 1)
+    .map(anchoredVaultFrame)
+    .filter((frame): frame is string => frame !== undefined)
+    .slice(0, MAX_VAULT_FRAMES);
+}
+
+function vaultCauseChain(error: unknown): readonly string[] {
+  const classes: string[] = [];
+  const seen = new WeakSet();
+  if (typeof error === "object" && error !== null) seen.add(error);
+  let current = error;
+  for (let depth = 0; depth < MAX_VAULT_CAUSES; depth += 1) {
+    const cause = safeErrorProperty(current, "cause");
+    if (typeof cause !== "object" || cause === null || seen.has(cause)) break;
+    seen.add(cause);
+    classes.push(securityErrorKind(cause));
+    current = cause;
+  }
+  return classes;
+}
+
+function vaultFailureEvidence(error: unknown): VaultFailureEvidence {
+  const frames = vaultStackFrames(error);
+  const chain = vaultCauseChain(error);
+  return {
+    failureKind: securityErrorKind(error),
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(chain.length === 0 ? {} : { causeChain: chain }),
+  };
+}
+
+const SECURITY_VAULT_FAILURE_REGISTRATION = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "security",
+  owner: "keiko-security",
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  releaseImpact: "patch",
+} as const;
+
+const SECURITY_VAULT_FAILURE_FIELDS = {
+  failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  frames: {
+    type: "string-array",
+    dataClass: "safe-platform-class",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 128,
+    maxItems: 5,
+  },
+} as const;
+
+const SECURITY_VAULT_KEY_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.vault.key-resolved",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "secret-vault.resolveLocalVaultKey",
+  fields: {
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["env", "keychain", "keyfile"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["security-vault-key-resolution"],
+  proofIds: ["security.vault.key-resolved.source"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_VAULT_KEY_RESOLUTION_FAILED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.key-resolution-failed",
+  emitter: "secret-vault.emitKeyResolutionFailed",
+  fields: { ...SECURITY_VAULT_FAILURE_FIELDS },
+  failureClasses: ["security-vault-key-resolution"],
+  proofIds: ["security.vault.key-resolution-failed.evidence"],
+});
+
+const SECURITY_VAULT_ENTRIES_MERGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.vault.entries-merged",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "secret-vault.emitEntriesMerged",
+  fields: { count: { type: "integer", dataClass: "count", required: true } },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["security-vault-write"],
+  proofIds: ["security.vault.entries-merged.count"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_VAULT_ENTRIES_DELETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.vault.entries-deleted",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "secret-vault.emitEntriesDeleted",
+  fields: { count: { type: "integer", dataClass: "count", required: true } },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["security-vault-delete"],
+  proofIds: ["security.vault.entries-deleted.count"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_VAULT_ENTRIES_DELETE_FAILED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.entries-delete-failed",
+  emitter: "secret-vault.deleteManyWithLog",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
+  },
+  failureClasses: ["security-vault-delete"],
+  proofIds: ["security.vault.entries-delete-failed.count"],
+});
+
+const SECURITY_VAULT_ENTRIES_MERGE_FAILED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.entries-merge-failed",
+  emitter: "secret-vault.setManyWithLog",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
+  },
+  failureClasses: ["security-vault-write"],
+  proofIds: ["security.vault.entries-merge-failed.count"],
+});
+
+const SECURITY_VAULT_SHARD_UNREADABLE_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.shard-unreadable",
+  emitter: "secret-vault.emitShardUnreadable",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
+  },
+  failureClasses: ["security-vault-read"],
+  proofIds: ["security.vault.shard-unreadable.count"],
+});
+
+const SECURITY_VAULT_ENTRIES_ROLLBACK_FAILED_OPERATION = defineActivityLogOperation({
+  ...SECURITY_VAULT_FAILURE_REGISTRATION,
+  op: "security.vault.entries-rollback-failed",
+  emitter: "secret-vault.rollbackCommittedShards",
+  fields: {
+    count: { type: "integer", dataClass: "count", required: true },
+    ...SECURITY_VAULT_FAILURE_FIELDS,
+  },
+  failureClasses: ["security-vault-rollback"],
+  proofIds: ["security.vault.entries-rollback-failed.count"],
+});
 
 export type SecretVaultStoreErrorCode =
   "SECRET_VAULT_STORE_INVALID_JSON" | "SECRET_VAULT_STORE_INVALID_SCHEMA";
@@ -281,16 +535,33 @@ function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
   return key;
 }
 
+function emitKeyResolutionFailed(sink: SecurityLogSink | undefined, error: unknown): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_KEY_RESOLUTION_FAILED_OPERATION,
+      { level: "error", errorKind: vaultEnvelopeErrorKind(error, "unavailable") },
+      vaultFailureEvidence(error),
+    ),
+  );
+}
+
 export function resolveLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
-  const resolved = computeLocalVaultKey(options);
-  // Fires only once the tier has genuinely resolved — a thrown error (a malformed env key, a
-  // symlinked keyfile path) skips this and reports nothing, exactly as before this event existed.
-  emitSecurityLogEvent(options.sink, {
-    level: "info",
-    category: "security",
-    op: "security.vault.key-resolved",
-    extra: { source: resolved.source },
-  });
+  let resolved: ResolvedLocalVaultKey;
+  try {
+    resolved = computeLocalVaultKey(options);
+  } catch (error) {
+    emitKeyResolutionFailed(options.sink, error);
+    throw error;
+  }
+  emitSecurityLogEvent(
+    options.sink,
+    activityLogEvent(
+      SECURITY_VAULT_KEY_RESOLVED_OPERATION,
+      { level: "info" },
+      { source: resolved.source },
+    ),
+  );
   return resolved;
 }
 
@@ -309,7 +580,9 @@ function assertNoSymlinkedPathSegments(resolvedPath: string): void {
   let current = resolvedPath;
   while (current !== dirname(current)) {
     if (isSymlink(current)) {
-      throw new Error("refusing to write secret vault through a symlinked path");
+      throw new SecretVaultUnsafeTargetError(
+        "refusing to write secret vault through a symlinked path",
+      );
     }
     current = dirname(current);
   }
@@ -577,12 +850,14 @@ function emitEntriesMerged(
   count: number,
   elapsedMs: () => number,
 ): void {
-  emitSecurityLogEvent(sink, {
-    category: "security",
-    op: "security.vault.entries-merged",
-    durationMs: elapsedMs(),
-    extra: { count },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_ENTRIES_MERGED_OPERATION,
+      { durationMs: elapsedMs() },
+      { count },
+    ),
+  );
 }
 
 function emitEntriesDeleted(
@@ -590,12 +865,14 @@ function emitEntriesDeleted(
   count: number,
   elapsedMs: () => number,
 ): void {
-  emitSecurityLogEvent(sink, {
-    category: "security",
-    op: "security.vault.entries-deleted",
-    durationMs: elapsedMs(),
-    extra: { count },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_ENTRIES_DELETED_OPERATION,
+      { durationMs: elapsedMs() },
+      { count },
+    ),
+  );
 }
 
 function deleteManyWithLog(
@@ -608,14 +885,18 @@ function deleteManyWithLog(
   try {
     run();
   } catch (error) {
-    emitSecurityLogEvent(sink, {
-      level: "error",
-      category: "security",
-      op: "security.vault.entries-delete-failed",
-      errorKind: securityErrorKind(error),
-      durationMs: elapsedMs(),
-      extra: { count: references.length },
-    });
+    emitSecurityLogEvent(
+      sink,
+      activityLogEvent(
+        SECURITY_VAULT_ENTRIES_DELETE_FAILED_OPERATION,
+        {
+          level: "error",
+          errorKind: vaultEnvelopeErrorKind(error, "write-failed"),
+          durationMs: elapsedMs(),
+        },
+        { count: references.length, ...vaultFailureEvidence(error) },
+      ),
+    );
     throw error;
   }
   emitEntriesDeleted(sink, references.length, elapsedMs);
@@ -631,14 +912,18 @@ function setManyWithLog(
   try {
     merge(next);
   } catch (error) {
-    emitSecurityLogEvent(sink, {
-      level: "error",
-      category: "security",
-      op: "security.vault.entries-merge-failed",
-      errorKind: securityErrorKind(error),
-      durationMs: elapsedMs(),
-      extra: { count: next.size },
-    });
+    emitSecurityLogEvent(
+      sink,
+      activityLogEvent(
+        SECURITY_VAULT_ENTRIES_MERGE_FAILED_OPERATION,
+        {
+          level: "error",
+          errorKind: vaultEnvelopeErrorKind(error, "write-failed"),
+          durationMs: elapsedMs(),
+        },
+        { count: next.size, ...vaultFailureEvidence(error) },
+      ),
+    );
     throw error;
   }
   emitEntriesMerged(sink, next.size, elapsedMs);
@@ -723,15 +1008,16 @@ function isEnoent(cause: unknown): boolean {
 }
 
 function emitShardUnreadable(sink: SecurityLogSink | undefined, cause: unknown): void {
-  emitSecurityLogEvent(sink, {
-    level: "warn",
-    category: "security",
-    op: "security.vault.shard-unreadable",
-    errorKind: securityErrorKind(cause),
-    // A single unreadable file per call; never the filename (it decodes to the reference) or the
-    // read error's message (it can carry the resolved path).
-    extra: { count: 1 },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_SHARD_UNREADABLE_OPERATION,
+      { level: "warn", errorKind: "read-failed" },
+      // A single unreadable file per call; never the filename (it decodes to the reference) or the
+      // read error's message (it can carry the resolved path).
+      { count: 1, ...vaultFailureEvidence(cause) },
+    ),
+  );
 }
 
 function readShardEnvelope(filePath: string, sink?: SecurityLogSink): string | undefined {
@@ -807,13 +1093,14 @@ function rollbackCommittedShards(
     try {
       restorePreparedShard(storeDir, item, sink);
     } catch (cause) {
-      emitSecurityLogEvent(sink, {
-        level: "error",
-        category: "security",
-        op: "security.vault.entries-rollback-failed",
-        errorKind: securityErrorKind(cause),
-        extra: { count: 1 },
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          SECURITY_VAULT_ENTRIES_ROLLBACK_FAILED_OPERATION,
+          { level: "error", errorKind: "durability-failed" },
+          { count: 1, ...vaultFailureEvidence(cause) },
+        ),
+      );
     }
   }
 }

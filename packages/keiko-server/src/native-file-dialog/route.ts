@@ -23,6 +23,10 @@ import {
   nativeFileDialogSelectionBounds,
   validateNativeFileDialogRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/native-file-dialog";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
@@ -40,6 +44,31 @@ import {
 } from "./adapter.js";
 
 const MAX_NATIVE_FILE_DIALOG_BODY_BYTES = 16_384;
+
+const NATIVE_FILE_DIALOG_SELECTION_PROJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "native-file-dialog.selection.projected",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "native-file-dialog.route.emitSelectionProjected",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+      values: ["complete", "partial"],
+    },
+    rejectedSelectionCount: { type: "integer", dataClass: "count", required: true },
+    selectionCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["native-file-dialog-projection"],
+  proofIds: ["native-file-dialog.selection.projected.counts"],
+  releaseImpact: "patch",
+});
 
 // Route-level single flight: one BFF process can sensibly host one native dialog at a time.
 // State lives in an injectable object (not a module `let`) so tests stay hermetic under
@@ -167,16 +196,17 @@ function emitSelectionProjected(
   selectionCount: number,
   rejectedSelectionCount: number,
 ): void {
-  activityLog.write({
-    category: "diagnostic",
-    op: "native-file-dialog.selection.projected",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      outcome: rejectedSelectionCount > 0 ? "partial" : "complete",
-      selectionCount,
-      rejectedSelectionCount,
-    },
-  });
+  activityLog.write(
+    activityLogEvent(
+      NATIVE_FILE_DIALOG_SELECTION_PROJECTED_OPERATION,
+      { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID },
+      {
+        outcome: rejectedSelectionCount > 0 ? "partial" : "complete",
+        selectionCount,
+        rejectedSelectionCount,
+      },
+    ),
+  );
 }
 
 async function projectSelections(

@@ -79,6 +79,7 @@
 // happens to share it, carries no such promise, and takes the ordinary generic path instead.
 
 import { CLIENT_ERROR_CLASSES } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { ACTIVITY_LOG_FRAME_FIELD_NAME } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import { redactRoutePath } from "./route-template.js";
 import { FRAME_SHAPE_PATTERN, PACKAGE_DIR_NAMES } from "./stack-frames.js";
@@ -137,6 +138,15 @@ const RESERVED_FIELD_NAMES = new Set<string>([
   "category",
   "op",
   "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
   "pid",
   "instanceId",
   "seq",
@@ -604,7 +614,7 @@ function redactGuardedArrayField(
   depth: number,
 ): string[] | undefined {
   if (depth !== MAX_LOG_FIELD_DEPTH || !Array.isArray(fieldValue)) return undefined;
-  if (name === "frames") return redactKeikoFrames(fieldValue);
+  if (name === ACTIVITY_LOG_FRAME_FIELD_NAME) return redactKeikoFrames(fieldValue);
   if (name === "causeChain") return redactCauseChain(fieldValue);
   return undefined;
 }

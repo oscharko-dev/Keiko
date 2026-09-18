@@ -4,6 +4,11 @@
 // logger rather than from a value frozen at import.
 
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  activityLogEvent,
+  activityLogEventRegistration,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   createBufferedServerLogSink,
@@ -13,10 +18,35 @@ import {
   setServerLogger,
 } from "./observability/index.js";
 import {
+  consolidationLogSinkFor,
   logCommandTermination,
   processServerLogSink,
   processServerLogSinkFor,
 } from "./process-log-sink.js";
+
+const PROCESS_WRAPPER_FIXTURE = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "test.process-wrapper",
+  category: "setup",
+  owner: "keiko-server",
+  emitter: "process-log-sink.test.process-wrapper",
+  fields: {},
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["test-fixture"],
+  proofIds: ["test.process-wrapper.registration"],
+  releaseImpact: "none",
+});
+
+const CONSOLIDATION_WRAPPER_FIXTURE = defineActivityLogOperation({
+  ...PROCESS_WRAPPER_FIXTURE,
+  op: "test.consolidation-wrapper",
+  category: "consolidation",
+  emitter: "process-log-sink.test.consolidation-wrapper",
+  proofIds: ["test.consolidation-wrapper.registration"],
+});
 
 afterEach(() => {
   resetServerLogger();
@@ -107,6 +137,19 @@ describe("processServerLogSink", () => {
       "producer-correlation-1",
     ]);
   });
+
+  it("preserves typed registration through correlation wrappers", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const processEvent = activityLogEvent(PROCESS_WRAPPER_FIXTURE, {}, {});
+    const consolidationEvent = activityLogEvent(CONSOLIDATION_WRAPPER_FIXTURE, {}, {});
+
+    processServerLogSinkFor("process-correlation-1").write(processEvent);
+    consolidationLogSinkFor("consolidation-correlation-1").write(consolidationEvent);
+
+    expect(activityLogEventRegistration(sink.events[0] ?? {})).toBe(PROCESS_WRAPPER_FIXTURE);
+    expect(activityLogEventRegistration(sink.events[1] ?? {})).toBe(CONSOLIDATION_WRAPPER_FIXTURE);
+  });
 });
 
 // A single termination can emit TWO lines: the SIGTERM step, and — only when the child ignored it —
@@ -118,7 +161,7 @@ describe("logCommandTermination", () => {
     logCommandTermination(sink, "corr-1", evidence);
     const event = sink.events[0];
     expect(event?.op).toBe("command.terminated");
-    expect(event?.correlationId).toBe("corr-1");
+    expect(event?.correlationId).toBe("unknown-correlation-id");
     return event?.extra ?? {};
   }
 

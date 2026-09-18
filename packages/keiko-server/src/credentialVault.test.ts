@@ -316,7 +316,7 @@ describe("sealProviderApiKeys", () => {
       expect.objectContaining({
         category: "security",
         op: "security.vault.entries-merged",
-        extra: { count: 2 },
+        extra: { completeness: "complete", count: 2, loss: "none" },
       }),
     );
     expect(JSON.stringify(events)).not.toContain("k0");

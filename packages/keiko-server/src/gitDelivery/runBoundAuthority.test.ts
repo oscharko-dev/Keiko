@@ -454,7 +454,13 @@ describe("authorizeGitDelivery", () => {
         op: "git.delivery.authority.admitted",
         correlationId: "correlation-1",
         status: 200,
-        extra: { operation: "push", phase: "admission", runId: "test-run" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "push",
+          phase: "admission",
+          runId: "test-run",
+        },
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain(WORKSPACE_ROOT);
@@ -491,6 +497,8 @@ describe("authorizeGitDelivery", () => {
         correlationId: UNKNOWN_CORRELATION_ID,
         status: 403,
         extra: {
+          completeness: "complete",
+          loss: "none",
           operation: "push",
           phase: "admission",
           reason: "accepted-run-unavailable",
@@ -527,7 +535,13 @@ describe("authorizeGitDelivery", () => {
         op: "git.delivery.authority.denied",
         correlationId: "correlation-2",
         status: 403,
-        extra: { operation: "push", phase: "continuity", reason: "authority-changed" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "push",
+          phase: "continuity",
+          reason: "authority-changed",
+        },
       }),
     ]);
   });
@@ -667,7 +681,13 @@ describe("authorizeGitDelivery", () => {
         op: "git.delivery.authority.denied",
         correlationId: "correlation-4",
         status: 403,
-        extra: { operation: "push", phase: "admission", reason: "approval-required" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "push",
+          phase: "admission",
+          reason: "approval-required",
+        },
       }),
     ]);
   });

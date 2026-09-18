@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   readBoundedRequestBody,
   readJsonRequestBody,
@@ -237,14 +238,20 @@ describe("bounded request body activity log", () => {
         correlationId: "req-correlation-01",
         durationMs: undefined,
         status: undefined,
-        errorKind: "RequestBodyTooLargeError",
-        extra: { maxBytes: 4, receivedBytes: 5, reason: "limit-exceeded" },
+        errorKind: "invalid-request",
+        extra: {
+          maxBytes: 4,
+          receivedBytes: 5,
+          reason: "limit-exceeded",
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
     stream.end();
   });
 
-  it("omits the correlation id when the caller could not supply one", async () => {
+  it("uses the sanctioned unknown correlation id when the caller could not supply one", async () => {
     const sink = captureServerLog("info");
     const stream = new PassThrough();
     const outcome = readBoundedRequestBody(asRequest(stream), 2);
@@ -252,7 +259,7 @@ describe("bounded request body activity log", () => {
     stream.write(Buffer.from("abc"));
 
     await expect(outcome).rejects.toBeInstanceOf(RequestBodyTooLargeError);
-    expect(sink.events[0]?.correlationId).toBeUndefined();
+    expect(sink.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(sink.events[0]?.op).toBe("http.request.body.rejected");
     stream.end();
   });
@@ -260,7 +267,15 @@ describe("bounded request body activity log", () => {
   it("classifies a stream failure without reading its message", async () => {
     const sink = captureServerLog("info");
     const stream = new PassThrough();
-    const failure = Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    const failure = Object.assign(
+      new Error("connection reset by peer", { cause: new TypeError("private parser detail") }),
+      { code: "ECONNRESET" },
+    );
+    failure.stack = [
+      "Error: connection reset by peer",
+      "    at readChunk (file:///Users/someone/app/packages/keiko-server/dist/bounded-request-body.js:208:11)",
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+    ].join("\n");
     const outcome = readBoundedRequestBody(asRequest(stream), 128_000, undefined, "req-corr-02");
 
     stream.emit("error", failure);
@@ -269,8 +284,36 @@ describe("bounded request body activity log", () => {
     const [event] = sink.events;
     expect(event?.op).toBe("http.request.body.failed");
     expect(event?.level).toBe("warn");
-    expect(event?.errorKind).toBe("ECONNRESET");
+    expect(event?.errorKind).toBe("internal");
+    expect(event?.extra).toEqual({
+      maxBytes: 128_000,
+      receivedBytes: 0,
+      failureKind: "ECONNRESET",
+      frames: ["packages/keiko-server/dist/bounded-request-body.js:208:11"],
+      causeChain: ["TypeError"],
+      completeness: "complete",
+      loss: "none",
+    });
     expect(JSON.stringify(sink.events)).not.toContain("connection reset");
+    expect(JSON.stringify(sink.events)).not.toContain("private parser detail");
+    stream.destroy();
+  });
+
+  it("normalizes a 128-character machine code to the 64-character field contract and settles", async () => {
+    const sink = captureServerLog("info");
+    const stream = new PassThrough();
+    const failure = Object.assign(new Error("private transport failure"), {
+      code: "X".repeat(128),
+    });
+    const outcome = readBoundedRequestBody(asRequest(stream), 128_000, undefined, "req-corr-128");
+
+    stream.emit("error", failure);
+
+    await expect(outcome).rejects.toBe(failure);
+    expect(sink.events[0]).toMatchObject({
+      op: "http.request.body.failed",
+      extra: { failureKind: "unknown" },
+    });
     stream.destroy();
   });
 
@@ -301,8 +344,13 @@ describe("bounded request body activity log", () => {
         correlationId: "req-c-03",
         durationMs: undefined,
         status: undefined,
-        errorKind: "RequestBodyCancelledError",
-        extra: { maxBytes: 128_000, receivedBytes: 0 },
+        errorKind: "cancelled",
+        extra: {
+          maxBytes: 128_000,
+          receivedBytes: 0,
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
   });
@@ -339,7 +387,12 @@ describe("bounded request body activity log", () => {
         durationMs: undefined,
         status: undefined,
         errorKind: undefined,
-        extra: { contentType: "application/json", receivedBytes: 5 },
+        extra: {
+          contentType: "application/json",
+          receivedBytes: 5,
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
   });
@@ -361,7 +414,12 @@ describe("bounded request body activity log", () => {
       })(),
     ).resolves.toBe("hi");
 
-    expect(sink.events[0]?.extra).toEqual({ contentType: "other", receivedBytes: 2 });
+    expect(sink.events[0]?.extra).toEqual({
+      contentType: "other",
+      receivedBytes: 2,
+      completeness: "complete",
+      loss: "none",
+    });
     expect(JSON.stringify(sink.events)).not.toContain("secret-token-abc123");
   });
 
@@ -372,7 +430,12 @@ describe("bounded request body activity log", () => {
 
     await expect(readBoundedRequestBody(req, 128_000)).resolves.toBe("hi");
 
-    expect(sink.events[0]?.extra).toEqual({ contentType: "unspecified", receivedBytes: 2 });
+    expect(sink.events[0]?.extra).toEqual({
+      contentType: "unspecified",
+      receivedBytes: 2,
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   it("logs one rejection even when a late data event arrives after the read settled", async () => {

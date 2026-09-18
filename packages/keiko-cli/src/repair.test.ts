@@ -602,7 +602,12 @@ describe("runRepairCli — install layout", () => {
       expect.objectContaining({
         op: "cli.install-layout.normalized",
         correlationId: "00000000-0000-4000-8000-000000000001",
-        extra: { overriddenCount: 1, overriddenKinds: ["ui-static-root"] },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          overriddenCount: 1,
+          overriddenKinds: ["ui-static-root"],
+        },
       }),
     ]);
   });

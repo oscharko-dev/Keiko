@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { readVerifiedCommitFacts } from "../gitDelivery/verifiedCommitFacts.js";
 import {
@@ -142,8 +143,13 @@ describe("repository identity before runtime confirmation", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git.runtime-identity",
-        correlationId: "run-1",
-        extra: { runId: "run-1", state: "consumed" },
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          runId: "run-1",
+          state: "consumed",
+        },
       }),
     );
     expect(JSON.stringify(events)).not.toMatch(
@@ -199,7 +205,7 @@ describe("repository identity before runtime confirmation", () => {
       expect.objectContaining({
         op: "git.runtime-identity",
         errorKind: "internal",
-        correlationId: "run-1",
+        correlationId: UNKNOWN_CORRELATION_ID,
         extra: expect.objectContaining({ state: "failed" }) as unknown,
       }),
     );

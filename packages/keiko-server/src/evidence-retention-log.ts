@@ -6,6 +6,10 @@
 // report from one observer registration (one retention pass) shares one correlation id (ADR-0173 D5).
 
 import { randomUUID } from "node:crypto";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogSink } from "./observability/server-log.js";
 import { processServerLogSink } from "./process-log-sink.js";
 
@@ -22,6 +26,41 @@ export type EvidenceRetentionSource =
   | "run-engine"
   | "terminal-execution";
 
+const EVIDENCE_RETENTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "evidence.retention",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "evidence-retention-log.evidenceRetentionObserver",
+  fields: {
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "browser-capture",
+        "chat-compaction-evidence",
+        "command-runner",
+        "container-runner",
+        "editor-verification-run",
+        "grounded-qa",
+        "grounded-qa-hybrid",
+        "grounded-qa-multi-source",
+        "run-engine",
+        "terminal-execution",
+      ],
+    },
+    deletedCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["evidence-retention"],
+  proofIds: ["evidence.retention.line"],
+  releaseImpact: "patch",
+});
+
 /**
  * The `onRetentionDeleted` callback for one store registration. Every deletion it reports lands as
  * a `process` line with its source and count, joinable under the observer's own correlation id.
@@ -32,11 +71,8 @@ export function evidenceRetentionObserver(
 ): (deletedCount: number) => void {
   const correlationId = randomUUID();
   return (deletedCount: number): void => {
-    activityLog.write({
-      category: "process",
-      op: "evidence.retention",
-      correlationId,
-      extra: { source, deletedCount },
-    });
+    activityLog.write(
+      activityLogEvent(EVIDENCE_RETENTION_OPERATION, { correlationId }, { source, deletedCount }),
+    );
   };
 }

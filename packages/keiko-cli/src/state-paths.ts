@@ -390,7 +390,7 @@ export function classifyPid(
 //     updates/runtime-state.json            keiko-server  update-local-state.ts
 //     updates/update-audit.jsonl            keiko-server  update-local-state.ts
 //     updates/snapshots/<id>/manifest.json  keiko-server  update-local-state.ts
-//     logs/server.log, server-<date>.log    keiko-server  observability/server-log.ts
+//     logs/server.log, legacy server-<date>.log archives keiko-server  observability/server-log.ts
 //
 // The sealed `*.vault` ciphertext and its `*.key` keyfile (the env/keychain-tier fallback,
 // ADR-0046) are the most confidentiality-critical artifacts here, so they are first-class
@@ -439,7 +439,8 @@ const PRODUCER_TEMP_SUFFIX = ".tmp"; // atomic-save temp files (`<target>.<rando
 const PRODUCER_TEMP_TOKEN = /^[A-Za-z0-9._-]{8,}$/u;
 const SECRET_VAULT_TEMP_FILE = /^\.secret-vault\.[1-9]\d*\.[0-9a-f]{16}\.tmp$/u;
 const SERVER_LOG_FILE = "server.log"; // keiko-server/src/observability/server-log.ts (createFileServerLogSink)
-const SERVER_LOG_ARCHIVE_FILE = /^server-\d{4}-\d{2}-\d{2}\.log$/u; // day-rotated archive (archiveCurrentDay)
+// Compatibility ownership for archives created before #3528 retired path-based rotation.
+const SERVER_LOG_ARCHIVE_FILE = /^server-\d{4}-\d{2}-\d{2}\.log$/u;
 const QI_OWNED_SUFFIXES = [
   ".qi.json", // keiko-evidence/src/qualityIntelligence/store.ts
   ".candidates.json", // keiko-evidence/src/qualityIntelligence/candidatesArtifact.ts
@@ -729,8 +730,8 @@ const updateSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
-// `logs/` holds only `server.log` and its day-rotated `server-<date>.log` archives
-// (`createFileServerLogSink`). Classified rather than `whole`: an operator file dropped into
+// `logs/` owns `server.log` plus legacy `server-<date>.log` archives from the retired rotation
+// implementation. Classified rather than `whole`: an operator file dropped into
 // `logs/`, or an unexpected nested directory, must be retained rather than claimed by
 // `repair`/`uninstall` — a `whole` subtree here would let anything placed under `logs/` get
 // chmod'd or removed as if Keiko had written it (#2902 PR review).

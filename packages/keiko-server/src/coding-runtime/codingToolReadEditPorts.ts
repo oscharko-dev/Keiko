@@ -5,6 +5,11 @@ import type {
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import {
   detectWorkspaceAt,
@@ -321,6 +326,125 @@ type WorkspaceReadFailureReason =
   | "preflight-refused"
   | "response-too-large";
 
+const CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [
+    "unsupported-platform",
+    "workspace-unavailable",
+    "artifact-unverified",
+    "busy",
+    "cancelled",
+    "timeout",
+    "process-failed",
+    "protocol-invalid",
+    "denied",
+    "not-found",
+    "not-text",
+    "too-large",
+    "unstable",
+    "exception",
+    "postflight-refused",
+    "preflight-refused",
+    "response-too-large",
+  ],
+} as const;
+
+const CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const CODING_RUNTIME_WORKSPACE_READ_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const CODING_RUNTIME_WORKSPACE_READ_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.workspace-read",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolReadEditPorts.workspaceRead",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "failed"],
+    },
+    reason: CODING_RUNTIME_WORKSPACE_READ_REASON_FIELD,
+    targetPathSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    startLine: { type: "integer", dataClass: "count", required: false },
+    maxLines: { type: "integer", dataClass: "count", required: false },
+    frames: CODING_RUNTIME_WORKSPACE_READ_FRAMES_FIELD,
+    causeChain: CODING_RUNTIME_WORKSPACE_READ_CAUSE_CHAIN_FIELD,
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-workspace-read"],
+  proofIds: ["coding-runtime.workspace-read.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.editor-mutation.settled",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolReadEditPorts.completedEdit",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded", "failed", "cancelled"],
+    },
+    actionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["edit"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-editor-mutation"],
+  proofIds: ["coding-runtime.editor-mutation.settled.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const WORKSPACE_READ_ERROR_KINDS: Partial<
+  Readonly<Record<WorkspaceReadFailureReason, ActivityLogErrorKind>>
+> = {
+  cancelled: "cancelled",
+  timeout: "timeout",
+  denied: "authority-denied",
+  "preflight-refused": "authority-denied",
+  "postflight-refused": "authority-denied",
+  "not-found": "unavailable",
+  "workspace-unavailable": "unavailable",
+  "too-large": "validation-failed",
+  "response-too-large": "validation-failed",
+  exception: "internal",
+  "process-failed": "internal",
+};
+
+function workspaceReadErrorKind(reason: WorkspaceReadFailureReason): ActivityLogErrorKind {
+  return WORKSPACE_READ_ERROR_KINDS[reason] ?? "read-failed";
+}
+
 function completedRead(
   deps: CodingToolReadEditPortDeps,
   binding: RuntimeProducerBinding | undefined,
@@ -348,17 +472,18 @@ function recordCompletedRead(
   binding: RuntimeProducerBinding | undefined,
   request: RepositoryReadRequest,
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "coding-runtime.workspace-read",
-    correlationId: correlationIdOrUnknown(binding?.runId),
-    extra: {
-      state: "completed",
-      targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
-      startLine: request.startLine ?? 1,
-      maxLines: request.maxLines ?? 0,
-    },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_WORKSPACE_READ_OPERATION,
+      { correlationId: correlationIdOrUnknown(binding?.runId) },
+      {
+        state: "completed",
+        targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
+        startLine: request.startLine ?? 1,
+        maxLines: request.maxLines ?? 0,
+      },
+    ),
+  );
 }
 
 function failedRead(
@@ -369,21 +494,20 @@ function failedRead(
   error?: unknown,
 ): { readonly status: "failed" } {
   const correlationId = correlationIdOrUnknown(binding?.runId);
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "coding-runtime.workspace-read",
-    correlationId,
-    level: "warn",
-    ...(error === undefined ? {} : { errorKind: contentFreeErrorClass(error) }),
-    extra: {
-      state: "failed",
-      reason,
-      targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
-      ...(error === undefined
-        ? {}
-        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
-    },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_WORKSPACE_READ_OPERATION,
+      { correlationId, level: "warn", errorKind: workspaceReadErrorKind(reason) },
+      {
+        state: "failed",
+        reason,
+        targetPathSha256: createHash("sha256").update(request.relativePath, "utf8").digest("hex"),
+        ...(error === undefined
+          ? {}
+          : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+      },
+    ),
+  );
   if (error !== undefined) emitReadFailureDiagnostic(deps.diagnostics, correlationId, error);
   return { status: "failed" };
 }
@@ -584,12 +708,18 @@ async function completedEdit(
 ): Promise<EditOutcome> {
   if (completion === undefined) return { status: "completed" };
   const outcome = await completion;
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "coding-runtime.editor-mutation.settled",
-    correlationId,
-    extra: { state: outcome, actionKind: "edit" },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION,
+      {
+        correlationId,
+        ...(outcome === "succeeded"
+          ? {}
+          : { level: "warn", errorKind: outcome === "cancelled" ? "cancelled" : "internal" }),
+      },
+      { state: outcome, actionKind: "edit" },
+    ),
+  );
   const reasonCode = outcome === "cancelled" ? "CANCELLED" : "EDIT_MUTATION_FAILED";
   return outcome === "succeeded"
     ? { status: "completed" }

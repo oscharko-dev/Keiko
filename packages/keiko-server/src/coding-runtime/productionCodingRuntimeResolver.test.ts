@@ -417,6 +417,7 @@ describe("production coding runtime resolver", () => {
       workspaceId: "workspace-private",
       workspaceRoot: fixture.workspace,
       serverPrincipal: "operator-private",
+      correlationId: "request-runtime-start-0001",
     } as const;
     confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
     const launch = host.launchResolver.resolve(request);
@@ -456,7 +457,10 @@ describe("production coding runtime resolver", () => {
     expect(JSON.stringify(createRun.mock.calls[0]?.[0].minted)).not.toContain("private task");
     expect(createRun.mock.calls[0]?.[0].authorityLifecycle.revokeRuntime("run-1")).toBe(true);
     // Revoking the run drops its manifest admissions with it (ADR-0147 D3, autonomous-delivery).
-    expect(revokeRunAdmissions).toHaveBeenCalledExactlyOnceWith("run-1");
+    expect(revokeRunAdmissions).toHaveBeenCalledExactlyOnceWith(
+      "run-1",
+      "request-runtime-start-0001",
+    );
     await expect(
       host.taskDispatcher.dispatch({
         runId: "run-1",
@@ -819,12 +823,14 @@ describe("operatorDecisionRequester", () => {
       { workspaceScriptTrust: { admitRunManifest, revokeRunAdmissions: vi.fn() } },
       { workspaceRoot: "/managed/worktree", expiresAt: "2026-09-10T20:00:00.000Z" },
       { authorityRef: { runId: "run-7", envelopeDigest: "d".repeat(64) } },
+      "request-runtime-parent-0007",
     );
     composed.admitRunManifest?.();
     expect(admitRunManifest).toHaveBeenCalledExactlyOnceWith(
       "/managed/worktree",
       "run-7",
       "2026-09-10T20:00:00.000Z",
+      "request-runtime-parent-0007",
     );
     expect(
       runManifestAdmission(

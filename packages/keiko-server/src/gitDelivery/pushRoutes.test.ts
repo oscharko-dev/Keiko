@@ -564,6 +564,9 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(
       activity.events.filter((event) => event.op === "git.delivery.dispatch.no-spawn"),
     ).toHaveLength(1);
+    expect(
+      activity.events.find((event) => event.op === "git.delivery.dispatch.no-spawn")?.errorKind,
+    ).toBe("authority-denied");
     const completed = activity.events.find(
       (event) => event.op === "git.delivery.mutation.completed",
     );

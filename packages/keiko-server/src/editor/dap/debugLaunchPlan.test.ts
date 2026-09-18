@@ -644,7 +644,8 @@ describe("stateless debug launch Layer-2 planning", () => {
     const persisted = readFileSync(join(logRoot, "logs", "server.log"), "utf8")
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.op !== "server-log.safe-open");
     expect(persisted).toEqual([
       expect.objectContaining({
         op: "dap.debug-runtime.selected",

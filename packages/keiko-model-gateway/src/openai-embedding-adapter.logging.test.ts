@@ -12,7 +12,11 @@ import {
   requestOpenAIEmbeddingBatch,
   resetStrictGatewayMemoForTests,
 } from "./openai-embedding-adapter.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import {
+  logModelId,
+  type ModelGatewayLogEvent,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
@@ -167,8 +171,8 @@ describe("scalar embedding — activity log", () => {
     expect(retry.level).toBe("warn");
     expect(retry.status).toBe(400);
     expect(retry.extra).toMatchObject({ reason: "strict-gateway-rejection" });
-    // The endpoint is reduced to scheme://host — never the /embeddings path, never the input.
-    expect(retry.extra?.endpoint).toBe(new URL(endpoint).origin);
+    expect(retry.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(retry)).not.toContain(new URL(endpoint).host);
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
   });
 
@@ -185,7 +189,7 @@ describe("scalar embedding — activity log", () => {
     expect(outcome.ok).toBe(false);
     const failed = eventFor(log.events, "embedding.request.failed");
     expect(failed.status).toBe(401);
-    expect(failed.errorKind).toBe("wrong-header");
+    expect(failed.errorKind).toBe("validation-failed");
     expect(failed.extra).toMatchObject({ minimalShape: false });
   });
 
@@ -209,14 +213,38 @@ describe("scalar embedding — activity log", () => {
     const dispatch = eventFor(log.events, "embedding.request.dispatch");
     expect(dispatch.level).toBe("info");
     expect(dispatch.extra).toMatchObject({
-      endpoint: new URL(endpoint).origin,
       modelId: "embed-1",
       inputCount: 1,
       timeoutMs: 12_000,
       minimalShape: false,
     });
+    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(dispatch.extra).not.toHaveProperty("endpoint");
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
+  });
+
+  it("sanitizes a body-bearing model id without blocking the provider call", async () => {
+    const log = recorder();
+    const modelId = "text embedding 3 / customer alias";
+    const transport = scriptedFetch([(): Response => jsonResponse(scalarBody())]);
+
+    await expect(
+      requestOpenAIEmbedding({
+        ...BASE,
+        modelId,
+        endpoint: uniqueEndpoint(),
+        input: "x",
+        fetchImpl: transport.fetchImpl,
+        log: log.sink,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(transport.calls()).toBe(1);
+    expect(eventFor(log.events, "embedding.request.dispatch").extra?.modelId).toBe(
+      logModelId(modelId),
+    );
+    expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
   // The ordering proof. A line written after the call returns cannot describe a call that never
@@ -286,7 +314,7 @@ describe("batch embedding — activity log", () => {
     const degrading = eventFor(log.events, "embedding.batch.degrading-to-scalar");
     expect(degrading.level).toBe("warn");
     expect(degrading.status).toBe(500);
-    expect(degrading.errorKind).toBe("http-error");
+    expect(degrading.errorKind).toBe("unavailable");
     expect(degrading.extra).toMatchObject({ inputCount: 2 });
 
     const degraded = eventFor(log.events, "embedding.batch.degraded-to-scalar");
@@ -466,13 +494,13 @@ describe("batch embedding — activity log", () => {
     expect(Object.keys(fromMemo.extra ?? {}).sort()).toEqual(
       Object.keys(fromRetry.extra ?? {}).sort(),
     );
-    expect({ ...fromMemo.extra, endpoint: undefined }).toEqual({
+    expect({ ...fromMemo.extra, endpointDigest: undefined }).toEqual({
       ...fromRetry.extra,
-      endpoint: undefined,
+      endpointDigest: undefined,
     });
-    // The host is the one field that legitimately differs — and it is a HOST, never the path.
-    expect(fromMemo.extra?.endpoint).toBe(new URL(strictEndpoint).origin);
-    expect(fromRetry.extra?.endpoint).toBe(new URL(endpoint).origin);
+    expect(fromMemo.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(fromRetry.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(fromMemo.extra?.endpointDigest).not.toBe(fromRetry.extra?.endpointDigest);
   });
 
   it("names which structural check rejected a malformed body", async () => {
@@ -537,6 +565,29 @@ describe("batch embedding — activity log", () => {
       timeoutMs: 9_000,
     });
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
+  });
+
+  it("sanitizes a body-bearing batch model id without blocking the provider call", async () => {
+    const log = recorder();
+    const modelId = "embedding batch alias";
+    const transport = scriptedFetch([(): Response => jsonResponse(batchBody(2))]);
+
+    await expect(
+      requestOpenAIEmbeddingBatch({
+        ...BASE,
+        modelId,
+        endpoint: uniqueEndpoint(),
+        inputs: ["a", "b"],
+        fetchImpl: transport.fetchImpl,
+        log: log.sink,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(transport.calls()).toBe(1);
+    expect(eventFor(log.events, "embedding.batch.dispatch").extra?.modelId).toBe(
+      logModelId(modelId),
+    );
+    expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
   // The 0.3.13 shape: one array request, 36 inputs, nineteen seconds, no answer yet. The attempt

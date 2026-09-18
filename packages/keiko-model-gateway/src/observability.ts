@@ -22,7 +22,14 @@
 // bodies, API keys, or headers — counts, sizes, statuses, durations, and closed-union decision
 // labels only.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  withActivityLogCorrelation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
 export type ModelGatewayLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -43,6 +50,7 @@ export interface ModelGatewayLogEvent {
 
 export interface ModelGatewayLogSink {
   readonly write: (event: ModelGatewayLogEvent) => void;
+  readonly correlationId?: string | undefined;
   // Cheap level predicate — the ONLY way a below-threshold event can cost nothing here.
   //
   // The sink that ultimately receives these events applies a threshold (`KEIKO_LOG_LEVEL`,
@@ -97,13 +105,36 @@ export function resolveLogSink(sink: ModelGatewayLogSink | undefined): ModelGate
 // test double never inherits another test's state, and nothing is retained.
 const REPORTED_FAILED_SINKS = new WeakSet<ModelGatewayLogSink>();
 
+const GATEWAY_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.log.sink-failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "observability.reportFailedLogSink",
+  fields: {
+    droppedOp: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 128,
+    },
+  },
+  causal: "none",
+  lifecycle: "loss",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-sink-failure"],
+  proofIds: ["model-gateway.log-sink-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
   return {
     write(event: ModelGatewayLogEvent): void {
       try {
         sink.write(event);
       } catch (cause) {
-        reportFailedLogSink(sink, event.op, cause);
+        reportFailedLogSink(sink, event, cause);
       }
     },
     enabled(level: ModelGatewayLogLevel): boolean {
@@ -116,21 +147,32 @@ function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
         return true;
       }
     },
+    ...(sink.correlationId === undefined ? {} : { correlationId: sink.correlationId }),
   };
 }
 
-function reportFailedLogSink(sink: ModelGatewayLogSink, droppedOp: string, cause: unknown): void {
+function reportFailedLogSink(
+  sink: ModelGatewayLogSink,
+  droppedEvent: ModelGatewayLogEvent,
+  cause: unknown,
+): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;
   REPORTED_FAILED_SINKS.add(sink);
-  const errorKind = logErrorKind(cause);
+  const errorKind = activityLogErrorKind(cause);
   try {
-    sink.write({
-      level: "error",
-      category: "gateway",
-      op: "gateway.log.sink-failed",
-      errorKind,
-      extra: { droppedOp },
-    });
+    sink.write(
+      activityLogEvent(
+        GATEWAY_LOG_SINK_FAILED_OPERATION,
+        {
+          level: "error",
+          errorKind,
+          ...(droppedEvent.correlationId === undefined
+            ? {}
+            : { correlationId: droppedEvent.correlationId }),
+        },
+        { droppedOp: droppedEvent.op },
+      ),
+    );
     return;
   } catch {
     // The transport refuses this shape too, so it is the transport that is down.
@@ -139,7 +181,7 @@ function reportFailedLogSink(sink: ModelGatewayLogSink, droppedOp: string, cause
     process.emitWarning("Keiko activity log sink is failing; log lines are being dropped.", {
       type: "KeikoActivityLog",
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: `op=${droppedOp} errorKind=${errorKind}`,
+      detail: `op=${droppedEvent.op} errorKind=${errorKind}`,
     });
   } catch {
     // The process warning channel is the last one there is.
@@ -186,12 +228,21 @@ export function withCorrelationId(
   }
   return {
     write(event: ModelGatewayLogEvent): void {
-      sink.write(event.correlationId === undefined ? { ...event, correlationId } : event);
+      sink.write(event.correlationId === undefined ? correlatedEvent(event, correlationId) : event);
     },
     enabled(level: ModelGatewayLogLevel): boolean {
       return logLevelEnabled(sink, level);
     },
+    correlationId,
   };
+}
+
+export function logCorrelationId(sink: ModelGatewayLogSink): string | undefined {
+  return sink.correlationId;
+}
+
+function correlatedEvent(event: ModelGatewayLogEvent, correlationId: string): ModelGatewayLogEvent {
+  return withActivityLogCorrelation(event, correlationId);
 }
 
 // Monotonic elapsed milliseconds. `performance.now` rather than `Date.now` so a wall-clock step
@@ -236,6 +287,38 @@ export function logErrorKind(error: unknown): string {
     return "unknown";
   }
   return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
+}
+
+const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{
+  pattern: RegExp;
+  result: ActivityLogErrorKind;
+}>[] = [
+  { pattern: /timeout|^etimedout$/u, result: "timeout" },
+  { pattern: /cancel|abort/u, result: "cancelled" },
+  { pattern: /rate|^429$/u, result: "rate-limited" },
+  { pattern: /valid|schema/u, result: "validation-failed" },
+  {
+    pattern: /(?:^|[._-])auth(?:entication)?(?:[._-]|$)|permission|forbidden|blocked/u,
+    result: "permission-denied",
+  },
+  { pattern: /authority/u, result: "authority-denied" },
+  { pattern: /conflict/u, result: "conflict" },
+  { pattern: /unavailable|econn/u, result: "unavailable" },
+];
+
+export function activityLogErrorKind(error: unknown): ActivityLogErrorKind {
+  const kind = logErrorKind(error).toLowerCase();
+  const matched = ACTIVITY_LOG_ERROR_KIND_RULES.find(({ pattern }) => pattern.test(kind));
+  return matched?.result ?? (kind === "unknown" ? "unknown" : "internal");
+}
+
+const BODY_FREE_MODEL_ID = /^(?![<{])[\x21-\x7e]{1,256}$/u;
+
+// Configured provider ids are routing data, not log data. Preserve already bounded printable ids
+// for operator readability; hash whitespace, Unicode, and oversized ids into a registry-safe token
+// without changing the id the adapter receives.
+export function logModelId(modelId: string): string {
+  return BODY_FREE_MODEL_ID.test(modelId) ? modelId : `model-${sha256Hex(modelId)}`;
 }
 
 // `scheme://host:port` and nothing else. Credentials, path, query, and fragment are dropped rather

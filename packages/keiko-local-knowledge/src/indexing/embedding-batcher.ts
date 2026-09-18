@@ -13,6 +13,7 @@
 // The identity check is the load-bearing invariant from #192. Removing it would let a
 // capsule pinned to dim=1536 silently accept dim=768 rows — see test #5.
 
+import { createHash } from "node:crypto";
 import type {
   EmbeddingModelIdentity,
   IndexingJobError,
@@ -47,14 +48,9 @@ import {
 } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
 import { chunkDedupeKey } from "../chunking/chunker.js";
-import {
-  emitKnowledgeLogEvent,
-  knowledgeErrorKind,
-  startKnowledgeLogTimer,
-  type KnowledgeLogEvent,
-  type KnowledgeLogLevel,
-} from "../knowledge-log.js";
+import { knowledgeErrorKind, startKnowledgeLogTimer } from "../knowledge-log.js";
 import { conservativeTokenEstimatorTokenizer } from "../chunking/token-estimator.js";
+import { emitEmbeddingActivity, type EmbeddingActivity } from "./embedding-activity-log.js";
 
 // ─── Activity log ────────────────────────────────────────────────────────────
 // Every line this module writes is content-free: counts, byte-free sizes, durations, HTTP
@@ -83,49 +79,72 @@ export function embeddingEndpointHost(endpoint: string | undefined): string | un
 
 // The correlation fields ride in `extra` rather than replacing `correlationId`, which carries
 // the job id alone so an operator can grep one run out of a file interleaving four of them.
-function correlationExtra(
-  context: IndexingLogContext | undefined,
-): Readonly<Record<string, unknown>> {
-  if (context === undefined) return {};
-  return {
-    capsuleIdDigest: context.capsuleIdDigest,
-    ...(context.documentIdDigest !== undefined
-      ? { documentIdDigest: context.documentIdDigest }
-      : {}),
-  };
-}
-
-function logEmbedding(
-  options: EmbedBatchOptions,
-  event: Omit<KnowledgeLogEvent, "category" | "correlationId">,
-): void {
-  const sink = options.logSink;
-  if (sink === undefined) return;
-  const context = options.logContext;
-  const extra = { ...correlationExtra(context), ...event.extra };
+function logEmbedding(options: EmbedBatchOptions, event: EmbeddingActivity): void {
   // A throwing sink must not escape into the retry ladder, the pinned-identity gate, or
   // `persistAndReport`: those read their own control flow from what the adapter returned, and a
   // logging failure landing there would be accounted as an embedding failure. `emitKnowledgeLogEvent`
   // also makes a permanently failing sink report itself once — see `knowledge-log.ts`.
-  emitKnowledgeLogEvent(sink, {
-    ...event,
-    category: "embedding",
-    ...(context !== undefined ? { correlationId: context.jobId } : {}),
-    ...(Object.keys(extra).length > 0 ? { extra } : {}),
-  });
+  emitEmbeddingActivity(options.logSink, options.logContext, event);
 }
 
 // Omitted rather than written as `undefined` when the endpoint does not parse: a field that is
 // present but empty reads as "the gateway has no host", which is a different diagnosis.
-function endpointExtra(options: EmbedBatchOptions): Readonly<Record<string, unknown>> {
+function endpointExtra(options: EmbedBatchOptions): { readonly endpointDigest?: string } {
   const host = embeddingEndpointHost(options.adapter.endpoint);
-  return host === undefined ? {} : { endpointHost: host };
+  return host === undefined
+    ? {}
+    : { endpointDigest: createHash("sha256").update(host).digest("hex").slice(0, 16) };
+}
+
+interface EmbeddingRetryExtra {
+  readonly attempt: number;
+  readonly maxRetries: number;
+  readonly delayMs?: number;
+  readonly zeroProgressRetries?: number;
+  readonly remainingCount?: number;
+  readonly completedCount?: number;
+  readonly transport: "scalar" | "array-batch";
+}
+
+function logScalarEmbeddingRetry(
+  options: EmbedBatchOptions,
+  outcome: OpenAIEmbeddingOutcome | OpenAIEmbeddingBatchOutcome,
+  op: "embedding.chunk.retry" | "embedding.chunk.retry-exhausted",
+  durationMs: number,
+  extra: EmbeddingRetryExtra,
+): void {
+  if (outcome.ok) return;
+  const failure = {
+    failureKind: outcome.kind,
+    ...(outcome.status === undefined ? {} : { status: outcome.status }),
+    durationMs,
+    ...endpointExtra(options),
+  };
+  logEmbedding(
+    options,
+    op === "embedding.chunk.retry"
+      ? {
+          op,
+          ...failure,
+          attempt: extra.attempt,
+          maxRetries: extra.maxRetries,
+          delayMs: extra.delayMs ?? 0,
+          transport: "scalar",
+        }
+      : {
+          op,
+          ...failure,
+          attempt: extra.attempt,
+          maxRetries: extra.maxRetries,
+          transport: "scalar",
+        },
+  );
 }
 
 // One shape for both transports' retry lines. The `ok` guard is what narrows the union down to
 // the failure variants that actually carry `kind` and `status`.
 //
-// `durationMs` and `endpointHost` are on every one of them because without the pair a hang is
+// `durationMs` and `endpointDigest` are on every one of them because without the pair a hang is
 // unreadable: "refused instantly" (a gateway that is not listening, ~0 ms) and "burned the full
 // provider deadline" (a gateway that accepted the connection and never answered, ~60 s) produce
 // the SAME error kind, and telling them apart is the whole diagnosis during the six-minute stall
@@ -133,18 +152,35 @@ function endpointExtra(options: EmbedBatchOptions): Readonly<Record<string, unkn
 function logEmbeddingRetry(
   options: EmbedBatchOptions,
   outcome: OpenAIEmbeddingOutcome | OpenAIEmbeddingBatchOutcome,
-  op: string,
+  op:
+    | "embedding.chunk.retry"
+    | "embedding.chunk.retry-exhausted"
+    | "embedding.batch.partial-progress"
+    | "embedding.batch.retry",
   durationMs: number,
-  extra: Readonly<Record<string, unknown>>,
+  extra: EmbeddingRetryExtra,
 ): void {
   if (outcome.ok) return;
-  logEmbedding(options, {
-    level: "warn",
-    op,
-    errorKind: outcome.kind,
-    status: outcome.status,
+  if (op === "embedding.chunk.retry" || op === "embedding.chunk.retry-exhausted") {
+    logScalarEmbeddingRetry(options, outcome, op, durationMs, extra);
+    return;
+  }
+  const failure = {
+    failureKind: outcome.kind,
+    ...(outcome.status === undefined ? {} : { status: outcome.status }),
     durationMs,
-    extra: { ...extra, ...endpointExtra(options) },
+    ...endpointExtra(options),
+  };
+  logEmbedding(options, {
+    op,
+    ...failure,
+    attempt: extra.attempt,
+    maxRetries: extra.maxRetries,
+    delayMs: extra.delayMs ?? 0,
+    zeroProgressRetries: extra.zeroProgressRetries ?? 0,
+    remainingCount: extra.remainingCount ?? 0,
+    completedCount: extra.completedCount ?? 0,
+    transport: "array-batch",
   });
 }
 
@@ -521,9 +557,8 @@ async function embedArrayBatchWithRetry(
   const requestBatch = options.adapter.requestBatch;
   if (requestBatch === undefined) {
     logEmbedding(options, {
-      level: "debug",
       op: "embedding.batch.transport-unavailable",
-      extra: { itemCount: inputs.length, transport: "array-batch" },
+      itemCount: inputs.length,
     });
     return { ok: false, kind: "transport" };
   }
@@ -573,14 +608,11 @@ function recordIdentityFailure(
   };
   state.identityFailure = failure;
   logEmbedding(options, {
-    level: "error",
     op: "embedding.identity.rejected",
-    errorKind: failure.code,
-    extra: {
-      pinnedDimensions: options.pinnedIdentity.vectorDimensions,
-      observedDimensions: observed.vectorDimensions,
-      pinnedNormalization: options.pinnedIdentity.normalization ?? EMBEDDING_NORMALIZATION,
-    },
+    failureKind: failure.code,
+    pinnedDimensions: options.pinnedIdentity.vectorDimensions,
+    observedDimensions: observed.vectorDimensions,
+    pinnedNormalization: options.pinnedIdentity.normalization ?? EMBEDDING_NORMALIZATION,
   });
   return failure;
 }
@@ -629,17 +661,13 @@ async function embedUniqueBatch(
     // is deliberately a different number from the per-attempt duration on the retry lines: it
     // is how long the RUN spent on these items before giving up on them.
     logEmbedding(options, {
-      level: "warn",
       op: "embedding.batch.failed",
-      errorKind: outcome.kind,
-      status: outcome.status,
+      failureKind: outcome.kind,
+      ...(outcome.status === undefined ? {} : { status: outcome.status }),
       durationMs: attempted.durationMs,
-      extra: {
-        itemCount: batch.length,
-        transient: isTransientFailure(outcome.kind, outcome.status),
-        transport: "array-batch",
-        ...endpointExtra(options),
-      },
+      itemCount: batch.length,
+      failureClass: isTransientFailure(outcome.kind, outcome.status) ? "transient" : "terminal",
+      ...endpointExtra(options),
     });
     return batch.map((r) => ({ ok: false as const, chunk: r.representative, error }));
   }
@@ -811,10 +839,9 @@ async function embedViaArrayBatches(
     batches = groupIntoBatches(uniqueRequests, options);
   } catch (cause) {
     logEmbedding(options, {
-      level: "warn",
       op: "embedding.batch.budgeting-failed",
-      errorKind: knowledgeErrorKind(cause),
-      extra: { uniqueChunkCount: uniqueRequests.length },
+      failureKind: knowledgeErrorKind(cause),
+      uniqueChunkCount: uniqueRequests.length,
     });
     return tokenBudgetErrorOutcomes(uniqueRequests, cause);
   }
@@ -823,14 +850,11 @@ async function embedViaArrayBatches(
   // same chunk count and completely different investigations, and an operator reading the file
   // at the default level must be able to tell which one is in front of them.
   logEmbedding(options, {
-    level: "info",
     op: "embedding.batch.grouped",
-    extra: {
-      uniqueChunkCount: uniqueRequests.length,
-      batchCount: batches.length,
-      concurrency: options.concurrency,
-      ...endpointExtra(options),
-    },
+    uniqueChunkCount: uniqueRequests.length,
+    batchCount: batches.length,
+    concurrency: options.concurrency,
+    ...endpointExtra(options),
   });
   const batchOutcomes = await runBounded(batches, options.concurrency, async (batch) =>
     embedUniqueBatch(batch, options, state),
@@ -857,16 +881,13 @@ async function buildChunkOutcomes(
   // count, which otherwise reads as lost work. One line per flush, not per chunk — the per-chunk
   // detail stays at debug.
   logEmbedding(options, {
-    level: "info",
     op: "embedding.batch.transport-selected",
-    extra: {
-      transport: arrayBatchCapable ? "array-batch" : "scalar",
-      chunkCount: chunks.length,
-      uniqueChunkCount: uniqueRequests.length,
-      dedupedCount: chunks.length - uniqueRequests.length,
-      concurrency: options.concurrency,
-      ...endpointExtra(options),
-    },
+    transport: arrayBatchCapable ? "array-batch" : "scalar",
+    chunkCount: chunks.length,
+    uniqueChunkCount: uniqueRequests.length,
+    dedupedCount: chunks.length - uniqueRequests.length,
+    concurrency: options.concurrency,
+    ...endpointExtra(options),
   });
   // Scalar fallback (adapters/stubs without `requestBatch`): one HTTP call per unique chunk.
   const uniqueOutcomes = arrayBatchCapable
@@ -942,21 +963,34 @@ interface BatchClosingCounts {
 // how many chunks went in, how many vectors came out, and how long it took.
 function logBatchClosed(
   options: EmbedBatchOptions,
-  level: KnowledgeLogLevel,
-  op: string,
+  level: "info" | "warn" | "error",
+  op:
+    | "embedding.batch.persist-failed"
+    | "embedding.batch.completed"
+    | "embedding.batch.rejected"
+    | "embedding.batch.cancelled",
   counts: BatchClosingCounts,
 ): void {
-  logEmbedding(options, {
-    level,
-    op,
-    errorKind: counts.errorKind,
+  const closing = {
+    chunkCount: counts.chunkCount,
+    vectorCount: counts.vectorCount,
+    errorCount: counts.errorCount,
     durationMs: counts.durationMs,
-    extra: {
-      chunkCount: counts.chunkCount,
-      vectorCount: counts.vectorCount,
-      errorCount: counts.errorCount,
-    },
-  });
+  };
+  if (op === "embedding.batch.completed") {
+    logEmbedding(options, { op, level: level === "info" ? "info" : "warn", ...closing });
+    return;
+  }
+  const failureKind = counts.errorKind ?? "unknown";
+  if (op === "embedding.batch.persist-failed") {
+    logEmbedding(options, { op, failureKind, ...closing });
+    return;
+  }
+  if (op === "embedding.batch.rejected") {
+    logEmbedding(options, { op, failureKind, ...closing });
+    return;
+  }
+  logEmbedding(options, { op, failureKind, ...closing });
 }
 
 // Vector persistence is the LAST step of a flush and the only one that throws instead of

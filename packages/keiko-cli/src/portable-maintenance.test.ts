@@ -350,6 +350,7 @@ describe("portable native registration policy", () => {
       undefined,
       "security",
       "security.windows-portable-legacy-launcher.system-root-refused",
+      "unsafe-target",
       "WindowsSystemDirectoryError",
     ],
     [
@@ -360,11 +361,12 @@ describe("portable native registration policy", () => {
       },
       "diagnostic",
       "security.windows-portable-legacy-launcher.system-binary-missing",
+      "unavailable",
       "WINDOWS_SYSTEM_BINARY_MISSING",
     ],
   ] as const)(
     "keeps verified shortcut installation successful when legacy cleanup meets %s",
-    (_label, systemRoot, resolveWindowsPowerShell, category, op, errorKind) => {
+    (_label, systemRoot, resolveWindowsPowerShell, category, op, errorKind, failureKind) => {
       const root = mkdtempSync(join(homedir(), ".keiko-legacy-helper-refused-"));
       try {
         const home = join(root, "home");
@@ -392,7 +394,7 @@ describe("portable native registration policy", () => {
 
         expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
         expect(events).toHaveLength(1);
-        expect(events[0]).toMatchObject({ category, op, errorKind });
+        expect(events[0]).toMatchObject({ category, op, errorKind, extra: { failureKind } });
         expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
         expect(errors.join("")).toContain("trusted Windows launch helper is unavailable");
         expect(JSON.stringify({ events, errors })).not.toContain(systemRoot);
@@ -656,8 +658,8 @@ describe("parseWindowsStartMenuRegistration propagates a trust-boundary refusal"
       expect(events[0]).toMatchObject({
         category: "security",
         op: "security.windows-shortcut.system-root-refused",
-        errorKind: "WindowsSystemDirectoryError",
-        extra: { mode: "read" },
+        errorKind: "unsafe-target",
+        extra: { mode: "read", failureKind: "WindowsSystemDirectoryError" },
       });
       expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(JSON.stringify(events)).not.toContain("attacker");
@@ -716,8 +718,8 @@ describe("parseWindowsStartMenuRegistration propagates a trust-boundary refusal"
       expect(events[0]).toMatchObject({
         category: "security",
         op: "security.windows-shortcut.system-root-refused",
-        errorKind: "WindowsSystemDirectoryError",
-        extra: { mode: "create" },
+        errorKind: "unsafe-target",
+        extra: { mode: "create", failureKind: "WindowsSystemDirectoryError" },
       });
       expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(JSON.stringify(events)).not.toContain("attacker");

@@ -51,8 +51,14 @@ import {
   type GitProcessRunner,
   type GitRefusalClass,
 } from "@oscharko-dev/keiko-git";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+  type ActivityLogFieldContract,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 import { startLogTimer, type ServerLogLevel, type ServerLogSink } from "./observability/index.js";
 
 // `gitSubcommand` returns `undefined` for an argv with no subcommand token, and for a token whose
@@ -86,6 +92,81 @@ const TIMEOUT_ERROR_KIND = "timeout";
 
 /** `errorKind` for a run Keiko's byte cap cut. Not a git failure either — Keiko stopped reading. */
 const TRUNCATED_ERROR_KIND = "output-truncated";
+
+const GIT_PROCESS_OUTCOME_FIELD_CONTRACTS = {
+  subcommand: {
+    type: "string",
+    dataClass: "safe-platform-class",
+    required: true,
+    maxLength: 64,
+  },
+  endedBy: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["not-started", "exit", "signal", "unknown"],
+  },
+  exitCode: { type: "integer", dataClass: "count", required: false },
+  signal: { type: "string", dataClass: "safe-platform-class", required: false, maxLength: 16 },
+  truncated: { type: "boolean", dataClass: "closed-enum", required: true },
+  timedOut: { type: "boolean", dataClass: "closed-enum", required: true },
+  aborted: { type: "boolean", dataClass: "closed-enum", required: true },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
+const GIT_PROCESS_FAILURE_FIELD_CONTRACTS = {
+  failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
+const GIT_PROCESS_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.process.refused",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitProcessActivity.logGitProcessOutcome.refused",
+  fields: {
+    ...GIT_PROCESS_OUTCOME_FIELD_CONTRACTS,
+    refusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "remote-command-option",
+        "diff-enabling-flag",
+        "config-override",
+        "untrusted-executable",
+      ],
+    },
+    ...GIT_PROCESS_FAILURE_FIELD_CONTRACTS,
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-process-refusal"],
+  proofIds: ["git.process.refused.line"],
+  releaseImpact: "patch",
+});
+
+const GIT_PROCESS_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.process.failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitProcessActivity.logGitProcessOutcome.failed",
+  fields: {
+    ...GIT_PROCESS_OUTCOME_FIELD_CONTRACTS,
+    ...GIT_PROCESS_FAILURE_FIELD_CONTRACTS,
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-process-failure"],
+  proofIds: ["git.process.failed.line"],
+  releaseImpact: "patch",
+});
 
 // Subcommands that talk to a remote. Their failures belong to a taxonomy `classifyGitFailure`
 // cannot express — authentication, permission, untrusted host key, missing repository, unreachable
@@ -153,6 +234,32 @@ function gitFailureLevel(result: GitProcessResult): ServerLogLevel {
   return result.aborted === true ? "info" : "warn";
 }
 
+const CLOSED_GIT_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  [TIMEOUT_ERROR_KIND]: "timeout",
+  [CANCELLED_ERROR_KIND]: "cancelled",
+  "auth-failed": "permission-denied",
+  "permission-denied": "permission-denied",
+  "unsafe-repository": "unsafe-target",
+  "git-executable-untrusted": "unsafe-target",
+  "git-option-refused": "authority-denied",
+  [TRUNCATED_ERROR_KIND]: "unavailable",
+  "git-missing": "unavailable",
+  "not-a-repository": "unavailable",
+  "remote-unavailable": "unavailable",
+  "untrusted-host-key": "unavailable",
+  "repository-not-found": "unavailable",
+};
+
+function closedGitErrorKind(errorKind: string): ActivityLogErrorKind {
+  return CLOSED_GIT_ERROR_KINDS[errorKind] ?? "internal";
+}
+
+const GIT_FAILURE_KIND = /^[A-Za-z0-9._-]{1,64}$/u;
+
+function boundedGitFailureKind(errorKind: string): string {
+  return GIT_FAILURE_KIND.test(errorKind) ? errorKind : "unknown";
+}
+
 // How the child process ended. A child either exits with a code or is killed by a signal, so
 // `exitCode` and `signal` are mutually exclusive and one of them is ALWAYS null — which matters
 // here because `redactLogFields` drops a null field outright (`redactLogValue` in
@@ -176,7 +283,17 @@ function gitTermination(result: GitProcessResult): "not-started" | "exit" | "sig
 // values, branch names and remote URLs to both, and `refusal`'s own raw token carries a
 // caller-chosen segment for the config-override family (see `GitRefusalClass` in keiko-git). The
 // CLASS is the body-free half of that fact, which is why keiko-git reports it structurally.
-function gitOutcomeFields(subcommand: string, result: GitProcessResult): Record<string, unknown> {
+interface GitOutcomeFields {
+  readonly subcommand: string;
+  readonly endedBy: "not-started" | "exit" | "signal" | "unknown";
+  readonly exitCode?: number;
+  readonly signal?: NodeJS.Signals;
+  readonly truncated: boolean;
+  readonly timedOut: boolean;
+  readonly aborted: boolean;
+}
+
+function gitOutcomeFields(subcommand: string, result: GitProcessResult): GitOutcomeFields {
   return {
     subcommand,
     endedBy: gitTermination(result),
@@ -228,31 +345,67 @@ export function logGitProcessOutcome(
   classifyFailure?: (result: GitProcessResult) => string | undefined,
 ): void {
   if (isSuccessfulGitOutcome(result, expectedExitCodes)) return;
-  const id = correlationId ?? UNKNOWN_CORRELATION_ID;
+  const id = correlationIdOrUnknown(correlationId);
   const subcommand = gitSubcommand(args) ?? UNNAMED_SUBCOMMAND;
   const fields = gitOutcomeFields(subcommand, result);
-  const errorKind = gitFailureErrorKind(result, subcommand, classifyFailure);
+  const failureKind = boundedGitFailureKind(
+    gitFailureErrorKind(result, subcommand, classifyFailure),
+  );
   if (result.refusal !== undefined) {
-    log.write({
-      level: "error",
-      category: "security",
-      op: "git.process.refused",
-      correlationId: id,
-      errorKind,
-      durationMs,
-      extra: { ...fields, refusal: result.refusal },
-    });
+    writeGitRefusal(log, id, durationMs, fields, failureKind, result.refusal);
     return;
   }
-  log.write({
-    level: gitFailureLevel(result),
-    category: "diagnostic",
-    op: "git.process.failed",
-    correlationId: id,
-    errorKind,
-    durationMs,
-    extra: fields,
-  });
+  writeGitFailure(log, id, durationMs, fields, failureKind, result);
+}
+
+function writeGitRefusal(
+  log: ServerLogSink,
+  correlationId: string,
+  durationMs: number,
+  fields: ReturnType<typeof gitOutcomeFields>,
+  failureKind: string,
+  refusal: NonNullable<GitProcessResult["refusal"]>,
+): void {
+  log.write(
+    activityLogEvent(
+      GIT_PROCESS_REFUSED_OPERATION,
+      {
+        level: "error",
+        correlationId,
+        errorKind: closedGitErrorKind(failureKind),
+        durationMs,
+      },
+      {
+        ...fields,
+        refusal,
+        failureKind,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function writeGitFailure(
+  log: ServerLogSink,
+  correlationId: string,
+  durationMs: number,
+  fields: ReturnType<typeof gitOutcomeFields>,
+  failureKind: string,
+  result: GitProcessResult,
+): void {
+  log.write(
+    activityLogEvent(
+      GIT_PROCESS_FAILED_OPERATION,
+      {
+        level: gitFailureLevel(result),
+        correlationId,
+        errorKind: closedGitErrorKind(failureKind),
+        durationMs,
+      },
+      { ...fields, failureKind, completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 /**

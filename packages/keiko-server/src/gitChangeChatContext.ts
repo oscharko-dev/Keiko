@@ -1,5 +1,10 @@
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { isGitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import type { ChatGitChangeScope } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -40,26 +45,126 @@ export type GitChangeChatDescriptionResult =
 
 const REFINEMENT_MAX_BYTES = 4096;
 
+const PR_DESCRIPTION_CHAT_GENERATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.chat.generated",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeChatContext.logDescriptionResult",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "partial", "fallback", "failed"],
+    },
+    relationshipId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    requestCount: { type: "integer", dataClass: "count", required: true },
+    snapshotDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["pr-description-chat-generation"],
+  proofIds: ["pr-description.chat.generated.outcome"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_CHAT_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.chat.unavailable",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeChatContext.logDescriptionResult",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "model-unavailable",
+        "invalid-model-output",
+        "unsafe-model-output",
+        "provider-failed",
+        "budget-exhausted",
+        "cancelled",
+        "timeout",
+        "snapshot-unavailable",
+        "invalid-snapshot",
+        "invalid-request",
+        "authority-denied",
+      ],
+    },
+    relationshipId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    snapshotDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-chat-generation"],
+  proofIds: ["pr-description.chat.unavailable.reason"],
+  releaseImpact: "patch",
+});
+
+type PrDescriptionReason = import("@oscharko-dev/keiko-contracts").PrDescriptionReason;
+
+const DESCRIPTION_ERROR_KINDS: Readonly<Record<PrDescriptionReason, ActivityLogErrorKind>> = {
+  "authority-denied": "authority-denied",
+  "budget-exhausted": "rate-limited",
+  cancelled: "cancelled",
+  timeout: "timeout",
+  "unsafe-model-output": "unsafe-target",
+  "invalid-model-output": "validation-failed",
+  "invalid-snapshot": "validation-failed",
+  "invalid-request": "validation-failed",
+  "model-unavailable": "unavailable",
+  "provider-failed": "unavailable",
+  "snapshot-unavailable": "unavailable",
+  none: "unknown",
+};
+
+function descriptionErrorKind(reason: PrDescriptionReason): ActivityLogErrorKind {
+  return DESCRIPTION_ERROR_KINDS[reason];
+}
+
 function logDescriptionResult(
   input: Parameters<typeof generateGitChangeChatDescription>[0],
   result: GitChangeChatDescriptionResult,
 ): void {
-  (input.deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op:
-      result.status === "generated"
-        ? "pr-description.chat.generated"
-        : "pr-description.chat.unavailable",
-    correlationId: input.correlationId,
-    ...(result.status === "unavailable" ? { level: "warn", errorKind: result.reason } : {}),
-    extra: {
-      relationshipId: input.scope.relationshipId,
-      snapshotDigest: input.scope.snapshotDigest,
-      ...(result.status === "generated"
-        ? { outcome: result.artifact.outcome, requestCount: result.usage?.requestCount ?? 0 }
-        : { reason: result.reason }),
-    },
-  });
+  const activityLog = input.deps.activityLog ?? processServerLogSink();
+  if (result.status === "generated") {
+    activityLog.write(
+      activityLogEvent(
+        PR_DESCRIPTION_CHAT_GENERATED_OPERATION,
+        { correlationId: input.correlationId },
+        {
+          relationshipId: input.scope.relationshipId,
+          snapshotDigest: input.scope.snapshotDigest,
+          outcome: result.artifact.outcome,
+          requestCount: result.usage?.requestCount ?? 0,
+        },
+      ),
+    );
+    return;
+  }
+  activityLog.write(
+    activityLogEvent(
+      PR_DESCRIPTION_CHAT_UNAVAILABLE_OPERATION,
+      {
+        level: "warn",
+        correlationId: input.correlationId,
+        errorKind: descriptionErrorKind(result.reason),
+      },
+      {
+        relationshipId: input.scope.relationshipId,
+        snapshotDigest: input.scope.snapshotDigest,
+        reason: result.reason,
+      },
+    ),
+  );
 }
 
 function recordedDescriptionResult(

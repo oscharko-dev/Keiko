@@ -7,6 +7,8 @@ import { createPrDescriptionApplicationService } from "./prDescriptionService.js
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionPreview } from "./prDescriptionTypes.js";
 
+const GIT_FIXTURE_TIMEOUT_MS = 15_000;
+
 let fixture: DescriptionFixture;
 beforeEach(() => {
   fixture = new DescriptionFixture();
@@ -396,15 +398,19 @@ describe("description authority and transient request integrity", () => {
     }
     expect(fixture.writes).toHaveLength(0);
   });
-  it("retains the same sole closing directive through a repeat update", async () => {
-    const first = await approved();
-    await fixture.service.executeApproved(first.review.proposalId, first.lease);
-    const next = await approved();
-    await fixture.service.executeApproved(next.review.proposalId, next.lease);
-    expect(fixture.remote.body.match(/Closes #42/gu)).toHaveLength(1);
-    expect(fixture.remote.body.match(/keiko:pr-description:v1:start/gu)).toHaveLength(1);
-    expect(fixture.remote.body.startsWith("# Human template\r\n\r\nCloses #42\r\n")).toBe(true);
-  });
+  it(
+    "retains the same sole closing directive through a repeat update",
+    async () => {
+      const first = await approved();
+      await fixture.service.executeApproved(first.review.proposalId, first.lease);
+      const next = await approved();
+      await fixture.service.executeApproved(next.review.proposalId, next.lease);
+      expect(fixture.remote.body.match(/Closes #42/gu)).toHaveLength(1);
+      expect(fixture.remote.body.match(/keiko:pr-description:v1:start/gu)).toHaveLength(1);
+      expect(fixture.remote.body.startsWith("# Human template\r\n\r\nCloses #42\r\n")).toBe(true);
+    },
+    GIT_FIXTURE_TIMEOUT_MS,
+  );
   it("blocks revoked authority after the awaited live read with no write", async () => {
     const { review, lease } = await approved();
     fixture.beforeRead = (): void => {
@@ -455,25 +461,29 @@ describe("description authority and transient request integrity", () => {
   });
 });
 
-it("requires a new preview and approval before retrying an unchanged provider body", async () => {
-  const first = await approved();
-  fixture.keepOld = true;
-  fixture.lostResponse = true;
-  await fixture.service.executeApproved(first.review.proposalId, first.lease);
-  expect(fixture.status?.reason).toBe("unchanged-after-write");
-  expect(await fixture.service.reconcile()).toMatchObject({
-    outcome: "observed",
-    status: { reason: "unchanged-after-write" },
-  });
-  expect(fixture.writes).toHaveLength(1);
-  fixture.keepOld = false;
-  fixture.lostResponse = false;
-  const next = await approved();
-  expect(next.review.proposalId).not.toBe(first.review.proposalId);
-  await fixture.service.executeApproved(next.review.proposalId, next.lease);
-  expect(fixture.status?.state).toBe("current");
-  expect(fixture.writes).toHaveLength(2);
-});
+it(
+  "requires a new preview and approval before retrying an unchanged provider body",
+  async () => {
+    const first = await approved();
+    fixture.keepOld = true;
+    fixture.lostResponse = true;
+    await fixture.service.executeApproved(first.review.proposalId, first.lease);
+    expect(fixture.status?.reason).toBe("unchanged-after-write");
+    expect(await fixture.service.reconcile()).toMatchObject({
+      outcome: "observed",
+      status: { reason: "unchanged-after-write" },
+    });
+    expect(fixture.writes).toHaveLength(1);
+    fixture.keepOld = false;
+    fixture.lostResponse = false;
+    const next = await approved();
+    expect(next.review.proposalId).not.toBe(first.review.proposalId);
+    await fixture.service.executeApproved(next.review.proposalId, next.lease);
+    expect(fixture.status?.state).toBe("current");
+    expect(fixture.writes).toHaveLength(2);
+  },
+  GIT_FIXTURE_TIMEOUT_MS,
+);
 
 it("does not overwrite retained success when a later preview fails", async () => {
   const first = await approved();
@@ -581,16 +591,20 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
     expect(refusal).toBeDefined();
   });
 
-  it("reserves the captured reference while held, and releases it when a fresh preview replaces it", async () => {
-    const { reserved, released } = instrumentSnapshotReservations();
-    const first = await preview();
-    expect(reserved).toHaveLength(1);
-    expect(released).toHaveLength(0);
-    const second = await preview();
-    expect(second.proposalId).not.toBe(first.proposalId);
-    expect(reserved).toHaveLength(2);
-    expect(released).toEqual([reserved[0]]);
-  });
+  it(
+    "reserves the captured reference while held, and releases it when a fresh preview replaces it",
+    async () => {
+      const { reserved, released } = instrumentSnapshotReservations();
+      const first = await preview();
+      expect(reserved).toHaveLength(1);
+      expect(released).toHaveLength(0);
+      const second = await preview();
+      expect(second.proposalId).not.toBe(first.proposalId);
+      expect(reserved).toHaveLength(2);
+      expect(released).toEqual([reserved[0]]);
+    },
+    GIT_FIXTURE_TIMEOUT_MS,
+  );
 
   it("releases a held application proposal's reservation when a draft artifact replaces it", async () => {
     const { reserved, released } = instrumentSnapshotReservations();

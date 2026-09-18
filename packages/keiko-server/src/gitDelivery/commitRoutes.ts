@@ -33,6 +33,7 @@ import type {
   GitCommitMessagePolicy,
   GitCommitMessageValidation,
   GitDeliveryApprovalClaim,
+  GitDeliveryPolicyDecision,
   GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
 import { analyzeGitCommitIntent } from "@oscharko-dev/keiko-contracts/runtime/git-commit-intent";
@@ -43,11 +44,16 @@ import {
 import { gitDeliveryRiskClassForInputs } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { validateGitCommitMessage } from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   evaluateGitPreflight,
   summarizeStagedChangeset,
   type GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -56,6 +62,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "../task-workspace/workspace-root-access.js";
 import {
   gitDeliveryAuthorityGate,
+  logGitDeliveryAuthorityAdmission,
   type GitDeliveryAuthorityIdentity,
   type GitDeliveryAuthorityGate,
 } from "./requestPreparation.js";
@@ -78,6 +85,7 @@ import {
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
 } from "./execution.js";
+import { logGitDeliveryApprovalEvent } from "./approvalEvents.js";
 import {
   hasOnlyAllowedKeys,
   isNonEmptyString,
@@ -107,6 +115,82 @@ export type GitDeliveryCommitErrorCode =
   | "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES"
   | "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT"
   | "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE";
+
+const COMMIT_PREVIEW_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.commit.preview.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitDelivery/commitRoutes.logCommitPreview",
+  fields: {
+    stagedFileCount: { type: "integer", dataClass: "count", required: true },
+    areaCount: { type: "integer", dataClass: "count", required: true },
+    touchesTests: { type: "boolean", dataClass: "closed-enum", required: true },
+    draftSuggested: { type: "boolean", dataClass: "closed-enum", required: true },
+    policyOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["allowed", "blocked", "approval-gated", "constrained"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-commit-preview"],
+  proofIds: ["git.commit.preview.completed"],
+  releaseImpact: "patch",
+});
+
+const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.commit.draft.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitDelivery/commitRoutes.logCommitDraft",
+  fields: {
+    stagedFileCount: { type: "integer", dataClass: "count", required: true },
+    areaCount: { type: "integer", dataClass: "count", required: true },
+    touchesTests: { type: "boolean", dataClass: "closed-enum", required: true },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded", "failed"],
+    },
+    failureCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "GIT_DELIVERY_COMMIT_BAD_REQUEST",
+        "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
+        "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
+        "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
+        "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+        "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
+        "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
+        "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
+        "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-commit-draft"],
+  proofIds: ["git.commit.draft.completed"],
+  releaseImpact: "patch",
+});
+
+function commitDraftErrorKind(code: GitDeliveryCommitErrorCode): ActivityLogErrorKind {
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE") return "unavailable";
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT") return "validation-failed";
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES") return "conflict";
+  return "internal";
+}
 
 const SAFE_MESSAGES: Readonly<Record<GitDeliveryCommitErrorCode, string>> = {
   GIT_DELIVERY_COMMIT_BAD_REQUEST: "The request body is not a valid governed commit request.",
@@ -186,7 +270,7 @@ export interface GitDeliveryCommitPreviewBody {
   readonly messageValidation: GitCommitMessageValidation;
   readonly preflightFindingCodes: readonly string[];
   readonly signatureRequirement: GitDeliverySignatureRequirement;
-  readonly policyOutcome: string;
+  readonly policyOutcome: GitDeliveryPolicyDecision["outcome"];
   readonly suggestedMessage?: string;
   readonly policyBlockReason?: string;
 }
@@ -202,7 +286,7 @@ interface PreviewBodyInput {
   readonly policy: GitCommitMessagePolicy;
   readonly preflightCodes: readonly string[];
   readonly signatureRequirement: GitDeliverySignatureRequirement;
-  readonly policyOutcome: string;
+  readonly policyOutcome: GitDeliveryPolicyDecision["outcome"];
   readonly policyBlockReason: string | undefined;
 }
 
@@ -227,19 +311,19 @@ function logCommitPreview(
   correlationId: string | undefined,
   body: GitDeliveryCommitPreviewBody,
 ): void {
-  log.write({
-    category: "diagnostic",
-    op: "git.commit.preview.completed",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 200,
-    extra: {
-      stagedFileCount: body.summary.stagedFileCount,
-      areaCount: body.summary.areaCount,
-      touchesTests: body.summary.touchesTests,
-      draftSuggested: false,
-      policyOutcome: body.policyOutcome,
-    },
-  });
+  log.write(
+    activityLogEvent(
+      COMMIT_PREVIEW_COMPLETED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), status: 200 },
+      {
+        stagedFileCount: body.summary.stagedFileCount,
+        areaCount: body.summary.areaCount,
+        touchesTests: body.summary.touchesTests,
+        draftSuggested: false,
+        policyOutcome: body.policyOutcome,
+      },
+    ),
+  );
 }
 
 type CommitFailureDetails = Omit<Parameters<typeof serverDiagnosticFromError>[0], "operation">;
@@ -708,19 +792,23 @@ function logCommitDraft(
   status: number,
   failureCode?: GitDeliveryCommitErrorCode,
 ): void {
-  log.write({
-    category: "diagnostic",
-    op: "git.commit.draft.completed",
-    correlationId,
-    status,
-    extra: {
-      stagedFileCount: summary.stagedFileCount,
-      areaCount: summary.areaCount,
-      touchesTests: summary.touchesTests,
-      outcome: status === 200 ? "succeeded" : "failed",
-      ...(failureCode === undefined ? {} : { failureCode }),
-    },
-  });
+  log.write(
+    activityLogEvent(
+      COMMIT_DRAFT_COMPLETED_OPERATION,
+      {
+        correlationId,
+        status,
+        ...(failureCode === undefined ? {} : { errorKind: commitDraftErrorKind(failureCode) }),
+      },
+      {
+        stagedFileCount: summary.stagedFileCount,
+        areaCount: summary.areaCount,
+        touchesTests: summary.touchesTests,
+        outcome: status === 200 ? "succeeded" : "failed",
+        ...(failureCode === undefined ? {} : { failureCode }),
+      },
+    ),
+  );
 }
 
 function draftFailureResult(
@@ -988,22 +1076,18 @@ function logCommitApprovalRequired(
   correlationId: string,
   runId: string,
 ): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.commit.approval.required",
+  logGitDeliveryApprovalEvent(
+    activityLog,
+    "git.delivery.commit.approval.required",
+    "commit",
     correlationId,
-    status: 200,
-    extra: { operation: "commit", runId },
-  });
+    runId,
+  );
 }
 
 function logUserInitiatedCommitAdmission(ctx: RouteContext, activityLog: ServerLogSink): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.authority.admitted",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 200,
-    extra: { operation: "commit", phase: "admission", source: "local-user" },
+  logGitDeliveryAuthorityAdmission(ctx, "commit", "admission", activityLog, {
+    source: "local-user",
   });
 }
 
@@ -1138,13 +1222,13 @@ function logCommitApprovalMinted(
   correlationId: string,
   runId: string,
 ): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.commit.approval.minted",
+  logGitDeliveryApprovalEvent(
+    activityLog,
+    "git.delivery.commit.approval.minted",
+    "commit",
     correlationId,
-    status: 200,
-    extra: { operation: "commit", runId },
-  });
+    runId,
+  );
 }
 
 export const createHandleCommitApprove = (

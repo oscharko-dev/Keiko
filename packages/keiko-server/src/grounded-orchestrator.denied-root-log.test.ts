@@ -45,10 +45,15 @@ function expectSearchLifecycle(
   activityLog: BufferedActivityLog,
   terminalOp: "search.connected-context.completed" | "search.connected-context.failed",
 ): void {
-  expect(activityLog.events.map((event) => event.op)).toEqual([
-    "search.connected-context.started",
-    terminalOp,
-  ]);
+  expect(activityLog.events.map((event) => event.op)).toEqual(
+    terminalOp === "search.connected-context.completed"
+      ? [
+          "search.connected-context.started",
+          "search.connected-context.completion-details",
+          terminalOp,
+        ]
+      : ["search.connected-context.started", terminalOp],
+  );
   expect(activityLog.events.every((event) => event.correlationId === CORRELATION_ID)).toBe(true);
 }
 
@@ -62,17 +67,23 @@ function expectDeniedLifecycle(activityLog: BufferedActivityLog): void {
   expect(activityLog.events[1]).toMatchObject({
     level: "warn",
     category: "security",
-    errorKind: "WORKSPACE_PATH_DENIED",
-    extra: { decision: "denied", reason: "denied-locus" },
+    errorKind: "permission-denied",
+    extra: {
+      decision: "denied",
+      reason: "denied-locus",
+      failureKind: "WORKSPACE_PATH_DENIED",
+    },
   });
   expect(activityLog.events[2]).toMatchObject({
     level: "error",
     category: "search",
-    errorKind: "WORKSPACE_PATH_DENIED",
+    errorKind: "internal",
     extra: {
+      failureKind: "WORKSPACE_PATH_DENIED",
       outcome: "failed",
       retrievalPhase: "workspace-admission",
-      workspaceIo: { realPathCalls: 1, contentReadCalls: 0 },
+      workspaceIoContentReadCalls: 0,
+      workspaceIoRealPathCalls: 1,
     },
   });
 }
@@ -181,8 +192,12 @@ describe("grounded orchestrator denied-root activity", () => {
     expect(realPathCalls).toBe(0);
     expectSearchLifecycle(activityLog, "search.connected-context.failed");
     expect(activityLog.events[1]).toMatchObject({
-      errorKind: "ClarificationNeededError",
-      extra: { outcome: "failed", retrievalPhase: "planning" },
+      errorKind: "internal",
+      extra: {
+        failureKind: "ClarificationNeededError",
+        outcome: "failed",
+        retrievalPhase: "planning",
+      },
     });
   });
 
@@ -217,11 +232,13 @@ describe("grounded orchestrator denied-root activity", () => {
     expect(detectCalls).toBe(0);
     expectSearchLifecycle(activityLog, "search.connected-context.failed");
     expect(activityLog.events[1]).toMatchObject({
-      errorKind: "WORKSPACE_NOT_FOUND",
+      errorKind: "internal",
       extra: {
+        failureKind: "WORKSPACE_NOT_FOUND",
         outcome: "failed",
         retrievalPhase: "workspace-admission",
-        workspaceIo: { realPathCalls: 1, contentReadCalls: 0 },
+        workspaceIoContentReadCalls: 0,
+        workspaceIoRealPathCalls: 1,
       },
     });
   });

@@ -3,7 +3,7 @@
 // "does the redactor work" (log-redaction.test.ts owns that) but "which fields of the record are
 // allowed to become log fields at all".
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,11 +14,18 @@ import {
   serverDiagnosticFromError,
 } from "./diagnostics-log.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import { closeFileServerLogSinks, SERVER_LOG_LEVEL_ENV } from "./observability/index.js";
+import {
+  closeFileServerLogSinks,
+  resetServerLogFailureNotices,
+  SERVER_LOG_LEVEL_ENV,
+} from "./observability/index.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
   const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8").trim();
-  return JSON.parse(raw) as Record<string, unknown>;
+  const records = raw.split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  const activity = records.find((record) => record.op !== "server-log.safe-open");
+  if (activity === undefined) throw new Error("activity record missing");
+  return activity;
 }
 
 describe("diagnostic records on the activity log", () => {
@@ -36,6 +43,44 @@ describe("diagnostic records on the activity log", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("never throws from record() when the Activity Log cannot be opened, and recovers later", () => {
+    resetServerLogFailureNotices();
+    const logsPath = join(stateDir, "logs");
+    writeFileSync(logsPath, "occupied by a regular file");
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const record: ServerDiagnosticRecord = {
+      correlationId: "req-open-failed",
+      timestamp: "2026-09-18T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    };
+
+    expect(() => {
+      defaultServerDiagnosticSink.record(record);
+    }).not.toThrow();
+    const notice = stderrWrite.mock.calls
+      .map(([chunk]) => String(chunk))
+      .find((line) => line.includes("server-log.initialize"));
+    expect(notice).toBeDefined();
+    expect(notice).not.toContain(stateDir);
+    expect(JSON.parse(notice ?? "{}")).toMatchObject({
+      op: "server-log.write-failed",
+      correlationId: "req-open-failed",
+      failedOp: "server-log.initialize",
+      writerCapability: "unavailable",
+      loss: "event-dropped",
+    });
+
+    rmSync(logsPath);
+    defaultServerDiagnosticSink.record(record);
+    expect(readActivityLine(stateDir)).toMatchObject({
+      op: "server.diagnostic.failure",
+      correlationId: "req-open-failed",
+    });
   });
 
   it("projects the record onto allowlisted fields instead of passing it whole", () => {
@@ -70,9 +115,11 @@ describe("diagnostic records on the activity log", () => {
     // `log-redaction.ts`'s `DENIED_FIELD_NAMES`.
     expect(line).toMatchObject({
       category: "diagnostic",
-      op: "chat.stream",
+      op: "server.diagnostic.failure",
       correlationId: "req-1f2e3d",
-      errorKind: "GatewayError",
+      errorKind: "internal",
+      diagnosticOperation: "chat.stream",
+      diagnosticErrorClass: "GatewayError",
       source: "server.top-level-catch",
       code: "GATEWAY_ERROR",
       occurrenceCount: 2,
@@ -83,6 +130,8 @@ describe("diagnostic records on the activity log", () => {
       httpStatus: 503,
       retryAfterMs: 2_000,
       deadlineMs: 360_000,
+      completeness: "complete",
+      loss: "none",
     });
 
     // Nothing else. Not the undeclared field, not the whole record under a `record` key, and not
@@ -202,13 +251,39 @@ describe("diagnostic records on the activity log", () => {
     });
     const line = readActivityLine(stateDir);
 
-    expect(line).toMatchObject({ op: "evidence.persist", occurrenceCount: 3 });
+    expect(line).toMatchObject({
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "evidence.persist",
+      diagnosticErrorClass: "Error",
+      errorKind: "internal",
+      occurrenceCount: 3,
+      completeness: "complete",
+      loss: "none",
+    });
     expect(Object.keys(line)).not.toContain("code");
     expect(Object.keys(line)).not.toContain("gatewayRequestId");
     expect(Object.keys(line)).not.toContain("promptTokens");
     expect(Object.keys(line)).not.toContain("parentCorrelationId");
     expect(Object.keys(line)).not.toContain("httpStatus");
     expect(Object.keys(line)).not.toContain("retryAfterMs");
+  });
+
+  it("projects a route operation as a body-free route template", () => {
+    defaultServerDiagnosticSink.record({
+      correlationId: "req-route-1f2e3d",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "POST /api/gateway/setup",
+      source: "gateway-setup.discovery",
+      errorClass: "GatewayError",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    });
+
+    expect(readActivityLine(stateDir)).toMatchObject({
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "POST:/api/gateway/setup",
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   // `parentCorrelationId` is shape-guarded, not merely redacted, the same way `server-log.ts`'s
@@ -252,7 +327,8 @@ describe("diagnostic records on the activity log", () => {
     expect(readActivityLine(stateDir)).toMatchObject({
       level: "error",
       category: "diagnostic",
-      op: "knowledge.index",
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "knowledge.index",
     });
   });
   it("bounds `code` at the writer: a colon-joined machine token passes, whitespace or over-length is dropped", () => {

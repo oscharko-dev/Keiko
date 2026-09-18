@@ -23,6 +23,7 @@ import {
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { MicroIndex, RerankerSeam } from "@oscharko-dev/keiko-workflows";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
@@ -150,6 +151,10 @@ function parsePersistedLogLines(raw: string): readonly Readonly<Record<string, u
     .map((line) => JSON.parse(line) as Readonly<Record<string, unknown>>);
 }
 
+function producerLogLines(raw: string): readonly Readonly<Record<string, unknown>>[] {
+  return parsePersistedLogLines(raw).filter((line) => line.op !== "server-log.safe-open");
+}
+
 function advancingClock(): () => number {
   let current = FIXTURE_NOW_MS;
   return (): number => {
@@ -200,25 +205,126 @@ function nestedExtra(
   name: string,
 ): Readonly<Record<string, unknown>> {
   const value = fields?.[name];
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`expected ${name} activity object`);
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Readonly<Record<string, unknown>>;
   }
-  return value as Readonly<Record<string, unknown>>;
+  const mapping = COMPLETION_FIELD_GROUPS[name];
+  if (mapping === undefined) throw new TypeError(`expected ${name} activity object`);
+  return Object.fromEntries(
+    Object.entries(mapping)
+      .filter(([, fieldName]) => fields?.[fieldName] !== undefined)
+      .map(([projectedName, fieldName]) => [projectedName, fields?.[fieldName]]),
+  );
 }
+
+const COMPLETION_FIELD_GROUPS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  usage: {
+    searchCalls: "usageSearchCalls",
+    filesRead: "usageFilesRead",
+    excerptBytes: "usageExcerptBytes",
+    modelInputTokens: "usageModelInputTokens",
+    modelOutputTokens: "usageModelOutputTokens",
+    elapsedMs: "usageElapsedMs",
+    rerankCalls: "usageRerankCalls",
+  },
+  selectionCounts: { selectedFileCount: "selectedFileCount", omittedCount: "omittedCount" },
+  uncertainty: {
+    count: "uncertaintyCount",
+    scopeIncompleteUncertaintyCount: "scopeIncompleteUncertaintyCount",
+    budgetClippedUncertaintyCount: "budgetClippedUncertaintyCount",
+    toolUnavailableUncertaintyCount: "toolUnavailableUncertaintyCount",
+    unsupportedClaimUncertaintyCount: "unsupportedClaimUncertaintyCount",
+    entailmentUnavailableUncertaintyCount: "entailmentUnavailableUncertaintyCount",
+  },
+  coverage: {
+    coverageStatus: "coverageStatus",
+    coverageReasons: "coverageReasons",
+    coverageFilesDiscovered: "coverageFilesDiscovered",
+    coverageFilesScanned: "coverageFilesScanned",
+    coverageFilesSkipped: "coverageFilesSkipped",
+    coverageDepthPruned: "coverageDepthPruned",
+    coverageMaxFilesPruned: "coverageMaxFilesPruned",
+  },
+  retrievalStatus: {
+    readBudgetBlocked: "retrievalReadBudgetBlocked",
+    elapsedBudgetBlocked: "retrievalElapsedBudgetBlocked",
+    workspaceIndexProviderStatus: "retrievalWorkspaceIndexProviderStatus",
+  },
+  structural: {
+    contextCount: "structuralContextCount",
+    candidateInventoryBuildCount: "structuralCandidateInventoryBuildCount",
+    candidateFileCount: "structuralCandidateFileCount",
+    candidateDirectoryCount: "structuralCandidateDirectoryCount",
+    codeIndexBuildCount: "structuralCodeIndexBuildCount",
+    symbolGraphBuildCount: "structuralSymbolGraphBuildCount",
+    importGraphBuildCount: "structuralImportGraphBuildCount",
+    endpointGraphBuildCount: "structuralEndpointGraphBuildCount",
+    fileSearchCount: "structuralFileSearchCount",
+    textSearchCount: "structuralTextSearchCount",
+  },
+  workspaceIndex: {
+    providerStatus: "indexProviderStatus",
+    searchMode: "indexSearchMode",
+    loadStatus: "indexLoadStatus",
+    saveStatus: "indexSaveStatus",
+    indexedRecords: "indexIndexedRecords",
+    reusedRecords: "indexReusedRecords",
+    staleRecords: "indexStaleRecords",
+    searchCount: "indexSearchCount",
+    reportCount: "indexReportCount",
+    fallbackSearchCount: "indexFallbackSearchCount",
+    loadFailures: "indexLoadFailures",
+    saveFailures: "indexSaveFailures",
+  },
+  workspaceIo: {
+    readDirCalls: "workspaceIoReadDirCalls",
+    readDirEntries: "workspaceIoReadDirEntries",
+    statCalls: "workspaceIoStatCalls",
+    realPathCalls: "workspaceIoRealPathCalls",
+    existsCalls: "workspaceIoExistsCalls",
+    contentReadCalls: "workspaceIoContentReadCalls",
+    contentReadBytes: "workspaceIoContentReadBytes",
+  },
+};
 
 function lifecycleEvents(
   activityLog: BufferedServerLogSink,
   terminalOp: "search.connected-context.completed" | "search.connected-context.failed",
 ): readonly [ServerLogEvent, ServerLogEvent] {
-  expect(activityLog.events).toHaveLength(2);
-  const [started, terminal] = activityLog.events;
+  expect(activityLog.events).toHaveLength(
+    terminalOp === "search.connected-context.completed" ? 3 : 2,
+  );
+  const started = activityLog.events[0];
+  const terminal = activityLog.events.at(-1);
   if (started === undefined || terminal === undefined) {
     throw new Error("expected connected-context start and terminal activity events");
   }
   expect(started.op).toBe("search.connected-context.started");
   expect(terminal.op).toBe(terminalOp);
   expect(terminal.correlationId).toBe(started.correlationId);
+  if (terminalOp === "search.connected-context.completed") {
+    const details = activityLog.events[1];
+    expect(details?.op).toBe("search.connected-context.completion-details");
+    expect(details?.correlationId).toBe(started.correlationId);
+    expect(
+      activityLogEventRegistration(details as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toBeDefined();
+  }
+  expect(
+    activityLogEventRegistration(started as unknown as Readonly<Record<PropertyKey, unknown>>),
+  ).toBeDefined();
+  expect(
+    activityLogEventRegistration(terminal as unknown as Readonly<Record<PropertyKey, unknown>>),
+  ).toBeDefined();
   return [started, terminal];
+}
+
+function completionDetailsEvent(activityLog: BufferedServerLogSink): ServerLogEvent {
+  const details = activityLog.events.find(
+    (event) => event.op === "search.connected-context.completion-details",
+  );
+  if (details === undefined) throw new Error("expected connected-context completion details");
+  return details;
 }
 
 function expectedRequestExtra(input: OrchestratorInput): Readonly<Record<string, unknown>> {
@@ -254,51 +360,42 @@ function expectedCoverageExtra(output: RetrievalOnlyOutput): Readonly<Record<str
 }
 
 function expectedExtra(
-  input: OrchestratorInput,
   output: RetrievalOnlyOutput,
   readBudgetBlocked: boolean,
   elapsedBudgetBlocked = false,
 ): Readonly<Record<string, unknown>> {
   const retrievalBlocked = readBudgetBlocked || elapsedBudgetBlocked;
+  const coverage = retrievalBlocked
+    ? { coverageStatus: "not-reported", coverageReasons: [] }
+    : expectedCoverageExtra(output);
   return {
     activityDetailStatus: "complete",
-    scopeKind: input.scope.kind,
-    relativePathCount: input.scope.relativePaths.length,
-    explicitConnection: input.scope.explicitConnection === true,
     plannedRingCount: output.plan.rings.length,
-    usage: {
-      searchCalls: output.pack.usage.searchCalls,
-      filesRead: output.pack.usage.filesRead,
-      excerptBytes: output.pack.usage.excerptBytes,
-      modelInputTokens: output.pack.usage.modelInputTokens,
-      modelOutputTokens: output.pack.usage.modelOutputTokens,
-      elapsedMs: output.pack.usage.elapsedMs,
-      rerankCalls: output.pack.usage.rerankCalls,
-    },
-    selectionCounts: {
-      selectedFileCount: output.pack.files.length,
-      omittedCount: output.pack.omitted.length,
-    },
-    uncertainty: {
-      count: output.pack.uncertainty.length,
-      scopeIncompleteUncertaintyCount: output.pack.uncertainty.filter(
-        (marker) => marker.kind === "scope-incomplete",
-      ).length,
-      toolUnavailableUncertaintyCount: output.pack.uncertainty.filter(
-        (marker) => marker.kind === "tool-unavailable",
-      ).length,
-      budgetClippedUncertaintyCount: output.pack.uncertainty.filter(
-        (marker) => marker.kind === "budget-clipped",
-      ).length,
-    },
-    coverage: retrievalBlocked
-      ? { coverageStatus: "not-reported", coverageReasons: [] }
-      : expectedCoverageExtra(output),
-    retrievalStatus: {
-      readBudgetBlocked,
-      elapsedBudgetBlocked,
-      workspaceIndexProviderStatus: retrievalBlocked ? "not-evaluated" : "unavailable",
-    },
+    usageSearchCalls: output.pack.usage.searchCalls,
+    usageFilesRead: output.pack.usage.filesRead,
+    usageExcerptBytes: output.pack.usage.excerptBytes,
+    usageModelInputTokens: output.pack.usage.modelInputTokens,
+    usageModelOutputTokens: output.pack.usage.modelOutputTokens,
+    usageElapsedMs: output.pack.usage.elapsedMs,
+    usageRerankCalls: output.pack.usage.rerankCalls,
+    selectedFileCount: output.pack.files.length,
+    omittedCount: output.pack.omitted.length,
+    uncertaintyCount: output.pack.uncertainty.length,
+    scopeIncompleteUncertaintyCount: output.pack.uncertainty.filter(
+      (marker) => marker.kind === "scope-incomplete",
+    ).length,
+    toolUnavailableUncertaintyCount: output.pack.uncertainty.filter(
+      (marker) => marker.kind === "tool-unavailable",
+    ).length,
+    budgetClippedUncertaintyCount: output.pack.uncertainty.filter(
+      (marker) => marker.kind === "budget-clipped",
+    ).length,
+    ...coverage,
+    retrievalReadBudgetBlocked: readBudgetBlocked,
+    retrievalElapsedBudgetBlocked: elapsedBudgetBlocked,
+    retrievalWorkspaceIndexProviderStatus: retrievalBlocked ? "not-evaluated" : "unavailable",
+    completeness: "complete",
+    loss: "none",
   };
 }
 
@@ -320,25 +417,26 @@ function expectCommonExtra(
     scopeKind: input.scope.kind,
     relativePathCount: input.scope.relativePaths.length,
     explicitConnection: input.scope.explicitConnection === true,
+    inputStatus: "valid",
+    completeness: "complete",
+    loss: "none",
     ...expectedRequestExtra(input),
   });
   expectSha256(started.extra?.scopeIdentitySha256);
   expectSha256(started.extra?.queryIdentitySha256);
   expect(started.extra?.queryIdentitySha256).not.toBe(started.extra?.scopeIdentitySha256);
-  expect(terminal.extra).toMatchObject(started.extra ?? {});
+  expect(terminal.extra).toMatchObject({
+    scopeIdentitySha256: started.extra?.scopeIdentitySha256,
+    queryIdentitySha256: started.extra?.queryIdentitySha256,
+    completeness: "complete",
+    loss: "none",
+  });
 }
 
 function expectZeroStructuralWork(event: ServerLogEvent): void {
   expect(nestedExtra(event.extra, "structural")).toMatchObject({
     contextCount: 0,
     candidateInventoryBuildCount: 0,
-    candidateFileCount: 0,
-    candidateDirectoryCount: 0,
-    codeIndexBuildCount: 0,
-    symbolGraphBuildCount: 0,
-    importGraphBuildCount: 0,
-    endpointGraphBuildCount: 0,
-    fileSearchCount: 0,
     textSearchCount: 0,
   });
 }
@@ -347,20 +445,10 @@ const WORKSPACE_INDEX_COUNTER_FIELDS = [
   "searchCount",
   "reportCount",
   "fallbackSearchCount",
-  "discoveredEntries",
-  "retainedEntries",
   "indexedRecords",
   "reusedRecords",
   "staleRecords",
-  "skippedEntries",
-  "deletedEntries",
-  "droppedRecords",
-  "loadAttempts",
-  "loadHits",
-  "loadMisses",
   "loadFailures",
-  "saveAttempts",
-  "saveSuccesses",
   "saveFailures",
 ] as const;
 
@@ -382,7 +470,12 @@ const WORKSPACE_IO_COUNTER_FIELDS = [
 ] as const;
 
 function expectWorkspaceIoCounters(event: Readonly<Record<string, unknown>>): void {
-  expectNonNegativeNumberFields(nestedExtra(event, "workspaceIo"), WORKSPACE_IO_COUNTER_FIELDS);
+  const workspaceIo = nestedExtra(event, "workspaceIo");
+  const fields =
+    "readDirCalls" in workspaceIo
+      ? WORKSPACE_IO_COUNTER_FIELDS
+      : (["contentReadCalls", "contentReadBytes"] as const);
+  expectNonNegativeNumberFields(workspaceIo, fields);
 }
 
 function emptyExpectedWorkspaceIoActivity(): Readonly<Record<string, number>> {
@@ -406,11 +499,11 @@ describe("retrieveConnectedContextPack activity log", () => {
       activityLog.close?.();
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const persisted = parsePersistedLogLines(raw);
-      expect(persisted).toHaveLength(2);
-      const [started, completed] = persisted;
-      if (started === undefined || completed === undefined) {
-        throw new Error("expected persisted connected-context start and completion lines");
+      const persisted = producerLogLines(raw);
+      expect(persisted).toHaveLength(3);
+      const [started, details, completed] = persisted;
+      if (started === undefined || details === undefined || completed === undefined) {
+        throw new Error("expected persisted connected-context lifecycle lines");
       }
       expect(started).toMatchObject({
         category: "search",
@@ -426,30 +519,29 @@ describe("retrieveConnectedContextPack activity log", () => {
         correlationId: CORRELATION_ID,
         scopeIdentitySha256: started.scopeIdentitySha256,
         queryIdentitySha256: started.queryIdentitySha256,
-        coverage: expectedCoverageExtra(output),
-        selectionCounts: {
-          selectedFileCount: output.pack.files.length,
-          omittedCount: output.pack.omitted.length,
-        },
-        retrievalStatus: {
-          readBudgetBlocked: false,
-          elapsedBudgetBlocked: false,
-          workspaceIndexProviderStatus: "unavailable",
-        },
+        ...expectedCoverageExtra(output),
+        selectedFileCount: output.pack.files.length,
+        omittedCount: output.pack.omitted.length,
+        retrievalReadBudgetBlocked: false,
+        retrievalElapsedBudgetBlocked: false,
+        retrievalWorkspaceIndexProviderStatus: "unavailable",
+      });
+      expect(details).toMatchObject({
+        category: "search",
+        op: "search.connected-context.completion-details",
+        correlationId: CORRELATION_ID,
+        scopeIdentitySha256: started.scopeIdentitySha256,
+        queryIdentitySha256: started.queryIdentitySha256,
+        activityDetailStatus: "complete",
+        completeness: "complete",
+        loss: "none",
       });
       expectSha256(started.scopeIdentitySha256);
       expectSha256(started.queryIdentitySha256);
       expectNonNegativeNumberFields(completed, ["durationMs"]);
-      expectNonNegativeNumberFields(nestedExtra(completed, "structural"), [
+      expectNonNegativeNumberFields(nestedExtra(details, "structural"), [
         "contextCount",
         "candidateInventoryBuildCount",
-        "candidateFileCount",
-        "candidateDirectoryCount",
-        "codeIndexBuildCount",
-        "symbolGraphBuildCount",
-        "importGraphBuildCount",
-        "endpointGraphBuildCount",
-        "fileSearchCount",
         "textSearchCount",
       ]);
       expectNonNegativeNumberFields(nestedExtra(completed, "usage"), [
@@ -468,9 +560,9 @@ describe("retrieveConnectedContextPack activity log", () => {
         "coverageDepthPruned",
         "coverageMaxFilesPruned",
       ]);
-      expectWorkspaceIndexCounters(completed);
-      expectWorkspaceIoCounters(completed);
-      const workspaceIndex = nestedExtra(completed, "workspaceIndex");
+      expectWorkspaceIndexCounters(details);
+      expectWorkspaceIoCounters(details);
+      const workspaceIndex = nestedExtra(details, "workspaceIndex");
       expect(workspaceIndex).toMatchObject({
         providerStatus: "unavailable",
         loadStatus: "not-attempted",
@@ -492,6 +584,7 @@ describe("retrieveConnectedContextPack activity log", () => {
         workspaceIndexProviderStatus: "unavailable",
       });
       expect(completed).not.toHaveProperty("_truncatedFieldCount");
+      expect(details).not.toHaveProperty("_truncatedFieldCount");
       for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
     } finally {
       activityLog.close?.();
@@ -528,11 +621,11 @@ describe("retrieveConnectedContextPack activity log", () => {
       activityLog.close?.();
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const completed = parsePersistedLogLines(raw).filter(
-        (entry) => entry.op === "search.connected-context.completed",
+      const completedDetails = parsePersistedLogLines(raw).filter(
+        (entry) => entry.op === "search.connected-context.completion-details",
       );
-      expect(completed).toHaveLength(3);
-      const [cold, warm, stale] = completed;
+      expect(completedDetails).toHaveLength(3);
+      const [cold, warm, stale] = completedDetails;
       if (cold === undefined || warm === undefined || stale === undefined) {
         throw new Error("expected cold, warm, and stale connected-context completion lines");
       }
@@ -592,21 +685,23 @@ describe("retrieveConnectedContextPack activity log", () => {
       activityLog.close?.();
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const completed = parsePersistedLogLines(raw).find(
-        (entry) => entry.op === "search.connected-context.completed",
+      const completedDetails = parsePersistedLogLines(raw).find(
+        (entry) => entry.op === "search.connected-context.completion-details",
       );
-      if (completed === undefined) throw new Error("expected connected-context completion line");
-      expectWorkspaceIndexCounters(completed);
-      expect(nestedExtra(completed, "workspaceIndex")).toMatchObject({
+      if (completedDetails === undefined) {
+        throw new Error("expected connected-context completion details");
+      }
+      expectWorkspaceIndexCounters(completedDetails);
+      expect(nestedExtra(completedDetails, "workspaceIndex")).toMatchObject({
         providerStatus: "available",
         loadStatus: "failed",
         saveStatus: "failed",
       });
       expect(["request-local-cold", "request-local-warm", "request-local-reconciled"]).toContain(
-        nestedExtra(completed, "workspaceIndex").searchMode,
+        nestedExtra(completedDetails, "workspaceIndex").searchMode,
       );
-      expect(nestedExtra(completed, "workspaceIndex").loadFailures).toBeGreaterThan(0);
-      expect(nestedExtra(completed, "workspaceIndex").saveFailures).toBeGreaterThan(0);
+      expect(nestedExtra(completedDetails, "workspaceIndex").loadFailures).toBeGreaterThan(0);
+      expect(nestedExtra(completedDetails, "workspaceIndex").saveFailures).toBeGreaterThan(0);
       for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
       expect(raw).not.toContain("private index");
     } finally {
@@ -634,18 +729,18 @@ describe("retrieveConnectedContextPack activity log", () => {
       activityLog.close?.();
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const persisted = parsePersistedLogLines(raw);
+      const persisted = producerLogLines(raw);
       expect(persisted).toHaveLength(2);
       expect(persisted[1]).toMatchObject({
         op: "search.connected-context.failed",
         correlationId: CORRELATION_ID,
-        errorKind: "TypeError",
+        errorKind: "internal",
         causeChain: ["RangeError"],
         outcome: "failed",
         retrievalPhase: "workspace-detection",
       });
       expectAnchoredFrames(persisted[1]?.frames);
-      expect(persisted[1]?.workspaceIndex).toMatchObject({
+      expect(nestedExtra(persisted[1], "workspaceIndex")).toMatchObject({
         providerStatus: "not-evaluated",
         searchMode: "not-evaluated",
       });
@@ -668,6 +763,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     );
 
     const [started, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
+    const details = completionDetailsEvent(activityLog);
     expect(completed).toMatchObject({
       category: "search",
       op: "search.connected-context.completed",
@@ -675,18 +771,11 @@ describe("retrieveConnectedContextPack activity log", () => {
     });
     expect(completed.durationMs).toBeGreaterThanOrEqual(0);
     expect(completed.extra).toMatchObject({
-      ...expectedExtra(input, output, false),
+      ...expectedExtra(output, false),
     });
-    expectNonNegativeNumberFields(nestedExtra(completed.extra, "structural"), [
+    expectNonNegativeNumberFields(nestedExtra(details.extra, "structural"), [
       "contextCount",
       "candidateInventoryBuildCount",
-      "candidateFileCount",
-      "candidateDirectoryCount",
-      "codeIndexBuildCount",
-      "symbolGraphBuildCount",
-      "importGraphBuildCount",
-      "endpointGraphBuildCount",
-      "fileSearchCount",
       "textSearchCount",
     ]);
     expectNonNegativeNumberFields(nestedExtra(completed.extra, "usage"), [
@@ -707,19 +796,26 @@ describe("retrieveConnectedContextPack activity log", () => {
     ]);
     expectNonNegativeNumberFields(nestedExtra(completed.extra, "uncertainty"), [
       "count",
-      "noEvidenceUncertaintyCount",
-      "staleEvidenceUncertaintyCount",
       "scopeIncompleteUncertaintyCount",
       "budgetClippedUncertaintyCount",
       "toolUnavailableUncertaintyCount",
-      "lowConfidenceUncertaintyCount",
-      "unsupportedCitationUncertaintyCount",
-      "incompleteAnswerUncertaintyCount",
       "unsupportedClaimUncertaintyCount",
       "entailmentUnavailableUncertaintyCount",
     ]);
-    expectWorkspaceIndexCounters(completed.extra ?? {});
-    expectWorkspaceIoCounters(completed.extra ?? {});
+    expectWorkspaceIndexCounters(details.extra ?? {});
+    expectWorkspaceIoCounters(details.extra ?? {});
+    expect(details).toMatchObject({
+      category: "search",
+      op: "search.connected-context.completion-details",
+      correlationId: completed.correlationId,
+      extra: {
+        scopeIdentitySha256: started.extra?.scopeIdentitySha256,
+        queryIdentitySha256: started.extra?.queryIdentitySha256,
+        activityDetailStatus: "complete",
+        completeness: "complete",
+        loss: "none",
+      },
+    });
     expectCommonExtra(started, completed, input);
     expectBodyFree(activityLog);
   });
@@ -803,6 +899,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const output = await retrieveConnectedContextPack(input, fixtureDeps(activityLog, undefined));
 
     const [started, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
+    const details = completionDetailsEvent(activityLog);
     expect(completed).toMatchObject({
       category: "search",
       op: "search.connected-context.completed",
@@ -810,18 +907,19 @@ describe("retrieveConnectedContextPack activity log", () => {
     });
     expect(completed.durationMs).toBeGreaterThanOrEqual(0);
     expect(completed.extra).toMatchObject({
-      ...expectedExtra(input, output, true),
-      structural: { contextCount: 0, candidateInventoryBuildCount: 0 },
-      workspaceIndex: {
-        providerStatus: "not-evaluated",
-        searchMode: "not-evaluated",
-        loadStatus: "not-attempted",
-        saveStatus: "not-attempted",
-      },
+      ...expectedExtra(output, true),
     });
-    expectWorkspaceIndexCounters(completed.extra ?? {});
-    expectWorkspaceIoCounters(completed.extra ?? {});
-    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual(
+    expect(details.extra).toMatchObject({
+      structuralContextCount: 0,
+      structuralCandidateInventoryBuildCount: 0,
+      indexProviderStatus: "not-evaluated",
+      indexSearchMode: "not-evaluated",
+      indexLoadStatus: "not-attempted",
+      indexSaveStatus: "not-attempted",
+    });
+    expectWorkspaceIndexCounters(details.extra ?? {});
+    expectWorkspaceIoCounters(details.extra ?? {});
+    expect(nestedExtra(details.extra, "workspaceIo")).toEqual(
       admissionOnlyExpectedWorkspaceIoActivity(),
     );
     expectCommonExtra(started, completed, input);
@@ -840,13 +938,14 @@ describe("retrieveConnectedContextPack activity log", () => {
     );
 
     const [started, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
-    expect(completed.extra).toMatchObject({ ...expectedExtra(input, output, false, true) });
+    const details = completionDetailsEvent(activityLog);
+    expect(completed.extra).toMatchObject({ ...expectedExtra(output, false, true) });
     expect(nestedExtra(completed.extra, "retrievalStatus")).toEqual({
       readBudgetBlocked: false,
       elapsedBudgetBlocked: true,
       workspaceIndexProviderStatus: "not-evaluated",
     });
-    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual(
+    expect(nestedExtra(details.extra, "workspaceIo")).toEqual(
       admissionOnlyExpectedWorkspaceIoActivity(),
     );
     expectCommonExtra(started, completed, input);
@@ -878,8 +977,9 @@ describe("retrieveConnectedContextPack activity log", () => {
       },
     );
 
-    const [, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
-    const workspaceIndex = nestedExtra(completed.extra, "workspaceIndex");
+    lifecycleEvents(activityLog, "search.connected-context.completed");
+    const details = completionDetailsEvent(activityLog);
+    const workspaceIndex = nestedExtra(details.extra, "workspaceIndex");
     expect(workspaceIndex).toMatchObject({
       providerStatus: "unavailable",
       searchMode: "unused",
@@ -910,7 +1010,7 @@ describe("retrieveConnectedContextPack activity log", () => {
       level: "error",
       category: "search",
       correlationId: CORRELATION_ID,
-      errorKind: "TypeError",
+      errorKind: "internal",
       extra: {
         outcome: "failed",
         retrievalPhase: "workspace-detection",
@@ -1108,7 +1208,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const [started, failed] = lifecycleEvents(activityLog, "search.connected-context.failed");
     expect(failed).toMatchObject({
       level: "warn",
-      errorKind: "GATEWAY_CANCELLED",
+      errorKind: "cancelled",
       extra: {
         outcome: "cancelled",
         retrievalPhase: "request-validation",
@@ -1219,7 +1319,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const [, failed] = lifecycleEvents(activityLog, "search.connected-context.failed");
     expect(failed).toMatchObject({
       level: "warn",
-      errorKind: "GATEWAY_CANCELLED",
+      errorKind: "cancelled",
       extra: {
         activityDetailStatus: "complete",
         outcome: "cancelled",
@@ -1275,7 +1375,7 @@ describe("retrieveConnectedContextPack activity log", () => {
         op: "server-log.write-failed",
         failedOp: "search.connected-context.started",
         correlationId: CORRELATION_ID,
-        errorKind: "TypeError",
+        errorKind: "internal",
       });
       expect(String(stderr.mock.calls[0]?.[0])).not.toContain(FIXTURE_ROOT);
     } finally {

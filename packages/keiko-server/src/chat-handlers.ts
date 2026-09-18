@@ -164,12 +164,22 @@ import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.
 import { scheduleMemorySalienceCapture } from "./memory-salience.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
+  logChatCreationRejectionEvent,
+  logChatRejectionEvent,
+  logChatTurnStartedEvent,
+  logGitChangeApply,
+  logGitChangeDescriptionTargetDenied,
+  logGitChangeTurnAuthorityEvent,
+  type ChatRejectionReason,
+  type GitChangeDescriptionTargetDenial,
+  type GitChangeDescriptionTurnDenial,
+} from "./chat-activity.js";
+import {
   contentFreeErrorClass,
   emitServerDiagnostic,
   serverDiagnosticFromError,
 } from "./diagnostics-log.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
-import { getServerLogger } from "./observability/index.js";
 import {
   assertUsableAssistantContent,
   isLegacyEmptyAssistantPlaceholder,
@@ -895,21 +905,12 @@ function logChatCreationRejection(
 ): void {
   const modelKind = chatCapability(deps, modelId)?.kind ?? "unknown";
   const readinessFailure = modelKind === "chat";
-  getServerLogger().warn({
-    category: "gateway",
-    op: "chat.creation.rejected",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+  logChatCreationRejectionEvent({
+    correlationId: ctx.correlationId,
     status,
-    errorKind: readinessFailure ? "model-not-ready" : "invalid-model",
-    extra: { reason: readinessFailure ? "readiness" : "configuration", modelKind },
+    reason: readinessFailure ? "readiness" : "configuration",
+    modelKind,
   });
-}
-
-type ChatRejectionReason = "readiness" | "generation" | "grounding-scope";
-
-function chatRejectionErrorKind(reason: ChatRejectionReason): string {
-  if (reason === "generation") return "config-changed";
-  return reason === "grounding-scope" ? "grounding-scope-changed" : "model-not-ready";
 }
 
 export function logChatRejection(
@@ -920,21 +921,12 @@ export function logChatRejection(
   status: number,
   reason: ChatRejectionReason = "readiness",
 ): void {
-  const event = {
-    category: "gateway",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+  logChatRejectionEvent(operation, {
+    correlationId,
     status,
-    errorKind: chatRejectionErrorKind(reason),
-    extra: {
-      reason,
-      modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
-    },
-  } as const;
-  if (operation === "chat.send.rejected") {
-    getServerLogger().warn({ ...event, op: "chat.send.rejected" });
-  } else {
-    getServerLogger().warn({ ...event, op: "chat.regeneration.rejected" });
-  }
+    reason,
+    modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
+  });
 }
 
 function routeErrorFields(
@@ -1766,9 +1758,9 @@ const CHAT_TURN_ROLE_SET: ReadonlySet<string> = new Set(CHAT_TURN_ROLES);
 
 export interface ChatTurnShapeFields {
   readonly messageCount: number;
-  readonly roleCounts: Readonly<Record<ChatTurnRole, number>>;
-  // Denormalized copy of roleCounts.tool: a scalar an agent can grep for directly, without
-  // descending into the nested extra.roleCounts object.
+  readonly systemCount: number;
+  readonly userCount: number;
+  readonly assistantCount: number;
   readonly toolCount: number;
   readonly imageAttachmentCount: number;
   readonly imageAttachmentBytes: number;
@@ -1797,7 +1789,9 @@ export function chatTurnShapeFields(
   }
   return {
     messageCount: messages.length,
-    roleCounts,
+    systemCount: roleCounts.system,
+    userCount: roleCounts.user,
+    assistantCount: roleCounts.assistant,
     toolCount: roleCounts.tool,
     imageAttachmentCount,
     imageAttachmentBytes,
@@ -1809,12 +1803,7 @@ function logChatTurnStarted(
   messages: readonly { readonly role: string }[],
   attachments: readonly ConversationAttachment[],
 ): void {
-  getServerLogger().info({
-    category: "gateway",
-    op: "chat.turn.started",
-    correlationId,
-    extra: { ...chatTurnShapeFields(messages, attachments) },
-  });
+  logChatTurnStartedEvent(correlationId, chatTurnShapeFields(messages, attachments));
 }
 
 export interface ChatCompactionTurn {
@@ -2866,7 +2855,7 @@ export function validateCurrentDesktopChatSend(
 // description authority record that existed for the exact scope but has passed its `expiresAt`
 // from every other closed case (no port wired at all, or a scope that was never minted), reusing
 // `authorizeGitDeliveryModelEgress`'s own expired-vs-absent discriminant rather than a second one.
-export type GitChangeDescriptionTurnDenial = "authority-expired" | "model-egress-denied";
+export type { GitChangeDescriptionTurnDenial } from "./chat-activity.js";
 
 export type GitChangeDescriptionTurnAdmission =
   | { readonly admitted: true }
@@ -2903,15 +2892,7 @@ function logGitChangeTurnAuthority(
   admission: GitChangeDescriptionTurnAdmission,
   relationshipId: string,
 ): void {
-  getServerLogger()[admission.admitted ? "info" : "warn"]({
-    category: "security",
-    op: admission.admitted
-      ? "pr-description.chat.turn.admitted"
-      : "pr-description.chat.turn.denied",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    ...(admission.admitted ? {} : { errorKind: admission.reason }),
-    extra: { relationshipId },
-  });
+  logGitChangeTurnAuthorityEvent(correlationId, admission, relationshipId);
 }
 
 // V1 connects at most one git-change comparison per chat in practice; a chat that somehow carries
@@ -3076,7 +3057,7 @@ type GitChangeRepositoryResolution =
   | { readonly ok: true; readonly ownerAndRepo: string }
   | {
       readonly ok: false;
-      readonly reason: "repository-unavailable" | "reader-unauthorized" | "remote-unresolved";
+      readonly reason: GitChangeDescriptionTargetDenial;
     };
 
 async function resolveGitChangeApplyOwnerAndRepo(
@@ -3120,13 +3101,11 @@ function gitChangeDescriptionTargetUnavailable(
   correlationId: string,
   reason: Exclude<GitChangeRepositoryResolution, { readonly ok: true }>["reason"],
 ): RouteResult {
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "git-change.chat.description-target.denied",
+  logGitChangeDescriptionTargetDenied(
+    deps.activityLog ?? processServerLogSink(),
     correlationId,
-    level: "warn",
-    errorKind: reason,
-  });
+    reason,
+  );
   const unauthorized = reason === "reader-unauthorized";
   let errorCode = "GIT_CHANGE_APPLY_REMOTE_UNRESOLVED";
   if (unauthorized) {
@@ -3182,12 +3161,7 @@ function logGitChangeApplyOutcome(
   correlationId: string,
   outcome: PrDescriptionApplicationResult["outcome"],
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git-change.chat.apply",
-    correlationId,
-    extra: { outcome },
-  });
+  logGitChangeApply(deps.activityLog ?? processServerLogSink(), correlationId, outcome);
 }
 
 /**

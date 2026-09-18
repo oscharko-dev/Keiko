@@ -230,7 +230,15 @@ describe("CodingToolGovernedDelegate", () => {
           category: "process",
           op: "coding-runtime.tool-result",
           correlationId: UNKNOWN_CORRELATION_ID,
-          extra: { actionKind: "read", state: "discarded", reason: "authority-denied" },
+          level: "warn",
+          errorKind: "authority-denied",
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            actionKind: "read",
+            state: "discarded",
+            reason: "authority-denied",
+          },
         },
       ]);
       expect(redactLogFields(events[0]?.extra ?? {})).toEqual(events[0]?.extra);

@@ -74,9 +74,10 @@ export class IndexingError extends KnowledgeStoreError {
 // it — which is exactly what made the six-minute "0 of 1 documents, 0 of 36 vectors" field
 // incident undiagnosable. Every line this layer writes carries this context.
 //
-// `jobId` is a v4 uuid minted by the orchestrator (or an injected id source in tests). It is
-// caller-opaque, carries nothing about the customer, and is what an operator greps, so it rides
-// verbatim in `correlationId`.
+// `jobId` is the sanctioned activity correlation derived once from the orchestrator's public job
+// id. Production UUIDs pass through unchanged; a legacy injected id may be reduced to a stable,
+// body-free digest. Keeping the normalized value in this context ensures Knowledge and gateway
+// lines receive the same join key without changing the public or persisted job id.
 //
 // The other two members are DIGESTS, not identifiers, because their raw forms are not safe to
 // write: a `KnowledgeCapsuleId` is supplied by the caller and routinely IS the Pod's

@@ -49,6 +49,7 @@ export interface CodingRuntimeLaunchResolver {
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;
+    readonly correlationId?: string | undefined;
     readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
   }): Omit<CodingRuntimeLaunchRequest, "runId" | "taskRef" | "workspaceRoot" | "requestedMode"> & {
     readonly taskRef: string;

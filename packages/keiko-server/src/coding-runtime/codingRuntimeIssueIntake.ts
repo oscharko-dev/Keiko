@@ -6,10 +6,14 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { ServerLogSink } from "../observability/server-log.js";
-import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 
@@ -71,7 +75,89 @@ interface AdmissionInput {
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
 }
 
-type Stage = "admission" | "resolution" | "revalidation" | "base-branch" | "context" | "reattach";
+const CODING_RUNTIME_ISSUE_STAGES = [
+  "admission",
+  "resolution",
+  "revalidation",
+  "base-branch",
+  "context",
+  "reattach",
+] as const;
+type Stage = (typeof CODING_RUNTIME_ISSUE_STAGES)[number];
+
+const CODING_RUNTIME_ISSUE_BINDING_FAILURES = [
+  "invalid-reference",
+  "repository-mismatch",
+  "auth-required",
+  "issue-unavailable",
+  "clone-failed",
+  "authority-denied",
+  "cancelled",
+] as const;
+
+const CODING_RUNTIME_ISSUE_BINDING_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const CODING_RUNTIME_ISSUE_BINDING_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const CODING_RUNTIME_ISSUE_BINDING_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.issue-binding-refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeIssueIntake.refused",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...CODING_RUNTIME_ISSUE_STAGES],
+    },
+    issueBindingFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...CODING_RUNTIME_ISSUE_BINDING_FAILURES],
+    },
+    frames: CODING_RUNTIME_ISSUE_BINDING_FRAMES_FIELD,
+    causeChain: CODING_RUNTIME_ISSUE_BINDING_CAUSE_CHAIN_FIELD,
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-issue-binding"],
+  proofIds: ["coding-runtime.run.issue-binding-refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function issueBindingErrorKind(
+  stage: Stage,
+  failure: CodingWorkbenchIssueBindingFailure | undefined,
+  error: unknown,
+): ActivityLogErrorKind {
+  if (failure === "auth-required" || failure === "authority-denied") return "authority-denied";
+  if (failure === "cancelled") return "cancelled";
+  if (failure === "issue-unavailable" || failure === "clone-failed" || stage === "reattach") {
+    return "unavailable";
+  }
+  if (error !== undefined) return "internal";
+  return failure === "repository-mismatch" || stage === "base-branch"
+    ? "conflict"
+    : "invalid-request";
+}
 
 function refused(
   input: AdmissionInput,
@@ -79,21 +165,24 @@ function refused(
   failure?: CodingWorkbenchIssueBindingFailure,
   error?: unknown,
 ): CodingRuntimeIssueAdmission {
-  input.activityLog?.write({
-    category: "process",
-    level: "warn",
-    op: "coding-runtime.run.issue-binding-refused",
-    correlationId: input.runId,
-    ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
-    extra: {
-      runId: input.runId,
-      stage,
-      ...(failure === undefined ? {} : { issueBindingFailure: failure }),
-      ...(error === undefined
-        ? {}
-        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
-    },
-  });
+  input.activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_ISSUE_BINDING_REFUSED_OPERATION,
+      {
+        level: "warn",
+        correlationId: input.runId,
+        errorKind: issueBindingErrorKind(stage, failure, error),
+      },
+      {
+        runId: input.runId,
+        stage,
+        ...(failure === undefined ? {} : { issueBindingFailure: failure }),
+        ...(error === undefined
+          ? {}
+          : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+      },
+    ),
+  );
   return {
     ok: false,
     failureCode: failureCodeFor(stage, failure),

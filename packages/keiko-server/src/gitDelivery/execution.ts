@@ -20,6 +20,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  isErrorKind,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   buildGitDeliveryEvidenceRecord,
@@ -38,7 +44,7 @@ import {
   readStagedPaths,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import { logWorkspaceLifecycleFailure } from "../task-workspace/activity-log.js";
 import { asRepositoryUnreachable, TaskWorkspaceError } from "../task-workspace/errors.js";
 import {
@@ -53,12 +59,252 @@ import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPrefli
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 
 const KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS = [
   { matchKind: "exact", value: "dev" },
   { matchKind: "exact", value: "main" },
 ] as const;
+
+const GIT_DELIVERY_MUTATION_ACTIONS = [
+  "branch-create",
+  "branch-switch",
+  "stage",
+  "unstage",
+  "commit",
+  "push",
+  "pr-create",
+  "pr-update",
+  "pr-description-apply",
+  "pr-mark-ready",
+  "merge",
+  "abort",
+  "recovery",
+] as const;
+
+const GIT_DELIVERY_FAILURE_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "safe-platform-class",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const GIT_DELIVERY_FAILURE_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const DISPATCH_NO_SPAWN_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.dispatch.no-spawn",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/execution.logGitDeliveryNoSpawnRefusal",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...GIT_DELIVERY_MUTATION_ACTIONS, "fetch", "pull"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-delivery-authority-continuity"],
+  proofIds: ["git.delivery.dispatch.no-spawn"],
+  releaseImpact: "patch",
+});
+
+const UPSTREAM_TRACKING_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.push.upstream-tracking-failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitDelivery/execution.logGitDeliveryUpstreamTrackingFailed",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-upstream-tracking"],
+  proofIds: ["git.delivery.push.upstream-tracking-failed"],
+  releaseImpact: "patch",
+});
+
+const MUTATION_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.mutation.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitDelivery/execution.logGitDeliveryMutation",
+  fields: {
+    actionId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    actionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...GIT_DELIVERY_MUTATION_ACTIONS],
+    },
+    status: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded", "approval-required", "blocked", "failed", "recovery-required"],
+    },
+    phaseReached: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["resolve", "preflight", "preview", "policy", "execute", "result"],
+    },
+    policyOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["allowed", "blocked", "approval-gated", "constrained"],
+    },
+    preflightFindingCount: { type: "integer", dataClass: "count", required: true },
+    preflightBlockingCount: { type: "integer", dataClass: "count", required: true },
+    requiredApproverCount: { type: "integer", dataClass: "count", required: true },
+    blockReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "policy-pack-blocked",
+        "authority-denied",
+        "protected-branch",
+        "provider-capability-absent",
+        "approval-expired",
+        "approver-not-authorized",
+        "risk-class-ceiling",
+        "head-hash-mismatch",
+        "no-applicable-rule",
+      ],
+    },
+    executionErrorCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "provider-rejected",
+        "network-failure",
+        "conflict",
+        "precondition-failed",
+        "signature-failed",
+        "timeout",
+        "internal-error",
+      ],
+    },
+    rejectionReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "already-exists",
+        "base-missing",
+        "head-unpublished",
+        "validation-error",
+        "permission-denied",
+        "not-found",
+        "rate-limited",
+        "provider-unavailable",
+        "unknown",
+        "non-fast-forward",
+        "fetch-first",
+        "no-upstream",
+        "auth-failed",
+        "protected-ref",
+        "remote-unavailable",
+        "not-mergeable",
+        "checks-failing",
+        "approvals-missing",
+        "conflict",
+        "head-modified",
+        "strategy-unavailable",
+        "branch-protection",
+        "already-merged",
+      ],
+    },
+    failureClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "argv-invalid",
+        "invocation-error",
+        "output-truncated",
+        "number-unparsable",
+        "identity-unparsable",
+      ],
+    },
+    identityIssue: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "json-invalid",
+        "output-redacted",
+        "shape-invalid",
+        "repository-mismatch",
+        "head-repository-mismatch",
+        "head-ref-mismatch",
+        "base-ref-mismatch",
+        "draft-mismatch",
+        "state-not-open",
+      ],
+    },
+    stdoutBytes: { type: "integer", dataClass: "count", required: false },
+    stderrBytes: { type: "integer", dataClass: "count", required: false },
+    exitCode: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-delivery-mutation"],
+  proofIds: ["git.delivery.mutation.completed"],
+  releaseImpact: "patch",
+});
+
+const MUTATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.mutation.failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "gitDelivery/execution.logGitDeliveryMutationFailure",
+  fields: {
+    actionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...GIT_DELIVERY_MUTATION_ACTIONS],
+    },
+    phaseReached: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["snapshot", "readiness", "post-observation", "dispatch"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: GIT_DELIVERY_FAILURE_FRAMES_FIELD,
+    causeChain: GIT_DELIVERY_FAILURE_CAUSE_CHAIN_FIELD,
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-delivery-precondition"],
+  proofIds: ["git.delivery.mutation.failed"],
+  releaseImpact: "patch",
+});
 
 // Default trusted policy: PERMIT the lowest risk class (branch create/switch, stage, unstage, and
 // feature-branch commits), block local commits on protected integration branches, and fail-closed for
@@ -437,7 +683,7 @@ export function gitDeliveryTerminationHandler(
 ): (evidence: CommandTerminationEvidence) => void {
   const activityLog = seams.activityLog ?? processServerLogSink();
   return (evidence): void => {
-    logCommandTermination(activityLog, correlationId ?? UNKNOWN_CORRELATION_ID, evidence);
+    logCommandTermination(activityLog, correlationIdOrUnknown(correlationId), evidence);
   };
 }
 
@@ -461,13 +707,17 @@ export function logGitDeliveryNoSpawnRefusal(
   operation: GitDeliveryActionKind | GitSyncOperation,
   correlationId: string | undefined,
 ): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.dispatch.no-spawn",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 403,
-    extra: { operation },
-  });
+  activityLog.write(
+    activityLogEvent(
+      DISPATCH_NO_SPAWN_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        status: 403,
+        errorKind: "authority-denied",
+      },
+      { operation },
+    ),
+  );
 }
 
 // The interactive pinned-push path's post-push `git branch --set-upstream-to=…` follow-up
@@ -482,12 +732,17 @@ export function logGitDeliveryUpstreamTrackingFailed(
   activityLog: ServerLogSink,
   correlationId: string | undefined,
 ): void {
-  activityLog.write({
-    level: "warn",
-    category: "diagnostic",
-    op: "git.delivery.push.upstream-tracking-failed",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-  });
+  activityLog.write(
+    activityLogEvent(
+      UPSTREAM_TRACKING_FAILED_OPERATION,
+      {
+        level: "warn",
+        correlationId: correlationIdOrUnknown(correlationId),
+        errorKind: "unavailable",
+      },
+      {},
+    ),
+  );
 }
 
 export function readWorktreeSnapshotFor(
@@ -810,21 +1065,70 @@ const UNSUCCESSFUL_MUTATION_STATUSES: ReadonlySet<string> = new Set([
  * these on the mutation line the failing step is reconstructable from the log alone. Anything that
  * is not a short closed word never reaches the log.
  */
+export interface GitDeliveryFailureFields {
+  readonly rejectionReason?: MutationFailureStringValue<"rejectionReason">;
+  readonly failureClass?: MutationFailureStringValue<"failureClass">;
+  readonly identityIssue?: MutationFailureStringValue<"identityIssue">;
+  readonly stdoutBytes?: number;
+  readonly stderrBytes?: number;
+  readonly exitCode?: number;
+}
+
+type MutationFailureStringField = "rejectionReason" | "failureClass" | "identityIssue";
+type MutationFailureStringValue<FieldName extends MutationFailureStringField> =
+  (typeof MUTATION_COMPLETED_OPERATION.fields)[FieldName]["values"][number];
+
+function admittedString<FieldName extends MutationFailureStringField>(
+  fieldName: FieldName,
+  value: unknown,
+): MutationFailureStringValue<FieldName> | undefined {
+  const values: readonly string[] = MUTATION_COMPLETED_OPERATION.fields[fieldName].values;
+  return typeof value === "string" && values.includes(value)
+    ? (value as MutationFailureStringValue<FieldName>)
+    : undefined;
+}
+
+function admittedCount(value: unknown): number | undefined {
+  return typeof value === "number" && value >= 0 && closedFailureDetailValue(value)
+    ? value
+    : undefined;
+}
+
+function failureValue(result: unknown, detail: GitDeliveryFailureDetail, key: string): unknown {
+  const resultValue: unknown =
+    typeof result === "object" && result !== null
+      ? (result as Readonly<Record<string, unknown>>)[key]
+      : undefined;
+  const explicitValue: string | number | undefined = detail[key];
+  return closedFailureDetailValue(explicitValue) ? explicitValue : resultValue;
+}
+
 export function executionFailureDetail(
   outcome: GitMutationLifecycleResult["outcome"],
   detail: GitDeliveryFailureDetail = {},
-): Readonly<Record<string, string | number>> {
+): GitDeliveryFailureFields {
   if (outcome.status !== "failed" && outcome.status !== "recovery-required") return {};
   const result: unknown = outcome.executionResult;
-  const admitted: Record<string, string | number> = {};
-  const admit = (key: string, value: unknown): void => {
-    if (closedFailureDetailValue(value)) admitted[key] = value;
+  const rejectionReason = admittedString(
+    "rejectionReason",
+    failureValue(result, detail, "rejectionReason"),
+  );
+  const failureClass = admittedString("failureClass", failureValue(result, detail, "failureClass"));
+  const identityIssue = admittedString(
+    "identityIssue",
+    failureValue(result, detail, "identityIssue"),
+  );
+  const stdoutBytes = admittedCount(failureValue(result, detail, "stdoutBytes"));
+  const stderrBytes = admittedCount(failureValue(result, detail, "stderrBytes"));
+  const exitCode = admittedCount(failureValue(result, detail, "exitCode"));
+  return {
+    ...(rejectionReason === undefined ? {} : { rejectionReason }),
+    ...(failureClass === undefined ? {} : { failureClass }),
+    ...(identityIssue === undefined ? {} : { identityIssue }),
+    ...(stdoutBytes === undefined ? {} : { stdoutBytes }),
+    ...(stderrBytes === undefined ? {} : { stderrBytes }),
+    ...(exitCode === undefined ? {} : { exitCode }),
   };
-  for (const key of FAILURE_DETAIL_KEYS) {
-    if (typeof result === "object" && result !== null) admit(key, Reflect.get(result, key));
-    admit(key, detail[key]);
-  }
-  return admitted;
 }
 
 /** A closed word or a safe integer: the only value shapes a failure detail may carry onto the log. */
@@ -835,21 +1139,50 @@ function closedFailureDetailValue(value: unknown): value is string | number {
   );
 }
 
-const FAILURE_DETAIL_KEYS = [
-  "rejectionReason",
-  "failureClass",
-  "identityIssue",
-  "stdoutBytes",
-  "stderrBytes",
-  "exitCode",
-] as const;
-
 function executionErrorCodeOf(
   outcome: GitMutationLifecycleResult["outcome"],
 ): GitDeliveryExecutionErrorCode | undefined {
   return outcome.status === "failed" || outcome.status === "recovery-required"
     ? (outcome.executionResult.errorCode ?? "internal-error")
     : undefined;
+}
+
+const EXECUTION_ACTIVITY_ERROR_KIND: Readonly<
+  Record<GitDeliveryExecutionErrorCode, ActivityLogErrorKind>
+> = {
+  "provider-rejected": "unavailable",
+  "network-failure": "unavailable",
+  conflict: "conflict",
+  "precondition-failed": "conflict",
+  "signature-failed": "validation-failed",
+  timeout: "timeout",
+  "internal-error": "internal",
+};
+
+const ACTIVITY_ERROR_PATTERNS: readonly (readonly [RegExp, ActivityLogErrorKind])[] = [
+  [/rate[-_ ]?limit/u, "rate-limited"],
+  [/timeout/u, "timeout"],
+  [/cancel|abort/u, "cancelled"],
+  [/authority/u, "authority-denied"],
+  [/permission|denied/u, "permission-denied"],
+  [/conflict|lock/u, "conflict"],
+  [/valid|signature/u, "validation-failed"],
+  [/unavailable|unreachable|network/u, "unavailable"],
+];
+
+export function gitDeliveryActivityErrorKind(kind: string): ActivityLogErrorKind {
+  const lower = kind.toLowerCase();
+  const match = ACTIVITY_ERROR_PATTERNS.find(([pattern]) => pattern.test(lower));
+  if (match !== undefined) return match[1];
+  return kind === "unknown" ? "unknown" : "internal";
+}
+
+export function gitDeliveryActivityFailureKind(kind: string): string {
+  return isErrorKind(kind) ? kind : gitDeliveryActivityErrorKind(kind);
+}
+
+export function gitDeliveryActivityCode(code: string | undefined): string | undefined {
+  return isErrorKind(code) ? code : undefined;
 }
 
 function policyBlockReasonOf(
@@ -870,33 +1203,35 @@ export function logGitDeliveryMutation(
   const unsuccessful = UNSUCCESSFUL_MUTATION_STATUSES.has(outcome.status);
   const executionErrorCode = executionErrorCodeOf(outcome);
   const blockReason = policyBlockReasonOf(outcome);
-  log.write({
-    // Without an explicit level this line defaulted to `info`, so a FAILED governed mutation or
-    // push was filtered out entirely under `KEIKO_LOG_LEVEL=warn` — the threshold an operator
-    // investigating a failed delivery would actually be running at (AGENTS.md §8 Rule 1).
-    level: unsuccessful ? "warn" : "info",
-    category: "diagnostic",
-    op: "git.delivery.mutation.completed",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    // Promoted out of `extra` onto the envelope: `errorKind` is the field an operator greps and
-    // `keiko support analyze` clusters on, and it was previously reachable only by digging into
-    // `extra.executionErrorCode`.
-    ...(executionErrorCode === undefined ? {} : { errorKind: executionErrorCode }),
-    extra: {
-      actionId: envelope.actionId,
-      actionKind: envelope.kind,
-      status: outcome.status,
-      phaseReached,
-      policyOutcome: envelope.policyDecision.outcome,
-      preflightFindingCount: preflight.findings.length,
-      preflightBlockingCount: preflight.blocking.length,
-      requiredApproverCount:
-        outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
-      blockReason,
-      executionErrorCode,
-      ...executionFailureDetail(outcome, failureDetail),
-    },
-  });
+  log.write(
+    activityLogEvent(
+      MUTATION_COMPLETED_OPERATION,
+      {
+        // Without an explicit level this line defaulted to `info`, so a FAILED governed mutation or
+        // push was filtered out entirely under `KEIKO_LOG_LEVEL=warn` — the threshold an operator
+        // investigating a failed delivery would actually be running at (AGENTS.md §8 Rule 1).
+        level: unsuccessful ? "warn" : "info",
+        correlationId: correlationIdOrUnknown(correlationId),
+        ...(executionErrorCode === undefined
+          ? {}
+          : { errorKind: EXECUTION_ACTIVITY_ERROR_KIND[executionErrorCode] }),
+      },
+      {
+        actionId: envelope.actionId,
+        actionKind: envelope.kind,
+        status: outcome.status,
+        phaseReached,
+        policyOutcome: envelope.policyDecision.outcome,
+        preflightFindingCount: preflight.findings.length,
+        preflightBlockingCount: preflight.blocking.length,
+        requiredApproverCount:
+          outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
+        ...(blockReason === undefined ? {} : { blockReason }),
+        ...(executionErrorCode === undefined ? {} : { executionErrorCode }),
+        ...executionFailureDetail(outcome, failureDetail),
+      },
+    ),
+  );
 }
 
 export function logGitDeliveryPreconditionFailure(
@@ -905,17 +1240,47 @@ export function logGitDeliveryPreconditionFailure(
   error: unknown,
   correlationId: string | undefined,
 ): void {
-  log.write({
-    level: "error",
-    category: "diagnostic",
-    op: "git.delivery.mutation.failed",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    errorKind: errorKindOf(error),
-    extra: {
-      actionKind,
-      phaseReached: "snapshot",
-    },
-  });
+  writeGitDeliveryMutationFailure(log, actionKind, "snapshot", error, correlationId, false);
+}
+
+export function logGitDeliveryMutationFailure(
+  log: ServerLogSink,
+  actionKind: GitDeliveryActionKind,
+  phaseReached: "snapshot" | "readiness" | "post-observation" | "dispatch",
+  error: unknown,
+  correlationId: string | undefined,
+): void {
+  writeGitDeliveryMutationFailure(log, actionKind, phaseReached, error, correlationId, true);
+}
+
+function writeGitDeliveryMutationFailure(
+  log: ServerLogSink,
+  actionKind: GitDeliveryActionKind,
+  phaseReached: "snapshot" | "readiness" | "post-observation" | "dispatch",
+  error: unknown,
+  correlationId: string | undefined,
+  includeErrorStructure: boolean,
+): void {
+  const failureKind = errorKindOf(error);
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
+  log.write(
+    activityLogEvent(
+      MUTATION_FAILED_OPERATION,
+      {
+        level: "error",
+        correlationId: correlationIdOrUnknown(correlationId),
+        errorKind: gitDeliveryActivityErrorKind(failureKind),
+      },
+      {
+        actionKind,
+        phaseReached,
+        failureKind,
+        ...(includeErrorStructure && frames.length > 0 ? { frames } : {}),
+        ...(includeErrorStructure && chain.length > 0 ? { causeChain: chain } : {}),
+      },
+    ),
+  );
 }
 
 // ─── Content-free response projection ──────────────────────────────────────────────────────────

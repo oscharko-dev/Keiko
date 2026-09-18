@@ -24,6 +24,45 @@ npm run arch:check:negative
 
 See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area gate table.
 
+### Activity Log runtime changes
+
+Production runtime behavior extends the existing Activity Log; it never creates a second logger,
+event store, analyzer, or incident subsystem. Register every operation through the canonical typed
+APIs in `keiko-contracts` and emit only the registration-derived event shape. The checked-in
+`docs/observability/op-catalog.generated.json` is generated from those canonical declarations and
+emitters. Its typed registry is authoritative; the legacy literal scan is migration input only.
+
+Each registration owns exact fields, bounds, data classes and vocabularies, causal and lifecycle
+semantics, analyzer projection, failure classes, proof ids, and release impact. Unknown or dynamic
+operations, arbitrary metadata, nested objects, missing required fields, unbounded strings, and
+unknown error/loss states fail closed. Persisted v2 records also require the sink-owned version and
+digest dimensions, compatibility/writer state, and complete `(pid, instanceId, seq)` identity.
+Tests for changed behavior assert the emitted line and the support-analyzer projection. Regenerate
+and check the catalog with `npm run generate:op-catalog` and `npm run check:op-catalog`; error-path
+changes also run `npm run check:error-observability` during the verification phase.
+
+The generated registry also publishes the stable implementation-obligation categories and the
+failure-class coverage matrix consumed by permanent quality gates. Its release expectation is
+100% complete. Exemptions are not comments or wildcards: the sole registry exemption contract is
+limited to one registered operation/failure-class pair and requires an owner, technical reason,
+linked tracking issue, unavoidable platform or durability boundary, and expiry. It cannot permit
+unknown fields, prohibited data, silent loss, or incomplete evidence.
+
+Keep this contract converged in one change. A runtime change that affects Activity Log behavior
+updates the owning implementation, its failure-first regression, emitted-line and analyzer/replay
+proof, ADR-0173, AGENTS.md, this contributor contract, and directly affected operator documentation
+as applicable. Saved support reports remain local artifacts written to a user-selected destination;
+publishing or attaching one to GitHub or another external system requires separate explicit user
+authority and is never part of logging or export.
+
+Activity Log storage must remain bounded on every intermediate change. The current daily-file
+implementation publishes one immutable `server-YYYY-MM-DD.log` archive per UTC boundary and retains
+only the configured number of closed-grammar archives. Filesystem mutation is limited to verified
+owner-private, non-redirected directories and opened regular owner-matched targets. Cross-process
+rotation uses a non-replacing hard-link winner; rename is permitted only when the filesystem reports
+hard links unsupported. Any successor segment design must replace this bound atomically rather than
+remove it first.
+
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into

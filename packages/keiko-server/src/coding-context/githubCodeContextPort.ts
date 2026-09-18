@@ -19,6 +19,13 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { CommandResult, CommandRule, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+  type ActivityLogFieldContract,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
@@ -37,6 +44,75 @@ const GH_API_TIMEOUT_MS = 30_000;
 // trips, so a second, larger number here could never bound anything — it only made an over-cap read
 // look like a syntax problem when the marker reached `JSON.parse`.
 const GH_API_MAX_STDOUT_BYTES = GOVERNED_GIT_REMOTE_SANDBOX_POLICY.maxOutputBytes;
+
+type GitHubReadOperationHeader = Pick<
+  ActivityLogOperationRegistration,
+  "contractKind" | "schemaVersion"
+>;
+type GitHubReadOperationOwnership = Pick<ActivityLogOperationRegistration, "category" | "owner">;
+
+const GITHUB_READ_OPERATION_HEADER = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+} as const satisfies GitHubReadOperationHeader;
+const GITHUB_READ_OPERATION_OWNERSHIP = {
+  category: "process",
+  owner: "keiko-server",
+} as const satisfies GitHubReadOperationOwnership;
+
+const GITHUB_READ_SUCCESS_OUTCOMES = ["succeeded", "cancelled"] as const;
+const GITHUB_READ_GH_OUTCOMES = [
+  "gh-denied",
+  "gh-failed",
+  "gh-transient-failure",
+  "gh-output-truncated",
+  "gh-invalid-json",
+] as const;
+const GITHUB_READ_OUTCOME_VALUES = [
+  ...GITHUB_READ_SUCCESS_OUTCOMES,
+  ...GITHUB_READ_GH_OUTCOMES,
+  "failed",
+] as const;
+
+const GITHUB_READ_FRAMES_FIELD_CONTRACT = {
+  type: "string-array",
+  dataClass: "safe-platform-class",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const satisfies ActivityLogFieldContract;
+const GITHUB_READ_CAUSE_CHAIN_FIELD_CONTRACT = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const satisfies ActivityLogFieldContract;
+
+const GITHUB_CONTEXT_READ_OPERATION = defineActivityLogOperation({
+  ...GITHUB_READ_OPERATION_HEADER,
+  op: "coding-context.github.read",
+  ...GITHUB_READ_OPERATION_OWNERSHIP,
+  emitter: "coding-context/githubCodeContextPort.recordRead",
+  fields: {
+    byteCount: { type: "integer", dataClass: "count", required: true },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: GITHUB_READ_OUTCOME_VALUES,
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: GITHUB_READ_FRAMES_FIELD_CONTRACT,
+    causeChain: GITHUB_READ_CAUSE_CHAIN_FIELD_CONTRACT,
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["github-code-context-read"],
+  proofIds: ["coding-context.github.read.line"],
+  releaseImpact: "patch",
+});
 
 // Flags that turn `gh api` into a mutation or redirect it to another host. Presence
 // anywhere in the argument vector rejects the invocation (deny-by-default posture).
@@ -241,22 +317,56 @@ function recordRead(
   error: unknown,
   byteCount = 0,
 ): void {
-  log.write({
-    category: "process",
-    op: "coding-context.github.read",
-    correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
-    ...(error === undefined ? {} : { level: "warn", errorKind: errorKindOf(error) }),
-    extra: {
-      byteCount,
-      outcome: readOutcome(context, error),
-      ...(error === undefined
-        ? {}
-        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
-    },
-  });
+  const failureKind = error === undefined ? undefined : errorKindOf(error);
+  log.write(
+    activityLogEvent(
+      GITHUB_CONTEXT_READ_OPERATION,
+      {
+        correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
+        ...(failureKind === undefined
+          ? {}
+          : { level: "warn", errorKind: closedReadErrorKind(context, error) }),
+      },
+      {
+        byteCount,
+        outcome: readOutcome(context, error),
+        ...(failureKind === undefined
+          ? {}
+          : {
+              failureKind,
+              frames: keikoStackFrames(error),
+              causeChain: causeChain(error),
+            }),
+      },
+    ),
+  );
 }
 
-function readOutcome(context: GitHubCodeContextReadContext, error: unknown): string {
+type GitHubContextReadOutcome =
+  "succeeded" | "cancelled" | GitHubCodeContextPortErrorCode | "failed";
+
+const GITHUB_READ_ERROR_KINDS = {
+  "gh-denied": "authority-denied",
+  "gh-failed": "read-failed",
+  "gh-transient-failure": "unavailable",
+  "gh-output-truncated": "read-failed",
+  "gh-invalid-json": "validation-failed",
+} as const satisfies Record<GitHubCodeContextPortErrorCode, ActivityLogErrorKind>;
+
+function closedReadErrorKind(
+  context: GitHubCodeContextReadContext,
+  error: unknown,
+): ActivityLogErrorKind {
+  if (context.signal?.aborted === true) return "cancelled";
+  return error instanceof GitHubCodeContextPortError
+    ? GITHUB_READ_ERROR_KINDS[error.code]
+    : "internal";
+}
+
+function readOutcome(
+  context: GitHubCodeContextReadContext,
+  error: unknown,
+): GitHubContextReadOutcome {
   if (context.signal?.aborted === true) return "cancelled";
   if (error === undefined) return "succeeded";
   return error instanceof GitHubCodeContextPortError ? error.code : "failed";

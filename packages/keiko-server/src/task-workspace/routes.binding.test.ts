@@ -326,8 +326,8 @@ describe("active binding lifecycle over HTTP", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "INVALID_REQUEST",
-      extra: { operation: "activate" },
+      errorKind: "invalid-request",
+      extra: { operation: "activate", failureKind: "INVALID_REQUEST" },
     });
     const formatted = activityLog.lines().join("\n");
     expect(formatted).not.toContain(workspaceId);
@@ -349,8 +349,8 @@ describe("active binding lifecycle over HTTP", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "WORKSPACE_NOT_FOUND",
-      extra: { operation: "activate" },
+      errorKind: "unavailable",
+      extra: { operation: "activate", failureKind: "WORKSPACE_NOT_FOUND" },
     });
     expect(activityLog.lines().join("\n")).not.toContain(workspaceId);
   });
@@ -379,8 +379,8 @@ describe("active binding lifecycle over HTTP", () => {
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
         correlationId,
-        errorKind: "INVALID_REQUEST",
-        extra: { operation },
+        errorKind: "invalid-request",
+        extra: { operation, failureKind: "INVALID_REQUEST" },
       });
       expect(activityLog.lines().join("\n")).not.toContain(workspaceId);
     },

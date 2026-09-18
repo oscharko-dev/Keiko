@@ -297,7 +297,8 @@ describe("GET /api/terminal/directories", () => {
       expect(sink.events[0]).toMatchObject({
         op: "workspace.root.denied",
         correlationId,
-        errorKind: "WORKSPACE_PATH_DENIED",
+        errorKind: "permission-denied",
+        extra: { failureKind: "WORKSPACE_PATH_DENIED" },
       });
       expect(sink.events[1]).toMatchObject({ category: "http", correlationId, status: 403 });
       expect(JSON.stringify(sink.events)).not.toContain(fixture);
@@ -462,7 +463,12 @@ describe("GET /api/terminal/directories — managed root, no authority resolver 
     expect(sink.events[0]).toMatchObject({
       op: "workspace.root.denied",
       correlationId: "terminal-managed-correlation-0001",
-      extra: { decision: "denied", reason: "managed-authority-unavailable" },
+      errorKind: "authority-denied",
+      extra: {
+        decision: "denied",
+        reason: "managed-authority-unavailable",
+        failureKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
+      },
     });
     expect(sink.events[1]).toMatchObject({
       category: "http",

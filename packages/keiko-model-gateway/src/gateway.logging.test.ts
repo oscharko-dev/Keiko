@@ -3,7 +3,9 @@
 // adapter. Every case injects an adapter and a Clock — no network, no timers, no global state.
 
 import { describe, expect, it } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { Gateway } from "./gateway.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import { providerRequestBudgetMs } from "./resilience.js";
@@ -110,7 +112,7 @@ async function drainStream(stream: AsyncGenerator<GatewayStreamChunk>): Promise<
 // The ONE-TIME configuration snapshot, written by the constructor itself — before any call has
 // happened, and never repeated for a Gateway instance that goes on to serve many calls.
 describe("Gateway construction — activity log", () => {
-  it("logs a config-resolved line naming every provider's safe fields, once", () => {
+  it("logs one bounded digest of the resolved provider configuration", () => {
     const log = recorder();
     const providers = [
       provider({
@@ -133,27 +135,12 @@ describe("Gateway construction — activity log", () => {
     const resolved = eventFor(log.events, "gateway.config.resolved");
     expect(resolved.level).toBe("info");
     expect(resolved.category).toBe("gateway");
-    expect(resolved.extra?.providers).toEqual([
-      {
-        modelId: "chat-a",
-        endpointHost: "provider-a.example",
-        timeoutMs: 5000,
-        maxRetries: 2,
-        retryBaseDelayMs: 250,
-      },
-      {
-        modelId: "chat-b",
-        endpointHost: "provider-b.example",
-        timeoutMs: 9000,
-        maxRetries: 0,
-        retryBaseDelayMs: 100,
-      },
-    ]);
+    expect(resolved.extra?.providerCount).toBe(2);
+    expect(resolved.extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   // AUDIT-SEC-002-adjacent: a misconfigured provider entry can carry a bare token as URL userinfo
-  // or a deployment id in the path. `endpointHost` must survive that — reducing to the bare
-  // hostname, never the baseUrl the operator actually typed.
+  // or a deployment id in the path. The registry permits only the digest, never any endpoint.
   it("never lets a provider's baseUrl, embedded credentials, or path reach the config-resolved line", () => {
     const log = recorder();
     const leaky = provider({
@@ -162,9 +149,8 @@ describe("Gateway construction — activity log", () => {
     });
     new Gateway(config([leaky]), { clock: stubClock(), log: log.sink });
     const resolved = eventFor(log.events, "gateway.config.resolved");
-    expect(resolved.extra?.providers).toMatchObject([
-      { modelId: "chat-leaky", endpointHost: "leaky.example" },
-    ]);
+    expect(resolved.extra?.providerCount).toBe(1);
+    expect(resolved.extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
     const serialized = JSON.stringify(resolved);
     expect(serialized).not.toContain("sk-embedded-secret-9876543210");
     expect(serialized).not.toContain("secret-path");
@@ -195,6 +181,7 @@ describe("Gateway routing — activity log", () => {
     const rejected = eventFor(log.events, "gateway.route.rejected");
     expect(rejected.level).toBe("warn");
     expect(rejected.category).toBe("gateway");
+    expect(rejected.errorKind).toBe("unavailable");
     expect(rejected.extra).toMatchObject({
       modelId: "not-configured",
       reason: "no-provider-configured",
@@ -211,7 +198,9 @@ describe("Gateway routing — activity log", () => {
       log: log.sink,
     });
     await expect(gateway.chat({ ...REQUEST, modelId: "text-embedding-3-small" })).rejects.toThrow();
-    expect(eventFor(log.events, "gateway.route.rejected").extra).toMatchObject({
+    const rejected = eventFor(log.events, "gateway.route.rejected");
+    expect(rejected.errorKind).toBe("validation-failed");
+    expect(rejected.extra).toMatchObject({
       modelId: "text-embedding-3-small",
       reason: "wrong-model-kind",
       kind: "embedding",
@@ -220,6 +209,33 @@ describe("Gateway routing — activity log", () => {
 });
 
 describe("Gateway.chat — activity log", () => {
+  it.each(["custom model", "custom-模型"])(
+    "routes configured model id %j while logging only a bounded digest token",
+    async (modelId) => {
+      const log = recorder();
+      let routedModelId: string | undefined;
+      const gateway = new Gateway(config([provider({ modelId })]), {
+        adapter: {
+          call: (_request, configuredProvider): Promise<NormalizedResponse> => {
+            routedModelId = configuredProvider.modelId;
+            return Promise.resolve(okResponse(configuredProvider.modelId));
+          },
+        },
+        clock: stubClock(),
+        log: log.sink,
+      });
+      log.events.length = 0;
+
+      await gateway.chat({ ...REQUEST, modelId });
+
+      const loggedModelId = `model-${sha256Hex(modelId)}`;
+      expect(routedModelId).toBe(modelId);
+      expect(eventFor(log.events, "gateway.chat.started").extra?.modelId).toBe(loggedModelId);
+      expect(eventFor(log.events, "gateway.chat.completed").extra?.modelId).toBe(loggedModelId);
+      expect(JSON.stringify(log.events)).not.toContain(modelId);
+    },
+  );
+
   // THE ATTEMPT LINE. A provider that accepts the request and then goes quiet produces neither a
   // completion nor a failure, so without a line written BEFORE the adapter is invoked the gateway
   // is silent for exactly the window an operator is trying to diagnose. `timeoutMs`/`maxRetries`
@@ -243,13 +259,17 @@ describe("Gateway.chat — activity log", () => {
     expect(started.correlationId).toBe(response.usage.requestId);
     expect(started.extra).toMatchObject({
       modelId: "example-chat-model",
-      endpoint: "https://provider.example",
+      endpointDigest: sha256Hex("https://provider.example"),
       timeoutMs: 30_000,
       maxRetries: 0,
       requestBudgetMs: providerRequestBudgetMs(provider()),
       reasoningEffort: "high",
       streaming: false,
     });
+    expect(
+      activityLogEventRegistration(started as unknown as Readonly<Record<PropertyKey, unknown>>)
+        ?.fields.streaming,
+    ).toEqual({ type: "boolean", dataClass: "closed-enum", required: true });
   });
 
   // The failure the whole effort exists for: the attempt is on record even though no outcome
@@ -349,7 +369,7 @@ describe("Gateway.chat — activity log", () => {
     await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
     const failed = eventFor(log.events, "gateway.chat.failed");
     expect(failed.level).toBe("warn");
-    expect(failed.errorKind).toBe("GATEWAY_TRANSPORT");
+    expect(failed.errorKind).toBe("internal");
     expect(JSON.stringify(failed)).not.toContain("sk-leak-me");
     expect(ops(log.events)).not.toContain("gateway.chat.completed");
   });
@@ -442,7 +462,7 @@ describe("Gateway.chatStream — activity log", () => {
       TransportError,
     );
     const failed = eventFor(log.events, "gateway.stream.failed");
-    expect(failed.errorKind).toBe("GATEWAY_TRANSPORT");
+    expect(failed.errorKind).toBe("internal");
     expect(failed.extra).toMatchObject({ chunkCount: 1, afterFirstChunk: true, streaming: true });
     expect(ops(log.events)).not.toContain("gateway.stream.completed");
   });
@@ -559,13 +579,13 @@ describe("Gateway — caller correlation", () => {
       },
       log,
     );
-    const response = await gateway.chat({ ...REQUEST, logContext: { correlationId: "run-77" } });
+    const response = await gateway.chat({ ...REQUEST, logContext: { correlationId: "run-0077" } });
     for (const op of ["gateway.chat.started", "gateway.chat.completed"]) {
       const event = eventFor(log.events, op);
-      expect(event.correlationId).toBe("run-77");
+      expect(event.correlationId).toBe("run-0077");
       expect(event.extra).toMatchObject({ requestId: response.usage.requestId });
     }
-    expect(response.usage.requestId).not.toBe("run-77");
+    expect(response.usage.requestId).not.toBe("run-0077");
   });
 
   it("tags a failed call and a streaming call the same way", async () => {
@@ -575,9 +595,9 @@ describe("Gateway — caller correlation", () => {
       failing,
     );
     await expect(
-      failingGateway.chat({ ...REQUEST, logContext: { correlationId: "run-78" } }),
+      failingGateway.chat({ ...REQUEST, logContext: { correlationId: "run-0078" } }),
     ).rejects.toBeInstanceOf(TransportError);
-    expect(eventFor(failing.events, "gateway.chat.failed").correlationId).toBe("run-78");
+    expect(eventFor(failing.events, "gateway.chat.failed").correlationId).toBe("run-0078");
 
     const streaming = recorder();
     const streamingGateway = gatewayWith(
@@ -587,7 +607,7 @@ describe("Gateway — caller correlation", () => {
       streaming,
     );
     await drainStream(
-      streamingGateway.chatStream({ ...REQUEST, logContext: { correlationId: "run-79" } }),
+      streamingGateway.chatStream({ ...REQUEST, logContext: { correlationId: "run-0079" } }),
     );
     // The buffered-fallback degradation is emitted from the deepest frame of the stream path; it
     // must be attributable too.
@@ -596,7 +616,7 @@ describe("Gateway — caller correlation", () => {
       "gateway.stream.buffered-fallback",
       "gateway.stream.completed",
     ]) {
-      expect(eventFor(streaming.events, op).correlationId).toBe("run-79");
+      expect(eventFor(streaming.events, op).correlationId).toBe("run-0079");
     }
   });
 
@@ -613,11 +633,11 @@ describe("Gateway — caller correlation", () => {
       gateway.chat({
         ...REQUEST,
         modelId: "not-configured",
-        logContext: { correlationId: "run-80" },
+        logContext: { correlationId: "run-0080" },
       }),
     ).rejects.toThrow();
     const rejected = eventFor(log.events, "gateway.route.rejected");
-    expect(rejected.correlationId).toBe("run-80");
+    expect(rejected.correlationId).toBe("run-0080");
     expect(rejected.extra).not.toHaveProperty("requestId");
   });
 
@@ -654,8 +674,8 @@ describe("Gateway — caller correlation", () => {
       clock: stubClock(),
       log: log.sink,
     });
-    await gateway.chat({ ...REQUEST, logContext: { correlationId: "run-81" } });
+    await gateway.chat({ ...REQUEST, logContext: { correlationId: "run-0081" } });
     expect(ops(log.events)).toContain("gateway.retry.scheduled");
-    expect(eventFor(log.events, "gateway.retry.scheduled").correlationId).toBe("run-81");
+    expect(eventFor(log.events, "gateway.retry.scheduled").correlationId).toBe("run-0081");
   });
 });

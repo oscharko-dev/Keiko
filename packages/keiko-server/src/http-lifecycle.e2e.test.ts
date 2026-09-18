@@ -8,8 +8,8 @@
 //   (b) an SSE stream that emits exactly 3 frames yields one `sse.stream.closed` line whose
 //       `frameCount` is 3 and whose `bytesStreamed` equals the bytes the server actually wrote;
 //   (c) `POST /api/diagnostics/client` round-trips a body-supplied `correlationId` into a log line
-//       carrying the message under `extra.clientNote` — never the denylisted `extra.message` — and
-//       enforces its own size/shape bounds (413 oversized, 400 malformed);
+//       carrying only a digest of the hostile message and enforces its own size/shape bounds
+//       (413 oversized, 400 malformed);
 //   (d) a diagnostic raised from a git route whose QUERY carries a customer-named value (a git
 //       working-tree path) never leaks that value — the diagnostic's `operation` is the DECLARED
 //       route template, `"GET /api/git/diff"`, not anything derived from the live request.
@@ -28,7 +28,10 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildCspHeader } from "./csp.js";
-import { resetClientDiagnosticsIngestStateForTests } from "./client-diagnostics-routes.js";
+import {
+  clientDiagnosticNoteDigest,
+  resetClientDiagnosticsIngestStateForTests,
+} from "./client-diagnostics-routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import {
   buildRedactor,
@@ -234,7 +237,7 @@ describe("(b) SSE terminal line — real frame/byte counters", () => {
 });
 
 describe("(c) POST /api/diagnostics/client — real ingest route", () => {
-  it("round-trips a body-supplied correlationId under extra.clientNote, with no message key on the formatted line", async () => {
+  it("round-trips correlation while persisting only a digest of the client message", async () => {
     const handlerDeps = minimalHandlerDeps();
     const correlationId = randomUUID();
     // Short and low-punctuation on purpose: `log-redaction.ts`'s generic prose guard collapses any
@@ -263,24 +266,22 @@ describe("(c) POST /api/diagnostics/client — real ingest route", () => {
         started.sink,
         (candidate) => candidate.op === "client.diagnostic",
       );
-      // The raw (pre-format) event: proves the route's own code writes the field under the name
-      // `clientNote`, never `message`.
-      expect(rawEvent.extra?.clientNote).toBe(message);
+      expect(rawEvent.extra?.clientNoteDigest).toBe(clientDiagnosticNoteDigest(message));
+      expect(rawEvent.extra).not.toHaveProperty("clientNote");
       expect(rawEvent.correlationId).toBe(correlationId);
 
-      // The FORMATTED line — what actually reaches disk in production — after redaction. If the
-      // route had used `extra.message` instead, `message` would be DENIED and this same line would
-      // carry `"message":"[redacted:key]"`; because it used `clientNote`, no `message` key exists at
-      // all and the content survives intact.
+      // The formatted line — what actually reaches disk in production — contains no raw message.
       const lineIndex = started.sink.events.indexOf(rawEvent);
       const formattedLine = started.sink.lines()[lineIndex];
       if (formattedLine === undefined) {
         throw new Error("expected a formatted log line for the captured event");
       }
       const parsed = JSON.parse(formattedLine) as Record<string, unknown>;
-      expect(parsed.clientNote).toBe(message);
+      expect(parsed.clientNoteDigest).toBe(clientDiagnosticNoteDigest(message));
       expect(parsed.correlationId).toBe(correlationId);
       expect("message" in parsed).toBe(false);
+      expect("clientNote" in parsed).toBe(false);
+      expect(formattedLine).not.toContain(message);
     } finally {
       if (started !== undefined) await closeUiTestServer(started.server);
       handlerDeps.store.close();

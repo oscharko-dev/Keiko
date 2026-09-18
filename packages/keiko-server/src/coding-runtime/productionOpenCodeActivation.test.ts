@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync, unlinkSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -150,9 +150,31 @@ describe("production OpenCode activation", () => {
         category: "process",
         op: "coding-runtime.dev-lane.refused",
         correlationId: UNKNOWN_CORRELATION_ID,
-        extra: { lane: "dev-checkout", reason: "payload-missing" },
+        level: "warn",
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          lane: "dev-checkout",
+          reason: "payload-missing",
+        },
       },
     ]);
+  });
+
+  it("classifies a tampered dev-lane payload separately from routine unavailability", () => {
+    const staged = devLaneFixture();
+    const activity: ServerLogEvent[] = [];
+    writeFileSync(staged.paths.executable, "tampered");
+
+    resolveProductionOpenCodeActivation(
+      activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { activity }),
+    );
+
+    expect(activity.at(-1)).toMatchObject({
+      errorKind: "validation-failed",
+      extra: { reason: "payload-tampered" },
+    });
   });
 
   it("names secure-read-unavailable when workspace-root resolution is not composed", () => {

@@ -270,6 +270,8 @@ describe("run-bound CI observations through existing draft authority", () => {
           .filter((event) => event.op === "git.draft-remote.observed")
           .map((event) => event.extra),
       ).toContainEqual({
+        completeness: "complete",
+        loss: "none",
         runId: "run-2",
         phase: "head-read",
         state: "observed",

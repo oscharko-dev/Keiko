@@ -27,6 +27,11 @@ import {
   type GitHubIssueReferenceRejection,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { readGitDefaultBranch } from "@oscharko-dev/keiko-tools";
 
@@ -53,6 +58,86 @@ import {
   githubRemoteOwnerAndRepoFor,
   isGitHubIssueReaderAuthorized,
 } from "./githubIssueReaderAuthorization.js";
+
+const ISSUE_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-workbench.issue.resolved",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-context/githubIssueResolution.record",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "invalid-reference",
+        "repository-mismatch",
+        "auth-required",
+        "issue-unavailable",
+        "clone-failed",
+        "authority-denied",
+        "cancelled",
+        "resolved",
+      ],
+    },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "empty",
+        "malformed",
+        "unsupported-host",
+        "pull-request",
+        "invalid-repository",
+        "invalid-number",
+        "repository-required",
+        "repository-unresolved",
+        "remote-unresolved",
+        "reference-names-other-repository",
+        "no-grant",
+        "reader-unavailable",
+        "read-failed",
+        "read-transient-failure",
+        "identity-missing",
+        "state-unknown",
+        "pull-request-as-issue",
+        "closed",
+        "provenance-unreadable",
+        "transferred",
+        "renumbered",
+        "default-branch-read-failed",
+        "default-branch-unresolved",
+        "aborted",
+      ],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-workbench-issue-resolution"],
+  proofIds: ["coding-workbench.issue.resolved.line"],
+  releaseImpact: "patch",
+});
 
 export interface GitHubIssueResolutionInput {
   /** Server-resolved checkout root, already canonical (realpath'd by the caller). */
@@ -134,6 +219,24 @@ export type GitHubIssueResolutionReason =
   | "default-branch-read-failed"
   | "default-branch-unresolved"
   | "aborted";
+
+const RESOLUTION_ERROR_KINDS = {
+  "invalid-reference": "invalid-request",
+  "repository-mismatch": "conflict",
+  "auth-required": "authority-denied",
+  "issue-unavailable": "unavailable",
+  "clone-failed": "unavailable",
+  "authority-denied": "authority-denied",
+  cancelled: "cancelled",
+} as const satisfies Record<CodingWorkbenchIssueBindingFailure, ActivityLogErrorKind>;
+
+export function githubIssueResolutionErrorKind(
+  outcome: CodingWorkbenchIssueBindingFailure,
+  reason: GitHubIssueResolutionReason | undefined,
+): ActivityLogErrorKind {
+  if (reason === "read-failed" || reason === "default-branch-read-failed") return "read-failed";
+  return RESOLUTION_ERROR_KINDS[outcome];
+}
 
 // ─── digests ───────────────────────────────────────────────────────────────────────────────
 
@@ -411,6 +514,16 @@ function levelFor(
   return errorKind === undefined ? "info" : "warn";
 }
 
+function resolutionFailureKind(
+  outcome: CodingWorkbenchIssueBindingFailure | "resolved",
+  reason: GitHubIssueResolutionReason | undefined,
+  errorKind: string | undefined,
+): ActivityLogErrorKind | undefined {
+  if (errorKind === undefined) return undefined;
+  const failureOutcome = outcome === "resolved" ? "issue-unavailable" : outcome;
+  return githubIssueResolutionErrorKind(failureOutcome, reason);
+}
+
 function record(
   ctx: ResolutionContext,
   outcome: CodingWorkbenchIssueBindingFailure | "resolved",
@@ -423,22 +536,32 @@ function record(
     readonly repositoryId?: string | undefined;
   },
 ): void {
-  ctx.activityLog.write({
-    level: levelFor(outcome, detail.errorKind),
-    category: "security",
-    op: "coding-workbench.issue.resolved",
-    correlationId: ctx.correlationId,
-    ...(detail.errorKind === undefined ? {} : { errorKind: detail.errorKind }),
-    extra: {
-      outcome,
-      ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
-      ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
-      ...(detail.reason === undefined ? {} : { reason: detail.reason }),
-      ...(detail.frames === undefined
-        ? {}
-        : { frames: detail.frames, causeChain: detail.causeChain }),
-    },
-  });
+  const failureKind = resolutionFailureKind(outcome, detail.reason, detail.errorKind);
+  ctx.activityLog.write(
+    activityLogEvent(
+      ISSUE_RESOLVED_OPERATION,
+      {
+        level: levelFor(outcome, detail.errorKind),
+        correlationId: ctx.correlationId,
+        ...(outcome === "resolved"
+          ? {}
+          : { errorKind: githubIssueResolutionErrorKind(outcome, detail.reason) }),
+      },
+      {
+        outcome,
+        ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
+        ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
+        ...(detail.reason === undefined ? {} : { reason: detail.reason }),
+        ...(failureKind === undefined ? {} : { failureKind }),
+        ...(detail.frames === undefined
+          ? {}
+          : {
+              frames: detail.frames,
+              ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+            }),
+      },
+    ),
+  );
 }
 
 interface Resolved {

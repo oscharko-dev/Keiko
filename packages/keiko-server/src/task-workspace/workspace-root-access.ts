@@ -7,17 +7,15 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { UiHandlerDeps } from "../deps.js";
 import { pathIsDenied } from "../files-deny.js";
-import { correlationIdOrUnknown } from "../correlation.js";
-import { processServerLogSink } from "../process-log-sink.js";
-import {
-  createServerLogger,
-  errorKindOf,
-  type ServerLogger,
-  type ServerLogSink,
-} from "../observability/index.js";
+import { errorKindOf, type ServerLogSink } from "../observability/index.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import {
+  recordWorkspaceRootDenied,
+  type WorkspaceRootDenialReason,
+} from "../workspace-root-denial-log.js";
 import {
   resolveManagedTaskWorkspaceInstanceFromLookup,
   type ManagedTaskWorkspaceLookup,
@@ -212,7 +210,8 @@ function denialReasonFor(
 // a guard) and a caught RESOLUTION FAILURE (the re-proof itself threw). Neither may collapse into a
 // bare `undefined`, because a route that answers 403 must leave something correlated behind that
 // says why (#3347 owner P2 + cursor).
-type ManagedRootDenialReason =
+type ManagedRootDenialReason = Extract<
+  WorkspaceRootDenialReason,
   // The configured managed root is absent or no longer carries Keiko's ownership marker.
   | "managed-root-ownership"
   // The requested root is under managed authority but is not a persisted managed workspace.
@@ -237,21 +236,13 @@ type ManagedRootDenialReason =
   // The same throw on the lifecycle-maintenance twin. A distinct reason on purpose: a background
   // sweep that cannot re-prove a worktree fails a health/cleanup decision, not a user request, and
   // an operator must be able to tell those two blast radii apart in one grep of the activity log.
-  | "managed-root-lifecycle-resolution-failed";
+  | "managed-root-lifecycle-resolution-failed"
+>;
 
 interface ManagedRootDenialContext {
   readonly managedRoot: string | undefined;
   readonly requestedRoot: string;
   readonly logging: WorkspaceRootAccessDenialLogging | undefined;
-}
-
-function managedRootDenialLogger(
-  logging: WorkspaceRootAccessDenialLogging | undefined,
-): ServerLogger {
-  return createServerLogger({
-    sink: logging?.activityLog ?? processServerLogSink(),
-    level: "debug",
-  });
 }
 
 // Reports one classified denial for a guard that refused the root, so the caller's `return
@@ -271,13 +262,14 @@ function recordManagedRootDenial(
     context.requestedRoot,
   );
   if (!requiresManagedAuthority) return;
-  managedRootDenialLogger(context.logging).warn({
-    category: "security",
-    op: "workspace.root.denied",
-    correlationId: correlationIdOrUnknown(context.logging?.correlationId),
-    errorKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
-    extra: { decision: "denied", reason },
-  });
+  recordWorkspaceRootDenied(
+    {
+      reason,
+      failureKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
+      errorKind: "authority-denied",
+    },
+    context.logging ?? {},
+  );
 }
 
 // The thrown-failure catches below choose the same reason per purpose; the in-proof `failed`
@@ -286,6 +278,24 @@ function resolutionFailureReasonFor(purpose: ManagedAccessPurpose): ManagedRootD
   return purpose === "lifecycle-maintenance"
     ? "managed-root-lifecycle-resolution-failed"
     : "managed-root-resolution-failed";
+}
+
+const MANAGED_ROOT_RESOLUTION_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  EACCES: "permission-denied",
+  EPERM: "permission-denied",
+  ENOENT: "unavailable",
+  ENOTDIR: "unavailable",
+  EIO: "read-failed",
+  ESTALE: "target-mutated",
+  EBUSY: "conflict",
+  AbortError: "cancelled",
+  TimeoutError: "timeout",
+  ETIMEDOUT: "timeout",
+  IDENTITY_PROOF_FAILED: "read-failed",
+};
+
+function managedRootResolutionErrorKind(error: unknown): ActivityLogErrorKind {
+  return MANAGED_ROOT_RESOLUTION_ERROR_KINDS[errorKindOf(error)] ?? "internal";
 }
 
 function canonicalManagedRootAccess(
@@ -349,18 +359,17 @@ function recordManagedRootResolutionFailure(
 ): void {
   const frames = keikoStackFrames(error);
   const causes = causeChain(error);
-  managedRootDenialLogger(logging).warn({
-    category: "security",
-    op: "workspace.root.denied",
-    correlationId: correlationIdOrUnknown(logging?.correlationId),
-    errorKind: errorKindOf(error),
-    extra: {
-      decision: "denied",
+  const errorKind = managedRootResolutionErrorKind(error);
+  recordWorkspaceRootDenied(
+    {
       reason,
+      failureKind: errorKind,
+      errorKind,
       ...(frames.length === 0 ? {} : { frames }),
       ...(causes.length === 0 ? {} : { causeChain: causes }),
     },
-  });
+    logging ?? {},
+  );
 }
 
 /**

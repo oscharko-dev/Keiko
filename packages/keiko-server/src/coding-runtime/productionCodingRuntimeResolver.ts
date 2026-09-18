@@ -829,7 +829,8 @@ function composeRunToolPorts(
   invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
   prepared: ReturnType<typeof prepareRunToolContext>,
 ): RunToolPorts {
-  const { input, context, minted, authority, research, skillCatalog, onRuntimeEvent } = args;
+  const { input, request, context, minted, authority, research, skillCatalog, onRuntimeEvent } =
+    args;
   const researchOptions = managedResearchOptions(input, context, minted, research, onRuntimeEvent);
   const childModel = resolveChildModelForRun({
     authorityRef: minted.authorityRef,
@@ -838,6 +839,7 @@ function composeRunToolPorts(
   });
   const toolFacade = createManagedToolFacade({
     input,
+    request,
     context,
     minted,
     authority,
@@ -1071,15 +1073,16 @@ function createBackendRun({
     minted,
     toolFacade,
     codingToolApprovals,
-    authorityLifecycle: authorityLifecycle(
+    authorityLifecycle: authorityLifecycle({
       authority,
       controller,
-      invocationRegistry,
+      invocations: invocationRegistry,
       leases,
       research,
-      () => runtimeNow(input),
-      input.workspaceScriptTrust,
-    ),
+      now: () => runtimeNow(input),
+      scriptTrust: input.workspaceScriptTrust,
+      parentCorrelationId: request.correlationId,
+    }),
     onRuntimeEvent,
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) reads as "not
     // current": the runtime must not keep acting on a workspace the product cannot verify.
@@ -1167,6 +1170,7 @@ interface ManagedToolFacadeInput {
   readonly verifiedCommitService?: VerifiedCommitService | undefined;
   readonly runtimeGitService?: RuntimeGitService | undefined;
   readonly input: ProductionCodingRuntimeResolverInput;
+  readonly request: ProductionRuntimeBackendInput["request"];
   readonly context: CodingRuntimeTrustedContext;
   readonly minted: MintedRuntime;
   readonly authority: CodingRuntimeAuthorityService;
@@ -1226,6 +1230,7 @@ function runtimeGitFacadeOptions({
 function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFacade {
   const {
     input,
+    request,
     context,
     minted,
     authority,
@@ -1269,7 +1274,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     explicitSkillInvocations: explicitSkills,
     ...(input.commandRunner === undefined ? {} : { commandRunner: input.commandRunner }),
     ...managedVerificationOptions(input, minted, onRuntimeEvent),
-    ...runManifestAdmission(input, context, minted),
+    ...runManifestAdmission(input, context, minted, request.correlationId),
     onRuntimeEvent,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
@@ -1281,12 +1286,18 @@ export function runManifestAdmission(
   input: Pick<ProductionCodingRuntimeResolverInput, "workspaceScriptTrust">,
   context: Pick<CodingRuntimeTrustedContext, "workspaceRoot" | "expiresAt">,
   minted: Pick<MintedRuntime, "authorityRef">,
+  parentCorrelationId?: string,
 ): Pick<ProductionManagedWorktreeToolInput, "admitRunManifest"> {
   const admit = input.workspaceScriptTrust?.admitRunManifest;
   if (admit === undefined) return {};
   return {
     admitRunManifest: (): void => {
-      admit(context.workspaceRoot, minted.authorityRef.runId, context.expiresAt);
+      admit(
+        context.workspaceRoot,
+        minted.authorityRef.runId,
+        context.expiresAt,
+        parentCorrelationId,
+      );
     },
   };
 }
@@ -1467,22 +1478,34 @@ function adapterKind(
   return context.runtimeSource === "keiko-sidecar" ? "model-gateway-sidecar" : "codex-cli-adapter";
 }
 
-function authorityLifecycle(
-  authority: CodingRuntimeAuthorityService,
-  controller: AbortController,
-  invocations: ReturnType<typeof createCodingToolInvocationRegistry>,
-  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
-  research: ResearchComposition,
-  now: () => Date,
-  scriptTrust?: Pick<WorkspaceScriptTrustService, "revokeRunAdmissions">,
-): ProductionRuntimeBackendInput["authorityLifecycle"] {
+interface AuthorityLifecycleInput {
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly controller: AbortController;
+  readonly invocations: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
+  readonly research: ResearchComposition;
+  readonly now: () => Date;
+  readonly scriptTrust: Pick<WorkspaceScriptTrustService, "revokeRunAdmissions"> | undefined;
+  readonly parentCorrelationId: string | undefined;
+}
+
+function authorityLifecycle({
+  authority,
+  controller,
+  invocations,
+  leases,
+  research,
+  now,
+  scriptTrust,
+  parentCorrelationId,
+}: AuthorityLifecycleInput): ProductionRuntimeBackendInput["authorityLifecycle"] {
   return {
     revokeRuntime: (runId): boolean => {
       controller.abort();
       invocations.revokeRun(runId);
       leases.revokeRun(runId);
       // ADR-0147 D3, autonomous-delivery amendment: the run's own manifest admissions end with it.
-      scriptTrust?.revokeRunAdmissions(runId);
+      scriptTrust?.revokeRunAdmissions(runId, parentCorrelationId);
       // Drop every read-only research grant AND any unanswered research ask for the run so a
       // terminate/revoke leaves no orphaned internet reach for the parent or any child (#2387).
       research.grants.invalidateRun(runId);

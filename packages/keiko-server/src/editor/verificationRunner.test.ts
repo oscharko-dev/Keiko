@@ -443,7 +443,7 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
         expect.objectContaining({
           op: "editor.verification.execute",
           correlationId: "run-drift",
-          errorKind: "WORKSPACE_TRUST_REQUIRED",
+          errorKind: "authority-denied",
           extra: expect.objectContaining({
             state: "refused",
             reason: "WORKSPACE_TRUST_REQUIRED",
@@ -1167,7 +1167,9 @@ describe("VerificationRunnerManager — catalog + edge cases", () => {
         op: "editor.verification.execute",
         correlationId: "terminal-status-counts",
         extra: {
+          completeness: "complete",
           state: "completed",
+          loss: "none",
           runnerId: "vitest",
           verificationStatus: "failed",
           stepCount: 2,
@@ -1245,7 +1247,7 @@ describe("VerificationRunnerManager — catalog + edge cases", () => {
       expect.objectContaining({
         op: "editor.verification.execute",
         correlationId: "node-runner-refused",
-        errorKind: "NO_RUNNABLE_STEPS",
+        errorKind: "invalid-request",
         extra: expect.objectContaining({
           state: "refused",
           runnerId: "node-test",

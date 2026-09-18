@@ -589,7 +589,13 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(extra.platform).toBe(process.platform);
     expect(typeof extra.childPid).toBe("number");
     // Body-free: never the resolved executable path or args on the evidence line.
-    expect(Object.keys(extra).sort()).toEqual(["childPid", "platform", "windowsWrapperEngaged"]);
+    expect(Object.keys(extra).sort()).toEqual([
+      "childPid",
+      "completeness",
+      "loss",
+      "platform",
+      "windowsWrapperEngaged",
+    ]);
     // Through the REAL redactor (review 5058571583 finding 1): `pid` is a reserved envelope name
     // and would be silently dropped — every evidence field here must SURVIVE redaction.
     const redacted = redactLogFields(extra) ?? {};
@@ -640,7 +646,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(terminated.at(-1)?.extra?.windowsTreeKill).toBe("not-attempted");
   });
 
-  it("logs lsp.spawn.failed with the closed EXECUTABLE_NOT_FOUND code for a non-absolute executable", () => {
+  it("logs lsp.spawn.failed with the closed unavailable kind for a non-absolute executable", () => {
     const events = captureLog();
 
     expect(() => defaultLspSpawnFn("relative-name", [], {}, "/tmp")).toThrow(LspProcessError);
@@ -650,7 +656,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(failed?.level).toBe("error");
     expect(failed?.category).toBe("diagnostic");
     expect(failed?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
-    expect(failed?.errorKind).toBe("EXECUTABLE_NOT_FOUND");
+    expect(failed?.errorKind).toBe("unavailable");
   });
 
   // Review 5058544058/5058571583: spawn() returning is NOT spawn success — ENOENT arrives
@@ -663,11 +669,9 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
   // stdio to three pipes; null stdio is not a production state.
   //
   // F2 (PR reviewer finding): the handler used to discard the real Error and always log the generic
-  // `errorKind: "SPAWN_FAILED"`, so a support bundle could not tell an ENOENT apart from an EACCES
-  // or a resource-limit failure. errorKind must now be the REAL classification (errorKindOf reads
-  // only the error's coded `.code`, e.g. Node's own "ENOENT" — see the sibling synchronous-catch
-  // test below for a second, different classification, proving the two are told apart).
-  it("an async spawn failure logs lsp.spawn.failed with the real ENOENT classification, never lsp.spawn.completed, and leaks no HOME", async () => {
+  // `errorKind: "SPAWN_FAILED"`. The typed Activity Log contract instead classifies Node's ENOENT
+  // as unavailable while retaining distinct closed kinds for permission, input and timeout failures.
+  it("an async spawn failure logs lsp.spawn.failed as unavailable, never lsp.spawn.completed, and leaks no HOME", async () => {
     const events = captureLog();
     const binDir = makeTempDir("keiko-lsp-enoent-");
     const missing = join(binDir, "does-not-exist");
@@ -687,7 +691,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(events.some((event) => event.op === "lsp.spawn.completed")).toBe(false);
     const failed = events.find((event) => event.op === "lsp.spawn.failed");
     expect(failed).toBeDefined();
-    expect(failed?.errorKind).toBe("ENOENT");
+    expect(failed?.errorKind).toBe("unavailable");
     expect(failed?.errorKind).not.toBe("SPAWN_FAILED");
     // BODY-FREE: Node's real ENOENT carries the resolved executable PATH on both `.message` and
     // `.path` (`Error: spawn <path> ENOENT`) — none of it may reach the line, in any field.
@@ -736,7 +740,7 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
 
     expect(events.some((event) => event.op === "lsp.spawn.failed")).toBe(false);
     const runtimeError = events.find((event) => event.op === "lsp.process.runtime-error");
-    expect(runtimeError?.errorKind).toBe("EIO");
+    expect(runtimeError?.errorKind).toBe("internal");
     expect(runtimeError?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(runtimeError?.extra?.childPid).toBe(child.pid);
     const runtimeExtra = runtimeError?.extra ?? {};
@@ -775,9 +779,9 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     const failed = events.find((event) => event.op === "lsp.spawn.failed");
     expect(failed).toBeDefined();
     expect(failed?.level).toBe("error");
-    // A DIFFERENT real cause than the ENOENT test above yields a DIFFERENT errorKind — proof the
-    // line now tells failures apart instead of collapsing every spawn failure onto one constant.
-    expect(failed?.errorKind).toBe("ERR_INVALID_ARG_VALUE");
+    // A DIFFERENT real cause than the ENOENT test above yields a DIFFERENT closed error kind —
+    // proof the line tells failure classes apart instead of collapsing every spawn failure.
+    expect(failed?.errorKind).toBe("invalid-request");
     expect(failed?.errorKind).not.toBe("SPAWN_FAILED");
     const frames = failed?.extra?.frames;
     expect(Array.isArray(frames)).toBe(true);
@@ -829,6 +833,8 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(typeof extra.childPid).toBe("number");
     expect(Object.keys(extra).sort()).toEqual([
       "childPid",
+      "completeness",
+      "loss",
       "signal",
       "treeContainment",
       "windowsTreeKill",

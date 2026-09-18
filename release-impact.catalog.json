@@ -2224,6 +2224,71 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.6",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.6",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-18-keiko-1.0.6-activity-log-contract-hardening",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "security",
+      "userVisibleSummary": "Activity Log persistence and support artifact publication now fail closed on unsafe filesystem targets while preserving bounded daily retention. New Activity Log records use the strict versioned registry contract, and support analysis explicitly classifies legacy, unsupported, corrupt, truncated and incomplete evidence without rewriting existing records.",
+      "affectedStateStores": ["activity-log", "support-artifacts"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "New records use the strict versioned contract. Existing records remain readable through bounded compatibility readers, are never rewritten, and continue under normal age-based retention.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "support-artifacts",
+          "description": "New support artifacts use fail-closed exclusive publication. Existing artifacts remain untouched and rollback must not restore unsafe overwrite behavior.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "releaseNoteBullets": [
+        "Activity Log files and support exports refuse unsafe targets such as symbolic links and never silently overwrite an existing artifact.",
+        "Activity Log records are strictly validated and versioned, and support analysis says explicitly when evidence is legacy, corrupt or incomplete."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-18",
+        "humanApproved": true,
+        "approvalReference": "github-pr-comment:oscharko-dev/Keiko#3542#discussion_r4044624494",
+        "rationale": "The release owner required PR #3542 to deliver the current structured Update Impact from issues #3528 and #3529 in the matching release-impact catalog entry. The work preserves existing logs and bounded retention, requires no user action, and records the two approved customer-facing bullets without expanding scope beyond those issues.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }

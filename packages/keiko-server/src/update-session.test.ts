@@ -10,6 +10,7 @@ import type {
   UpdatePortableStagingSummary,
   UpdateSessionStartRequest,
 } from "@oscharko-dev/keiko-contracts";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import {
   createUpdateSessionManager,
   UpdateSessionError,
@@ -692,6 +693,7 @@ describe("UpdateSessionManager", () => {
   });
 
   it("rejects portable success without exact target-version activation proof", async () => {
+    const events: SecurityLogEvent[] = [];
     const manager = createTestUpdateSessionManager({
       detector: portableMode,
       facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
@@ -702,6 +704,7 @@ describe("UpdateSessionManager", () => {
           versionVerified: false,
         }),
       },
+      activityLog: { write: (event): void => void events.push(event) },
     });
 
     manager.start(claim("0.2.12"));
@@ -709,6 +712,11 @@ describe("UpdateSessionManager", () => {
     expect(manager.getStatus().lastSession).toMatchObject({
       phase: "failed",
       failureReason: "portable-version-verification-failed",
+    });
+    expect(events.at(-1)).toMatchObject({
+      op: "update.session.lifecycle",
+      errorKind: "validation-failed",
+      extra: { phase: "failed", failureReason: "portable-version-verification-failed" },
     });
   });
 
@@ -1554,6 +1562,36 @@ describe("UpdateSessionManager", () => {
     });
 
     expect(() => manager.verifyRestart("0.2.12")).toThrow(UpdateSessionError);
+  });
+
+  it("emits a typed body-free lifecycle start event", () => {
+    const events: SecurityLogEvent[] = [];
+    const manager = createTestUpdateSessionManager({
+      detector: () => supportedMode(),
+      idFactory: () => "session-3405-0123456789abcdef",
+      runCommandImpl: () => Promise.resolve(commandResult()),
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    manager.start({ ...claim("0.2.12"), requestId: "request-3405-0123456789abcdef" });
+
+    expect(events[0]).toMatchObject({
+      category: "diagnostic",
+      op: "update.session.lifecycle",
+      correlationId: "request-3405-0123456789abcdef",
+      extra: {
+        sessionId: "session-3405-0123456789abcdef",
+        candidateId: "candidate-0.2.12",
+        targetVersion: "0.2.12",
+        phase: "preparing",
+        cancellationCutoff: "not-reached",
+        eventKind: "started",
+        completedBytes: 0,
+        failureReason: "none",
+        completeness: "complete",
+        loss: "none",
+      },
+    });
   });
 
   it("reports lifecycle activity sink failures through bounded diagnostics", async () => {

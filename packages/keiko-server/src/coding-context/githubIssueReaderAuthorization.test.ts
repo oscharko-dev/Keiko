@@ -391,9 +391,11 @@ describe("githubRemoteOwnerAndRepoFor — emitted evidence (#3385)", () => {
 
     await githubRemoteOwnerAndRepoFor(root, hermeticEnv(home), undefined, { activityLog: sink });
 
-    expect(events[0]).toMatchObject({ level: "warn", extra: { outcome: "remote-unreadable" } });
-    expect(typeof events[0]?.errorKind).toBe("string");
-    expect(events[0]?.errorKind).not.toBe("");
+    expect(events[0]).toMatchObject({
+      level: "warn",
+      errorKind: "read-failed",
+      extra: { outcome: "remote-unreadable", failureKind: "read-failed" },
+    });
   });
 
   it("reports an injected resolver that throws as its own fault, still denying", async () => {
@@ -403,14 +405,35 @@ describe("githubRemoteOwnerAndRepoFor — emitted evidence (#3385)", () => {
       "/workspace/project",
       hermeticEnv(home),
       () => {
-        throw new Error("resolver exploded");
+        throw Object.assign(new Error("resolver exploded"), { code: `E${"X".repeat(90)}` });
       },
       { activityLog: sink },
     );
 
     expect(resolved).toBeUndefined();
-    expect(events[0]).toMatchObject({ level: "warn", extra: { outcome: "resolver-failed" } });
-    expect(typeof events[0]?.errorKind).toBe("string");
+    expect(events[0]).toMatchObject({
+      level: "warn",
+      errorKind: "unavailable",
+      extra: { outcome: "resolver-failed", failureKind: "unavailable" },
+    });
+  });
+
+  it("classifies a resolver fault after cancellation as cancelled", async () => {
+    const { sink, events } = capturingLog();
+    const controller = new AbortController();
+    controller.abort();
+
+    await githubRemoteOwnerAndRepoFor(
+      "/workspace/project",
+      hermeticEnv(home),
+      () => Promise.reject(new Error("aborted")),
+      { activityLog: sink, signal: controller.signal },
+    );
+
+    expect(events[0]).toMatchObject({
+      errorKind: "cancelled",
+      extra: { outcome: "resolver-failed", failureKind: "cancelled" },
+    });
   });
 
   // The defect that turned CI red on 56ffa39c, and that a first repair only hid from the tests by

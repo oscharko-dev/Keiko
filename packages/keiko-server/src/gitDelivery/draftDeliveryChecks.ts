@@ -5,6 +5,11 @@
 
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { localDraftDeliverySource } from "../coding-runtime/codingRuntimeDraftDeliverySource.js";
 import { describeError } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
@@ -17,6 +22,141 @@ import {
   type VerificationCheckRecord,
   type VerificationCheckStep,
 } from "./verificationChecks.js";
+
+const DRAFT_CHECKS_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-checks",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/draftDeliveryChecks.logDraftChecksActivity",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["refresh"],
+    },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["listed", "unavailable", "refreshed", "skipped", "failed"],
+    },
+    verificationEvidenceId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    recordCount: { type: "integer", dataClass: "count", required: false },
+    omittedCount: { type: "integer", dataClass: "count", required: false },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "receipt-missing",
+        "evidence-missing",
+        "evidence-unreadable",
+        "evidence-invalid",
+        "approval-required",
+        "adapter-unavailable",
+        "identity-mismatch",
+        "section-absent",
+        "section-malformed",
+        "unchanged",
+        "read-failed",
+        "body-invalid",
+        "body-changed",
+        "identity-changed",
+        "update-failed",
+        "internal",
+      ],
+    },
+    prNumber: { type: "integer", dataClass: "count", required: false },
+    headSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    checkRowCount: { type: "integer", dataClass: "count", required: false },
+    authority: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["policy-authorized"],
+    },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-draft-checks"],
+  proofIds: ["git.draft-checks"],
+  releaseImpact: "patch",
+});
+
+export interface DraftChecksActivityFields {
+  readonly runId: string;
+  readonly phase?: "refresh";
+  readonly state: "listed" | "unavailable" | "refreshed" | "skipped" | "failed";
+  readonly verificationEvidenceId?: string;
+  readonly recordCount?: number;
+  readonly omittedCount?: number;
+  readonly reason?:
+    | DraftDeliveryChecksUnavailableReason
+    | "approval-required"
+    | "adapter-unavailable"
+    | "identity-mismatch"
+    | "section-absent"
+    | "section-malformed"
+    | "unchanged"
+    | "read-failed"
+    | "body-invalid"
+    | "body-changed"
+    | "identity-changed"
+    | "update-failed"
+    | "internal";
+  readonly prNumber?: number;
+  readonly headSha?: string;
+  readonly checkRowCount?: number;
+  readonly authority?: "policy-authorized";
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+export function logDraftChecksActivity(
+  log: ServerLogSink,
+  correlationId: string,
+  fields: DraftChecksActivityFields,
+  failure?: { readonly errorKind: ActivityLogErrorKind },
+): void {
+  log.write(
+    activityLogEvent(
+      DRAFT_CHECKS_OPERATION,
+      {
+        correlationId,
+        ...(failure === undefined ? {} : { level: "warn", errorKind: failure.errorKind }),
+      },
+      fields,
+    ),
+  );
+}
 
 export type DraftDeliveryChecksUnavailableReason =
   "receipt-missing" | "evidence-missing" | "evidence-unreadable" | "evidence-invalid";
@@ -86,7 +226,12 @@ function readChecks(input: DraftDeliveryChecksInput): ChecksRead {
   };
 }
 
-function checksFields(checks: DraftDeliveryChecks): Readonly<Record<string, unknown>> {
+function checksFields(
+  checks: DraftDeliveryChecks,
+): Pick<
+  DraftChecksActivityFields,
+  "verificationEvidenceId" | "recordCount" | "omittedCount" | "reason"
+> {
   return checks.status === "listed"
     ? {
         verificationEvidenceId: checks.evidenceId,
@@ -99,19 +244,27 @@ function checksFields(checks: DraftDeliveryChecks): Readonly<Record<string, unkn
 /** Reads the committed change's verification history and logs the outcome body-free. */
 export function readDraftDeliveryChecks(input: DraftDeliveryChecksInput): DraftDeliveryChecks {
   const { checks, error } = readChecks(input);
-  input.activityLog.write({
-    category: "process",
-    op: "git.draft-checks",
-    correlationId: input.correlationId,
-    ...(checks.status === "listed" ? {} : { level: "warn" as const }),
-    ...(error === undefined ? {} : { errorKind: "internal" as const }),
-    extra: {
+  const detail = error === undefined ? undefined : describeError(error);
+  logDraftChecksActivity(
+    input.activityLog,
+    input.correlationId,
+    {
       runId: input.record.binding.runId,
       state: checks.status,
       ...checksFields(checks),
-      ...(error === undefined ? {} : describeError(error)),
+      ...(detail === undefined
+        ? {}
+        : {
+            errorClass: detail.errorClass,
+            ...(detail.code === undefined ? {} : { code: detail.code }),
+            ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+            ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+          }),
     },
-  });
+    checks.status === "listed"
+      ? undefined
+      : { errorKind: error === undefined ? "unavailable" : "internal" },
+  );
   return checks;
 }
 

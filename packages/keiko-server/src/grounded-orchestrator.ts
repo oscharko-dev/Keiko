@@ -31,6 +31,14 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogErrorKindOr,
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   advanceRing,
   applyUsage,
   assembleContextPack,
@@ -151,12 +159,345 @@ import {
   reportServerLogFailure,
   startLogTimer,
   type ServerLogEvent,
+  type ServerLogger,
   type ServerLogSink,
 } from "./observability/index.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
 import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
+
+const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.started",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.started",
+  fields: {
+    scopeKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["workspace-root", "directory", "files", "invalid"],
+    },
+    relativePathCount: { type: "integer", dataClass: "count", required: true },
+    explicitConnection: { type: "boolean", dataClass: "closed-enum", required: true },
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["natural-language", "exact-symbol", "file-pattern", "regex", "invalid"],
+    },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    inputStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["valid", "invalid"],
+    },
+    caseSensitive: { type: "boolean", dataClass: "closed-enum", required: false },
+    maxResults: { type: "integer", dataClass: "count", required: false },
+    searchCallsMax: { type: "integer", dataClass: "count", required: false },
+    filesReadMax: { type: "integer", dataClass: "count", required: false },
+    excerptBytesMax: { type: "integer", dataClass: "count", required: false },
+    modelInputTokensMax: { type: "integer", dataClass: "count", required: false },
+    modelOutputTokensMax: { type: "integer", dataClass: "count", required: false },
+    elapsedMsMax: { type: "integer", dataClass: "duration", required: false },
+    rerankCallsMax: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.started.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.completed",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.completed",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
+    plannedRingCount: { type: "integer", dataClass: "count", required: false },
+    usageSearchCalls: { type: "integer", dataClass: "count", required: false },
+    usageFilesRead: { type: "integer", dataClass: "count", required: false },
+    usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
+    usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
+    usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
+    usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
+    usageRerankCalls: { type: "integer", dataClass: "count", required: false },
+    selectedFileCount: { type: "integer", dataClass: "count", required: false },
+    omittedCount: { type: "integer", dataClass: "count", required: false },
+    uncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    scopeIncompleteUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    budgetClippedUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    toolUnavailableUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    unsupportedClaimUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    entailmentUnavailableUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    coverageStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-reported", "incomplete", "complete"],
+    },
+    coverageReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 5,
+      values: ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned"],
+    },
+    coverageFilesDiscovered: { type: "integer", dataClass: "count", required: false },
+    coverageFilesScanned: { type: "integer", dataClass: "count", required: false },
+    coverageFilesSkipped: { type: "integer", dataClass: "count", required: false },
+    coverageDepthPruned: { type: "integer", dataClass: "count", required: false },
+    coverageMaxFilesPruned: { type: "integer", dataClass: "count", required: false },
+    retrievalReadBudgetBlocked: { type: "boolean", dataClass: "closed-enum", required: false },
+    retrievalElapsedBudgetBlocked: { type: "boolean", dataClass: "closed-enum", required: false },
+    retrievalWorkspaceIndexProviderStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "available", "unavailable"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.completed.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.completion-details",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.completionDetails",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
+    structuralContextCount: { type: "integer", dataClass: "count", required: false },
+    structuralCandidateInventoryBuildCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
+    structuralCandidateFileCount: { type: "integer", dataClass: "count", required: false },
+    structuralCandidateDirectoryCount: { type: "integer", dataClass: "count", required: false },
+    structuralCodeIndexBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralSymbolGraphBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralImportGraphBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralEndpointGraphBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralFileSearchCount: { type: "integer", dataClass: "count", required: false },
+    structuralTextSearchCount: { type: "integer", dataClass: "count", required: false },
+    indexProviderStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "available", "unavailable"],
+    },
+    indexSearchMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "not-evaluated",
+        "unused",
+        "live-fallback",
+        "persistent-cold",
+        "persistent-warm",
+        "persistent-reconciled",
+        "request-local-cold",
+        "request-local-warm",
+        "request-local-reconciled",
+      ],
+    },
+    indexLoadStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-attempted", "hit", "miss", "mixed", "failed"],
+    },
+    indexSaveStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-attempted", "succeeded", "unfinished", "failed"],
+    },
+    indexIndexedRecords: { type: "integer", dataClass: "count", required: false },
+    indexReusedRecords: { type: "integer", dataClass: "count", required: false },
+    indexStaleRecords: { type: "integer", dataClass: "count", required: false },
+    indexSearchCount: { type: "integer", dataClass: "count", required: false },
+    indexReportCount: { type: "integer", dataClass: "count", required: false },
+    indexFallbackSearchCount: { type: "integer", dataClass: "count", required: false },
+    indexLoadFailures: { type: "integer", dataClass: "count", required: false },
+    indexSaveFailures: { type: "integer", dataClass: "count", required: false },
+    workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoReadDirEntries: { type: "integer", dataClass: "count", required: false },
+    workspaceIoStatCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoRealPathCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoExistsCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.completion-details.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.failed",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.failed",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["failed", "cancelled"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    retrievalPhase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "request-validation",
+        "planning",
+        "workspace-admission",
+        "budget-evaluation",
+        "workspace-detection",
+        "ring-retrieval",
+        "pack-assembly",
+        "empty-pack-assembly",
+      ],
+    },
+    plannedRingCount: { type: "integer", dataClass: "count", required: true },
+    structuralContextCount: { type: "integer", dataClass: "count", required: true },
+    structuralCandidateInventoryBuildCount: { type: "integer", dataClass: "count", required: true },
+    structuralCandidateFileCount: { type: "integer", dataClass: "count", required: true },
+    structuralCandidateDirectoryCount: { type: "integer", dataClass: "count", required: true },
+    structuralCodeIndexBuildCount: { type: "integer", dataClass: "count", required: true },
+    structuralSymbolGraphBuildCount: { type: "integer", dataClass: "count", required: true },
+    structuralImportGraphBuildCount: { type: "integer", dataClass: "count", required: true },
+    structuralEndpointGraphBuildCount: { type: "integer", dataClass: "count", required: true },
+    structuralFileSearchCount: { type: "integer", dataClass: "count", required: true },
+    structuralTextSearchCount: { type: "integer", dataClass: "count", required: true },
+    indexProviderStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-evaluated", "available", "unavailable"],
+    },
+    indexSearchMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "not-evaluated",
+        "unused",
+        "live-fallback",
+        "persistent-cold",
+        "persistent-warm",
+        "persistent-reconciled",
+        "request-local-cold",
+        "request-local-warm",
+        "request-local-reconciled",
+      ],
+    },
+    indexLoadStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-attempted", "hit", "miss", "mixed", "failed"],
+    },
+    indexSaveStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-attempted", "succeeded", "unfinished", "failed"],
+    },
+    indexIndexedRecords: { type: "integer", dataClass: "count", required: true },
+    indexReusedRecords: { type: "integer", dataClass: "count", required: true },
+    indexStaleRecords: { type: "integer", dataClass: "count", required: true },
+    indexSearchCount: { type: "integer", dataClass: "count", required: true },
+    indexReportCount: { type: "integer", dataClass: "count", required: true },
+    indexFallbackSearchCount: { type: "integer", dataClass: "count", required: true },
+    indexLoadFailures: { type: "integer", dataClass: "count", required: true },
+    indexSaveFailures: { type: "integer", dataClass: "count", required: true },
+    workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required: true },
+    workspaceIoReadDirEntries: { type: "integer", dataClass: "count", required: true },
+    workspaceIoStatCalls: { type: "integer", dataClass: "count", required: true },
+    workspaceIoRealPathCalls: { type: "integer", dataClass: "count", required: true },
+    workspaceIoExistsCalls: { type: "integer", dataClass: "count", required: true },
+    workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required: true },
+    workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required: true },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.failed.line"],
+  releaseImpact: "patch",
+});
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -4707,6 +5048,27 @@ interface ConnectedContextActivityIdentity {
   readonly rerankCallsMax: ActivityNumber;
 }
 
+interface ConnectedContextCommonActivityFields {
+  readonly scopeKind: ActivityScopeKind;
+  readonly relativePathCount: number;
+  readonly explicitConnection: boolean;
+  readonly scopeIdentitySha256: string;
+  readonly queryKind: ActivityQueryKind;
+  readonly queryIdentitySha256: string;
+  readonly inputStatus: "valid" | "invalid";
+  readonly caseSensitive?: boolean;
+  readonly maxResults?: number;
+  readonly searchCallsMax?: number;
+  readonly filesReadMax?: number;
+  readonly excerptBytesMax?: number;
+  readonly modelInputTokensMax?: number;
+  readonly modelOutputTokensMax?: number;
+  readonly elapsedMsMax?: number;
+  readonly rerankCallsMax?: number;
+  readonly completeness: "complete";
+  readonly loss: "none";
+}
+
 function activityProperty(record: Readonly<Record<string, unknown>>, key: string): unknown {
   try {
     return record[key];
@@ -4722,7 +5084,7 @@ function activityString(record: Readonly<Record<string, unknown>>, key: string):
 
 function activityNumber(record: Readonly<Record<string, unknown>>, key: string): ActivityNumber {
   const value = activityProperty(record, key);
-  return typeof value === "number" && Number.isFinite(value) ? value : "invalid";
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : "invalid";
 }
 
 function activityBoolean(record: Readonly<Record<string, unknown>>, key: string): ActivityBoolean {
@@ -4842,9 +5204,42 @@ function connectedContextActivityIdentity(
   };
 }
 
+function validActivityNumber(value: ActivityNumber): number | undefined {
+  return value === "invalid" ? undefined : value;
+}
+
+function connectedContextInputStatus(
+  identity: ConnectedContextActivityIdentity,
+): "valid" | "invalid" {
+  const values: readonly (
+    ActivityNumber | ActivityBoolean | ActivityScopeKind | ActivityQueryKind
+  )[] = [
+    identity.scopeKind,
+    identity.queryKind,
+    identity.caseSensitive,
+    identity.maxResults,
+    identity.searchCallsMax,
+    identity.filesReadMax,
+    identity.excerptBytesMax,
+    identity.modelInputTokensMax,
+    identity.modelOutputTokensMax,
+    identity.elapsedMsMax,
+    identity.rerankCallsMax,
+  ];
+  return values.includes("invalid") ? "invalid" : "valid";
+}
+
 function commonActivityExtra(
   identity: ConnectedContextActivityIdentity,
-): Readonly<Record<string, unknown>> {
+): ConnectedContextCommonActivityFields {
+  const maxResults = validActivityNumber(identity.maxResults);
+  const searchCallsMax = validActivityNumber(identity.searchCallsMax);
+  const filesReadMax = validActivityNumber(identity.filesReadMax);
+  const excerptBytesMax = validActivityNumber(identity.excerptBytesMax);
+  const modelInputTokensMax = validActivityNumber(identity.modelInputTokensMax);
+  const modelOutputTokensMax = validActivityNumber(identity.modelOutputTokensMax);
+  const elapsedMsMax = validActivityNumber(identity.elapsedMsMax);
+  const rerankCallsMax = validActivityNumber(identity.rerankCallsMax);
   return {
     scopeKind: identity.scopeKind,
     relativePathCount: identity.relativePathCount,
@@ -4852,15 +5247,18 @@ function commonActivityExtra(
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryKind: identity.queryKind,
     queryIdentitySha256: identity.queryIdentitySha256,
-    caseSensitive: identity.caseSensitive,
-    maxResults: identity.maxResults,
-    searchCallsMax: identity.searchCallsMax,
-    filesReadMax: identity.filesReadMax,
-    excerptBytesMax: identity.excerptBytesMax,
-    modelInputTokensMax: identity.modelInputTokensMax,
-    modelOutputTokensMax: identity.modelOutputTokensMax,
-    elapsedMsMax: identity.elapsedMsMax,
-    rerankCallsMax: identity.rerankCallsMax,
+    inputStatus: connectedContextInputStatus(identity),
+    ...(identity.caseSensitive === "invalid" ? {} : { caseSensitive: identity.caseSensitive }),
+    ...(maxResults === undefined ? {} : { maxResults }),
+    ...(searchCallsMax === undefined ? {} : { searchCallsMax }),
+    ...(filesReadMax === undefined ? {} : { filesReadMax }),
+    ...(excerptBytesMax === undefined ? {} : { excerptBytesMax }),
+    ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
+    ...(modelOutputTokensMax === undefined ? {} : { modelOutputTokensMax }),
+    ...(elapsedMsMax === undefined ? {} : { elapsedMsMax }),
+    ...(rerankCallsMax === undefined ? {} : { rerankCallsMax }),
+    completeness: "complete",
+    loss: "none",
   };
 }
 
@@ -4881,20 +5279,65 @@ function uncertaintyActivityExtra(
   };
   for (const marker of markers) counts[marker.kind] += 1;
   return {
-    noEvidenceUncertaintyCount: counts["no-evidence"],
-    staleEvidenceUncertaintyCount: counts["stale-evidence"],
     scopeIncompleteUncertaintyCount: counts["scope-incomplete"],
     budgetClippedUncertaintyCount: counts["budget-clipped"],
     toolUnavailableUncertaintyCount: counts["tool-unavailable"],
-    lowConfidenceUncertaintyCount: counts["low-confidence"],
-    unsupportedCitationUncertaintyCount: counts["unsupported-citation"],
-    incompleteAnswerUncertaintyCount: counts["incomplete-answer"],
     unsupportedClaimUncertaintyCount: counts["unsupported-claim"],
     entailmentUnavailableUncertaintyCount: counts["entailment-unavailable"],
   };
 }
 
-function coverageActivityExtra(pack: ConnectedContextPack): Readonly<Record<string, unknown>> {
+type ConnectedContextCompletedActivityFields = ActivityLogFields<
+  typeof SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION
+>;
+type ConnectedContextCompletionDetailsActivityFields = ActivityLogFields<
+  typeof SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION
+>;
+type ConnectedContextFailedActivityFields = ActivityLogFields<
+  typeof SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION
+>;
+type FailedStructuralFields = Pick<
+  ConnectedContextFailedActivityFields,
+  | "structuralContextCount"
+  | "structuralCandidateInventoryBuildCount"
+  | "structuralCandidateFileCount"
+  | "structuralCandidateDirectoryCount"
+  | "structuralCodeIndexBuildCount"
+  | "structuralSymbolGraphBuildCount"
+  | "structuralImportGraphBuildCount"
+  | "structuralEndpointGraphBuildCount"
+  | "structuralFileSearchCount"
+  | "structuralTextSearchCount"
+>;
+type FailedIndexFields = Pick<
+  ConnectedContextFailedActivityFields,
+  | "indexProviderStatus"
+  | "indexSearchMode"
+  | "indexLoadStatus"
+  | "indexSaveStatus"
+  | "indexIndexedRecords"
+  | "indexReusedRecords"
+  | "indexStaleRecords"
+  | "indexSearchCount"
+  | "indexReportCount"
+  | "indexFallbackSearchCount"
+  | "indexLoadFailures"
+  | "indexSaveFailures"
+>;
+type FailedWorkspaceIoFields = Pick<
+  ConnectedContextFailedActivityFields,
+  | "workspaceIoReadDirCalls"
+  | "workspaceIoReadDirEntries"
+  | "workspaceIoStatCalls"
+  | "workspaceIoRealPathCalls"
+  | "workspaceIoExistsCalls"
+  | "workspaceIoContentReadCalls"
+  | "workspaceIoContentReadBytes"
+>;
+
+function coverageActivityExtra(
+  pack: ConnectedContextPack,
+): Partial<ConnectedContextCompletedActivityFields> {
   const coverage = pack.diagnostics?.coverage;
   if (coverage === undefined) {
     return { coverageStatus: "not-reported", coverageReasons: [] };
@@ -4910,37 +5353,99 @@ function coverageActivityExtra(pack: ConnectedContextPack): Readonly<Record<stri
   };
 }
 
+function structuralActivityExtra(
+  structural: StructuralRequestContextPoolDiagnostics,
+): FailedStructuralFields & Partial<ConnectedContextCompletionDetailsActivityFields> {
+  return {
+    structuralContextCount: structural.contextCount,
+    structuralCandidateInventoryBuildCount: structural.candidateInventoryBuildCount,
+    structuralCandidateFileCount: structural.candidateFileCount,
+    structuralCandidateDirectoryCount: structural.candidateDirectoryCount,
+    structuralCodeIndexBuildCount: structural.codeIndexBuildCount,
+    structuralSymbolGraphBuildCount: structural.symbolGraphBuildCount,
+    structuralImportGraphBuildCount: structural.importGraphBuildCount,
+    structuralEndpointGraphBuildCount: structural.endpointGraphBuildCount,
+    structuralFileSearchCount: structural.fileSearchCount,
+    structuralTextSearchCount: structural.textSearchCount,
+  };
+}
+
+function workspaceIndexActivityExtra(
+  index: WorkspaceIndexActivityDiagnostics,
+): FailedIndexFields & Partial<ConnectedContextCompletionDetailsActivityFields> {
+  return {
+    indexProviderStatus: index.providerStatus,
+    indexSearchMode: index.searchMode,
+    indexLoadStatus: index.loadStatus,
+    indexSaveStatus: index.saveStatus,
+    indexIndexedRecords: index.indexedRecords,
+    indexReusedRecords: index.reusedRecords,
+    indexStaleRecords: index.staleRecords,
+    indexSearchCount: index.searchCount,
+    indexReportCount: index.reportCount,
+    indexFallbackSearchCount: index.fallbackSearchCount,
+    indexLoadFailures: index.loadFailures,
+    indexSaveFailures: index.saveFailures,
+  };
+}
+
+function workspaceIoActivityExtra(
+  io: WorkspaceIoActivityDiagnostics,
+): FailedWorkspaceIoFields & Partial<ConnectedContextCompletionDetailsActivityFields> {
+  return {
+    workspaceIoReadDirCalls: io.readDirCalls,
+    workspaceIoReadDirEntries: io.readDirEntries,
+    workspaceIoStatCalls: io.statCalls,
+    workspaceIoRealPathCalls: io.realPathCalls,
+    workspaceIoExistsCalls: io.existsCalls,
+    workspaceIoContentReadCalls: io.contentReadCalls,
+    workspaceIoContentReadBytes: io.contentReadBytes,
+  };
+}
+
 function completionActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
-): Readonly<Record<string, unknown>> {
+): ConnectedContextCompletedActivityFields {
   const { pack, plan } = execution.output;
   return {
-    ...commonActivityExtra(identity),
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
     plannedRingCount: plan.rings.length,
-    usage: {
-      searchCalls: pack.usage.searchCalls,
-      filesRead: pack.usage.filesRead,
-      excerptBytes: pack.usage.excerptBytes,
-      modelInputTokens: pack.usage.modelInputTokens,
-      modelOutputTokens: pack.usage.modelOutputTokens,
-      elapsedMs: pack.usage.elapsedMs,
-      rerankCalls: pack.usage.rerankCalls,
-    },
-    selectionCounts: {
-      selectedFileCount: pack.files.length,
-      omittedCount: pack.omitted.length,
-    },
-    uncertainty: {
-      count: pack.uncertainty.length,
-      ...uncertaintyActivityExtra(pack.uncertainty),
-    },
-    coverage: coverageActivityExtra(pack),
-    retrievalStatus: execution.status,
-    structural: execution.structural,
-    workspaceIndex: execution.workspaceIndex,
-    workspaceIo: execution.workspaceIo,
+    usageSearchCalls: pack.usage.searchCalls,
+    usageFilesRead: pack.usage.filesRead,
+    usageExcerptBytes: pack.usage.excerptBytes,
+    usageModelInputTokens: pack.usage.modelInputTokens,
+    usageModelOutputTokens: pack.usage.modelOutputTokens,
+    usageElapsedMs: pack.usage.elapsedMs,
+    usageRerankCalls: pack.usage.rerankCalls,
+    selectedFileCount: pack.files.length,
+    omittedCount: pack.omitted.length,
+    uncertaintyCount: pack.uncertainty.length,
+    ...uncertaintyActivityExtra(pack.uncertainty),
+    ...coverageActivityExtra(pack),
+    retrievalReadBudgetBlocked: execution.status.readBudgetBlocked,
+    retrievalElapsedBudgetBlocked: execution.status.elapsedBudgetBlocked,
+    retrievalWorkspaceIndexProviderStatus: execution.status.workspaceIndexProviderStatus,
+    completeness: "complete",
+    loss: "none",
+  };
+}
+
+function completionDetailsActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+): ConnectedContextCompletionDetailsActivityFields {
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    activityDetailStatus: "complete",
+    ...structuralActivityExtra(execution.structural),
+    ...workspaceIndexActivityExtra(execution.workspaceIndex),
+    ...workspaceIoActivityExtra(execution.workspaceIo),
+    completeness: "complete",
+    loss: "none",
   };
 }
 
@@ -4949,59 +5454,126 @@ function failureActivityExtra(
   error: unknown,
   progress: ConnectedContextProgress,
   cancelled: boolean,
-): Readonly<Record<string, unknown>> {
+): ConnectedContextFailedActivityFields {
   const frames = keikoStackFrames(error);
   const chain = causeChain(error);
+  const structural = progress.structuralContexts?.diagnostics() ?? EMPTY_STRUCTURAL_DIAGNOSTICS;
+  const index =
+    progress.workspaceIndexActivity?.diagnostics() ?? NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS;
+  const io = progress.workspaceIoActivity?.diagnostics() ?? emptyWorkspaceIoActivityDiagnostics();
   return {
-    ...commonActivityExtra(identity),
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
     outcome: cancelled ? "cancelled" : "failed",
+    failureKind: connectedContextFailureKind(error),
     retrievalPhase: progress.phase,
     plannedRingCount: progress.plannedRingCount,
-    structural: progress.structuralContexts?.diagnostics() ?? EMPTY_STRUCTURAL_DIAGNOSTICS,
-    workspaceIndex:
-      progress.workspaceIndexActivity?.diagnostics() ?? NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS,
-    workspaceIo:
-      progress.workspaceIoActivity?.diagnostics() ?? emptyWorkspaceIoActivityDiagnostics(),
+    ...structuralActivityExtra(structural),
+    ...workspaceIndexActivityExtra(index),
+    ...workspaceIoActivityExtra(io),
     ...(frames.length === 0 ? {} : { frames }),
     ...(chain.length === 0 ? {} : { causeChain: chain }),
+    completeness: "complete",
+    loss: "none",
   };
 }
 
-function safeConnectedContextErrorKind(error: unknown): string {
+function safeConnectedContextErrorKind(error: unknown): ActivityLogErrorKind {
+  const value = connectedContextFailureKind(error);
+  if (value === ERROR_CODES.CANCELLED) return "cancelled";
+  return activityLogErrorKindOr(value, "internal");
+}
+
+function connectedContextFailureKind(error: unknown): string {
   try {
-    return errorKindOf(error);
+    return classifyErrorKind(errorKindOf(error)) ?? "unknown";
   } catch {
     return "unknown";
   }
 }
 
-function isConnectedContextCancellation(error: unknown, errorKind: string): boolean {
+function isConnectedContextCancellation(error: unknown, errorKind: ActivityLogErrorKind): boolean {
   try {
     if (error instanceof CancelledError) return true;
   } catch {
     // A hostile getPrototypeOf trap cannot be allowed to replace the original retrieval failure.
   }
-  return errorKind === ERROR_CODES.CANCELLED;
+  return errorKind === "cancelled";
 }
 
-function unavailableActivityExtra(
+function unavailableFailureActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  progress: ConnectedContextProgress,
+  cancelled: boolean,
+): ConnectedContextFailedActivityFields {
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    activityDetailStatus: "unavailable",
+    outcome: cancelled ? "cancelled" : "failed",
+    retrievalPhase: progress.phase,
+    plannedRingCount: progress.plannedRingCount,
+    ...structuralActivityExtra(EMPTY_STRUCTURAL_DIAGNOSTICS),
+    ...workspaceIndexActivityExtra(NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS),
+    ...workspaceIoActivityExtra(emptyWorkspaceIoActivityDiagnostics()),
+    completeness: "partial",
+    loss: "none",
+  };
+}
+
+function unavailableCompletionActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+): ConnectedContextCompletedActivityFields {
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    activityDetailStatus: "unavailable",
+    completeness: "complete",
+    loss: "none",
+  };
+}
+
+function unavailableCompletionDetailsActivityExtra(
   identity: ConnectedContextActivityIdentity,
   workspaceIo: WorkspaceIoActivityDiagnostics,
-): Readonly<Record<string, unknown>> {
-  return { ...commonActivityExtra(identity), activityDetailStatus: "unavailable", workspaceIo };
+): ConnectedContextCompletionDetailsActivityFields {
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    activityDetailStatus: "unavailable",
+    ...workspaceIoActivityExtra(workspaceIo),
+    completeness: "complete",
+    loss: "none",
+  };
 }
 
 function safeCompletionActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
   correlationId: string,
-): Readonly<Record<string, unknown>> {
+): ConnectedContextCompletedActivityFields {
   try {
     return completionActivityExtra(identity, execution);
   } catch (error) {
     reportServerLogFailure(error, { op: "search.connected-context.completed", correlationId });
-    return unavailableActivityExtra(identity, execution.workspaceIo);
+    return unavailableCompletionActivityExtra(identity);
+  }
+}
+
+function safeCompletionDetailsActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+  correlationId: string,
+): ConnectedContextCompletionDetailsActivityFields {
+  try {
+    return completionDetailsActivityExtra(identity, execution);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: "search.connected-context.completion-details",
+      correlationId,
+    });
+    return unavailableCompletionDetailsActivityExtra(identity, execution.workspaceIo);
   }
 }
 
@@ -5011,7 +5583,7 @@ function safeFailureActivityExtra(
   progress: ConnectedContextProgress,
   cancelled: boolean,
   correlationId: string,
-): Readonly<Record<string, unknown>> {
+): ConnectedContextFailedActivityFields {
   try {
     return failureActivityExtra(identity, error, progress, cancelled);
   } catch (projectionError) {
@@ -5019,16 +5591,31 @@ function safeFailureActivityExtra(
       op: "search.connected-context.failed",
       correlationId,
     });
-    return {
-      ...unavailableActivityExtra(
-        identity,
-        progress.workspaceIoActivity?.diagnostics() ?? emptyWorkspaceIoActivityDiagnostics(),
-      ),
-      outcome: cancelled ? "cancelled" : "failed",
-      retrievalPhase: progress.phase,
-      plannedRingCount: progress.plannedRingCount,
-    };
+    return unavailableFailureActivityExtra(identity, progress, cancelled);
   }
+}
+
+function logConnectedContextCompletion(
+  logger: ServerLogger,
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+  correlationId: string,
+  durationMs: number,
+): void {
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION,
+      { correlationId },
+      safeCompletionDetailsActivityExtra(identity, execution, correlationId),
+    ),
+  );
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,
+      { correlationId, durationMs },
+      safeCompletionActivityExtra(identity, execution, correlationId),
+    ),
+  );
 }
 
 function createConnectedContextActivity(
@@ -5045,33 +5632,26 @@ function createConnectedContextActivity(
   return {
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     started: (): void => {
-      logger.info(() => ({
-        category: "search",
-        op: "search.connected-context.started",
-        correlationId,
-        extra: commonActivityExtra(identity),
-      }));
+      logger.info(() =>
+        activityLogEvent(
+          SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION,
+          { correlationId },
+          commonActivityExtra(identity),
+        ),
+      );
     },
     completed: (execution): void => {
-      logger.info(() => ({
-        category: "search",
-        op: "search.connected-context.completed",
-        correlationId,
-        durationMs: logElapsed(),
-        extra: safeCompletionActivityExtra(identity, execution, correlationId),
-      }));
+      logConnectedContextCompletion(logger, identity, execution, correlationId, logElapsed());
     },
     failed: (error, progress): void => {
       const errorKind = safeConnectedContextErrorKind(error);
       const cancelled = isConnectedContextCancellation(error, errorKind);
-      const event = (): ServerLogEvent => ({
-        category: "search" as const,
-        op: "search.connected-context.failed",
-        correlationId,
-        durationMs: logElapsed(),
-        errorKind,
-        extra: safeFailureActivityExtra(identity, error, progress, cancelled, correlationId),
-      });
+      const event = (): ServerLogEvent =>
+        activityLogEvent(
+          SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION,
+          { correlationId, durationMs: logElapsed(), errorKind },
+          safeFailureActivityExtra(identity, error, progress, cancelled, correlationId),
+        );
       if (cancelled) logger.warn(event);
       else logger.error(event);
     },

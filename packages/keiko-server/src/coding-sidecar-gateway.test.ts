@@ -16,6 +16,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -994,6 +995,8 @@ describe("coding-sidecar gateway", () => {
           unavailableOptionalToolCount: 1,
           offeredOptionalTools: ["keiko_child_agent", "keiko_skill", "keiko_skill_discover"],
           offeredOptionalToolCount: 3,
+          completeness: "complete",
+          loss: "none",
         },
       });
       expect(availabilityEvents[1]).toMatchObject({
@@ -1004,8 +1007,15 @@ describe("coding-sidecar gateway", () => {
           unavailableOptionalToolCount: 1,
           offeredOptionalTools: ["keiko_research_fetch", "keiko_skill", "keiko_skill_discover"],
           offeredOptionalToolCount: 3,
+          completeness: "complete",
+          loss: "none",
         },
       });
+      expect(
+        activityLogEventRegistration(
+          availabilityEvents[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+        ),
+      ).toBeDefined();
       expect(availabilityEvents[0]?.extra?.handlerSetDigest).not.toBe(
         availabilityEvents[1]?.extra?.handlerSetDigest,
       );
@@ -1119,7 +1129,12 @@ describe("coding-sidecar gateway", () => {
       expect.objectContaining({
         op: "coding-sidecar.gateway.rejected",
         status: 401,
-        extra: { reason: "capability-authenticator-unavailable" },
+        errorKind: "unavailable",
+        extra: {
+          reason: "capability-authenticator-unavailable",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     ]);
   });
@@ -1143,7 +1158,8 @@ describe("coding-sidecar gateway", () => {
       expect.objectContaining({
         op: "coding-sidecar.gateway.rejected",
         status: 401,
-        extra: { reason: "capability-missing" },
+        errorKind: "permission-denied",
+        extra: { reason: "capability-missing", completeness: "complete", loss: "none" },
       }),
     ]);
   });
@@ -1164,7 +1180,8 @@ describe("coding-sidecar gateway", () => {
       expect.objectContaining({
         op: "coding-sidecar.gateway.rejected",
         status: 401,
-        extra: { reason: "capability-invalid" },
+        errorKind: "permission-denied",
+        extra: { reason: "capability-invalid", completeness: "complete", loss: "none" },
       }),
     ]);
 
@@ -3446,8 +3463,16 @@ describe("coding-sidecar gateway", () => {
       (event) => event.op === "coding-sidecar.gateway.request-validated",
     );
     expect(validated?.correlationId).toEqual(expect.any(String));
-    expect(validated?.extra).toMatchObject({ maxRequestBytes: 1_048_576, inputMessageCount: 1 });
+    expect(validated?.extra).toMatchObject({
+      maxRequestBytes: 1_048_576,
+      inputMessageCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
     expect(validated?.extra?.estimatedPromptTokens).toEqual(expect.any(Number));
+    expect(
+      activityLogEventRegistration(validated as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toBeDefined();
     expect(JSON.stringify(sink.events)).not.toContain("bounded source context");
   });
 
@@ -3951,9 +3976,20 @@ describe("coding sidecar gateway rejection activity log", () => {
       expect.objectContaining({
         op: "coding-sidecar.gateway.rejected",
         status: 400,
-        extra: { reason: "body-not-json", runId: "run-gateway-test" },
+        errorKind: "invalid-request",
+        extra: {
+          reason: "body-not-json",
+          runId: "run-gateway-test",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     ]);
+    expect(
+      activityLogEventRegistration(
+        sink.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
   });
 
   it("logs a body-free rejection line when estimated prompt tokens exceed the profile budget", async () => {
@@ -3976,7 +4012,7 @@ describe("coding sidecar gateway rejection activity log", () => {
         correlationId: "unknown-correlation-id",
         durationMs: undefined,
         status: 400,
-        errorKind: undefined,
+        errorKind: "invalid-request",
         extra: {
           reason: "prompt-tokens-exceeded",
           runId: "run-gateway-test",
@@ -3984,6 +4020,8 @@ describe("coding sidecar gateway rejection activity log", () => {
           maxPromptTokens: 16,
           inputMessageCount: 1,
           maxInputMessages: 512,
+          completeness: "complete",
+          loss: "none",
         },
       },
     ]);
@@ -4008,6 +4046,7 @@ describe("coding sidecar gateway rejection activity log", () => {
       expect.objectContaining({
         op: "coding-sidecar.gateway.rejected",
         status: 400,
+        errorKind: "invalid-request",
         extra: {
           reason: "input-messages-exceeded",
           runId: "run-gateway-test",
@@ -4015,13 +4054,15 @@ describe("coding sidecar gateway rejection activity log", () => {
           maxPromptTokens: 128_000,
           inputMessageCount: 513,
           maxInputMessages: 512,
+          completeness: "complete",
+          loss: "none",
         },
       }),
     ]);
     expect(JSON.stringify(sink.events)).not.toContain("private");
   });
 
-  it("logs a body-free rejection line naming the mismatching tool identifiers for a tool-contract-drift rejection", async () => {
+  it("logs a body-free count-and-digest proof for a tool-contract-drift rejection", async () => {
     const sink = captureServerLog("warn");
     const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-1" } }));
 
@@ -4047,11 +4088,45 @@ describe("coding sidecar gateway rejection activity log", () => {
         runId: "run-1",
         expectedToolCount: 19,
         receivedToolCount: 2,
-        unexpectedToolNames: [],
+        unexpectedToolCount: 0,
+        missingToolCount: 17,
+        completeness: "complete",
+        loss: "none",
       },
     });
-    const extra = sink.events[0]?.extra as { missingToolNames?: readonly string[] } | undefined;
-    expect(extra?.missingToolNames).toHaveLength(17);
+    expect(sink.events[0]?.errorKind).toBe("authority-denied");
+    expect(sink.events[0]?.extra?.toolMismatchSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(
+      activityLogEventRegistration(
+        sink.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
+    expect(JSON.stringify(sink.events)).not.toContain("private runtime content");
+  });
+
+  it("never preserves a caller-selected unexpected tool name in rejection evidence", async () => {
+    const sink = captureServerLog("warn");
+    const hostileToolName = "private_customer_token_123";
+    const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-hostile" } }));
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "private runtime content" }],
+        tools: modelVisibleTools([{ name: hostileToolName, parameters: { type: "object" } }]),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 403 });
+    expect(sink.events[0]?.extra).toMatchObject({
+      unexpectedToolCount: 1,
+      missingToolCount: 19,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(sink.events[0]?.extra?.toolMismatchSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(sink.events)).not.toContain(hostileToolName);
     expect(JSON.stringify(sink.events)).not.toContain("private runtime content");
   });
 
@@ -4171,8 +4246,13 @@ describe("coding sidecar gateway rejection activity log", () => {
         correlationId: "unknown-correlation-id",
         durationMs: undefined,
         status: 400,
-        errorKind: undefined,
-        extra: { reason: "content-part-unsupported", runId: "run-gateway-test" },
+        errorKind: "invalid-request",
+        extra: {
+          reason: "content-part-unsupported",
+          runId: "run-gateway-test",
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
   });
@@ -4203,8 +4283,13 @@ describe("coding sidecar gateway rejection activity log", () => {
         correlationId: "unknown-correlation-id",
         durationMs: undefined,
         status: 400,
-        errorKind: undefined,
-        extra: { reason: "message-shape-invalid", runId: "run-gateway-test" },
+        errorKind: "invalid-request",
+        extra: {
+          reason: "message-shape-invalid",
+          runId: "run-gateway-test",
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
   });
@@ -4233,8 +4318,8 @@ describe("coding sidecar gateway rejection activity log", () => {
         correlationId: "unknown-correlation-id",
         durationMs: undefined,
         status: 403,
-        errorKind: undefined,
-        extra: { reason: "origin-not-allowed" },
+        errorKind: "authority-denied",
+        extra: { reason: "origin-not-allowed", completeness: "complete", loss: "none" },
       },
     ]);
   });
@@ -4269,8 +4354,13 @@ describe("coding sidecar gateway rejection activity log", () => {
         correlationId: "unknown-correlation-id",
         durationMs: undefined,
         status: 403,
-        errorKind: undefined,
-        extra: { reason: "runtime-prompt-budget-denied", runId: "run-gateway-test" },
+        errorKind: "authority-denied",
+        extra: {
+          reason: "runtime-prompt-budget-denied",
+          runId: "run-gateway-test",
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
   });
@@ -4318,14 +4408,21 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
         parentCorrelationId: undefined,
         durationMs: undefined,
         status: undefined,
-        errorKind: undefined,
+        errorKind: "unavailable",
         extra: {
           reason: "model-context-window-insufficient",
           maxPromptTokens: 4_096,
           minimumRequiredPromptTokens: 32_000,
+          completeness: "complete",
+          loss: "none",
         },
       },
     ]);
+    expect(
+      activityLogEventRegistration(
+        sink.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
   });
 
   it("keeps reporting available when the derived prompt budget clears the minimum", () => {

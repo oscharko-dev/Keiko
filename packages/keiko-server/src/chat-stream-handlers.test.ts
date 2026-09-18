@@ -1383,7 +1383,7 @@ describe("desktop chat SSE streaming handler", () => {
       expect.objectContaining({
         op: "chat.send.rejected",
         correlationId: "corr-stream-admission-unready",
-        errorKind: "model-not-ready",
+        errorKind: "unavailable",
       }),
     );
     expect(JSON.stringify(sink.events)).not.toContain("private user turn");
@@ -1415,7 +1415,7 @@ describe("desktop chat SSE streaming handler", () => {
       expect.objectContaining({
         op: "chat.regeneration.rejected",
         correlationId: "corr-regeneration-admission-unready",
-        errorKind: "model-not-ready",
+        errorKind: "unavailable",
       }),
     );
     expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
@@ -1496,8 +1496,13 @@ describe("desktop chat SSE streaming handler", () => {
         op: "chat.send.rejected",
         correlationId: "corr-buffered-readiness-race",
         status: 409,
-        errorKind: "config-changed",
-        extra: { reason: "generation", modelKind: "chat" },
+        errorKind: "internal",
+        extra: {
+          reason: "generation",
+          modelKind: "chat",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
     expect(JSON.stringify(sink.events)).not.toContain(secretContent);
@@ -1686,8 +1691,13 @@ describe("desktop chat SSE streaming handler", () => {
         op: "chat.send.rejected",
         correlationId: "corr-streamed-readiness-race",
         status: 409,
-        errorKind: "config-changed",
-        extra: { reason: "generation", modelKind: "chat" },
+        errorKind: "internal",
+        extra: {
+          reason: "generation",
+          modelKind: "chat",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
     expect(JSON.stringify(sink.events)).not.toContain(secretContent);
@@ -1963,8 +1973,13 @@ describe("desktop chat SSE streaming handler", () => {
         op: "chat.regeneration.rejected",
         correlationId: "corr-regeneration-readiness-race",
         status: 409,
-        errorKind: "config-changed",
-        extra: { reason: "generation", modelKind: "chat" },
+        errorKind: "internal",
+        extra: {
+          reason: "generation",
+          modelKind: "chat",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
     memoryVault.close();
@@ -3371,8 +3386,13 @@ describe("git-change description-authority admission on the streaming send path 
         category: "security",
         op: "pr-description.chat.turn.denied",
         correlationId: "corr-stream-git-change-1",
-        errorKind: "model-egress-denied",
-        extra: { relationshipId: "rel-stream-1" },
+        errorKind: "authority-denied",
+        extra: {
+          relationshipId: "rel-stream-1",
+          reason: "model-egress-denied",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
   });
@@ -3442,7 +3462,11 @@ describe("git-change description-authority admission on the streaming send path 
         category: "security",
         op: "pr-description.chat.turn.admitted",
         correlationId: "corr-stream-git-change-2",
-        extra: { relationshipId: "rel-description" },
+        extra: {
+          relationshipId: "rel-description",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
   });

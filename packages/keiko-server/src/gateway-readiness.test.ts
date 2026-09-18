@@ -267,6 +267,45 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  it("bounds a configured model id only at the 240-character activity-log projection", async () => {
+    const modelId = `coding-${"x".repeat(250)}`;
+    const config: GatewayConfig = {
+      ...gatewayConfig(modelId),
+      capabilities: [
+        {
+          ...createDefaultChatCapability(modelId),
+          preferredUseCases: ["Coding"],
+          workflowEligible: true,
+        },
+        embeddingCapability("text-embedding-3-small"),
+      ],
+    };
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(
+        config,
+        vi.fn().mockResolvedValue(jsonResponse(chatPayload("OK"))) as typeof fetch,
+      ),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    const result = await runGatewayReadiness(
+      { options: { probes: [], purpose: "coding-workbench-auto" } },
+      deps,
+      "coding-readiness-long-model",
+    );
+
+    expect("status" in result).toBe(false);
+    if ("status" in result) return;
+    expect(result.modelId).toBe(modelId);
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.extra?.modelId)).toEqual([
+      modelId.slice(0, 240),
+      modelId.slice(0, 240),
+    ]);
+    deps.store.close();
+  });
+
   it("rejects an automatic probe for a non-coding model without dispatching or logging", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const events: ServerLogEvent[] = [];

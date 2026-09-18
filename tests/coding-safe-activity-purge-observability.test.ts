@@ -44,7 +44,12 @@ describe("safe activity purge support reconstruction", () => {
         expect.objectContaining({
           category: "process",
           op: "coding-runtime.safe-activity",
-          extra: { event: "purged", reason: "stop" },
+          extra: {
+            completeness: "complete",
+            event: "purged",
+            loss: "none",
+            reason: "stop",
+          },
         }),
       );
       expect(serialized).not.toContain(bodyCanary);

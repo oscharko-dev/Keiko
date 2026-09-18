@@ -10,20 +10,132 @@ import type {
   UpdateSessionStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_CANDIDATE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-candidate";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 
 const DEFAULT_CANDIDATE_TTL_MS = 10 * 60_000;
+
+const UPDATE_CANDIDATE_ISSUED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.candidate.issued",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-candidate-authority.issue",
+  fields: {
+    candidateId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    targetVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+    installKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "package-manager",
+        "portable-managed",
+        "portable-bootstrap",
+        "portable-setup-failed",
+        "portable-it-managed",
+      ],
+    },
+    releaseImpactDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-candidate-authority"],
+  proofIds: ["update.candidate.issued.identity"],
+  releaseImpact: "patch",
+});
+
+const UPDATE_CANDIDATE_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.candidate.rejected",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-candidate-authority.consume.reject",
+  fields: {
+    candidateId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "unknown",
+        "expired",
+        "replayed",
+        "claim-mismatch",
+        "current-version-changed",
+        "install-facts-changed",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["update-candidate-authority"],
+  proofIds: ["update.candidate.rejected.reason"],
+  releaseImpact: "patch",
+});
+
+const UPDATE_CANDIDATE_CONSUMED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.candidate.consumed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-candidate-authority.consume",
+  fields: {
+    candidateId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    targetVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+    installKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "package-manager",
+        "portable-managed",
+        "portable-bootstrap",
+        "portable-setup-failed",
+        "portable-it-managed",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-candidate-authority"],
+  proofIds: ["update.candidate.consumed.identity"],
+  releaseImpact: "patch",
+});
 
 interface CandidateRecord {
   readonly snapshot: UpdateCandidateSnapshot;
   readonly installMode: UpdateInstallMode;
   readonly executionToken: string;
   readonly impact: UpdateReleaseImpactInput;
+  readonly issuedCorrelationId: string;
+}
+
+interface ConsumedCandidateRecord {
+  readonly expiresAt: number;
+  readonly issuedCorrelationId: string;
 }
 
 export type UpdateCandidateRejection =
@@ -43,10 +155,26 @@ export type UpdateCandidateConsumption =
     }
   | { readonly ok: false; readonly reason: UpdateCandidateRejection };
 
+function candidateRejectionErrorKind(reason: UpdateCandidateRejection): ActivityLogErrorKind {
+  switch (reason) {
+    case "expired":
+      return "timeout";
+    case "replayed":
+    case "current-version-changed":
+    case "install-facts-changed":
+      return "conflict";
+    case "claim-mismatch":
+      return "validation-failed";
+    case "unknown":
+      return "invalid-request";
+  }
+}
+
 export interface UpdateCandidateAuthority {
   readonly issue: (
     report: UpdatePreflightReport,
     installMode: UpdateInstallMode,
+    correlationId?: string,
   ) => UpdateCandidateClaim | undefined;
   readonly consume: (
     claim: UpdateSessionStartRequest,
@@ -267,14 +395,14 @@ export function createUpdateCandidateAuthority(
   const activityLog = options.activityLog;
   const diagnostics = options.diagnostics;
   const records = new Map<string, CandidateRecord>();
-  const consumed = new Map<string, number>();
+  const consumed = new Map<string, ConsumedCandidateRecord>();
   const pruneExpired = (): void => {
     const current = now();
     for (const [candidateId, record] of records) {
       if (Date.parse(record.snapshot.expiresAt) <= current) records.delete(candidateId);
     }
-    for (const [candidateId, expiresAt] of consumed) {
-      if (expiresAt <= current) consumed.delete(candidateId);
+    for (const [candidateId, consumedRecord] of consumed) {
+      if (consumedRecord.expiresAt <= current) consumed.delete(candidateId);
     }
   };
   const trimAfterInsertion = <T>(entries: Map<string, T>): void => {
@@ -285,7 +413,7 @@ export function createUpdateCandidateAuthority(
     }
   };
   return {
-    issue(report, installMode): UpdateCandidateClaim | undefined {
+    issue(report, installMode, correlationId): UpdateCandidateClaim | undefined {
       pruneExpired();
       const issuedAtMs = now();
       const candidateId = idFactory();
@@ -299,21 +427,29 @@ export function createUpdateCandidateAuthority(
         throw new TypeError("Update candidate token factory returned an invalid token.");
       }
       const confirmationDigest = digestUpdateCandidate(snapshot);
-      records.set(candidateId, { snapshot, installMode, executionToken, impact });
+      const issuedCorrelationId = correlationIdOrUnknown(correlationId);
+      records.set(candidateId, {
+        snapshot,
+        installMode,
+        executionToken,
+        impact,
+        issuedCorrelationId,
+      });
       trimAfterInsertion(records);
       emitCandidateEvent(
         activityLog,
-        {
-          category: "diagnostic",
-          op: "update.candidate.issued",
-          correlationId: candidateId,
-          extra: {
+        activityLogEvent(
+          UPDATE_CANDIDATE_ISSUED_OPERATION,
+          { correlationId: issuedCorrelationId },
+          {
             candidateId,
             targetVersion: snapshot.targetVersion,
             installKind: snapshot.install.installKind,
             releaseImpactDigest: snapshot.releaseImpactDigest,
+            completeness: "complete",
+            loss: "none",
           },
-        },
+        ),
         diagnostics,
       );
       return {
@@ -332,15 +468,26 @@ export function createUpdateCandidateAuthority(
       const record = records.get(claim.candidateId);
       pruneExpired();
       if (record === undefined) {
-        const reason = consumed.has(claim.candidateId) ? "replayed" : "unknown";
+        const consumedRecord = consumed.get(claim.candidateId);
+        const reason = consumedRecord === undefined ? "unknown" : "replayed";
         emitCandidateEvent(
           activityLog,
-          {
-            category: "diagnostic",
-            op: "update.candidate.rejected",
-            correlationId: claim.requestId ?? claim.candidateId,
-            extra: { candidateId: claim.candidateId, reason },
-          },
+          activityLogEvent(
+            UPDATE_CANDIDATE_REJECTED_OPERATION,
+            {
+              correlationId: correlationIdOrUnknown(claim.requestId),
+              ...(consumedRecord === undefined
+                ? {}
+                : { parentCorrelationId: consumedRecord.issuedCorrelationId }),
+              errorKind: candidateRejectionErrorKind(reason),
+            },
+            {
+              candidateId: claim.candidateId,
+              reason,
+              completeness: "complete",
+              loss: "none",
+            },
+          ),
           diagnostics,
         );
         return { ok: false, reason };
@@ -348,19 +495,30 @@ export function createUpdateCandidateAuthority(
       const reject = (reason: UpdateCandidateRejection): UpdateCandidateConsumption => {
         emitCandidateEvent(
           activityLog,
-          {
-            category: "diagnostic",
-            op: "update.candidate.rejected",
-            correlationId: claim.requestId ?? claim.candidateId,
-            extra: { candidateId: claim.candidateId, reason },
-          },
+          activityLogEvent(
+            UPDATE_CANDIDATE_REJECTED_OPERATION,
+            {
+              correlationId: correlationIdOrUnknown(claim.requestId),
+              parentCorrelationId: record.issuedCorrelationId,
+              errorKind: candidateRejectionErrorKind(reason),
+            },
+            {
+              candidateId: claim.candidateId,
+              reason,
+              completeness: "complete",
+              loss: "none",
+            },
+          ),
           diagnostics,
         );
         return { ok: false, reason };
       };
       if (!claimMatches(claim, record)) return reject("claim-mismatch");
       records.delete(claim.candidateId);
-      consumed.set(claim.candidateId, Date.parse(record.snapshot.expiresAt) + ttlMs);
+      consumed.set(claim.candidateId, {
+        expiresAt: Date.parse(record.snapshot.expiresAt) + ttlMs,
+        issuedCorrelationId: record.issuedCorrelationId,
+      });
       trimAfterInsertion(consumed);
       if (now() >= Date.parse(record.snapshot.expiresAt)) return reject("expired");
       const runtimeRejection = updateCandidateRuntimeRejection(
@@ -372,16 +530,20 @@ export function createUpdateCandidateAuthority(
       if (!freshReportMatches(record, freshReport)) return reject("claim-mismatch");
       emitCandidateEvent(
         activityLog,
-        {
-          category: "diagnostic",
-          op: "update.candidate.consumed",
-          correlationId: claim.requestId ?? claim.candidateId,
-          extra: {
+        activityLogEvent(
+          UPDATE_CANDIDATE_CONSUMED_OPERATION,
+          {
+            correlationId: correlationIdOrUnknown(claim.requestId),
+            parentCorrelationId: record.issuedCorrelationId,
+          },
+          {
             candidateId: claim.candidateId,
             targetVersion: record.snapshot.targetVersion,
             installKind: record.snapshot.install.installKind,
+            completeness: "complete",
+            loss: "none",
           },
-        },
+        ),
         diagnostics,
       );
       return {

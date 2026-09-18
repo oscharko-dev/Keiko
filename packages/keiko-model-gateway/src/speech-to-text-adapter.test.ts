@@ -120,7 +120,9 @@ describe("requestSpeechToText", () => {
         op: "speech.stt.language.normalized",
         correlationId: "corr-stt-language",
         extra: {
+          completeness: "complete",
           declaredSubtagCount: 2,
+          loss: "none",
           resolvedSubtagCount: 1,
           primaryLanguagePreserved: true,
         },
@@ -203,7 +205,9 @@ describe("requestSpeechToText", () => {
         op: "speech.stt.language.normalized",
         correlationId: "corr-stt-language-boundary",
         extra: {
+          completeness: "complete",
           declaredSubtagCount: 5,
+          loss: "none",
           resolvedSubtagCount: 1,
           primaryLanguagePreserved: true,
         },

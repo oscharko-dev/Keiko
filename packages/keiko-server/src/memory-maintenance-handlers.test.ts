@@ -577,7 +577,7 @@ describe("handleRunMaintenance — consolidation.summary.fallback activity-log w
         category: "consolidation",
         op: "consolidation.summary.fallback",
         correlationId: "req-consolidation-fallback-1",
-        extra: { reason: "absent" },
+        extra: { completeness: "complete", loss: "none", reason: "absent" },
       }),
     );
   });

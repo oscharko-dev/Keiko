@@ -3,6 +3,11 @@ import {
   captureCodingRepositoryRequest,
   type CodingRepositoryResult,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import {
   CodingRepositorySearchError,
@@ -11,9 +16,106 @@ import {
   type CodingRepositorySearchOptions,
 } from "@oscharko-dev/keiko-workspace/coding-repository-search";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { contentFreeErrorClass } from "../observability/error-classification.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+
+const CODING_REPOSITORY_HANDLER_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-repository-handler.started",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRepositorySearchHandler.invoke",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-repository-search"],
+  proofIds: ["coding-repository-handler.started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_REPOSITORY_HANDLER_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-repository-handler.settled",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRepositorySearchHandler.terminalEvent",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "failed"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "invalid-request",
+        "authority-stale",
+        "backend-unavailable",
+        "scope-denied",
+        "file-too-large",
+        "file-unreadable",
+        "cancelled",
+        "timeout",
+        "failed",
+      ],
+    },
+    candidatesDiscovered: { type: "integer", dataClass: "count", required: false },
+    filesScanned: { type: "integer", dataClass: "count", required: false },
+    skippedFiles: { type: "integer", dataClass: "count", required: false },
+    durationMs: { type: "integer", dataClass: "duration", required: false },
+    resultCount: { type: "integer", dataClass: "count", required: false },
+    outputBytes: { type: "integer", dataClass: "count", required: false },
+    truncationCount: { type: "integer", dataClass: "count", required: false },
+    resultPathSha256: {
+      type: "string-array",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+      maxItems: 50,
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-repository-search"],
+  proofIds: ["coding-repository-handler.settled.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function repositoryErrorKind(result: CodingRepositoryResult): ActivityLogErrorKind | undefined {
+  if (result.ok) return undefined;
+  if (result.reason === "authority-stale") return "authority-denied";
+  if (result.reason === "backend-unavailable") return "unavailable";
+  if (result.reason === "scope-denied") return "permission-denied";
+  if (result.reason === "file-unreadable") return "read-failed";
+  if (result.reason === "cancelled") return "cancelled";
+  if (result.reason === "timeout") return "timeout";
+  if (result.reason === "invalid-request" || result.reason === "file-too-large") {
+    return "validation-failed";
+  }
+  return "internal";
+}
 
 export interface CodingRepositorySearchHandlerOptions extends CodingRepositorySearchOptions {
   readonly workspace: WorkspaceInfo;
@@ -46,13 +148,14 @@ function terminalEvent(
   durationMs: number,
   error?: unknown,
 ): ServerLogEvent {
-  return {
-    category: "search",
-    op: "coding-repository-handler.settled",
-    correlationId,
-    durationMs,
-    ...(error === undefined ? {} : { errorKind: contentFreeErrorClass(error) }),
-    extra: {
+  return activityLogEvent(
+    CODING_REPOSITORY_HANDLER_SETTLED_OPERATION,
+    {
+      correlationId,
+      durationMs,
+      ...(result.ok ? {} : { level: "error", errorKind: repositoryErrorKind(result) }),
+    },
+    {
       state: result.ok ? "completed" : "failed",
       reason: result.ok ? "none" : result.reason,
       ...(result.ok
@@ -74,7 +177,7 @@ function terminalEvent(
         ? {}
         : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
     },
-  };
+  );
 }
 
 async function invoke(
@@ -85,7 +188,9 @@ async function invoke(
   const correlationId = operationCorrelation(context);
   const nowMs = options.nowMs ?? Date.now;
   const startedAtMs = nowMs();
-  options.log.write({ category: "search", op: "coding-repository-handler.started", correlationId });
+  options.log.write(
+    activityLogEvent(CODING_REPOSITORY_HANDLER_STARTED_OPERATION, { correlationId }, {}),
+  );
   let result: CodingRepositoryResult;
   let failure: unknown;
   try {

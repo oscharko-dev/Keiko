@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   GatewayConfig,
   LiteLLMRerankRequest,
@@ -89,7 +90,7 @@ function successfulOutcome(results: readonly { readonly index: number }[]): Rera
 function expectUnboundedRerankEvidence(sink: BufferedServerLogSink): void {
   expect(sink.events.find((event) => event.op === "gateway.spend.rejected")).toMatchObject({
     correlationId: "rerank-batch-budget",
-    errorKind: "GATEWAY_CONFIG_INVALID",
+    errorKind: "validation-failed",
     extra: { reason: "spend-bound-unavailable", frames: expect.any(Array) as unknown },
   });
   const evidence = JSON.stringify(sink.events);
@@ -767,6 +768,26 @@ describe("rerankSelection activity log", () => {
     });
   }
 
+  it("keeps a non-positive topN degradation non-throwing and logs a valid count", async () => {
+    const deps = depsWith(gatewayConfig(), () => Promise.reject(new Error("must not be called")));
+    const sink = capture("debug");
+
+    await expect(
+      rerankSelection({
+        deps,
+        query: "alpha",
+        candidates: CANDIDATES,
+        documentFor: (candidate) => candidate,
+        topN: -1,
+        fallbackMode: "slice-topN",
+      }),
+    ).resolves.toMatchObject({ selected: [] });
+
+    expect(sink.events.find((event) => event.op === "search.rerank.completed")?.extra?.topN).toBe(
+      0,
+    );
+  });
+
   it("warns when policy denies external reranking and reports what the caller kept instead", async () => {
     const deps = depsWith(gatewayConfig(), () => Promise.reject(new Error("never called")));
     const sink = capture("info");
@@ -777,7 +798,10 @@ describe("rerankSelection activity log", () => {
     expect(event?.level).toBe("warn");
     expect(event?.op).toBe("search.rerank.completed");
     expect(event?.category).toBe("search");
-    expect(event?.errorKind).toBe("policy-denied");
+    expect(event?.errorKind).toBe("authority-denied");
+    expect(
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toBeDefined();
     expect(event?.extra).toMatchObject({
       outcome: "denied",
       mode: "local-only",
@@ -785,6 +809,9 @@ describe("rerankSelection activity log", () => {
       keptCount: 2,
       fallbackMode: "slice-topN",
       topN: 2,
+      failureKind: "policy-denied",
+      completeness: "complete",
+      loss: "none",
     });
   });
 
@@ -817,8 +844,12 @@ describe("rerankSelection activity log", () => {
 
     const [event] = sink.events;
     expect(event?.level).toBe("warn");
-    expect(event?.errorKind).toBe("invalid-response");
-    expect(event?.extra).toMatchObject({ outcome: "invalid-response", keptCount: 2 });
+    expect(event?.errorKind).toBe("validation-failed");
+    expect(event?.extra).toMatchObject({
+      outcome: "invalid-response",
+      failureKind: "invalid-response",
+      keptCount: 2,
+    });
   });
 
   it("keeps the applied path and the unconfigured default install at debug", async () => {
@@ -839,7 +870,8 @@ describe("rerankSelection activity log", () => {
     await runSelection(unconfigured);
     expect(atDebug.events.map((event) => event.extra?.outcome)).toEqual(["applied", "disabled"]);
     expect(atDebug.events.map((event) => event.level)).toEqual(["debug", "debug"]);
-    expect(atDebug.events[1]?.errorKind).toBe("not-configured");
+    expect(atDebug.events[1]?.errorKind).toBe("unavailable");
+    expect(atDebug.events[1]?.extra?.failureKind).toBe("not-configured");
   });
 
   it("carries a duration and never a query, a document or the reranker credential", async () => {

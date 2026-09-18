@@ -1,9 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import {
+  activityLogEvent,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
-import { describeError } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { GIT_CI_REPAIR_BUDGET_OPERATION } from "./codingRuntimeActivityOperations.js";
 import type {
   CodingRuntimeSnapshot,
   CodingRuntimeSnapshotStore,
@@ -51,6 +56,21 @@ interface Scope {
   readonly current: CiRepairBudgetRecord | undefined;
 }
 type Phase = "read" | "accept" | "begin" | "charge" | "settle";
+function budgetErrorKind(reason: CiRepairBudgetBlockReason): ActivityLogErrorKind {
+  if (reason === "authority-denied") return "authority-denied";
+  if (reason === "deadline-exhausted") return "timeout";
+  if (reason === "storage-unavailable") return "unavailable";
+  if (reason === "invalid-binding" || reason === "invalid-input") return "validation-failed";
+  if (
+    reason === "tool-budget-exhausted" ||
+    reason === "prompt-budget-exhausted" ||
+    reason === "attempt-budget-exhausted" ||
+    reason === "storage-capacity"
+  ) {
+    return "rate-limited";
+  }
+  return "conflict";
+}
 function blocked(
   reason: CiRepairBudgetBlockReason,
   record?: CiRepairBudgetRecord,
@@ -203,14 +223,22 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
       this.log(context, phase, result);
       return result;
     } catch (error) {
-      this.deps.activityLog.write({
-        category: "process",
-        op: "git.ci-repair.budget",
-        level: "warn",
-        correlationId: correlationIdOrUnknown(context.correlationId),
-        errorKind: "internal",
-        extra: { phase, reason: "storage-unavailable", ...describeError(error) },
-      });
+      this.deps.activityLog.write(
+        activityLogEvent(
+          GIT_CI_REPAIR_BUDGET_OPERATION,
+          {
+            level: "warn",
+            correlationId: correlationIdOrUnknown(context.correlationId),
+            errorKind: "internal",
+          },
+          {
+            phase,
+            reason: "storage-unavailable",
+            frames: keikoStackFrames(error),
+            causeChain: causeChain(error),
+          },
+        ),
+      );
       return blocked("storage-unavailable");
     }
   }
@@ -442,44 +470,50 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
   private log(context: CiRepairBudgetContext, phase: Phase, result: CiRepairBudgetResult): void {
     const record = result.record;
     const attempt = record?.attempts.at(-1);
-    this.deps.activityLog.write({
-      category: "process",
-      op: "git.ci-repair.budget",
-      correlationId: correlationIdOrUnknown(context.correlationId),
-      extra: {
-        phase,
-        status: result.status,
-        ...(result.status === "blocked" ? { reason: result.reason } : {}),
-        ...(ciRepairId(context.runId) ? { runId: context.runId } : {}),
-        ...(attempt === undefined
-          ? {}
-          : {
-              attemptId: attempt.attemptId,
-              attemptRunId: attempt.runId,
-              attemptStatus: attempt.status,
-              attemptKind: attempt.kind,
-              failureSignatureDigest: attempt.failureSignatureDigest,
-              headSha: attempt.headSha,
-              baseSha: attempt.baseSha,
-            }),
-        ...(record === undefined
-          ? {}
-          : {
-              taskDigest: record.taskDigest,
-              remoteDigest: record.remoteDigest,
-              prNumber: record.prNumber,
-              revision: record.revision,
-              attemptCount: record.attempts.length,
-              failedAttemptCount: record.failedAttempts,
-              toolCallCount: record.toolCalls,
-              promptTokenCount: record.promptTokens,
-              deadlineMs: record.deadlineMs,
-              maxRuntimeMs: record.limits.maxRuntimeMs,
-              maxToolCalls: record.limits.maxToolCalls,
-              maxPromptTokens: record.limits.maxPromptTokens,
-            }),
-      },
-    });
+    this.deps.activityLog.write(
+      activityLogEvent(
+        GIT_CI_REPAIR_BUDGET_OPERATION,
+        {
+          correlationId: correlationIdOrUnknown(context.correlationId),
+          ...(result.status === "blocked"
+            ? { level: "warn", errorKind: budgetErrorKind(result.reason) }
+            : {}),
+        },
+        {
+          phase,
+          status: result.status,
+          ...(result.status === "blocked" ? { reason: result.reason } : {}),
+          ...(ciRepairId(context.runId) ? { runId: context.runId } : {}),
+          ...(attempt === undefined
+            ? {}
+            : {
+                attemptId: attempt.attemptId,
+                attemptRunId: attempt.runId,
+                attemptStatus: attempt.status,
+                attemptKind: attempt.kind,
+                failureSignatureDigest: attempt.failureSignatureDigest,
+                headSha: attempt.headSha,
+                baseSha: attempt.baseSha,
+              }),
+          ...(record === undefined
+            ? {}
+            : {
+                taskDigest: record.taskDigest,
+                remoteDigest: record.remoteDigest,
+                prNumber: record.prNumber,
+                revision: record.revision,
+                attemptCount: record.attempts.length,
+                failedAttemptCount: record.failedAttempts,
+                toolCallCount: record.toolCalls,
+                promptTokenCount: record.promptTokens,
+                deadlineMs: record.deadlineMs,
+                maxRuntimeMs: record.limits.maxRuntimeMs,
+                maxToolCalls: record.limits.maxToolCalls,
+                maxPromptTokens: record.limits.maxPromptTokens,
+              }),
+        },
+      ),
+    );
   }
 }
 

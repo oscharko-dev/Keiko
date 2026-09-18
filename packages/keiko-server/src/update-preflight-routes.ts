@@ -41,8 +41,8 @@ interface UpdatePreflightRuntimeOptions {
 }
 
 export interface UpdatePreflightService {
-  getStartupReport(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
-  runManualCheck(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
+  getStartupReport(deps: UiHandlerDeps, correlationId?: string): Promise<UpdatePreflightReport>;
+  runManualCheck(deps: UiHandlerDeps, correlationId?: string): Promise<UpdatePreflightReport>;
   runValidationCheck?(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
 }
 
@@ -108,8 +108,14 @@ async function portablePreflightReport(
   currentVersion: string,
   target: UpdatePortableTarget,
   options: UpdatePreflightRuntimeOptions,
+  correlationId: string | undefined,
 ): Promise<UpdatePreflightReport> {
-  const outcome = await fetchPortableGitHubReleaseAssets(deps, currentVersion, target);
+  const outcome = await fetchPortableGitHubReleaseAssets(
+    deps,
+    currentVersion,
+    target,
+    correlationId,
+  );
   if (outcome.status !== "live") {
     return portableReleaseUnavailableReport(
       base,
@@ -165,11 +171,12 @@ async function portableModePreflightReport(
   currentVersion: string,
   mode: UpdateInstallMode,
   options: UpdatePreflightRuntimeOptions,
+  correlationId: string | undefined,
 ): Promise<UpdatePreflightReport | undefined> {
   if (mode.status === "supported" && mode.installKind === "portable-managed") {
     const target = mode.portable?.target;
     if (target !== undefined) {
-      return portablePreflightReport(deps, base, currentVersion, target, options);
+      return portablePreflightReport(deps, base, currentVersion, target, options, correlationId);
     }
   }
   return isPortableInstallMode(mode) ? portableBlockedReport(base, mode) : undefined;
@@ -204,6 +211,7 @@ async function packageManagerPreflightReport(
 export async function runUpdatePreflight(
   deps: UiHandlerDeps,
   options: UpdatePreflightRuntimeOptions = {},
+  correlationId?: string,
 ): Promise<UpdatePreflightReport> {
   const currentVersion =
     typeof options.currentVersion === "function"
@@ -218,10 +226,11 @@ export async function runUpdatePreflight(
     currentVersion,
     mode,
     options,
+    correlationId,
   );
   const report =
     portableReport ?? (await packageManagerPreflightReport(deps, base, currentVersion, options));
-  const candidate = options.candidateAuthority?.issue(report, mode);
+  const candidate = options.candidateAuthority?.issue(report, mode, correlationId);
   return candidate === undefined ? report : { ...report, candidate };
 }
 
@@ -230,12 +239,12 @@ export function createUpdatePreflightService(
 ): UpdatePreflightService {
   let startupPromise: Promise<UpdatePreflightReport> | undefined;
   return {
-    getStartupReport(deps): Promise<UpdatePreflightReport> {
-      startupPromise ??= runUpdatePreflight(deps, options);
+    getStartupReport(deps, correlationId): Promise<UpdatePreflightReport> {
+      startupPromise ??= runUpdatePreflight(deps, options, correlationId);
       return startupPromise;
     },
-    runManualCheck(deps): Promise<UpdatePreflightReport> {
-      return runUpdatePreflight(deps, options);
+    runManualCheck(deps, correlationId): Promise<UpdatePreflightReport> {
+      return runUpdatePreflight(deps, options, correlationId);
     },
     runValidationCheck(deps): Promise<UpdatePreflightReport> {
       return runUpdatePreflight(deps, { ...options, candidateAuthority: undefined });
@@ -269,15 +278,21 @@ export function resolveUpdatePreflightService(deps: UiHandlerDeps): UpdatePrefli
 }
 
 export async function handleGetUpdatePreflight(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return { status: 200, body: await resolveUpdatePreflightService(deps).getStartupReport(deps) };
+  return {
+    status: 200,
+    body: await resolveUpdatePreflightService(deps).getStartupReport(deps, ctx.correlationId),
+  };
 }
 
 export async function handlePostUpdatePreflightCheck(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return { status: 200, body: await resolveUpdatePreflightService(deps).runManualCheck(deps) };
+  return {
+    status: 200,
+    body: await resolveUpdatePreflightService(deps).runManualCheck(deps, ctx.correlationId),
+  };
 }

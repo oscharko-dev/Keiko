@@ -9,7 +9,11 @@
 
 import { describe, expect, it } from "vitest";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import {
+  logModelId,
+  type ModelGatewayLogEvent,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 interface Recorder {
@@ -98,19 +102,19 @@ describe("OpenAiAdapter.call — activity log", () => {
     expect(dispatch.level).toBe("info");
     expect(dispatch.category).toBe("gateway");
     expect(dispatch.extra).toMatchObject({
-      endpoint: new URL(CONFIG.baseUrl).origin,
       modelId: "example-chat-model",
       messageCount: 2,
       timeoutMs: 12_000,
       stream: false,
     });
+    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
     // Never the prompt content, and never the api key.
     expect(JSON.stringify(log.events)).not.toContain("some private prompt text");
     expect(JSON.stringify(log.events)).not.toContain(CONFIG.apiKey);
   });
 
-  it("names the dispatch endpoint by host only, never the path or query", async () => {
+  it("records only a digest of the dispatch endpoint", async () => {
     const log = recorder();
     const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
     const adapter = new OpenAiAdapter({
@@ -121,7 +125,27 @@ describe("OpenAiAdapter.call — activity log", () => {
     });
     await adapter.call(REQUEST, CONFIG);
     const dispatch = eventFor(log.events, "chat.request.dispatch");
-    expect(dispatch.extra?.endpoint).toBe("https://provider.example");
+    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(dispatch)).not.toContain("provider.example");
+  });
+
+  it("sanitizes a body-bearing model id without replacing a successful response", async () => {
+    const log = recorder();
+    const modelId = "gpt 4 customer alias";
+    const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
+    const adapter = new OpenAiAdapter({
+      fetchImpl,
+      requestId: "fixed-id",
+      costClass: "low",
+      log: log.sink,
+    });
+
+    await expect(
+      adapter.call({ ...REQUEST, modelId }, { ...CONFIG, modelId }),
+    ).resolves.toMatchObject({ content: "pong" });
+
+    expect(eventFor(log.events, "chat.request.dispatch").extra?.modelId).toBe(logModelId(modelId));
+    expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 
   it("marks a streaming dispatch distinctly from a non-streaming one", async () => {
@@ -170,7 +194,7 @@ describe("OpenAiAdapter.call — activity log", () => {
     expect(log.events.map((event) => event.category)).toContain("gateway");
   });
 
-  it("leaves every line uncorrelated when the caller supplies no logContext", async () => {
+  it("uses the sanctioned fallback on every line when the caller supplies no logContext", async () => {
     const log = recorder();
     const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
     const adapter = new OpenAiAdapter({
@@ -180,7 +204,9 @@ describe("OpenAiAdapter.call — activity log", () => {
       log: log.sink,
     });
     await adapter.call(REQUEST, CONFIG);
-    expect(log.events.map((event) => event.correlationId)).toEqual(log.events.map(() => undefined));
+    expect(log.events.map((event) => event.correlationId)).toEqual(
+      log.events.map(() => "unknown-correlation-id"),
+    );
   });
 
   it("stays silent — and behaviourally identical — when no sink is wired", async () => {

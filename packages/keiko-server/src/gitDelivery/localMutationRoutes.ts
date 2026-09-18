@@ -17,7 +17,6 @@ import type { GitMutationCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "../task-workspace/workspace-root-access.js";
 import {
@@ -33,6 +32,7 @@ import {
 } from "./execution.js";
 import {
   gitDeliveryAuthorityDenial,
+  logGitDeliveryAuthorityAdmission,
   type GitDeliveryAuthorityTarget,
 } from "./requestPreparation.js";
 import {
@@ -290,13 +290,13 @@ function logUserInitiatedLocalMutationAdmission(
   operation: LocalDeliveryOperation,
   seams: GitDeliveryExecutionSeams,
 ): void {
-  (seams.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "git.delivery.authority.admitted",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 200,
-    extra: { operation, phase: "admission", source: "local-user" },
-  });
+  logGitDeliveryAuthorityAdmission(
+    ctx,
+    operation,
+    "admission",
+    seams.activityLog ?? processServerLogSink(),
+    { source: "local-user" },
+  );
 }
 
 function localMutationAuthorityDenial({

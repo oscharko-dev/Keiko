@@ -9,15 +9,18 @@ import {
   ProviderError,
   RateLimitError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import {
-  logErrorKind,
+  activityLogErrorKind,
   logLevelEnabled,
+  logModelId,
   logTimer,
   nullModelGatewayLogSink,
   resolveLogSink,
-  type ModelGatewayLogEvent,
-  type ModelGatewayLogLevel,
   type ModelGatewayLogSink,
 } from "./observability.js";
 import type {
@@ -29,6 +32,189 @@ import type {
 } from "./types.js";
 
 const MAX_BACKOFF_MS = 30_000;
+
+const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.retry.budget-exhausted",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.budgetExhaustedError",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    attempt: { type: "integer", dataClass: "count", required: true },
+    hadPriorFailure: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-retry"],
+  proofIds: ["gateway.retry-budget-exhausted.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_RETRY_EXHAUSTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.retry.exhausted",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.executeWithRetry",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    attempt: { type: "integer", dataClass: "count", required: true },
+    maxRetries: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["terminal", "max-retries", "budget"],
+    },
+    delayMs: { type: "number", dataClass: "duration", required: false },
+    remainingMs: { type: "number", dataClass: "duration", required: false },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-retry"],
+  proofIds: ["gateway.retry-exhausted.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.retry.scheduled",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.executeWithRetry",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    attempt: { type: "integer", dataClass: "count", required: true },
+    maxRetries: { type: "integer", dataClass: "count", required: true },
+    delayMs: { type: "number", dataClass: "duration", required: true },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-retry"],
+  proofIds: ["gateway.retry-scheduled.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_CIRCUIT_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.circuit.rejected",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.CircuitBreaker.noteRejection",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["closed", "open", "half-open"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["cooldown", "probe-saturated"],
+    },
+    probesInFlight: { type: "integer", dataClass: "count", required: true },
+    rejectedSinceTransition: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-circuit-breaker"],
+  proofIds: ["gateway.circuit-rejected.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_CIRCUIT_HALF_OPEN_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.circuit.half-open",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.CircuitBreaker.enterHalfOpenOrReject",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    probes: { type: "integer", dataClass: "count", required: true },
+    rejectedWhileOpen: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-circuit-breaker"],
+  proofIds: ["gateway.circuit-half-open.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_CIRCUIT_OPENED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.circuit.opened",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.CircuitBreaker.open",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    previousState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["closed", "open", "half-open"],
+    },
+    consecutiveFailures: { type: "integer", dataClass: "count", required: true },
+    cooldownMs: { type: "number", dataClass: "duration", required: true },
+    rejectedSincePreviousTransition: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-circuit-breaker"],
+  proofIds: ["gateway.circuit-opened.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_CIRCUIT_CLOSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.circuit.closed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.CircuitBreaker.close",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    previousState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["closed", "open", "half-open"],
+    },
+    rejectedSincePreviousTransition: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-circuit-breaker"],
+  proofIds: ["gateway.circuit-closed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export const systemClock: Clock = {
   now: (): number => Date.now(),
@@ -113,7 +299,11 @@ function retryDecision(
 }
 
 // Why the loop stopped retrying, on its exhausted line; a budget stop carries both numbers.
-function retryStopDetail(decision: RetryStop): Readonly<Record<string, unknown>> {
+function retryStopDetail(
+  decision: RetryStop,
+):
+  | { readonly reason: "terminal" | "max-retries" }
+  | { readonly reason: "budget"; readonly delayMs: number; readonly remainingMs: number } {
   return decision.stop === "budget"
     ? { reason: "budget", delayMs: decision.delayMs, remainingMs: decision.remainingMs }
     : { reason: decision.stop };
@@ -171,6 +361,10 @@ export interface RetryLogContext {
   readonly correlationId?: string | undefined;
 }
 
+function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string }> {
+  return context.modelId === undefined ? {} : { modelId: logModelId(context.modelId) };
+}
+
 // The provider-specific detail that turns "a retry happened" into "the provider said 503" or
 // "the provider said wait 2000ms", mirroring `logErrorKind`'s shape: it reads only fields these
 // error classes already type and already redact at construction (never `message`, which is where
@@ -183,14 +377,17 @@ export interface RetryLogContext {
 // restating it here costs one field and removes that inference entirely. `retryAfterMs` stays
 // `RateLimitError`-only: `ProviderError` never carries a server-supplied retry delay.
 export interface ProviderErrorDetail {
-  readonly httpStatus?: number | undefined;
-  readonly retryAfterMs?: number | undefined;
+  readonly httpStatus?: number;
+  readonly retryAfterMs?: number;
 }
 
 export function providerErrorDetail(error: unknown): ProviderErrorDetail {
+  const httpStatus = providerErrorHttpStatus(error);
+  const retryAfterMs =
+    error instanceof RateLimitError ? (error.retryAfterMs ?? undefined) : undefined;
   return {
-    httpStatus: providerErrorHttpStatus(error),
-    retryAfterMs: error instanceof RateLimitError ? (error.retryAfterMs ?? undefined) : undefined,
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   };
 }
 
@@ -202,25 +399,6 @@ function providerErrorHttpStatus(error: unknown): number | undefined {
     return error.httpStatus;
   }
   return undefined;
-}
-
-function retryEvent(
-  context: RetryLogContext,
-  level: ModelGatewayLogLevel,
-  op: string,
-  durationMs: number,
-  error: Error | undefined,
-  extra: Readonly<Record<string, unknown>>,
-): ModelGatewayLogEvent {
-  return {
-    level,
-    category: "gateway",
-    op,
-    correlationId: context.correlationId,
-    durationMs,
-    errorKind: error === undefined ? undefined : logErrorKind(error),
-    extra: { modelId: context.modelId, ...extra },
-  };
 }
 
 // The budget ran out BEFORE an attempt was made. Preserves the original throw exactly (the last
@@ -237,13 +415,81 @@ function budgetExhaustedError(
   const error =
     lastError ?? new CancelledError("request timeout budget exhausted before provider call");
   sink.write(
-    retryEvent(context, "warn", "gateway.retry.budget-exhausted", durationMs, error, {
-      attempt,
-      hadPriorFailure: lastError !== undefined,
-      ...providerErrorDetail(error),
-    }),
+    activityLogEvent(
+      GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION,
+      {
+        level: "warn",
+        ...(context.correlationId === undefined ? {} : { correlationId: context.correlationId }),
+        durationMs,
+        errorKind: activityLogErrorKind(error),
+      },
+      {
+        ...loggedRetryModel(context),
+        attempt,
+        hadPriorFailure: lastError !== undefined,
+        ...providerErrorDetail(error),
+      },
+    ),
   );
   return error;
+}
+
+interface RetryFailureLogInput {
+  readonly sink: ModelGatewayLogSink;
+  readonly context: RetryLogContext;
+  readonly attempt: number;
+  readonly maxRetries: number;
+  readonly error: Error;
+  readonly durationMs: number;
+}
+
+function logRetryExhausted(input: RetryFailureLogInput, decision: RetryStop): void {
+  input.sink.write(
+    activityLogEvent(
+      GATEWAY_RETRY_EXHAUSTED_OPERATION,
+      {
+        level: "warn",
+        ...(input.context.correlationId === undefined
+          ? {}
+          : { correlationId: input.context.correlationId }),
+        durationMs: input.durationMs,
+        errorKind: activityLogErrorKind(input.error),
+      },
+      {
+        ...loggedRetryModel(input.context),
+        attempt: input.attempt,
+        maxRetries: input.maxRetries,
+        ...retryStopDetail(decision),
+        ...providerErrorDetail(input.error),
+      },
+    ),
+  );
+}
+
+function logRetryScheduled(
+  input: RetryFailureLogInput,
+  decision: Readonly<{ sleepMs: number }>,
+): void {
+  input.sink.write(
+    activityLogEvent(
+      GATEWAY_RETRY_SCHEDULED_OPERATION,
+      {
+        level: "warn",
+        ...(input.context.correlationId === undefined
+          ? {}
+          : { correlationId: input.context.correlationId }),
+        durationMs: input.durationMs,
+        errorKind: activityLogErrorKind(input.error),
+      },
+      {
+        ...loggedRetryModel(input.context),
+        attempt: input.attempt,
+        maxRetries: input.maxRetries,
+        delayMs: decision.sleepMs,
+        ...providerErrorDetail(input.error),
+      },
+    ),
+  );
 }
 
 export async function executeWithRetry<T>(
@@ -272,25 +518,19 @@ export async function executeWithRetry<T>(
       lastError = asError(error);
       const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
       const decision = retryDecision(lastError, attempt, config, remainingMs, random);
+      const failureLog: RetryFailureLogInput = {
+        sink,
+        context: logContext,
+        attempt,
+        maxRetries: config.maxRetries,
+        error: lastError,
+        durationMs: elapsed(),
+      };
       if (!("sleepMs" in decision)) {
-        sink.write(
-          retryEvent(logContext, "warn", "gateway.retry.exhausted", elapsed(), lastError, {
-            attempt,
-            maxRetries: config.maxRetries,
-            ...retryStopDetail(decision),
-            ...providerErrorDetail(lastError),
-          }),
-        );
+        logRetryExhausted(failureLog, decision);
         throw lastError;
       }
-      sink.write(
-        retryEvent(logContext, "warn", "gateway.retry.scheduled", elapsed(), lastError, {
-          attempt,
-          maxRetries: config.maxRetries,
-          delayMs: decision.sleepMs,
-          ...providerErrorDetail(lastError),
-        }),
-      );
+      logRetryScheduled(failureLog, decision);
       await sleepWithCancellation(clock, decision.sleepMs, signal);
     }
   }
@@ -348,31 +588,6 @@ export class CircuitBreaker {
     private readonly log: ModelGatewayLogSink = nullModelGatewayLogSink,
   ) {}
 
-  // Every state transition and every fail-closed rejection is a line. A breaker that opens and
-  // stays open is otherwise indistinguishable, from the outside, from a provider that has simply
-  // gone quiet: the caller sees CircuitOpenError either way and no attempt ever reaches the wire.
-  //
-  // `correlationId` is the CALL that provoked the line, when there is one. A breaker is shared by
-  // every caller of a model, so a refusal line without it says "some request was refused" — which,
-  // with N requests in flight against one endpoint, does not tell an operator which of them is the
-  // one that never came back. The state transitions reached from a completed call
-  // (`open`/`closed`) are facts about the MODEL rather than about one request, and carry the id of
-  // the call that tipped them purely as the attribution of the trigger.
-  private emit(
-    level: ModelGatewayLogLevel,
-    op: string,
-    extra: Readonly<Record<string, unknown>>,
-    correlationId: string | undefined,
-  ): void {
-    this.log.write({
-      level,
-      category: "gateway",
-      op,
-      correlationId,
-      extra: { modelId: this.modelId, ...extra },
-    });
-  }
-
   // A refused call is the highest-volume, lowest-information event this class produces: while the
   // breaker is open EVERY caller is refused, so a busy model under a provider outage turns one
   // fact — "the breaker for model X is open" — into thousands of identical `warn` lines, drowning
@@ -388,22 +603,28 @@ export class CircuitBreaker {
   // costs a predicate call and an increment, not an allocation, when nobody is reading `debug`.
   private noteRejection(
     state: CircuitState,
-    reason: string,
+    reason: "cooldown" | "probe-saturated",
     correlationId: string | undefined,
   ): void {
     this.rejectedSinceTransition += 1;
     const first = this.rejectedSinceTransition === 1;
     if (!first && !logLevelEnabled(this.log, "debug")) return;
-    this.emit(
-      first ? "warn" : "debug",
-      "gateway.circuit.rejected",
-      {
-        state,
-        reason,
-        probesInFlight: this.probesInFlight,
-        rejectedSinceTransition: this.rejectedSinceTransition,
-      },
-      correlationId,
+    this.log.write(
+      activityLogEvent(
+        GATEWAY_CIRCUIT_REJECTED_OPERATION,
+        {
+          level: first ? "warn" : "debug",
+          errorKind: "unavailable",
+          ...(correlationId === undefined ? {} : { correlationId }),
+        },
+        {
+          modelId: logModelId(this.modelId),
+          state,
+          reason,
+          probesInFlight: this.probesInFlight,
+          rejectedSinceTransition: this.rejectedSinceTransition,
+        },
+      ),
     );
   }
 
@@ -434,14 +655,19 @@ export class CircuitBreaker {
       this.state = "half-open";
       this.probesRemaining = this.config.halfOpenProbes;
       this.probesInFlight = 0;
-      this.emit(
-        "info",
-        "gateway.circuit.half-open",
-        {
-          probes: this.config.halfOpenProbes,
-          rejectedWhileOpen: this.takeRejectedCount(),
-        },
-        correlationId,
+      this.log.write(
+        activityLogEvent(
+          GATEWAY_CIRCUIT_HALF_OPEN_OPERATION,
+          {
+            level: "info",
+            ...(correlationId === undefined ? {} : { correlationId }),
+          },
+          {
+            modelId: logModelId(this.modelId),
+            probes: this.config.halfOpenProbes,
+            rejectedWhileOpen: this.takeRejectedCount(),
+          },
+        ),
       );
       return;
     }
@@ -500,16 +726,22 @@ export class CircuitBreaker {
     this.openedAt = this.clock.now();
     this.probesRemaining = 0;
     this.probesInFlight = 0;
-    this.emit(
-      "warn",
-      "gateway.circuit.opened",
-      {
-        previousState,
-        consecutiveFailures: this.consecutiveFailures,
-        cooldownMs: this.config.cooldownMs,
-        rejectedSincePreviousTransition: this.takeRejectedCount(),
-      },
-      correlationId,
+    this.log.write(
+      activityLogEvent(
+        GATEWAY_CIRCUIT_OPENED_OPERATION,
+        {
+          level: "warn",
+          errorKind: "unavailable",
+          ...(correlationId === undefined ? {} : { correlationId }),
+        },
+        {
+          modelId: logModelId(this.modelId),
+          previousState,
+          consecutiveFailures: this.consecutiveFailures,
+          cooldownMs: this.config.cooldownMs,
+          rejectedSincePreviousTransition: this.takeRejectedCount(),
+        },
+      ),
     );
   }
 
@@ -520,14 +752,19 @@ export class CircuitBreaker {
     this.openedAt = null;
     this.probesRemaining = 0;
     this.probesInFlight = 0;
-    this.emit(
-      "info",
-      "gateway.circuit.closed",
-      {
-        previousState,
-        rejectedSincePreviousTransition: this.takeRejectedCount(),
-      },
-      correlationId,
+    this.log.write(
+      activityLogEvent(
+        GATEWAY_CIRCUIT_CLOSED_OPERATION,
+        {
+          level: "info",
+          ...(correlationId === undefined ? {} : { correlationId }),
+        },
+        {
+          modelId: logModelId(this.modelId),
+          previousState,
+          rejectedSincePreviousTransition: this.takeRejectedCount(),
+        },
+      ),
     );
   }
 }

@@ -6,6 +6,7 @@ import {
   WINDOWS_LOCAL_VOLUME_TIMEOUT_MS,
   type WindowsLocalVolumeRunner,
 } from "./windows-local-volume.js";
+import { WindowsSystemBinaryMissingError } from "./windows-system-directory.js";
 
 const POWERSHELL = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
 interface Invocation {
@@ -142,16 +143,53 @@ describe("Windows local volume authority", () => {
       });
     }).toThrow("local volume");
 
-    expect(events).toEqual([
-      expect.objectContaining({
-        category: "security",
-        level: "error",
-        op: "security.windows-local-volume.refused",
-        errorKind: "Error",
-        extra: { phase: "verify" },
-      }),
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "security",
+      level: "error",
+      op: "security.windows-local-volume.refused",
+      errorKind: "unsafe-target",
+    });
+    expect(events[0]?.extra).toMatchObject({ failureKind: "Error", phase: "verify" });
     expect(JSON.stringify(events)).not.toContain(path);
     expect(JSON.stringify(events)).not.toContain("private failure detail");
   });
+
+  it.each([
+    {
+      expectedErrorKind: "invalid-request",
+      invoke: (events: SecurityLogEvent[]): void => {
+        assertWindowsLocalVolume("", {
+          platform: "win32",
+          securityLogSink: { write: (event): void => void events.push(event) },
+        });
+      },
+      phase: "input",
+    },
+    {
+      expectedErrorKind: "unavailable",
+      invoke: (events: SecurityLogEvent[]): void => {
+        assertWindowsLocalVolume(String.raw`D:\Keiko`, {
+          platform: "win32",
+          resolvePowerShell: () => {
+            throw new WindowsSystemBinaryMissingError();
+          },
+          securityLogSink: { write: (event): void => void events.push(event) },
+        });
+      },
+      phase: "resolve",
+    },
+  ] as const)(
+    "classifies $phase failures as $expectedErrorKind",
+    ({ expectedErrorKind, invoke, phase }) => {
+      const events: SecurityLogEvent[] = [];
+
+      expect(() => {
+        invoke(events);
+      }).toThrow();
+      expect(events).toHaveLength(1);
+      expect(events[0]?.errorKind).toBe(expectedErrorKind);
+      expect(events[0]?.extra).toMatchObject({ phase });
+    },
+  );
 });

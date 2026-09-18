@@ -6,18 +6,77 @@ import {
   isPrDescriptionApplicationStatus,
   type PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
+import { gitDeliveryActivityCode, gitDeliveryActivityErrorKind } from "./execution.js";
 import type {
   PrDescriptionReceiptRead,
   PrDescriptionReceiptStatusHooks,
   PrDescriptionReceiptStore,
 } from "./prDescriptionReceiptTypes.js";
 import { validDescriptionContext } from "./prDescriptionPreparation.js";
+
+const PR_DESCRIPTION_RECEIPT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.pr-description.receipt",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/prDescriptionReceiptStore",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["read", "record"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["storage-unavailable", "receipt-conflict"],
+    },
+    revision: { type: "integer", dataClass: "count", required: false },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["current", "partial", "fallback", "blocked", "stale", "failed"],
+    },
+    scopeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-pr-description-receipt"],
+  proofIds: ["git.pr-description.receipt"],
+  releaseImpact: "patch",
+});
 
 const PREFIX = "git-pr-description-";
 const MAX_BYTES = 8192;
@@ -189,14 +248,24 @@ function failure(
   error: unknown,
 ): PrDescriptionReceiptRead {
   const reason = error instanceof ReceiptFailure ? error.reason : "storage-unavailable";
-  (options.log ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.pr-description.receipt",
-    correlationId: context.correlationId,
-    level: "warn",
-    errorKind: "internal",
-    extra: { phase, reason, ...describeError(error) },
-  });
+  const detail = describeError(error);
+  const errorKind = gitDeliveryActivityErrorKind(reason);
+  const code = gitDeliveryActivityCode(detail.code);
+  (options.log ?? processServerLogSink()).write(
+    activityLogEvent(
+      PR_DESCRIPTION_RECEIPT_OPERATION,
+      { correlationId: context.correlationId, level: "warn", errorKind },
+      {
+        phase,
+        reason,
+        failureKind: errorKind,
+        errorClass: detail.errorClass,
+        ...(code === undefined ? {} : { code }),
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
+    ),
+  );
   return { ok: false, reason };
 }
 export function createPrDescriptionReceiptStore(
@@ -245,17 +314,18 @@ function recordReceipt(
     if (committed === undefined || !validDescriptionContext(context))
       throw new ReceiptFailure("receipt-conflict");
     const result = readResult(committed);
-    (options.log ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.pr-description.receipt",
-      correlationId: context.correlationId,
-      extra: {
-        phase: "record",
-        revision: committed.revision,
-        state: committed.status.state,
-        scopeDigest: scope.digest,
-      },
-    });
+    (options.log ?? processServerLogSink()).write(
+      activityLogEvent(
+        PR_DESCRIPTION_RECEIPT_OPERATION,
+        { correlationId: context.correlationId },
+        {
+          phase: "record",
+          revision: committed.revision,
+          state: committed.status.state,
+          scopeDigest: scope.digest,
+        },
+      ),
+    );
     return result;
   } catch (error) {
     return failure(options, context, "record", error);

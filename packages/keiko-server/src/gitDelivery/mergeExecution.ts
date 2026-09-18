@@ -31,6 +31,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { GIT_DELIVERY_RISK_CLASS_SEVERITY } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   evaluateGitMergeEffectivePolicy,
   runGitMerge,
   type GitMergeAdapter,
@@ -44,10 +48,54 @@ import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/gi
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { describeError } from "../diagnostics-log.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
+
+const READINESS_OBSERVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.readiness.observed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/mergeExecution.logReadinessObservation",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["observed", "unknown"],
+    },
+    providerError: { type: "boolean", dataClass: "closed-enum", required: true },
+    count: { type: "integer", dataClass: "count", required: true },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    gatewayRequestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "integer", dataClass: "duration", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-delivery-readiness-provider"],
+  proofIds: ["git.delivery.readiness.observed"],
+  releaseImpact: "patch",
+});
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
@@ -159,18 +207,46 @@ function logReadinessObservation(
   correlationId: string | undefined,
   failure: { readonly error: unknown } | undefined,
 ): void {
-  (seams.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.delivery.readiness.observed",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    ...(failure === undefined ? {} : { level: "warn", errorKind: "internal" }),
-    extra: {
-      state: result.providerError === true ? "unknown" : "observed",
-      providerError: result.providerError === true,
-      count: result.checks?.total ?? 0,
-      ...(failure === undefined ? {} : describeError(failure.error)),
-    },
-  });
+  const providerFailed = result.providerError === true;
+  let failureFields: Record<string, unknown> = {};
+  if (failure !== undefined) {
+    failureFields = readinessFailureFields(failure.error);
+  } else if (providerFailed) {
+    failureFields = { errorClass: "ProviderReadinessError", code: "provider-error" };
+  }
+  (seams.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      READINESS_OBSERVED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        ...(providerFailed
+          ? {
+              level: "warn",
+              errorKind: failure === undefined ? ("unavailable" as const) : ("internal" as const),
+            }
+          : {}),
+      },
+      {
+        state: result.providerError === true ? "unknown" : "observed",
+        providerError: result.providerError === true,
+        count: result.checks?.total ?? 0,
+        ...failureFields,
+      },
+    ),
+  );
+}
+
+function readinessFailureFields(error: unknown): Record<string, unknown> {
+  const detail = describeError(error);
+  return {
+    errorClass: detail.errorClass,
+    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(detail.gatewayRequestId === undefined ? {} : { gatewayRequestId: detail.gatewayRequestId }),
+    ...(detail.httpStatus === undefined ? {} : { httpStatus: detail.httpStatus }),
+    ...(detail.retryAfterMs === undefined ? {} : { retryAfterMs: detail.retryAfterMs }),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
 }
 
 /**

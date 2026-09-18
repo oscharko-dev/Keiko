@@ -197,9 +197,10 @@ describe("openMemoryDatabase corruption path", () => {
       level: "error",
       category: "diagnostic",
       op: "memory-vault.store.quarantined",
+      errorKind: "read-failed",
       extra: { reopened: true },
     });
-    expect(typeof events[0]?.errorKind).toBe("string");
+    expect(typeof events[0]?.extra?.failureKind).toBe("string");
   });
 
   it("never lets a throwing sink surface as an open failure", () => {
@@ -227,7 +228,7 @@ describe("openMemoryDatabase corruption path", () => {
 // through the real production entry point end to end, per AGENTS.md's fixture rule: a fixture that
 // never reaches the production entry point cannot detect a wiring gap between two functions that
 // both individually work.
-describe("openMemoryDatabase — store.encryption-migrated wiring", () => {
+describe("openMemoryDatabase — memory-vault.store.encryption-migrated wiring", () => {
   // Mirrors `encryption-at-rest.test.ts`'s `downgradeToLegacyPlaintext`, at the level this suite
   // already operates on (a raw `DatabaseSync`, not the public vault API): bring the DB to schema
   // head first, insert a row, downgrade its content back to plaintext, then roll the v3+ DDL back
@@ -258,7 +259,7 @@ describe("openMemoryDatabase — store.encryption-migrated wiring", () => {
     db.close();
   }
 
-  it("emits store.encryption-migrated when opening a legacy plaintext DB", () => {
+  it("emits memory-vault.store.encryption-migrated for a legacy plaintext DB", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     seedLegacyPlaintextDb(dbPath);
@@ -272,7 +273,9 @@ describe("openMemoryDatabase — store.encryption-migrated wiring", () => {
     const db = openMemoryDatabase(dbPath, TEST_CIPHER, sink);
     db.close();
 
-    const migrated = events.filter((event) => event.op === "store.encryption-migrated");
+    const migrated = events.filter(
+      (event) => event.op === "memory-vault.store.encryption-migrated",
+    );
     expect(migrated).toHaveLength(1);
     expect(migrated[0]).toMatchObject({ category: "diagnostic" });
     const extra = migrated[0]?.extra as { rowsMigrated?: unknown } | undefined;
@@ -280,7 +283,7 @@ describe("openMemoryDatabase — store.encryption-migrated wiring", () => {
     expect(extra?.rowsMigrated as number).toBeGreaterThanOrEqual(1);
   });
 
-  it("does not emit store.encryption-migrated for a fresh DB with nothing to migrate", () => {
+  it("does not emit the encryption migration op for a fresh DB with nothing to migrate", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     const events: MemoryVaultLogEvent[] = [];
@@ -292,7 +295,9 @@ describe("openMemoryDatabase — store.encryption-migrated wiring", () => {
 
     openMemoryDatabase(dbPath, TEST_CIPHER, sink).close();
 
-    expect(events.some((event) => event.op === "store.encryption-migrated")).toBe(false);
+    expect(events.some((event) => event.op === "memory-vault.store.encryption-migrated")).toBe(
+      false,
+    );
   });
 });
 

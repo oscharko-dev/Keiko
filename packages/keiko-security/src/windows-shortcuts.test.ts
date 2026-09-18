@@ -215,12 +215,18 @@ describe("definition read/write entry points on the win32 route", () => {
       ),
     ).toThrow(WindowsSystemBinaryMissingError);
     expect(spawnFn).not.toHaveBeenCalled();
-    expect(write).toHaveBeenCalledWith({
+    expect(write).toHaveBeenCalledOnce();
+    expect(vi.mocked(write).mock.calls[0]?.[0]).toEqual({
       level: "error",
       category: "diagnostic",
       op: "security.windows-shortcut.system-binary-missing",
-      errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
-      extra: { mode: "read" },
+      errorKind: "unavailable",
+      extra: {
+        failureKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+        mode: "read",
+        completeness: "complete",
+        loss: "none",
+      },
     });
   });
 
@@ -238,12 +244,18 @@ describe("definition read/write entry points on the win32 route", () => {
       });
     }).toThrow(WindowsSystemBinaryMissingError);
     expect(spawnFn).not.toHaveBeenCalled();
-    expect(write).toHaveBeenCalledWith({
+    expect(write).toHaveBeenCalledOnce();
+    expect(vi.mocked(write).mock.calls[0]?.[0]).toEqual({
       level: "error",
       category: "diagnostic",
       op: "security.windows-shortcut.system-binary-missing",
-      errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
-      extra: { mode: "create" },
+      errorKind: "unavailable",
+      extra: {
+        failureKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+        mode: "create",
+        completeness: "complete",
+        loss: "none",
+      },
     });
   });
 
@@ -284,6 +296,7 @@ describe("definition read/write entry points on the win32 route", () => {
         level: "warn",
         category: "security",
         op: "security.windows-shortcut.system-root-refused",
+        errorKind: "unsafe-target",
       }),
     );
 
@@ -322,9 +335,11 @@ describe("definition read/write entry points on the win32 route", () => {
         level: "warn",
         category: "security",
         op: "security.windows-shortcut.system-root-refused",
-        extra: { mode: "create" },
+        errorKind: "unsafe-target",
       }),
     );
+    const written = vi.mocked(sink.write).mock.calls[0]?.[0];
+    expect(written?.extra?.mode).toBe("create");
 
     // The pre-existing 5-arg call shape (every current external writer) omits the sink entirely;
     // the refusal must still throw rather than depend on a sink being wired.

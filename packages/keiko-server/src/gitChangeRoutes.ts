@@ -30,6 +30,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import { isGitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 import type { GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { createNodeGitPullRequestAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -40,6 +45,7 @@ import { errorBody } from "./routes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { observedGitRunner } from "./gitProcessActivity.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import type { ServerLogSink } from "./observability/server-log.js";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
 import {
@@ -61,6 +67,104 @@ import type { StoredRelationship } from "./store/relationships.js";
 import { resolveChatRepository } from "./gitChangeRepository.js";
 import { MAX_GIT_CHANGE_SCOPES } from "./store/chats.js";
 import { UiStoreError } from "./store/errors.js";
+
+const GIT_CHANGE_CHAT_CONNECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git-change.chat.connected",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeRoutes.logGitChangeConnected",
+  fields: {
+    fileCount: { type: "integer", dataClass: "count", required: true },
+    hasPullRequest: { type: "boolean", dataClass: "closed-enum", required: true },
+    relationshipId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    remoteDigestPrefix: { type: "string", dataClass: "digest", required: true, maxLength: 8 },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-change-chat-connect"],
+  proofIds: ["git-change.chat.connected.scope"],
+  releaseImpact: "patch",
+});
+
+const GIT_CHANGE_CHAT_REFRESHED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git-change.chat.refreshed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeRoutes.logGitChangeRefreshed",
+  fields: {
+    relationshipId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-change-chat-refresh"],
+  proofIds: ["git-change.chat.refreshed.scope"],
+  releaseImpact: "patch",
+});
+
+const GIT_CHANGE_CHAT_STALE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git-change.chat.stale",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeRoutes.logGitChangeStale",
+  fields: {
+    relationshipId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    remoteDigestPrefix: { type: "string", dataClass: "digest", required: true, maxLength: 8 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-change-chat-refresh"],
+  proofIds: ["git-change.chat.stale.scope"],
+  releaseImpact: "patch",
+});
+
+const GIT_CHANGE_CHAT_BLOCKED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git-change.chat.blocked",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeRoutes.logGitChangeBlocked",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "detached-head",
+        "unborn-head",
+        "missing-ref",
+        "identical-refs",
+        "no-pull-request",
+        "ambiguous-pull-request",
+        "reader-unauthorized",
+        "remote-unresolved",
+        "repository-unavailable",
+        "snapshot-unavailable",
+        "snapshot-failed",
+        "chat-project-unavailable",
+        "GIT_CHANGE_CHAT_NOT_FOUND",
+        "GIT_CHANGE_SCOPE_LIMIT_REACHED",
+        "GIT_CHANGE_SCOPE_PERSIST_FAILED",
+        "relationship-conflict",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-change-chat-connect", "git-change-chat-refresh"],
+  proofIds: ["git-change.chat.blocked.reason"],
+  releaseImpact: "patch",
+});
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -386,22 +490,98 @@ function buildScope(
 
 // ─── Activity log (AGENTS.md §8 Rule 1 — body-free) ────────────────────────────────────────────
 
-function logGitChangeEvent(
+type GitChangeBlockedLogReason =
+  | GitChangeBlockedReason
+  | "GIT_CHANGE_CHAT_NOT_FOUND"
+  | "GIT_CHANGE_SCOPE_LIMIT_REACHED"
+  | "GIT_CHANGE_SCOPE_PERSIST_FAILED"
+  | "relationship-conflict";
+
+function gitChangeActivity(deps: UiHandlerDeps): ServerLogSink {
+  return deps.activityLog ?? processServerLogSink();
+}
+
+const GIT_CHANGE_BLOCKED_ERROR_KINDS = {
+  "detached-head": "conflict",
+  "unborn-head": "conflict",
+  "missing-ref": "validation-failed",
+  "identical-refs": "validation-failed",
+  "no-pull-request": "validation-failed",
+  "ambiguous-pull-request": "conflict",
+  "reader-unauthorized": "authority-denied",
+  "remote-unresolved": "unavailable",
+  "repository-unavailable": "unavailable",
+  "snapshot-unavailable": "unavailable",
+  "snapshot-failed": "unavailable",
+  "chat-project-unavailable": "unavailable",
+  GIT_CHANGE_CHAT_NOT_FOUND: "validation-failed",
+  GIT_CHANGE_SCOPE_LIMIT_REACHED: "rate-limited",
+  GIT_CHANGE_SCOPE_PERSIST_FAILED: "unavailable",
+  "relationship-conflict": "conflict",
+} as const satisfies Record<GitChangeBlockedLogReason, ActivityLogErrorKind>;
+
+export function gitChangeBlockedErrorKind(reason: GitChangeBlockedLogReason): ActivityLogErrorKind {
+  return GIT_CHANGE_BLOCKED_ERROR_KINDS[reason];
+}
+
+function logGitChangeBlocked(
   deps: UiHandlerDeps,
-  op:
-    | "git-change.chat.connected"
-    | "git-change.chat.refreshed"
-    | "git-change.chat.stale"
-    | "git-change.chat.blocked",
   correlationId: string,
-  extra: Readonly<Record<string, unknown>>,
+  reason: GitChangeBlockedLogReason,
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op,
-    correlationId,
-    extra,
-  });
+  gitChangeActivity(deps).write(
+    activityLogEvent(
+      GIT_CHANGE_CHAT_BLOCKED_OPERATION,
+      { correlationId, errorKind: gitChangeBlockedErrorKind(reason) },
+      { reason },
+    ),
+  );
+}
+
+function logGitChangeConnected(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  scope: ChatGitChangeScope,
+): void {
+  gitChangeActivity(deps).write(
+    activityLogEvent(
+      GIT_CHANGE_CHAT_CONNECTED_OPERATION,
+      { correlationId },
+      {
+        relationshipId: scope.relationshipId,
+        remoteDigestPrefix: scope.remoteDigest.slice(0, 8),
+        fileCount: scope.fileCount,
+        hasPullRequest: scope.pullRequestNumber !== undefined,
+      },
+    ),
+  );
+}
+
+function logGitChangeRefreshed(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  relationshipId: string,
+): void {
+  gitChangeActivity(deps).write(
+    activityLogEvent(GIT_CHANGE_CHAT_REFRESHED_OPERATION, { correlationId }, { relationshipId }),
+  );
+}
+
+function logGitChangeStale(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  scope: ChatGitChangeScope,
+): void {
+  gitChangeActivity(deps).write(
+    activityLogEvent(
+      GIT_CHANGE_CHAT_STALE_OPERATION,
+      { correlationId },
+      {
+        relationshipId: scope.relationshipId,
+        remoteDigestPrefix: scope.remoteDigest.slice(0, 8),
+      },
+    ),
+  );
 }
 
 // ─── Connect handler ────────────────────────────────────────────────────────────────────────────
@@ -518,17 +698,12 @@ function persistConnectedScope(
         error.code === "NOT_FOUND"
           ? "GIT_CHANGE_CHAT_NOT_FOUND"
           : "GIT_CHANGE_SCOPE_PERSIST_FAILED";
-      logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, { reason: code });
+      logGitChangeBlocked(deps, correlationId, code);
       return errResult(code === "GIT_CHANGE_CHAT_NOT_FOUND" ? 404 : 409, code);
     }
     throw error;
   }
-  logGitChangeEvent(deps, "git-change.chat.connected", correlationId, {
-    relationshipId: scope.relationshipId,
-    remoteDigestPrefix: scope.remoteDigest.slice(0, 8),
-    fileCount: scope.fileCount,
-    hasPullRequest: scope.pullRequestNumber !== undefined,
-  });
+  logGitChangeConnected(deps, correlationId, scope);
   const result: GitChangeConnectResult = { status: "connected", scope };
   return { status: 200, body: result };
 }
@@ -608,9 +783,7 @@ export async function handleGitChangeConnect(
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   const chatResult = connectChat(deps, request.chatId);
   if (!chatResult.ok) {
-    logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, {
-      reason: chatResult.reason,
-    });
+    logGitChangeBlocked(deps, correlationId, chatResult.reason);
     return errResult(
       chatResult.reason === "GIT_CHANGE_CHAT_NOT_FOUND" ? 404 : 409,
       chatResult.reason,
@@ -649,7 +822,7 @@ function blockedConnectResult(
   correlationId: string,
   reason: GitChangeBlockedReason,
 ): RouteResult {
-  logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, { reason });
+  logGitChangeBlocked(deps, correlationId, reason);
   const result: GitChangeConnectResult = { status: "blocked", reason };
   return { status: 200, body: result };
 }
@@ -680,7 +853,7 @@ function blockedRefreshResult(
   correlationId: string,
   reason: GitChangeBlockedReason,
 ): RouteResult {
-  logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, { reason });
+  logGitChangeBlocked(deps, correlationId, reason);
   const result: GitChangeRefreshResult = { status: "blocked", reason };
   return { status: 200, body: result };
 }
@@ -724,15 +897,10 @@ function persistStaleScope(
   };
   const conflict = replaceStaleScope(deps, workspaceId, chatId, found, staleScope);
   if (conflict !== undefined) {
-    logGitChangeEvent(deps, "git-change.chat.blocked", correlationId, {
-      reason: "relationship-conflict",
-    });
+    logGitChangeBlocked(deps, correlationId, "relationship-conflict");
     return conflict;
   }
-  logGitChangeEvent(deps, "git-change.chat.stale", correlationId, {
-    relationshipId: staleScope.relationshipId,
-    remoteDigestPrefix: staleScope.remoteDigest.slice(0, 8),
-  });
+  logGitChangeStale(deps, correlationId, staleScope);
   const result: GitChangeRefreshResult = { status: "stale", scope: staleScope };
   return { status: 200, body: result };
 }
@@ -779,9 +947,7 @@ export async function handleGitChangeRefresh(
   if (typeof captured === "string") return blockedRefreshResult(deps, correlationId, captured);
 
   if (isCurrentComparison(captured, found)) {
-    logGitChangeEvent(deps, "git-change.chat.refreshed", correlationId, {
-      relationshipId: found.scope.relationshipId,
-    });
+    logGitChangeRefreshed(deps, correlationId, found.scope.relationshipId);
     const result: GitChangeRefreshResult = { status: "current", scope: found.scope };
     return { status: 200, body: result };
   }

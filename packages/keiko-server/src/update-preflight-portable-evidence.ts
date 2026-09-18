@@ -14,7 +14,12 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayEgressConfig } from "./deps.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  recordPortableFetchFailure,
+  recordPortableRedirectRefusal,
+  recordReleaseTrustFailure as writeReleaseTrustFailure,
+  recordReleaseTrustSuccess as writeReleaseTrustSuccess,
+} from "./update-preflight-activity.js";
 import {
   type GitHubAsset,
   PortableAssetRedirectError,
@@ -355,27 +360,27 @@ async function readAssetSafely(
   deadlineAt: number,
   target: UpdatePortableTarget,
   assetKind: "manifest" | "checksum",
+  correlationId: string | undefined,
 ): Promise<TextAsset | undefined> {
   try {
     return await fetchTextAsset(deps, asset, maxBytes, deadlineAt);
   } catch (error) {
     if (error instanceof PortableAssetRedirectError) {
-      deps.activityLog?.write({
-        category: "security",
-        correlationId: UNKNOWN_CORRELATION_ID,
-        level: "warn",
-        op: "update.portable-asset.redirect-refused",
-        extra: { assetKind, reason: error.reason, target },
-      });
+      recordPortableRedirectRefusal(
+        deps.activityLog,
+        target,
+        assetKind,
+        error.reason,
+        correlationId,
+      );
     } else {
-      deps.activityLog?.write({
-        category: "diagnostic",
-        correlationId: UNKNOWN_CORRELATION_ID,
-        errorKind: "PORTABLE_FETCH_FAILURE",
-        level: "warn",
-        op: "update.portable-fetch.failed",
-        extra: { assetKind, reason: portableFetchFailureReason(error), target },
-      });
+      recordPortableFetchFailure(
+        deps.activityLog,
+        target,
+        assetKind,
+        portableFetchFailureReason(error),
+        correlationId,
+      );
     }
     return undefined;
   }
@@ -386,8 +391,17 @@ function readManifestAsset(
   asset: GitHubAsset,
   deadlineAt: number,
   target: UpdatePortableTarget,
+  correlationId: string | undefined,
 ): Promise<TextAsset | undefined> {
-  return readAssetSafely(deps, asset, MAX_PORTABLE_MANIFEST_BYTES, deadlineAt, target, "manifest");
+  return readAssetSafely(
+    deps,
+    asset,
+    MAX_PORTABLE_MANIFEST_BYTES,
+    deadlineAt,
+    target,
+    "manifest",
+    correlationId,
+  );
 }
 
 function readChecksumAsset(
@@ -395,14 +409,24 @@ function readChecksumAsset(
   asset: GitHubAsset,
   deadlineAt: number,
   target: UpdatePortableTarget,
+  correlationId: string | undefined,
 ): Promise<TextAsset | undefined> {
-  return readAssetSafely(deps, asset, MAX_CHECKSUM_BYTES, deadlineAt, target, "checksum");
+  return readAssetSafely(
+    deps,
+    asset,
+    MAX_CHECKSUM_BYTES,
+    deadlineAt,
+    target,
+    "checksum",
+    correlationId,
+  );
 }
 
 export async function resolvePortableAsset(
   deps: UiHandlerDeps,
   release: PortableRelease,
   target: UpdatePortableTarget,
+  correlationId?: string,
 ): Promise<PortableAssetResolution> {
   if (!firstClassArchiveSetComplete(release.assets)) {
     return missingResolution(
@@ -411,13 +435,14 @@ export async function resolvePortableAsset(
       "portable-asset-missing",
     );
   }
-  return resolveTargetPortableAsset(deps, release, target);
+  return resolveTargetPortableAsset(deps, release, target, correlationId);
 }
 
 async function resolveTargetPortableAsset(
   deps: UiHandlerDeps,
   release: PortableRelease,
   target: UpdatePortableTarget,
+  correlationId: string | undefined,
 ): Promise<PortableAssetResolution> {
   const archive = assetByName(release.assets, requiredAssetName(target));
   const manifestAsset = assetByName(release.assets, manifestAssetName(target));
@@ -443,7 +468,15 @@ async function resolveTargetPortableAsset(
       "portable-checksum-missing",
     );
   }
-  return resolvePortableEvidence(deps, release, target, archive, manifestAsset, checksumAsset);
+  return resolvePortableEvidence(
+    deps,
+    release,
+    target,
+    archive,
+    manifestAsset,
+    checksumAsset,
+    correlationId,
+  );
 }
 
 async function resolvePortableEvidence(
@@ -453,13 +486,20 @@ async function resolvePortableEvidence(
   archive: GitHubAsset,
   manifestAsset: GitHubAsset,
   checksumAsset: GitHubAsset,
+  correlationId: string | undefined,
 ): Promise<PortableAssetResolution> {
   const deadlineAt = Date.now() + PORTABLE_EVIDENCE_DEADLINE_MS;
-  const manifestText = await readManifestAsset(deps, manifestAsset, deadlineAt, target);
+  const manifestText = await readManifestAsset(
+    deps,
+    manifestAsset,
+    deadlineAt,
+    target,
+    correlationId,
+  );
   const manifest = manifestText === undefined ? undefined : manifestRecord(manifestText.text);
   const validated = validateManifestSafely(deps, manifest, release, archive, target);
   if (validated instanceof PortableSigningVerificationError) {
-    recordReleaseTrustFailure(deps, target, validated.trustReason, manifest);
+    recordReleaseTrustFailure(deps, target, validated.trustReason, correlationId);
     return signingResolution(target);
   }
   if (validated instanceof PortableSidecarVerificationError) {
@@ -468,8 +508,8 @@ async function resolvePortableEvidence(
   if (manifestText === undefined || manifest === undefined || validated === undefined) {
     return malformedResolution(target, "The matching portable manifest is malformed.");
   }
-  recordReleaseTrustSuccess(deps, target, validated.releaseTrust);
-  const checksum = await readChecksumAsset(deps, checksumAsset, deadlineAt, target);
+  recordReleaseTrustSuccess(deps, target, validated.releaseTrust, correlationId);
+  const checksum = await readChecksumAsset(deps, checksumAsset, deadlineAt, target, correlationId);
   if (
     checksum === undefined ||
     !checksumIncludesArchive(checksum.text, validated.archiveSha256, archive.name)
@@ -494,30 +534,19 @@ function recordReleaseTrustFailure(
   deps: UiHandlerDeps,
   target: UpdatePortableTarget,
   reason: PortableReleaseTrustFailureReason | "missing",
-  manifest: Record<string, unknown> | undefined,
+  correlationId: string | undefined,
 ): void {
-  if (manifest?.releaseTrust === undefined) return;
-  deps.activityLog?.write({
-    category: "security",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    level: "warn",
-    op: "update.release-trust.verify",
-    extra: { reason, status: "failed", target },
-  });
+  writeReleaseTrustFailure(deps.activityLog, target, reason, correlationId);
 }
 
 function recordReleaseTrustSuccess(
   deps: UiHandlerDeps,
   target: UpdatePortableTarget,
   trust: ValidatedPortableManifest["releaseTrust"],
+  correlationId: string | undefined,
 ): void {
   if (trust === undefined) return;
-  deps.activityLog?.write({
-    category: "security",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    op: "update.release-trust.verify",
-    extra: { ...trust, status: "succeeded", target },
-  });
+  writeReleaseTrustSuccess(deps.activityLog, target, trust, correlationId);
 }
 
 function validateManifestSafely(

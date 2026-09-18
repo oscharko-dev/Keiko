@@ -597,12 +597,18 @@ describe("approved skill discovery through the production ports (#3417)", () => 
         op: "coding-runtime.skill-discovery",
         correlationId: "run-2387",
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId: "run-2387",
           catalogRevision: 1,
           catalogDigest: catalog.digest(),
           approvedCount: 3,
           listedCount: 1,
-          unavailableByReason: { "handler-unavailable": 1 },
+          disabledCount: 0,
+          incompatibleCount: 0,
+          handlerUnavailableCount: 1,
+          authorityDeniedCount: 0,
+          budgetExhaustedCount: 0,
         },
       }),
     ]);
@@ -644,7 +650,7 @@ describe("approved skill discovery through the production ports (#3417)", () => 
     expect(listing(result).skills).toEqual([]);
     expect(events[0]?.extra).toMatchObject({
       listedCount: 0,
-      unavailableByReason: { [reason]: 1 },
+      [reason === "authority-denied" ? "authorityDeniedCount" : "budgetExhaustedCount"]: 1,
     });
   });
 

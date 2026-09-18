@@ -20,6 +20,11 @@ import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@osc
 import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { unpairedCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -37,6 +42,120 @@ import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
+
+type RuntimeMutationRefusalReason = CodingWorkbenchRuntimeFailureCode | "payload-too-large";
+
+// Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
+// route it backs so a log line names exactly which mutation was refused.
+const RUNTIME_MUTATION_OPERATIONS = [
+  "start",
+  "approval",
+  "stop",
+  "takeover",
+  "retry",
+  "recovery-ack",
+  "pause",
+  "resume",
+  "research-revoke",
+  "follow-up",
+  "answer",
+  "reject",
+] as const;
+
+type RuntimeMutationOperationName = (typeof RUNTIME_MUTATION_OPERATIONS)[number];
+
+const RUNTIME_REFUSAL_REASONS = [
+  "runtime-unavailable",
+  "active-run-conflict",
+  "invalid-intent",
+  "approval-activation-failed",
+  "authority-resolution-failed",
+  "authority-expired",
+  "authority-replayed",
+  "task-drift",
+  "workspace-drift",
+  "project-drift",
+  "branch-drift",
+  "scope-drift",
+  "budget-drift",
+  "authority-budget-exceeded",
+  "source-drift",
+  "runtime-failed",
+  "revoked",
+  "recovery-required",
+  "replay-cap-exhausted",
+  "issue-context-unavailable",
+  "question-answer-rejected",
+  "delivery-not-evidenced",
+  "payload-too-large",
+] as const satisfies readonly RuntimeMutationRefusalReason[];
+
+const CODING_RUNTIME_OPERATION_REFUSED_BASE = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.operation.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeRoutes.logRuntimeOperationRefusal",
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-operation-refusal"],
+  proofIds: ["coding-runtime.operation-refused.emitted-line"],
+  releaseImpact: "patch",
+} as const;
+
+const CODING_RUNTIME_OPERATION_REFUSED_FIELDS = {
+  operation: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: RUNTIME_MUTATION_OPERATIONS,
+  },
+  reason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: RUNTIME_REFUSAL_REASONS,
+  },
+  runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+} as const;
+
+const CODING_RUNTIME_OPERATION_REFUSED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_OPERATION_REFUSED_BASE,
+  fields: {
+    ...CODING_RUNTIME_OPERATION_REFUSED_FIELDS,
+  },
+});
+
+const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
+  Readonly<Record<RuntimeMutationRefusalReason, ActivityLogErrorKind>>
+> = {
+  "runtime-unavailable": "unavailable",
+  "issue-context-unavailable": "unavailable",
+  "active-run-conflict": "conflict",
+  "recovery-required": "conflict",
+  "task-drift": "conflict",
+  "workspace-drift": "conflict",
+  "project-drift": "conflict",
+  "branch-drift": "conflict",
+  "scope-drift": "conflict",
+  "budget-drift": "conflict",
+  "source-drift": "conflict",
+  "replay-cap-exhausted": "rate-limited",
+  "authority-budget-exceeded": "rate-limited",
+  "authority-resolution-failed": "authority-denied",
+  "authority-expired": "authority-denied",
+  "authority-replayed": "authority-denied",
+  revoked: "authority-denied",
+  "invalid-intent": "invalid-request",
+  "question-answer-rejected": "invalid-request",
+  "payload-too-large": "invalid-request",
+};
+
+function runtimeRefusalErrorKind(reason: RuntimeMutationRefusalReason): ActivityLogErrorKind {
+  return RUNTIME_REFUSAL_ERROR_KINDS[reason] ?? "internal";
+}
 
 class BodyTooLargeError extends Error {}
 
@@ -100,22 +219,6 @@ function notFound(correlationId?: string): RouteResult {
   };
 }
 
-// Every state-changing coding-runtime route the `mutation()` funnel below serves. Named after the
-// route it backs so a log line names exactly which mutation was refused.
-type RuntimeMutationOperationName =
-  | "start"
-  | "approval"
-  | "stop"
-  | "takeover"
-  | "retry"
-  | "recovery-ack"
-  | "pause"
-  | "resume"
-  | "research-revoke"
-  | "follow-up"
-  | "answer"
-  | "reject";
-
 // AGENTS.md §8 rule 1 / epic #3384 defect B: a refused runtime operation (a malformed body, a
 // replay-cap exhaustion, a question answer the runtime rejected, ...) used to return its 400/403
 // with NOTHING in the activity log -- an operator-visible refusal an agent replaying the log could
@@ -127,15 +230,29 @@ function logRuntimeOperationRefusal(
   correlationId: string | undefined,
   operation: RuntimeMutationOperationName,
   runId: string | undefined,
-  reason: CodingWorkbenchRuntimeFailureCode,
+  reason: RuntimeMutationRefusalReason,
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    level: "warn",
-    category: "process",
-    op: "coding-runtime.operation.refused",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: { operation, reason, ...(runId === undefined ? {} : { runId }) },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_OPERATION_REFUSED_OPERATION,
+      {
+        level: "warn",
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        errorKind: runtimeRefusalErrorKind(reason),
+      },
+      { operation, reason, ...(runId === undefined ? {} : { runId }) },
+    ),
+  );
+}
+
+function logMutationRefusal(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  operation: RuntimeMutationOperationName,
+  runId: string | undefined,
+  reason: RuntimeMutationRefusalReason,
+): void {
+  logRuntimeOperationRefusal(deps, ctx.correlationId, operation, runId, reason);
 }
 
 function readBody(req: IncomingMessage): Promise<unknown> {
@@ -181,15 +298,18 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 async function withBody(
   work: () => Promise<RouteResult>,
   correlationId?: string,
+  onTooLarge?: () => void,
 ): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
-    if (error instanceof BodyTooLargeError)
+    if (error instanceof BodyTooLargeError) {
+      onTooLarge?.();
       return {
         status: 413,
         body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.", correlationId),
       };
+    }
     throw error;
   }
 }
@@ -258,48 +378,47 @@ async function mutation(
   if (denied !== undefined) {
     // The request is refused before a per-run identifier can be resolved. Keep the evidence
     // content-free by logging only the closed operation and reason, never the caller-supplied id.
-    logRuntimeOperationRefusal(
-      deps,
-      ctx.correlationId,
-      operationName,
-      undefined,
-      "authority-resolution-failed",
-    );
+    logMutationRefusal(deps, ctx, operationName, undefined, "authority-resolution-failed");
     return denied;
   }
   const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
+  if (isRouteResult(required)) {
+    logMutationRefusal(deps, ctx, operationName, runId, "runtime-unavailable");
+    return required;
+  }
   if (runId !== undefined && !required.orchestrator.getSnapshot(runId))
     return notFound(ctx.correlationId);
-  return withBody(async () => {
-    const body = await readBody(ctx.req);
-    if (body === undefined) {
-      logRuntimeOperationRefusal(deps, ctx.correlationId, operationName, runId, "invalid-intent");
-      return failureResult("invalid-intent", ctx.correlationId);
-    }
-    const result = await invoke(required.orchestrator, body, ctx.correlationId);
-    if (result.ok) return { status: 200, body: result.snapshot };
-    // The refusal line names the run the refusal happened under, so this request-scoped line joins
-    // the run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId). The
-    // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
-    // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
-    // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
-    logRuntimeOperationRefusal(
-      deps,
-      ctx.correlationId,
-      operationName,
-      result.runId ?? runId,
-      result.failureCode,
-    );
-    return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
-  }, ctx.correlationId);
+  return withBody(
+    async () => {
+      const body = await readBody(ctx.req);
+      if (body === undefined) {
+        logMutationRefusal(deps, ctx, operationName, runId, "invalid-intent");
+        return failureResult("invalid-intent", ctx.correlationId);
+      }
+      const result = await invoke(required.orchestrator, body, ctx.correlationId);
+      if (result.ok) return { status: 200, body: result.snapshot };
+      // The refusal line names the run the refusal happened under, so this request-scoped line joins
+      // the run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId). The
+      // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
+      // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
+      // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
+      logMutationRefusal(deps, ctx, operationName, result.runId ?? runId, result.failureCode);
+      return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
+    },
+    ctx.correlationId,
+    () => {
+      logMutationRefusal(deps, ctx, operationName, runId, "payload-too-large");
+    },
+  );
 }
 
 export function handleCreateCodingRuntimeRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return mutation(ctx, deps, undefined, "start", (runtime, body) => runtime.start(body));
+  return mutation(ctx, deps, undefined, "start", (runtime, body, correlationId) =>
+    runtime.start(body, correlationId),
+  );
 }
 
 export function handleCodingRuntimeStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -430,7 +549,9 @@ export function handleCodingRuntimeRetry(
   const runId = ctx.params.runId;
   return runId === undefined
     ? Promise.resolve(notFound(ctx.correlationId))
-    : mutation(ctx, deps, runId, "retry", (runtime, body) => runtime.retry(runId, body));
+    : mutation(ctx, deps, runId, "retry", (runtime, body, correlationId) =>
+        runtime.retry(runId, body, correlationId),
+      );
 }
 export function handleCodingRuntimeRecoveryAcknowledgement(
   ctx: RouteContext,

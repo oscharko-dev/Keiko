@@ -263,7 +263,7 @@ describe("workspace watch authority revocation logging (#3347)", () => {
       expect(revokedEvent).toBeDefined();
       expect(revokedEvent?.category).toBe("security");
       expect(revokedEvent?.correlationId).toBe(correlationId);
-      expect(revokedEvent?.errorKind).toBe("WATCH_AUTHORITY_REVOKED");
+      expect(revokedEvent?.errorKind).toBe("authority-denied");
       expect(JSON.stringify(revokedEvent)).not.toContain(revocableRoot);
     } finally {
       await closeServer(built.server);
@@ -298,7 +298,7 @@ describe("workspace watch authority revocation logging (#3347)", () => {
       expect(deniedEvent).toBeDefined();
       expect(deniedEvent?.category).toBe("security");
       expect(deniedEvent?.correlationId).toBe(correlationId);
-      expect(deniedEvent?.errorKind).toBe("WATCH_AUTHORITY_REVOKED");
+      expect(deniedEvent?.errorKind).toBe("authority-denied");
       expect(JSON.stringify(deniedEvent)).not.toContain(deniedRoot);
     } finally {
       await closeServer(built.server);

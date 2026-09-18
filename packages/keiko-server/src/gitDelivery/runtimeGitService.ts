@@ -5,6 +5,10 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import {
   readGitStageCandidate,
@@ -24,7 +28,11 @@ import {
   type GitDeliveryApprovalBinding,
   type GitDeliveryIssuedApproval,
 } from "./approvalStore.js";
-import { executeGovernedMutation } from "./execution.js";
+import {
+  executeGovernedMutation,
+  gitDeliveryActivityErrorKind,
+  gitDeliveryActivityFailureKind,
+} from "./execution.js";
 import {
   admitStageSelection,
   reviewStageSelection,
@@ -42,6 +50,147 @@ import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacade
 import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { errorKindOf } from "../observability/server-log.js";
+
+const RUNTIME_GIT_STATE_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: [
+    "issued",
+    "consumed",
+    "completed",
+    "refused",
+    "withheld",
+    "failed",
+    "ready",
+    "approval-required",
+    "succeeded",
+    "blocked",
+    "drift",
+    "recovery-required",
+  ],
+} as const;
+
+const RUNTIME_GIT_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [
+    "none",
+    "approval-required",
+    "approval-invalid",
+    "authority-denied",
+    "scope-denied",
+    "policy-block",
+    "preflight-block",
+    "unsupported-transformation",
+    "selection-unreviewed",
+    "buffers-dirty",
+    "proposal-limit",
+    "candidate-drift",
+    "execution-failed",
+    "execution-uncertain",
+    "authority-revoked",
+    "proposal-unknown",
+    "signal-aborted",
+    "run-not-live",
+    "guard-rejected",
+    "mode-unavailable",
+  ],
+} as const;
+
+const RUNTIME_GIT_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "safe-platform-class",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const RUNTIME_GIT_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.runtime-action",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/runtimeGitService.RuntimeGitService.log",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["approval", "status", "diff", "stage-propose", "stage-execute"],
+    },
+    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    state: RUNTIME_GIT_STATE_FIELD,
+    reason: RUNTIME_GIT_REASON_FIELD,
+    proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    pathCount: { type: "integer", dataClass: "count", required: false },
+    fileCount: { type: "integer", dataClass: "count", required: false },
+    truncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: RUNTIME_GIT_FRAMES_FIELD,
+    causeChain: RUNTIME_GIT_CAUSE_CHAIN_FIELD,
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-runtime-action"],
+  proofIds: ["git.runtime-action"],
+  releaseImpact: "patch",
+});
+
+type RuntimeGitPhase = "approval" | "status" | "diff" | "stage-propose" | "stage-execute";
+interface RuntimeGitActivityFields {
+  readonly state:
+    | CodingRuntimeGitStage["status"]
+    | "issued"
+    | "consumed"
+    | "completed"
+    | "refused"
+    | "withheld"
+    | "failed";
+  readonly reason?:
+    CodingRuntimeGitStage["reason"] | RuntimeGitRefusalReason | RuntimeGitRefusalCondition;
+  readonly proposalId?: string;
+  readonly pathCount?: number;
+  readonly fileCount?: number;
+  readonly truncated?: boolean;
+  readonly failureKind?: string;
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+function runtimeGitLogOptions(
+  context: VerifiedCommitRunContext | undefined,
+  extra: RuntimeGitActivityFields,
+  outcome: "ok" | "refused" | "failed",
+): {
+  readonly correlationId: string;
+  readonly level?: "warn";
+  readonly errorKind?: ReturnType<typeof gitDeliveryActivityErrorKind>;
+} {
+  return {
+    correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
+    ...(outcome === "ok" ? {} : { level: "warn" as const }),
+    ...(outcome === "failed"
+      ? { errorKind: gitDeliveryActivityErrorKind(extra.failureKind ?? extra.reason ?? outcome) }
+      : {}),
+  };
+}
 
 export interface RuntimeGitProposal {
   readonly proposalId: string;
@@ -133,7 +282,7 @@ function buildStageProposal(
   };
 }
 
-function resultEvidence(result: RuntimeGitOutcome): Readonly<Record<string, unknown>> {
+function resultEvidence(result: RuntimeGitOutcome): RuntimeGitActivityFields {
   if (result.kind === "refused") return { state: "refused", reason: result.reason };
   if (result.kind === "stage")
     return {
@@ -152,7 +301,7 @@ function resultEvidence(result: RuntimeGitOutcome): Readonly<Record<string, unkn
 // so the failure line can name it body-free next to `describeError`'s class and frames.
 function thrownGitCode(error: unknown): { readonly code?: string } {
   const message = error instanceof Error ? error.message : undefined;
-  return message !== undefined && /^[a-z]+(?:-[a-z]+){1,8}$/u.test(message)
+  return message !== undefined && message.length <= 64 && /^[a-z]+(?:-[a-z]+){1,8}$/u.test(message)
     ? { code: message }
     : {};
 }
@@ -222,7 +371,8 @@ export class RuntimeGitService {
     signal?: AbortSignal,
   ): Promise<RuntimeGitOutcome> {
     const request = snapshotRuntimeGitRequest(input);
-    const phase = request.operation === "stage" ? `stage-${request.phase}` : request.operation;
+    const phase: RuntimeGitPhase =
+      request.operation === "stage" ? `stage-${request.phase}` : request.operation;
     const context = this.guardedContext(guard, signal, phase);
     if (context === undefined) return REFUSED_AUTHORITY;
     try {
@@ -249,7 +399,7 @@ export class RuntimeGitService {
   // refused request; every other operation has no result to fail and is refused as such.
   private failed(
     context: VerifiedCommitRunContext,
-    phase: string,
+    phase: RuntimeGitPhase,
     error: unknown,
   ): RuntimeGitOutcome {
     if (context.signal?.aborted === true || !context.stillAuthorized()) {
@@ -257,10 +407,19 @@ export class RuntimeGitService {
       return REFUSED_AUTHORITY;
     }
     const cause = error instanceof StageEffectFailure ? error.cause : error;
+    const failureKind = gitDeliveryActivityFailureKind(errorKindOf(cause));
+    const detail = describeError(cause);
     this.log(
       context,
       phase,
-      { state: "failed", ...describeError(cause), ...thrownGitCode(cause) },
+      {
+        state: "failed",
+        failureKind,
+        errorClass: detail.errorClass,
+        ...thrownGitCode(cause),
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
       "failed",
     );
     return error instanceof StageEffectFailure
@@ -270,7 +429,7 @@ export class RuntimeGitService {
   private guardedContext(
     guard: CodingToolMutationGuard,
     signal: AbortSignal | undefined,
-    phase: string,
+    phase: RuntimeGitPhase,
   ): VerifiedCommitRunContext | undefined {
     const context = this.options.context();
     const condition = this.refusalCondition(context, guard, signal);
@@ -492,17 +651,16 @@ export class RuntimeGitService {
   // no live run to borrow a correlation id from, the line rides on the one sanctioned unknown id.
   private log(
     context: VerifiedCommitRunContext | undefined,
-    phase: string,
-    extra: Readonly<Record<string, unknown>>,
+    phase: RuntimeGitPhase,
+    extra: RuntimeGitActivityFields,
     outcome: "ok" | "refused" | "failed" = "ok",
   ): void {
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.runtime-action",
-      correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
-      ...(outcome === "ok" ? {} : { level: "warn" as const }),
-      ...(outcome === "failed" ? { errorKind: "internal" as const } : {}),
-      extra: { phase, ...(context === undefined ? {} : { runId: context.runId }), ...extra },
-    });
+    (this.options.execution?.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(RUNTIME_GIT_OPERATION, runtimeGitLogOptions(context, extra, outcome), {
+        phase,
+        ...(context === undefined ? {} : { runId: context.runId }),
+        ...extra,
+      }),
+    );
   }
 }

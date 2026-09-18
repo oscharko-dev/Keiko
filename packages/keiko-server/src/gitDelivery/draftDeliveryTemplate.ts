@@ -1,6 +1,10 @@
 import { join } from "node:path";
 import type { CodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts";
 import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/issue-closing-directive";
 import {
   containsPrDescriptionMarker,
@@ -32,6 +36,74 @@ import {
   containsDraftChecksMarker,
   frameDraftChecksSection,
 } from "./draftDeliveryChecks.js";
+
+const DRAFT_TEMPLATE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-template",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/draftDeliveryTemplate.resolveDraftDeliveryTemplate",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready", "blocked"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "invalid-issue-binding",
+        "title-invalid",
+        "issue-directive",
+        "managed-region-marker",
+        "template-ambiguous",
+        "template-too-large",
+        "template-unreadable",
+        "template-unsafe",
+        "template-unsupported",
+        "template-discovery-limit",
+      ],
+    },
+    titleDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    bodyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    templateBytes: { type: "integer", dataClass: "count", required: false },
+    templateDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    relatedIssueCount: { type: "integer", dataClass: "count", required: false },
+    checksState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", "listed", "unavailable"],
+    },
+    checkRowCount: { type: "integer", dataClass: "count", required: false },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-draft-template"],
+  proofIds: ["git.draft-template"],
+  releaseImpact: "patch",
+});
 
 // Three fixed GitHub default locations, no recursive enumeration or model-selected template.
 // One sentinel entry makes discovery overflow explicit instead of selecting an arbitrary prefix.
@@ -266,39 +338,61 @@ function failureReason(error: unknown): DraftDeliveryTemplateFailure {
   return "template-unreadable";
 }
 
-/** Pure local preparation only. The delivery owner must bind/recheck this exact payload at dispatch. */
-export function resolveDraftDeliveryTemplate(
+function logReadyTemplate(
   input: DraftDeliveryTemplateInput,
-): DraftDeliveryTemplateResult {
-  const activityLog = input.activityLog ?? processServerLogSink();
-  try {
-    const result = compose(input);
-    activityLog.write({
-      category: "process",
-      op: "git.draft-template",
-      correlationId: input.correlationId,
-      extra: {
+  result: Extract<DraftDeliveryTemplateResult, { status: "ready" }>,
+): void {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DRAFT_TEMPLATE_OPERATION,
+      { correlationId: input.correlationId },
+      {
         state: result.status,
         titleDigest: result.titleDigest,
         bodyDigest: result.bodyDigest,
         templateBytes: result.templateBytes,
-        templateDigest: result.templateDigest,
+        ...(result.templateDigest === undefined ? {} : { templateDigest: result.templateDigest }),
         relatedIssueCount: input.relatedIssueNumbers?.length ?? 0,
         checksState: input.verificationChecks?.status ?? "absent",
         checkRowCount: result.checkRowCount ?? 0,
       },
-    });
+    ),
+  );
+}
+
+function logBlockedTemplate(input: DraftDeliveryTemplateInput, error: unknown): void {
+  const detail = describeError(error);
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DRAFT_TEMPLATE_OPERATION,
+      {
+        correlationId: input.correlationId,
+        level: "warn",
+        errorKind: error instanceof TemplateResolutionError ? "validation-failed" : "internal",
+      },
+      {
+        state: "blocked",
+        reason: failureReason(error),
+        errorClass: detail.errorClass,
+        ...(detail.code === undefined ? {} : { code: detail.code }),
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
+    ),
+  );
+}
+
+/** Pure local preparation only. The delivery owner must bind/recheck this exact payload at dispatch. */
+export function resolveDraftDeliveryTemplate(
+  input: DraftDeliveryTemplateInput,
+): DraftDeliveryTemplateResult {
+  try {
+    const result = compose(input);
+    logReadyTemplate(input, result);
     return result;
   } catch (error) {
     const reason = failureReason(error);
-    activityLog.write({
-      category: "process",
-      op: "git.draft-template",
-      correlationId: input.correlationId,
-      level: "warn",
-      errorKind: error instanceof TemplateResolutionError ? "validation" : "internal",
-      extra: { state: "blocked", reason, ...describeError(error) },
-    });
+    logBlockedTemplate(input, error);
     return { status: "blocked", reason };
   }
 }

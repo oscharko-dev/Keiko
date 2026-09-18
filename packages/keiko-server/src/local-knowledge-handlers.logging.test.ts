@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   addSourceToCapsule,
   openKnowledgeStore,
@@ -178,8 +179,15 @@ async function createIndexableCapsule(
   return capsuleId;
 }
 
-async function startIndexing(deps: UiHandlerDeps, capsuleId: string): Promise<RouteResult> {
-  return handleStartLocalKnowledgeCapsuleIndexing({ ...ctx("POST"), params: { capsuleId } }, deps);
+async function startIndexing(
+  deps: UiHandlerDeps,
+  capsuleId: string,
+  correlationId?: string,
+): Promise<RouteResult> {
+  return handleStartLocalKnowledgeCapsuleIndexing(
+    { ...ctx("POST"), correlationId, params: { capsuleId } },
+    deps,
+  );
 }
 
 async function cancelIndexing(deps: UiHandlerDeps, capsuleId: string): Promise<RouteResult> {
@@ -200,11 +208,26 @@ const RUN_LAUNCHED = "indexing.detached-run.launched";
 const CANCEL_REQUESTED = "indexing.cancel.requested";
 const CANCEL_REFUSED = "indexing.cancel.refused";
 const CANCEL_ACCEPTED = "indexing.cancel.accepted";
+const ROUTE_OPERATIONS: ReadonlySet<string> = new Set([
+  START_ACCEPTED,
+  START_REFUSED,
+  RUN_LAUNCHED,
+  "indexing.detached-run.failed",
+  CANCEL_REQUESTED,
+  CANCEL_REFUSED,
+  CANCEL_ACCEPTED,
+]);
 
 function lineFor(sink: BufferedServerLogSink, op: string): ServerLogEvent {
   const event = sink.events.find((candidate) => candidate.op === op);
   if (event === undefined) {
     throw new TypeError(`no activity-log line was written for ${op}`);
+  }
+  if (ROUTE_OPERATIONS.has(op)) {
+    expect(
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toBeDefined();
+    expect(event.extra).toMatchObject({ completeness: "complete", loss: "none" });
   }
   return event;
 }
@@ -331,10 +354,10 @@ describe("the composed embedding adapter carries the process activity log", () =
     expect(sink.events.map((event) => event.category)).toContain("http");
     expect(
       sink.events.find((event) => event.category === "embedding" && event.status === 500),
-    ).toMatchObject({ level: "warn", errorKind: "http-error" });
+    ).toMatchObject({ level: "warn", errorKind: "unavailable" });
   });
 
-  it("keeps the endpoint host on the line and the api key off it", async () => {
+  it("keeps only the endpoint digest on the line and the api key off it", async () => {
     const tmp = tempWorkspace();
     const adapter = localKnowledgeEmbeddingAdapterForProvider(depsFor(tmp), embeddingProvider());
     const sink = capture();
@@ -348,7 +371,10 @@ describe("the composed embedding adapter carries the process activity log", () =
     });
 
     const serialised = sink.lines().join("");
-    expect(serialised).toContain("https://gateway.example.test");
+    expect(
+      sink.events.some((event) => /^[a-f0-9]{64}$/u.test(String(event.extra?.endpointDigest))),
+    ).toBe(true);
+    expect(serialised).not.toContain("https://gateway.example.test");
     expect(serialised).not.toContain(["sk", "secret", "value"].join("-"));
     expect(serialised).not.toContain("one chunk");
   });
@@ -366,7 +392,7 @@ describe("the start-indexing route is on the record", () => {
     const capsuleId = await createIndexableCapsule(deps, tmp);
     const sink = capture();
 
-    const accepted = await startIndexing(deps, String(capsuleId));
+    const accepted = await startIndexing(deps, String(capsuleId), "request-indexing-launch-parent");
     expect(accepted.status).toBe(202);
     await awaitDetachedCapsuleIndexing(String(capsuleId));
 
@@ -394,7 +420,7 @@ describe("the start-indexing route is on the record", () => {
     const capsuleId = await createIndexableCapsule(deps, tmp);
     const sink = capture();
 
-    const accepted = await startIndexing(deps, String(capsuleId));
+    const accepted = await startIndexing(deps, String(capsuleId), "request-indexing-launch-parent");
     await awaitDetachedCapsuleIndexing(String(capsuleId));
 
     // Everything between the 202 and the orchestrator's first line — the detached store open and
@@ -403,6 +429,7 @@ describe("the start-indexing route is on the record", () => {
       level: "info",
       category: "indexing",
       correlationId: jobIdOf(accepted),
+      parentCorrelationId: "request-indexing-launch-parent",
       extra: { jobIdMinted: true },
     });
     const ops = sink.events.map((event) => event.op);
@@ -441,6 +468,7 @@ describe("every refusal of a start names which refusal it was", () => {
       level: "warn",
       category: "indexing",
       status: 404,
+      errorKind: "invalid-request",
       extra: { reason: "capsule-not-found" },
     });
   });
@@ -455,6 +483,7 @@ describe("every refusal of a start names which refusal it was", () => {
     expect(result.status).toBe(409);
     expect(lineFor(sink, START_REFUSED)).toMatchObject({
       status: 409,
+      errorKind: "invalid-request",
       extra: { reason: "capsule-has-no-sources" },
     });
   });
@@ -476,6 +505,7 @@ describe("every refusal of a start names which refusal it was", () => {
     expect(result.status).toBe(409);
     expect(lineFor(sink, START_REFUSED)).toMatchObject({
       status: 409,
+      errorKind: "unavailable",
       extra: { reason: "no-embedding-capable-model" },
     });
   });
@@ -499,6 +529,7 @@ describe("every refusal of a start names which refusal it was", () => {
       level: "warn",
       status: 409,
       correlationId: jobIdOf(first),
+      errorKind: "conflict",
       extra: { reason: "job-already-running" },
     });
   });
@@ -524,6 +555,7 @@ describe("every refusal of a start names which refusal it was", () => {
     // `job-already-running`, and the two must never be conflated on the record.
     expect(lineFor(sink, START_REFUSED)).toMatchObject({
       status: 409,
+      errorKind: "conflict",
       extra: { reason: "run-already-starting" },
     });
   });
@@ -571,6 +603,7 @@ describe("cancelling an indexing run is on the record", () => {
     expect(lineFor(sink, CANCEL_REFUSED)).toMatchObject({
       level: "warn",
       status: 404,
+      errorKind: "invalid-request",
       extra: { reason: "capsule-not-found" },
     });
   });
@@ -585,6 +618,7 @@ describe("cancelling an indexing run is on the record", () => {
     expect(result.status).toBe(409);
     expect(lineFor(sink, CANCEL_REFUSED)).toMatchObject({
       status: 409,
+      errorKind: "conflict",
       extra: { reason: "no-running-job" },
     });
   });

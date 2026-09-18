@@ -1418,7 +1418,7 @@ describe("CodingToolFacade", () => {
   // (catalogToolFacadeBridge.ts), which settles ANY `status: "failed"` handler result -- a genuine
   // dispatch fault AND a verifier that ran and reported failing tests alike -- as a
   // `CatalogDispatchFault` for its own governance bookkeeping (tool-catalog.invocation-settled,
-  // errorKind "CatalogDispatchFault", empty data). `catalogToolFacadeBridge.ts`'s
+  // global `internal` error kind, empty data). `catalogToolFacadeBridge.ts`'s
   // `preservedExecutedResult` rescues the original executed result for the first case; these tests
   // pin that the rescued payload actually survives THIS file's own catalog composition
   // (`executeCatalogRequest`'s `delegateState.threw` guard) all the way to the value returned to
@@ -1498,7 +1498,8 @@ describe("CodingToolFacade", () => {
       // evidence the payload asserted above was lost to the caller.
       expect(log.events.at(-1)).toMatchObject({
         op: "tool-catalog.invocation-settled",
-        extra: { status: "failed", reason: "handler-failed", errorKind: "CatalogDispatchFault" },
+        errorKind: "internal",
+        extra: { status: "failed", reason: "handler-failed" },
       });
     });
 

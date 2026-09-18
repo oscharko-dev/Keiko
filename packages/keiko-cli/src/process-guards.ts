@@ -31,6 +31,7 @@
 // The fallback never reads `.message` either: see `fallbackErrorKind`.
 
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-server";
+import { processFatalActivityLogEvent } from "./process-activity-log.js";
 
 // The narrow slice of keiko-server's public surface the fatal path needs, loaded only inside the
 // handler (see the file banner). `describeError` is reused rather than re-derived from its parts:
@@ -108,16 +109,6 @@ export function fatalProcessLine(kind: string, errorKind: string): string {
   return `keiko: fatal ${kind} (${errorKind}). The process will exit.\n`;
 }
 
-function fatalActivityLogExtra(
-  machineKind: FatalReasonKind,
-  described: ReturnType<FatalDiagnosticsModule["describeError"]>,
-): Readonly<Record<string, unknown>> {
-  const extra: Record<string, unknown> = { kind: machineKind };
-  if (described.frames !== undefined) extra.frames = described.frames;
-  if (described.causeChain !== undefined) extra.causeChain = described.causeChain;
-  return extra;
-}
-
 function writeFatalActivityLogLine(
   server: FatalDiagnosticsModule,
   machineKind: FatalReasonKind,
@@ -126,22 +117,22 @@ function writeFatalActivityLogLine(
   const stateDir = process.env.KEIKO_STATE_DIR;
   if (typeof stateDir !== "string" || stateDir.length === 0) return;
   const activityLog: ServerLogSink = server.createFileServerLogSink(stateDir);
-  const event: ServerLogEvent = {
-    level: "error",
-    category: "process",
-    op: "process.fatal",
-    errorKind: described.code ?? described.errorClass,
-    extra: fatalActivityLogExtra(machineKind, described),
-  };
+  const event: ServerLogEvent = processFatalActivityLogEvent({
+    kind: machineKind,
+    failureKind: described.code ?? described.errorClass,
+    ...(described.frames === undefined ? {} : { frames: described.frames }),
+    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+  });
   activityLog.write(event);
   activityLog.close?.();
 }
 
 // Loads the classifier, writes the `process.fatal` activity-log line when a state directory is in
-// scope, and resolves the stderr text — the content-free class only, never the code (the JSON
-// line's `errorKind` is code-first for machine matching; the human-facing stderr line stays the
-// simpler class name). Never throws: a failure here is caught by the caller, which keeps the
-// pre-computed fallback line rather than losing the crash report entirely.
+// scope, and resolves the stderr text. The activity-log envelope carries the nearest closed
+// failure class for clustering, while `extra.failureKind` retains the exact shape-gated code or
+// class for reconstruction. The human-facing stderr line stays on the simpler content-free class
+// name. Never throws: a failure here is caught by the caller, which keeps the pre-computed fallback
+// line rather than losing the crash report entirely.
 async function writeFatalLine(
   humanKind: string,
   machineKind: FatalReasonKind,

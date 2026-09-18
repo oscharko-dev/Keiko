@@ -48,7 +48,7 @@ describe("manual crawl gateway policy activity logging", () => {
       expect.objectContaining({
         op: "http.gateway.fetch.failed",
         correlationId: CORRELATION_ID,
-        errorKind: "PROXY_BLOCKED_BY_POLICY",
+        errorKind: "permission-denied",
         policyReason: "undelegated-proxied-hostname",
       }),
     );

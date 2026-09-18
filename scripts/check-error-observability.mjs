@@ -33,10 +33,15 @@
 // sink.test.ts / consolidate.test.ts / log-port.test.ts, one per site above).
 
 import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { request } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
+
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const scriptPath = fileURLToPath(import.meta.url);
@@ -45,6 +50,8 @@ const serverEntry = resolve(here, "../packages/keiko-server/dist/index.js");
 const SECRET_MARKER = "gate-secret-DO-NOT-LEAK";
 const ID_PATTERN = /^[A-Za-z0-9._-]{8,128}$/;
 const HOST = "127.0.0.1";
+const REPO_ROOT = resolve(here, "..");
+const GIT_EXECUTABLE = resolveHostExecutable("git", { workspaceRoot: REPO_ROOT });
 
 export const SERVER_TOP_LEVEL_SITE_ID = "server.top-level-catch";
 export const MIN_STRATIFIED_SITES = 10;
@@ -58,6 +65,358 @@ function fail(message) {
 // use the same shape checks — `fail()` is reserved for `main()`'s own top-level orchestration.
 function check(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function propertyNameText(name) {
+  return ts.isIdentifier(name) ||
+    ts.isPrivateIdentifier(name) ||
+    ts.isStringLiteral(name) ||
+    ts.isNumericLiteral(name)
+    ? name.text
+    : name.getText();
+}
+
+function isClassMember(node) {
+  return (
+    (ts.isMethodDeclaration(node) ||
+      ts.isGetAccessorDeclaration(node) ||
+      ts.isSetAccessorDeclaration(node) ||
+      ts.isConstructorDeclaration(node) ||
+      ts.isPropertyDeclaration(node)) &&
+    ts.isClassLike(node.parent)
+  );
+}
+
+// Class members get their own owner, `Class.member`, so two catches in different methods of one
+// class never share a key: the base-versus-head diff counts findings per owner, and a shared key
+// would let a new silent catch in one method hide behind a fixed one in another.
+function classMemberName(member) {
+  const className = member.parent.name?.text ?? "<class>";
+  if (ts.isConstructorDeclaration(member)) return `${className}.constructor`;
+  const memberName = propertyNameText(member.name);
+  if (ts.isGetAccessorDeclaration(member)) return `${className}.get ${memberName}`;
+  if (ts.isSetAccessorDeclaration(member)) return `${className}.set ${memberName}`;
+  return `${className}.${memberName}`;
+}
+
+function functionOwnerName(node) {
+  if (ts.isFunctionDeclaration(node) && node.name !== undefined) return node.name.text;
+  if (isClassMember(node) && !ts.isPropertyDeclaration(node)) return classMemberName(node);
+  if (!ts.isFunctionExpression(node) && !ts.isArrowFunction(node)) return undefined;
+  const holder = node.parent;
+  if (ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name)) return holder.name.text;
+  return isClassMember(holder) ? classMemberName(holder) : undefined;
+}
+
+function catchFunctionName(node) {
+  for (let current = node.parent; current !== undefined; current = current.parent) {
+    const owner = functionOwnerName(current);
+    if (owner !== undefined) return owner;
+  }
+  return "<anonymous>";
+}
+
+// Exact, reviewed clean-up boundaries only. A naming convention is not authority to discard a
+// failure: every exception must identify one source file and one function, with its reason kept
+// beside the gate. Additions are review-visible and cannot accidentally exempt a same-named catch
+// elsewhere.
+const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
+  [
+    "packages/keiko-cli/src/support-analyze.ts:registeredRecordClassification",
+    "The catch deterministically classifies hostile persisted evidence as incomplete or corrupt.",
+  ],
+  [
+    "packages/keiko-cli/src/support.ts:supportPublicationErrorKind",
+    "The catch bounds a hostile error-property read to the closed unknown failure kind.",
+  ],
+  [
+    "packages/keiko-cli/src/support.ts:supportPublicationFailure",
+    "The catch returns a closed publication failure consumed by the registered publication event.",
+  ],
+  [
+    "packages/keiko-cli/src/support.ts:publishSupportBundle",
+    "The catch returns a typed failed outcome consumed by the registered publication event.",
+  ],
+  [
+    "packages/keiko-cli/src/support.ts:recoverSupportBundle",
+    "The catch returns a typed recovery failure consumed by the registered publication event.",
+  ],
+  [
+    "packages/keiko-cli/src/support.ts:acknowledgeSupportPublication",
+    "The catch returns a closed acknowledgement failure consumed by the registered publication event.",
+  ],
+  [
+    "packages/keiko-cli/src/support.ts:collectFreshSupportData",
+    "Activity Log construction itself failed; the CLI reports the unavailable capability and stops.",
+  ],
+  [
+    "packages/keiko-cli/src/support.ts:persistSupportAnalysisEvidence",
+    "Activity Log construction itself failed; the CLI reports the unavailable capability and stops.",
+  ],
+  [
+    "packages/keiko-cli/src/support-export.ts:logSkipKind",
+    "A no-follow lstat probe classifies a skipped log file; the manifest attests its name and kind.",
+  ],
+  [
+    "packages/keiko-cli/src/ui.ts:safeCliErrorKind",
+    "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
+  ],
+  [
+    "packages/keiko-contracts/src/observability.ts:registrationMatchesCanonical",
+    "The contract boundary converts hostile proxy access into a registration mismatch rejection.",
+  ],
+  [
+    "packages/keiko-contracts/src/observability.ts:activityLogEvent",
+    "A validation failure becomes the rejection sentinel the sink drops with one bounded notice.",
+  ],
+  [
+    "packages/keiko-model-gateway/src/http.ts:logEndpointClass",
+    "The logging reducer drops an invalid endpoint instead of retaining raw URL content.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:closeDescriptorIgnoringErrors",
+    "Best-effort close after the primary filesystem result is already fixed.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:directoryGuardStillMatches",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:closeDirectoryGuards",
+    "Individual close failures are aggregated and propagated as one closed safe-file error.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:samePathNode",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:linkedArchiveMatches",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:movedArchiveMatches",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:pathHasIdentity",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:directoryGuardStillOwnerOnly",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:processIsAlive",
+    "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
+  ],
+  [
+    "packages/keiko-security/src/fs-hardening.ts:releasePublicationOwnerAfterFailure",
+    "Best-effort rollback after the owning publication failure is already emitted and propagated.",
+  ],
+  [
+    "packages/keiko-security/src/safe-artifact-directory-mutation-runtime.ts:parseExpectedIdentity",
+    "Invalid untrusted integer input is rejected by the helper protocol before mutation.",
+  ],
+  [
+    "packages/keiko-security/src/safe-artifact-directory-mutation-runtime.ts:runSafeArtifactDirectoryMutation",
+    "The isolated helper maps mutation failure to a closed process exit code returned to its owner.",
+  ],
+  [
+    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:directoryMatches",
+    "A failed identity read is the fail-closed false result of this isolated helper predicate.",
+  ],
+  [
+    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:entryMatches",
+    "A failed identity read refuses the unlink as an entry mismatch in this isolated helper.",
+  ],
+  [
+    "packages/keiko-security/src/safe-artifact-directory-mutation.ts:readRequest",
+    "Malformed helper-protocol input is rejected before any filesystem mutation.",
+  ],
+  [
+    "packages/keiko-security/src/secret-vault.ts:safeErrorProperty",
+    "A hostile error accessor is reduced to absent data before the registered failure event.",
+  ],
+  [
+    "packages/keiko-server/src/grounded-orchestrator.ts:connectedContextFailureKind",
+    "A hostile error classifier is reduced to the closed unknown kind before the failure event.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:safeArtifactErrorKind",
+    "A hostile prototype trap is reduced to absent data inside the last-resort log sink.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:handleStillCurrent",
+    "A failed file-identity check invalidates the cached handle and forces a safe reopen.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:currentHandleIdentity",
+    "A failed file-identity check invalidates the cached handle and forces a safe reopen.",
+  ],
+]);
+
+function isReviewedFailurePath(path, owner) {
+  return REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`);
+}
+
+function hasRawConsoleCall(node) {
+  let found = false;
+  const visit = (child) => {
+    if (
+      ts.isCallExpression(child) &&
+      ts.isPropertyAccessExpression(child.expression) &&
+      ts.isIdentifier(child.expression.expression) &&
+      child.expression.expression.text === "console"
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node.block);
+  return found;
+}
+
+const EVIDENCE_METHOD_NAMES = new Set(["emit", "error", "info", "record", "warn", "write"]);
+
+function evidenceReceiverName(expression) {
+  if (ts.isIdentifier(expression)) return expression.text;
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  return undefined;
+}
+
+function isEvidenceCall(node) {
+  if (!ts.isCallExpression(node)) return false;
+  if (ts.isIdentifier(node.expression)) {
+    const name = node.expression.text;
+    return (
+      name === "activityLogEvent" ||
+      name === "writeStderrNotice" ||
+      /^(?:emit|log|record|report)[A-Z_]/u.test(name)
+    );
+  }
+  if (!ts.isPropertyAccessExpression(node.expression)) return false;
+  const method = node.expression.name.text;
+  const receiver = evidenceReceiverName(node.expression.expression);
+  return (
+    receiver !== undefined &&
+    EVIDENCE_METHOD_NAMES.has(method) &&
+    /(?:^(?:log|logger|sink|diagnostic|diagnostics)$|(?:Log|Logger|Sink|Diagnostic|Diagnostics)$)/u.test(
+      receiver,
+    )
+  );
+}
+
+function hasEvidenceOrPropagation(node) {
+  let found = false;
+  const visit = (child) => {
+    if (ts.isThrowStatement(child) || isEvidenceCall(child)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node.block);
+  return found;
+}
+
+function failurePathFinding(sourceFile, node, path) {
+  const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+  const owner = catchFunctionName(node);
+  if (hasRawConsoleCall(node)) return { path, line, owner, kind: "raw-console-catch" };
+  if (!hasEvidenceOrPropagation(node) && !isReviewedFailurePath(path, owner)) {
+    return { path, line, owner, kind: "unregistered-catch" };
+  }
+  return undefined;
+}
+
+export function unregisteredFailurePathViolations(source, path = "fixture.ts") {
+  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const findings = [];
+  const visit = (node) => {
+    if (ts.isCatchClause(node)) {
+      const finding = failurePathFinding(sourceFile, node, path);
+      if (finding !== undefined) findings.push(finding);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return findings;
+}
+
+function findingSignature(finding) {
+  return `${finding.kind}:${finding.owner}`;
+}
+
+// Findings in the head revision of one file that its base revision did not already have.
+export function newFailurePathFindings(baseSource, headSource, path) {
+  const baseCounts = Map.groupBy(
+    unregisteredFailurePathViolations(baseSource, path),
+    findingSignature,
+  );
+  return unregisteredFailurePathViolations(headSource, path).filter((finding) => {
+    const signature = findingSignature(finding);
+    const matches = baseCounts.get(signature);
+    if (matches === undefined || matches.length === 0) return true;
+    matches.pop();
+    return false;
+  });
+}
+
+function gitText(args, cwd = REPO_ROOT) {
+  return execFileSync(GIT_EXECUTABLE, args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+
+function resolveGateBaseCommit(repoRoot) {
+  const configured = process.env.GITHUB_BASE_REF;
+  const candidates = [
+    ...(configured === undefined ? [] : [`origin/${configured}`, configured]),
+    "origin/dev",
+    "dev",
+  ];
+  for (const candidate of candidates) {
+    try {
+      return gitText(["rev-parse", "--verify", `${candidate}^{commit}`], repoRoot).trim();
+    } catch {
+      // Try the next deterministic local spelling of the PR base.
+    }
+  }
+  throw new Error("error-observability-base-ref-unavailable");
+}
+
+function changedProductionTypeScriptFiles(repoRoot, baseCommit) {
+  return gitText(
+    ["diff", "--name-only", "--diff-filter=ACMR", baseCommit, "--", "packages"],
+    repoRoot,
+  )
+    .split("\n")
+    .filter(
+      (path) =>
+        path.endsWith(".ts") &&
+        !path.endsWith(".d.ts") &&
+        !path.endsWith(".test.ts") &&
+        !path.includes("/__tests__/"),
+    );
+}
+
+function baseFileSource(repoRoot, baseCommit, path) {
+  try {
+    return gitText(["show", `${baseCommit}:${path}`], repoRoot);
+  } catch {
+    return "";
+  }
+}
+
+export function unregisteredFailurePathDiffViolations(repoRoot = REPO_ROOT) {
+  const baseCommit = resolveGateBaseCommit(repoRoot);
+  return changedProductionTypeScriptFiles(repoRoot, baseCommit).flatMap((path) => {
+    const headSource = readFileSync(resolve(repoRoot, path), "utf8");
+    return newFailurePathFindings(baseFileSource(repoRoot, baseCommit, path), headSource, path);
+  });
 }
 
 function distPath(pkg, file) {
@@ -497,9 +856,10 @@ function makeConsolidationLogPortProbe() {
       );
       check(record.level === "error", `consolidation log-port level: ${record.level}`);
       check(
-        record.extra?.droppedOp === "gate.probe.op",
-        "consolidation log-port droppedOp not retained",
+        record.extra?.droppedOpDigest === "2b1c9df7297b97cf",
+        "consolidation log-port droppedOpDigest not retained",
       );
+      check(record.extra?.droppedOp === undefined, "consolidation log-port leaked droppedOp");
       check(
         typeof record.errorKind === "string" && record.errorKind.length > 0,
         "consolidation log-port errorKind missing",
@@ -644,7 +1004,16 @@ async function runServerTopLevelSite(exercised) {
   }
 }
 
-export async function main() {
+// The static check diffs against the PR base commit. Tests of the probe wiring pass their own
+// findings, so they do not depend on how much Git history the checkout carries.
+export async function main(findStaticViolations = unregisteredFailurePathDiffViolations) {
+  const staticViolations = findStaticViolations();
+  if (staticViolations.length > 0) {
+    const sites = staticViolations
+      .map((finding) => `${finding.path}:${String(finding.line)} (${finding.kind})`)
+      .join(", ");
+    fail(`new unregistered failure path(s): ${sites}`);
+  }
   const exercised = [];
   await runServerTopLevelSite(exercised);
   for (const probe of SITE_PROBES) {

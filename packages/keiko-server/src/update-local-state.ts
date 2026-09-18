@@ -87,6 +87,10 @@ import {
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
 import {
+  updateRuntimeActivityEvent,
+  type UpdateRuntimeActivityFields,
+} from "./update-runtime-activity.js";
+import {
   isOptionalProcessIdentity,
   processIdentityField,
   PROCESS_START_IDENTITY,
@@ -145,6 +149,7 @@ export interface UpdateLocalStateManager {
   readonly recordAuditEvent: (
     type: UpdateRuntimeEventType,
     input?: AuditEventInput,
+    failure?: unknown,
   ) => AuditEventRecord;
 }
 
@@ -1638,11 +1643,87 @@ function writeRuntimeState(context: ManagerContext, state: UpdateRuntimeState): 
   return next;
 }
 
-// eslint-disable-next-line complexity
+function updateArtifactActivityFields(
+  event: UpdateRuntimeAuditEvent,
+): Partial<UpdateRuntimeActivityFields> {
+  return {
+    ...(event.targetVersion === undefined ? {} : { targetVersion: event.targetVersion }),
+    ...(event.snapshotId === undefined ? {} : { snapshotId: event.snapshotId }),
+    ...(event.portableStageId === undefined ? {} : { portableStageId: event.portableStageId }),
+    ...(event.portableActivationId === undefined
+      ? {}
+      : { portableActivationId: event.portableActivationId }),
+    ...(event.portableTarget === undefined ? {} : { portableTarget: event.portableTarget }),
+    ...(event.portableAssetName === undefined
+      ? {}
+      : { portableAssetName: event.portableAssetName }),
+    ...(event.portableAssetSha256 === undefined
+      ? {}
+      : { portableAssetSha256: event.portableAssetSha256 }),
+    ...(event.portableAssetSizeBytes === undefined
+      ? {}
+      : { portableAssetSizeBytes: event.portableAssetSizeBytes }),
+  };
+}
+
+function updateSidecarActivityFields(
+  event: UpdateRuntimeAuditEvent,
+): Partial<UpdateRuntimeActivityFields> {
+  return {
+    ...(event.portableSidecarName === undefined
+      ? {}
+      : { portableSidecarName: event.portableSidecarName }),
+    ...(event.portableSidecarKind === undefined
+      ? {}
+      : { portableSidecarKind: event.portableSidecarKind }),
+    ...(event.portableSidecarVersion === undefined
+      ? {}
+      : { portableSidecarVersion: event.portableSidecarVersion }),
+    ...(event.portableSidecarTarget === undefined
+      ? {}
+      : { portableSidecarTarget: event.portableSidecarTarget }),
+    ...(event.portableSidecarPayloadSha256 === undefined
+      ? {}
+      : { portableSidecarPayloadSha256: event.portableSidecarPayloadSha256 }),
+    ...(event.portableSidecarPayloadSha256Prefix === undefined
+      ? {}
+      : { portableSidecarPayloadSha256Prefix: event.portableSidecarPayloadSha256Prefix }),
+    ...(event.portableSidecarStatus === undefined
+      ? {}
+      : { portableSidecarStatus: event.portableSidecarStatus }),
+    ...(event.portableSidecarFailureCode === undefined
+      ? {}
+      : { portableSidecarFailureCode: event.portableSidecarFailureCode }),
+  };
+}
+
+function updateOutcomeActivityFields(
+  event: UpdateRuntimeAuditEvent,
+): Partial<UpdateRuntimeActivityFields> {
+  return {
+    ...(event.store === undefined ? {} : { store: event.store }),
+    ...(event.remediation === undefined ? {} : { remediation: event.remediation }),
+    ...(event.status === undefined ? {} : { status: event.status }),
+    ...(event.warningCode === undefined ? {} : { warningCode: event.warningCode }),
+  };
+}
+
+function updateRuntimeActivityFields(event: UpdateRuntimeAuditEvent): UpdateRuntimeActivityFields {
+  return {
+    eventId: event.eventId,
+    type: event.type,
+    occurredAt: event.occurredAt,
+    ...updateArtifactActivityFields(event),
+    ...updateSidecarActivityFields(event),
+    ...updateOutcomeActivityFields(event),
+  };
+}
+
 function recordAuditEvent(
   context: ManagerContext,
   type: UpdateRuntimeEventType,
   input: AuditEventInput = {},
+  failure?: unknown,
 ): AuditEventRecord {
   const event: UpdateRuntimeAuditEvent = {
     schemaVersion: UPDATE_LOCAL_STATE_SCHEMA_VERSION,
@@ -1652,23 +1733,9 @@ function recordAuditEvent(
     ...input,
   };
   try {
-    context.activityLog?.write({
-      category: "diagnostic",
-      op: "update.runtime.event",
-      ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
-      extra: {
-        eventId: event.eventId,
-        type: event.type,
-        ...(event.targetVersion === undefined ? {} : { targetVersion: event.targetVersion }),
-        ...(event.snapshotId === undefined ? {} : { snapshotId: event.snapshotId }),
-        ...(event.portableStageId === undefined ? {} : { portableStageId: event.portableStageId }),
-        ...(event.portableActivationId === undefined
-          ? {}
-          : { portableActivationId: event.portableActivationId }),
-        ...(event.status === undefined ? {} : { status: event.status }),
-        ...(event.warningCode === undefined ? {} : { warningCode: event.warningCode }),
-      },
-    });
+    context.activityLog?.write(
+      updateRuntimeActivityEvent(event.correlationId, updateRuntimeActivityFields(event), failure),
+    );
     return { event };
   } catch (error) {
     emitServerDiagnostic(
@@ -1717,6 +1784,7 @@ export function createUpdateLocalStateManager(
     writeRuntimeState: (state): UpdateRuntimeState => writeRuntimeState(context, state),
     acquireRemediationLease: (actionId): (() => void) | undefined =>
       acquireRemediationLease(context, actionId),
-    recordAuditEvent: (type, input): AuditEventRecord => recordAuditEvent(context, type, input),
+    recordAuditEvent: (type, input, failure): AuditEventRecord =>
+      recordAuditEvent(context, type, input, failure),
   };
 }

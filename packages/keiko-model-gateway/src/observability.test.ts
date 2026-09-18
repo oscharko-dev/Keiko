@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityLogErrorKind,
   logEndpointHost,
   logErrorKind,
   logLevelEnabled,
@@ -272,6 +273,16 @@ describe("logErrorKind", () => {
     );
     expect(() => logErrorKind(hostile)).not.toThrow();
     expect(logErrorKind(hostile)).toBe("unknown");
+  });
+});
+
+describe("activityLogErrorKind", () => {
+  it("maps the gateway authentication taxonomy to the closed permission denial kind", () => {
+    const error = Object.assign(new Error("provider rejected credentials"), {
+      code: "GATEWAY_AUTHENTICATION",
+    });
+    expect(activityLogErrorKind(error)).toBe("permission-denied");
+    expect(activityLogErrorKind({ code: "GATEWAY_AUTHORITY" })).toBe("authority-denied");
   });
 });
 

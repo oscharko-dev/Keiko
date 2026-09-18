@@ -55,11 +55,31 @@
 // in memory and pin it against the checked-in file, and `OP_NAME_PATTERN` so both this generator
 // and any future runtime-adjacent check share one definition of a well-formed op name.
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "prettier";
+import ts from "typescript";
 
+import {
+  ACTIVITY_LOG_ANALYZER_PROJECTIONS,
+  ACTIVITY_LOG_CATEGORIES,
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
+  ACTIVITY_LOG_COMPLETENESS_STATES,
+  ACTIVITY_LOG_DATA_CLASSES,
+  ACTIVITY_LOG_ERROR_KINDS,
+  ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
+  ACTIVITY_LOG_FIELD_TYPES,
+  ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+  ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
+  ACTIVITY_LOG_LIFECYCLE_PHASES,
+  ACTIVITY_LOG_LOSS_STATES,
+  ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
+  ACTIVITY_LOG_RELEASE_IMPACTS,
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+} from "../packages/keiko-contracts/dist/observability.js";
+import { ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS } from "../packages/keiko-contracts/dist/activity-log-failure-class-contracts.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import {
@@ -70,6 +90,78 @@ import {
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(SCRIPT_DIR);
 const OUTPUT_RELATIVE_PATH = "docs/observability/op-catalog.generated.json";
+const RUNTIME_REGISTRY_RELATIVE_PATH =
+  "packages/keiko-contracts/src/activity-log-registry.generated.ts";
+
+const REGISTRATION_KEYS = new Set([
+  "contractKind",
+  "schemaVersion",
+  "op",
+  "category",
+  "owner",
+  "emitter",
+  "fields",
+  "causal",
+  "lifecycle",
+  "analyzerProjection",
+  "failureClasses",
+  "proofIds",
+  "releaseImpact",
+]);
+const REGISTRATION_CATEGORIES = new Set(ACTIVITY_LOG_CATEGORIES);
+const REGISTRATION_CAUSAL = new Set(["none", "correlation", "parent-correlation"]);
+const REGISTRATION_LIFECYCLE = new Set(ACTIVITY_LOG_LIFECYCLE_PHASES);
+const REGISTRATION_PROJECTIONS = new Set(ACTIVITY_LOG_ANALYZER_PROJECTIONS);
+const REGISTRATION_RELEASE_IMPACTS = new Set(ACTIVITY_LOG_RELEASE_IMPACTS);
+const REGISTRATION_FIELD_TYPES = new Set(ACTIVITY_LOG_FIELD_TYPES);
+const REGISTRATION_DATA_CLASSES = new Set(ACTIVITY_LOG_DATA_CLASSES);
+const REGISTRATION_FIELD_KEYS = new Set([
+  "type",
+  "dataClass",
+  "required",
+  "maxLength",
+  "maxItems",
+  "values",
+]);
+const FAILURE_CLASS_CONTRACT_KEYS = new Set([
+  "contractKind",
+  "schemaVersion",
+  "failureClass",
+  "requiredProductSurfaces",
+  "requiredLifecycleOperations",
+  "requiredCausalOperations",
+  "requiredLossOperations",
+  "requiredProofOperations",
+  "requiredReplayProofIds",
+  "requiredResourceOperations",
+  "requiredEvidenceClasses",
+  "requiredFrameOperations",
+  "requiredCauseOperations",
+]);
+const REGISTRATION_TOKEN = /^[A-Za-z][A-Za-z0-9._/-]{0,159}$/u;
+const REGISTRATION_CLOSED_VALUE = /^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,159}$/u;
+const REGISTRATION_FIELD_NAME = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
+const EXEMPTION_KEYS = new Set([
+  "contractKind",
+  "schemaVersion",
+  "id",
+  "operation",
+  "failureClass",
+  "boundary",
+  "owner",
+  "reason",
+  "trackingIssue",
+  "expiresOn",
+]);
+const EXEMPTION_BOUNDARIES = new Set(ACTIVITY_LOG_EXEMPTION_BOUNDARIES);
+const EXEMPTION_DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const ACTIVITY_LOG_EXEMPTION_SCHEMA = {
+  schemaVersion: 1,
+  scope: "exact-operation-and-failure-class",
+  boundaries: ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
+  required: [...EXEMPTION_KEYS],
+  maximumEntries: 64,
+};
 
 // A well-formed op: lowercase dot-separated segments, each starting with a letter, hyphens
 // allowed within a segment, at most 6 segments and 32 characters per segment. Verified against
@@ -78,6 +170,58 @@ const OUTPUT_RELATIVE_PATH = "docs/observability/op-catalog.generated.json";
 // output rather than a hand-picked example set.
 export const OP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}(\.[a-z][a-z0-9-]{0,31}){0,5}$/;
 
+const ACTIVITY_LOG_LEVELS = ["debug", "info", "warn", "error"];
+const ACTIVITY_LOG_BUILD_CLASSES = ["node-esm"];
+const ACTIVITY_LOG_RELEASE_CLASSES = ["stable", "prerelease"];
+const ACTIVITY_LOG_PERSISTED_ENVELOPE_CONTRACT = {
+  ts: { type: "string", required: true, format: "iso-8601" },
+  schemaVersion: { type: "integer", required: true, values: [2] },
+  registryVersion: { type: "integer", required: true, minimum: 1 },
+  schemaDigest: { type: "string", required: true, format: "sha256-hex" },
+  catalogDigest: { type: "string", required: true, format: "sha256-hex" },
+  buildClass: { type: "string", required: true, values: ACTIVITY_LOG_BUILD_CLASSES },
+  releaseClass: { type: "string", required: true, values: ACTIVITY_LOG_RELEASE_CLASSES },
+  platformClass: {
+    type: "string",
+    required: true,
+    pattern: "^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$",
+  },
+  productVersion: {
+    type: "string",
+    required: true,
+    pattern: String.raw`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$`,
+  },
+  compatibilityState: {
+    type: "string",
+    required: true,
+    values: ACTIVITY_LOG_COMPATIBILITY_STATES,
+  },
+  writerCapability: {
+    type: "string",
+    required: true,
+    values: ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+  },
+  pid: { type: "integer", required: true, minimum: 1, maximum: 2_147_483_647 },
+  instanceId: { type: "string", required: true, pattern: "^[a-f0-9]{8}$" },
+  seq: { type: "integer", required: true, minimum: 1 },
+  level: { type: "string", required: true, values: ACTIVITY_LOG_LEVELS },
+  category: { type: "string", required: true, values: ACTIVITY_LOG_CATEGORIES },
+  op: { type: "string", required: true, pattern: OP_NAME_PATTERN.source },
+  correlationId: {
+    type: "string",
+    required: "by-causal-contract",
+    pattern: "^[A-Za-z0-9._-]{8,128}$",
+  },
+  parentCorrelationId: {
+    type: "string",
+    required: "by-parent-causal-contract",
+    pattern: "^[A-Za-z0-9._-]{8,128}$",
+  },
+  durationMs: { type: "number", required: false, minimum: 0 },
+  status: { type: "integer", required: false },
+  errorKind: { type: "string", required: false, values: ACTIVITY_LOG_ERROR_KINDS },
+};
+
 // Codepoint comparison, never `localeCompare`: the catalog's entry order (and, transitively, the
 // order files are walked in) is checked-in output pinned by a drift test. `localeCompare` uses the
 // runtime's ICU collation and the ambient `LANG`, so the SAME source could sort two different ways
@@ -85,6 +229,40 @@ export const OP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}(\.[a-z][a-z0-9-]{0,31}){0,
 function compareCodepoints(left, right) {
   if (left === right) return 0;
   return left < right ? -1 : 1;
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+export function activityLogSchemaDigestMaterial() {
+  return {
+    schemaVersion: 1,
+    persistedEnvelope: ACTIVITY_LOG_PERSISTED_ENVELOPE_CONTRACT,
+    vocabularies: {
+      categories: ACTIVITY_LOG_CATEGORIES,
+      fieldTypes: ACTIVITY_LOG_FIELD_TYPES,
+      dataClasses: ACTIVITY_LOG_DATA_CLASSES,
+      completenessStates: ACTIVITY_LOG_COMPLETENESS_STATES,
+      lossStates: ACTIVITY_LOG_LOSS_STATES,
+      errorKinds: ACTIVITY_LOG_ERROR_KINDS,
+      compatibilityStates: ACTIVITY_LOG_COMPATIBILITY_STATES,
+      writerCapabilityStates: ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+      levels: ACTIVITY_LOG_LEVELS,
+      buildClasses: ACTIVITY_LOG_BUILD_CLASSES,
+      releaseClasses: ACTIVITY_LOG_RELEASE_CLASSES,
+    },
+    globalFields: ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+    exemptionBoundaries: ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
+    implementationObligations: ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
+    lifecyclePhases: ACTIVITY_LOG_LIFECYCLE_PHASES,
+    analyzerProjections: ACTIVITY_LOG_ANALYZER_PROJECTIONS,
+    releaseImpacts: ACTIVITY_LOG_RELEASE_IMPACTS,
+  };
+}
+
+export function activityLogSchemaDigest() {
+  return sha256(JSON.stringify(activityLogSchemaDigestMaterial()));
 }
 
 // Every workspace package's `src` root, derived from `packages/*` rather than a hand-maintained
@@ -225,6 +403,1131 @@ function packageNameFromRoot(root) {
   const match = /^packages\/([^/]+)\/src$/.exec(root);
   if (match?.[1] === undefined) throw new Error(`Unexpected scanned root shape: ${root}`);
   return match[1];
+}
+
+function sourceFilesForRegistry(repoRoot) {
+  return scannedPackageRoots(repoRoot).flatMap((root) =>
+    walkTsFiles(join(repoRoot, ...root.split("/"))),
+  );
+}
+
+function unwrapExpression(expression) {
+  let current = expression;
+  while (
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isParenthesizedExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function stringLiteralType(checker, node, propertyName) {
+  const property = checker.getTypeAtLocation(node).getProperty(propertyName);
+  if (property === undefined) return undefined;
+  const declaration = property.valueDeclaration ?? property.declarations?.[0] ?? node;
+  const type = checker.getTypeOfSymbolAtLocation(property, declaration);
+  return type.isStringLiteral() ? type.value : undefined;
+}
+
+const CANONICAL_ACTIVITY_LOG_API =
+  /\/packages\/keiko-contracts\/(?:src|dist)\/observability(?:\.d)?\.ts$/u;
+
+function canonicalActivityLogApiName(checker, node) {
+  const declaration = checker.getResolvedSignature(node)?.declaration;
+  if (declaration === undefined) return undefined;
+  const sourcePath = declaration.getSourceFile().fileName.replaceAll("\\", "/");
+  if (!CANONICAL_ACTIVITY_LOG_API.test(sourcePath)) return undefined;
+  return declaration.name !== undefined && ts.isIdentifier(declaration.name)
+    ? declaration.name.text
+    : undefined;
+}
+
+function typedCallKind(checker, node) {
+  if (!ts.isCallExpression(node)) return undefined;
+  const apiName = canonicalActivityLogApiName(checker, node);
+  if (apiName === "activityLogEvent") return "activity-log-event";
+  const expectedKind =
+    apiName === "defineActivityLogOperation" ? "activity-log-operation" : undefined;
+  return stringLiteralType(checker, node, "contractKind") === expectedKind
+    ? expectedKind
+    : undefined;
+}
+
+function propertyNameText(name) {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
+  return undefined;
+}
+
+function literalPrimitive(value) {
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+    return { value: value.text };
+  }
+  if (ts.isNumericLiteral(value)) return { value: Number(value.text) };
+  if (value.kind === ts.SyntaxKind.TrueKeyword) return { value: true };
+  if (value.kind === ts.SyntaxKind.FalseKeyword) return { value: false };
+  return undefined;
+}
+
+function constInitializer(checker, identifier) {
+  if (checker === undefined) return undefined;
+  let symbol = checker.getSymbolAtLocation(identifier);
+  if (symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  const declarations = symbol?.declarations ?? [];
+  if (declarations.length !== 1) return undefined;
+  const declaration = declarations[0];
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.initializer === undefined ||
+    (declaration.parent.flags & ts.NodeFlags.Const) === 0
+  ) {
+    return undefined;
+  }
+  return declaration.initializer;
+}
+
+function literalRegistryObject(value, checker, seen) {
+  const result = Object.create(null);
+  for (const property of value.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      const spread = literalRegistryValue(property.expression, checker, seen);
+      if (spread === undefined || typeof spread !== "object" || Array.isArray(spread)) {
+        return undefined;
+      }
+      Object.assign(result, spread);
+      continue;
+    }
+    if (!ts.isPropertyAssignment(property)) return undefined;
+    const name = propertyNameText(property.name);
+    const propertyValue = literalRegistryValue(property.initializer, checker, seen);
+    if (name === undefined || propertyValue === undefined) return undefined;
+    result[name] = propertyValue;
+  }
+  return result;
+}
+
+function literalRegistryIdentifier(identifier, checker, seen) {
+  const initializer = constInitializer(checker, identifier);
+  if (initializer === undefined || seen.has(initializer)) return undefined;
+  return literalRegistryValue(initializer, checker, new Set([...seen, initializer]));
+}
+
+function literalRegistryArray(value, checker, seen) {
+  const items = [];
+  for (const item of value.elements) {
+    if (ts.isSpreadElement(item)) {
+      const spread = literalRegistryValue(item.expression, checker, seen);
+      if (!Array.isArray(spread)) return undefined;
+      items.push(...spread);
+      continue;
+    }
+    const itemValue = literalRegistryValue(item, checker, seen);
+    if (itemValue === undefined) return undefined;
+    items.push(itemValue);
+  }
+  return items;
+}
+
+function literalRegistryValue(expression, checker, seen = new Set()) {
+  const value = unwrapExpression(expression);
+  const primitive = literalPrimitive(value);
+  if (primitive !== undefined) return primitive.value;
+  if (ts.isIdentifier(value)) return literalRegistryIdentifier(value, checker, seen);
+  if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, checker, seen);
+  return ts.isObjectLiteralExpression(value)
+    ? literalRegistryObject(value, checker, seen)
+    : undefined;
+}
+
+function registrySite(repoRoot, sourceFile, node) {
+  const relPath = relative(repoRoot, sourceFile.fileName).replaceAll("\\", "/");
+  const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+  return `${relPath}:${String(line)}`;
+}
+
+function registryViolation(code, site, correctiveAction) {
+  return { code, site, correctiveAction };
+}
+
+function exemptionSite(index) {
+  return `typedRegistry.exemptions[${String(index)}]`;
+}
+
+function validExpiryDate(value) {
+  if (typeof value !== "string" || !EXEMPTION_DATE.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function validExemptionToken(value) {
+  return typeof value === "string" && REGISTRATION_TOKEN.test(value);
+}
+
+function validExemptionOperation(value) {
+  return typeof value === "string" && OP_NAME_PATTERN.test(value);
+}
+
+function validExemptionReason(value) {
+  return typeof value === "string" && value.trim().length >= 16 && value.length <= 512;
+}
+
+function invalidExemptionField(exemption) {
+  if (typeof exemption !== "object" || exemption === null || Array.isArray(exemption)) {
+    return "record";
+  }
+  if (!Object.keys(exemption).every((key) => EXEMPTION_KEYS.has(key))) return "unknown-key";
+  const checks = [
+    { field: "contractKind", valid: exemption.contractKind === "activity-log-exemption" },
+    { field: "schemaVersion", valid: exemption.schemaVersion === 1 },
+    { field: "id", valid: validExemptionToken(exemption.id) },
+    { field: "operation", valid: validExemptionOperation(exemption.operation) },
+    { field: "failureClass", valid: validExemptionToken(exemption.failureClass) },
+    { field: "boundary", valid: EXEMPTION_BOUNDARIES.has(exemption.boundary) },
+    { field: "owner", valid: validExemptionToken(exemption.owner) },
+    { field: "reason", valid: validExemptionReason(exemption.reason) },
+    {
+      field: "trackingIssue",
+      valid: Number.isInteger(exemption.trackingIssue) && exemption.trackingIssue > 0,
+    },
+    { field: "expiresOn", valid: validExpiryDate(exemption.expiresOn) },
+  ];
+  return checks.find(({ valid }) => !valid)?.field;
+}
+
+function exemptionViolation(code, index, detail, correctiveAction) {
+  return {
+    ...registryViolation(code, exemptionSite(index), correctiveAction),
+    detail,
+  };
+}
+
+function exemptionScopeViolation(exemption, operations, index) {
+  const operation = operations.find((candidate) => candidate.op === exemption.operation);
+  if (operation === undefined) {
+    return exemptionViolation(
+      "exemption-unknown-operation",
+      index,
+      exemption.operation,
+      "Scope the exemption to one registered production operation.",
+    );
+  }
+  if (!operation.failureClasses.includes(exemption.failureClass)) {
+    return exemptionViolation(
+      "exemption-failure-class-mismatch",
+      index,
+      exemption.failureClass,
+      "Scope the exemption to a failure class declared by the selected operation.",
+    );
+  }
+  return undefined;
+}
+
+function validateExemptionEntry(exemption, index, operations, today, ids) {
+  const violations = [];
+  const invalidField = invalidExemptionField(exemption);
+  if (invalidField !== undefined) {
+    return [
+      exemptionViolation(
+        "exemption-invalid",
+        index,
+        invalidField,
+        "Provide every bounded exemption field and remove any authorization-like extra key.",
+      ),
+    ];
+  }
+  if (ids.has(exemption.id)) {
+    violations.push(
+      exemptionViolation(
+        "exemption-duplicate",
+        index,
+        exemption.id,
+        "Give each reviewed exemption one stable unique id.",
+      ),
+    );
+  }
+  ids.add(exemption.id);
+  if (exemption.expiresOn < today) {
+    violations.push(
+      exemptionViolation(
+        "exemption-expired",
+        index,
+        exemption.expiresOn,
+        "Remove the expired exemption or complete the linked remediation before release.",
+      ),
+    );
+  }
+  const scopeViolation = exemptionScopeViolation(exemption, operations, index);
+  if (scopeViolation !== undefined) violations.push(scopeViolation);
+  return violations;
+}
+
+export function validateActivityLogRegistryExemptions(exemptions, operations, now = new Date()) {
+  if (
+    !Array.isArray(exemptions) ||
+    exemptions.length > ACTIVITY_LOG_EXEMPTION_SCHEMA.maximumEntries
+  ) {
+    return [
+      registryViolation(
+        "exemption-registry-invalid",
+        "typedRegistry.exemptions",
+        "Keep the reviewed exemption registry as a bounded array of exact records.",
+      ),
+    ];
+  }
+  const today = now.toISOString().slice(0, 10);
+  const ids = new Set();
+  return exemptions.flatMap((exemption, index) =>
+    validateExemptionEntry(exemption, index, operations, today, ids),
+  );
+}
+
+function visitSource(sourceFile, visit) {
+  const walk = (node) => {
+    visit(node);
+    ts.forEachChild(node, walk);
+  };
+  walk(sourceFile);
+}
+
+function registrationSymbol(checker, call) {
+  const parent = call.parent;
+  if (!ts.isVariableDeclaration(parent) || !ts.isIdentifier(parent.name)) return undefined;
+  return checker.getSymbolAtLocation(parent.name);
+}
+
+function emittedRegistrationSymbol(checker, expression) {
+  const value = unwrapExpression(expression);
+  if (!ts.isIdentifier(value)) return undefined;
+  const symbol = checker.getSymbolAtLocation(value);
+  return symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
+}
+
+function typedRegistryProgram(repoRoot) {
+  const rootNames = sourceFilesForRegistry(repoRoot);
+  return ts.createProgram({
+    rootNames,
+    options: {
+      baseUrl: repoRoot,
+      paths: {
+        "@oscharko-dev/keiko-contracts/runtime/observability": [
+          "packages/keiko-contracts/src/observability.ts",
+        ],
+        "@oscharko-dev/keiko-contracts/runtime/pr-description": [
+          "packages/keiko-contracts/src/pr-description.ts",
+        ],
+      },
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      skipLibCheck: true,
+      strict: true,
+    },
+  });
+}
+
+function relevantRegistrySource(sourceFile) {
+  return (
+    sourceFile.text.includes("defineActivityLogOperation") ||
+    sourceFile.text.includes("activityLogEvent")
+  );
+}
+
+function diagnosticSite(repoRoot, diagnostic) {
+  if (diagnostic.file === undefined || diagnostic.start === undefined) return "registry-program";
+  return registrySite(repoRoot, diagnostic.file, {
+    getStart: () => diagnostic.start,
+  });
+}
+
+function typedRegistryDiagnostics(program, repoRoot) {
+  const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
+  return diagnostics
+    .filter(
+      (diagnostic) => diagnostic.file !== undefined && relevantRegistrySource(diagnostic.file),
+    )
+    .map((diagnostic) => ({
+      ...registryViolation(
+        "typescript-diagnostic",
+        diagnosticSite(repoRoot, diagnostic),
+        "Repair the typed Activity Log registration or emission before generating the registry.",
+      ),
+      detail: `TS${String(diagnostic.code)}`,
+    }));
+}
+
+function invalidClosedStringArray(value, pattern = REGISTRATION_TOKEN) {
+  return (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 64 ||
+    value.some((item) => typeof item !== "string" || !pattern.test(item))
+  );
+}
+
+function invalidOptionalBound(value, maximum) {
+  return value !== undefined && (!Number.isInteger(value) || value <= 0 || value > maximum);
+}
+
+function validFieldContractShape(contract) {
+  return typeof contract === "object" && contract !== null && !Array.isArray(contract);
+}
+
+function validFieldContractValues(contract) {
+  if (contract.values === undefined) {
+    return contract.dataClass !== "closed-enum" || contract.type === "boolean";
+  }
+  return !invalidClosedStringArray(contract.values, REGISTRATION_CLOSED_VALUE);
+}
+
+function fieldContractIsBounded(contract) {
+  if (contract.type === "string-array") {
+    return (
+      contract.maxItems !== undefined &&
+      (contract.maxLength !== undefined || contract.values !== undefined)
+    );
+  }
+  if (contract.type !== "string") return true;
+  if (contract.dataClass === "completeness-state" || contract.dataClass === "loss-state") {
+    return true;
+  }
+  return contract.maxLength !== undefined || contract.values !== undefined;
+}
+
+function invalidFieldContract(name, contract) {
+  if (!REGISTRATION_FIELD_NAME.test(name)) return name;
+  if (!validFieldContractShape(contract)) return name;
+  const valid = [
+    Object.keys(contract).every((key) => REGISTRATION_FIELD_KEYS.has(key)),
+    REGISTRATION_FIELD_TYPES.has(contract.type),
+    REGISTRATION_DATA_CLASSES.has(contract.dataClass),
+    typeof contract.required === "boolean",
+    !invalidOptionalBound(contract.maxLength, 8192),
+    !invalidOptionalBound(contract.maxItems, 64),
+    validFieldContractValues(contract),
+    fieldContractIsBounded(contract),
+  ];
+  return valid.every(Boolean) ? undefined : name;
+}
+
+function invalidFields(fields) {
+  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) return "fields";
+  const entries = Object.entries(fields);
+  const contextFieldCount = entries.filter(
+    ([name]) => ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS[name] === undefined,
+  ).length;
+  if (contextFieldCount > 48) return "fields";
+  for (const [name, contract] of entries) {
+    const invalid = invalidFieldContract(name, contract);
+    if (invalid !== undefined) return `fields.${invalid}`;
+  }
+  return undefined;
+}
+
+function matchesGlobalFieldContract(actual, expected) {
+  return (
+    actual.type === expected.type &&
+    actual.dataClass === expected.dataClass &&
+    actual.required === expected.required &&
+    actual.maxLength === undefined &&
+    actual.maxItems === undefined &&
+    actual.values === undefined
+  );
+}
+
+function invalidGlobalFieldOverride(fields) {
+  for (const [name, expected] of Object.entries(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS)) {
+    const actual = fields[name];
+    if (actual !== undefined && !matchesGlobalFieldContract(actual, expected)) return name;
+  }
+  return undefined;
+}
+
+function invalidRegistrationField(value) {
+  const fields = invalidFields(value.fields);
+  if (fields !== undefined) return fields;
+  const checks = [
+    { field: "unknown-key", valid: Object.keys(value).every((key) => REGISTRATION_KEYS.has(key)) },
+    { field: "contractKind", valid: value.contractKind === "activity-log-operation" },
+    { field: "schemaVersion", valid: value.schemaVersion === 1 },
+    { field: "op", valid: typeof value.op === "string" && OP_NAME_PATTERN.test(value.op) },
+    { field: "category", valid: REGISTRATION_CATEGORIES.has(value.category) },
+    {
+      field: "owner",
+      valid: typeof value.owner === "string" && REGISTRATION_TOKEN.test(value.owner),
+    },
+    {
+      field: "emitter",
+      valid: typeof value.emitter === "string" && REGISTRATION_TOKEN.test(value.emitter),
+    },
+    { field: "causal", valid: REGISTRATION_CAUSAL.has(value.causal) },
+    { field: "lifecycle", valid: REGISTRATION_LIFECYCLE.has(value.lifecycle) },
+    {
+      field: "analyzerProjection",
+      valid: REGISTRATION_PROJECTIONS.has(value.analyzerProjection),
+    },
+    { field: "failureClasses", valid: !invalidClosedStringArray(value.failureClasses) },
+    { field: "proofIds", valid: !invalidClosedStringArray(value.proofIds) },
+    { field: "releaseImpact", valid: REGISTRATION_RELEASE_IMPACTS.has(value.releaseImpact) },
+  ];
+  return checks.find(({ valid }) => !valid)?.field;
+}
+
+function pushInvalidRegistration(context, site, detail, correctiveAction) {
+  context.violations.push({
+    ...registryViolation("registration-invalid", site, correctiveAction),
+    detail,
+  });
+}
+
+function rejectInvalidRegistrationField(context, site, value) {
+  const invalidField = invalidRegistrationField(value);
+  if (invalidField === undefined) return false;
+  pushInvalidRegistration(
+    context,
+    site,
+    invalidField,
+    "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
+  );
+  return true;
+}
+
+function registrationLiteral(context, node, site) {
+  const argument = node.arguments[0];
+  const value =
+    argument === undefined ? undefined : literalRegistryValue(argument, context.checker);
+  if (value !== undefined && typeof value.op === "string") return value;
+  context.violations.push(
+    registryViolation(
+      "registration-not-literal",
+      site,
+      "Pass one closed object literal with a literal op to defineActivityLogOperation.",
+    ),
+  );
+  return undefined;
+}
+
+function collectTypedRegistration(context, sourceFile, node) {
+  if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
+  const site = registrySite(context.repoRoot, sourceFile, node);
+  const value = registrationLiteral(context, node, site);
+  if (value === undefined) return;
+  if (rejectInvalidRegistrationField(context, site, value)) return;
+  const invalidGlobalField = invalidGlobalFieldOverride(value.fields);
+  if (invalidGlobalField !== undefined) {
+    pushInvalidRegistration(
+      context,
+      site,
+      `fields.${invalidGlobalField}`,
+      "Use the mandatory global completeness and loss field contracts without modification.",
+    );
+    return;
+  }
+  const valueWithGlobalFields = {
+    ...value,
+    fields: { ...ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS, ...value.fields },
+  };
+  if (rejectInvalidRegistrationField(context, site, valueWithGlobalFields)) return;
+  const operation = { ...valueWithGlobalFields, registrationSite: site, emitterSites: [] };
+  context.operations.push(operation);
+  const symbol = registrationSymbol(context.checker, node);
+  if (symbol !== undefined) context.bySymbol.set(symbol, operation);
+}
+
+function collectTypedEmission(context, sourceFile, node) {
+  if (typedCallKind(context.checker, node) !== "activity-log-event") return;
+  const site = registrySite(context.repoRoot, sourceFile, node);
+  const argument = node.arguments[0];
+  const symbol =
+    argument === undefined ? undefined : emittedRegistrationSymbol(context.checker, argument);
+  const operation = symbol === undefined ? undefined : context.bySymbol.get(symbol);
+  if (operation === undefined) {
+    context.violations.push(
+      registryViolation(
+        "emission-unregistered",
+        site,
+        "Pass a local defineActivityLogOperation registration to activityLogEvent.",
+      ),
+    );
+    return;
+  }
+  operation.emitterSites.push(site);
+}
+
+function collectTypedSites(context, sourceFiles, collector) {
+  for (const sourceFile of sourceFiles) {
+    visitSource(sourceFile, (node) => collector(context, sourceFile, node));
+  }
+}
+
+function addDuplicateRegistrationViolations(context) {
+  const byOp = Map.groupBy(context.operations, (operation) => operation.op);
+  for (const [op, registrations] of byOp) {
+    if (registrations.length < 2) continue;
+    context.violations.push({
+      ...registryViolation(
+        "registration-duplicate",
+        registrations[0].registrationSite,
+        "Keep exactly one defineActivityLogOperation registration for each operation.",
+      ),
+      detail: op,
+    });
+  }
+}
+
+function addMissingEmitterViolations(context) {
+  for (const operation of context.operations) {
+    if (operation.emitterSites.length > 0) continue;
+    context.violations.push({
+      ...registryViolation(
+        "registration-not-emitted",
+        operation.registrationSite,
+        "Emit the registered operation through activityLogEvent at its production owner.",
+      ),
+      detail: operation.op,
+    });
+  }
+}
+
+function operationContextFields(operation) {
+  return Object.entries(operation.fields)
+    .filter(([name]) => name !== "completeness" && name !== "loss")
+    .map(([name, contract]) => ({
+      name,
+      type: contract.type,
+      dataClass: contract.dataClass,
+      required: contract.required,
+    }))
+    .toSorted((left, right) => compareCodepoints(left.name, right.name));
+}
+
+function operationEvidenceClasses(operation) {
+  return [...new Set(Object.values(operation.fields).map((field) => field.dataClass))].toSorted(
+    compareCodepoints,
+  );
+}
+
+// Registration already rejects empty proofIds, so a missing executable proof surfaces as a
+// typed-registry violation and through the failure-class contract comparison, never here.
+function operationCoverageMissing(operation) {
+  return operation.emitterSites.length === 0 ? ["failure-evidence"] : [];
+}
+
+function sortedUnique(values) {
+  return [...new Set(values)].toSorted(compareCodepoints);
+}
+
+function sameStringSet(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function isCanonicalStringArray(value, validValue, allowEmpty = true) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) return false;
+  if (!value.every((item) => typeof item === "string" && validValue(item))) return false;
+  return sameStringSet(value, sortedUnique(value));
+}
+
+function lifecycleOperations(members) {
+  return Object.fromEntries(
+    ACTIVITY_LOG_LIFECYCLE_PHASES.map((phase) => [
+      phase,
+      members
+        .filter((operation) => operation.lifecycle === phase)
+        .map((operation) => operation.op)
+        .toSorted(compareCodepoints),
+    ]),
+  );
+}
+
+function failureClassContractSite(failureClass, index) {
+  return typeof failureClass === "string"
+    ? `typedRegistry.failureClassContracts.${failureClass}`
+    : `typedRegistry.failureClassContracts[${String(index)}]`;
+}
+
+function failureClassContractViolation(code, failureClass, index, detail, correctiveAction) {
+  return {
+    ...registryViolation(code, failureClassContractSite(failureClass, index), correctiveAction),
+    detail,
+  };
+}
+
+function invalidFailureClassLifecycle(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "record";
+  if (
+    !sameStringSet(
+      Object.keys(value).toSorted(compareCodepoints),
+      [...ACTIVITY_LOG_LIFECYCLE_PHASES].toSorted(compareCodepoints),
+    )
+  ) {
+    return "keys";
+  }
+  return ACTIVITY_LOG_LIFECYCLE_PHASES.find(
+    (phase) => !isCanonicalStringArray(value[phase], (op) => OP_NAME_PATTERN.test(op)),
+  );
+}
+
+function failureClassContractIdentityChecks(contract, invalidLifecycle) {
+  return [
+    { field: "contractKind", valid: contract.contractKind === "activity-log-failure-class" },
+    { field: "schemaVersion", valid: contract.schemaVersion === 1 },
+    {
+      field: "failureClass",
+      valid:
+        typeof contract.failureClass === "string" && REGISTRATION_TOKEN.test(contract.failureClass),
+    },
+    {
+      field: "requiredProductSurfaces",
+      valid: isCanonicalStringArray(
+        contract.requiredProductSurfaces,
+        (owner) => REGISTRATION_TOKEN.test(owner),
+        false,
+      ),
+    },
+    { field: "requiredLifecycleOperations", valid: invalidLifecycle === undefined },
+  ];
+}
+
+function failureClassContractOperationChecks(contract) {
+  const validOperation = (op) => OP_NAME_PATTERN.test(op);
+  return [
+    {
+      field: "requiredCausalOperations",
+      valid: isCanonicalStringArray(contract.requiredCausalOperations, validOperation),
+    },
+    {
+      field: "requiredLossOperations",
+      valid: isCanonicalStringArray(contract.requiredLossOperations, validOperation),
+    },
+    {
+      field: "requiredProofOperations",
+      valid: isCanonicalStringArray(contract.requiredProofOperations, validOperation),
+    },
+    {
+      field: "requiredReplayProofIds",
+      valid: isCanonicalStringArray(contract.requiredReplayProofIds, (proofId) =>
+        REGISTRATION_TOKEN.test(proofId),
+      ),
+    },
+    {
+      field: "requiredResourceOperations",
+      valid: isCanonicalStringArray(contract.requiredResourceOperations, validOperation),
+    },
+    {
+      field: "requiredEvidenceClasses",
+      valid: isCanonicalStringArray(
+        contract.requiredEvidenceClasses,
+        (dataClass) => REGISTRATION_DATA_CLASSES.has(dataClass),
+        false,
+      ),
+    },
+    {
+      field: "requiredFrameOperations",
+      valid: isCanonicalStringArray(contract.requiredFrameOperations, validOperation),
+    },
+    {
+      field: "requiredCauseOperations",
+      valid: isCanonicalStringArray(contract.requiredCauseOperations, validOperation),
+    },
+  ];
+}
+
+function invalidFailureClassContractField(contract) {
+  if (typeof contract !== "object" || contract === null || Array.isArray(contract)) return "record";
+  if (!Object.keys(contract).every((key) => FAILURE_CLASS_CONTRACT_KEYS.has(key))) {
+    return "unknown-key";
+  }
+  const invalidLifecycle = invalidFailureClassLifecycle(contract.requiredLifecycleOperations);
+  const checks = [
+    ...failureClassContractIdentityChecks(contract, invalidLifecycle),
+    ...failureClassContractOperationChecks(contract),
+  ];
+  return (
+    checks.find(({ valid }) => !valid)?.field ??
+    (invalidLifecycle === undefined ? undefined : `requiredLifecycleOperations.${invalidLifecycle}`)
+  );
+}
+
+function requiredContractOperations(contract) {
+  return sortedUnique(
+    ACTIVITY_LOG_LIFECYCLE_PHASES.flatMap((phase) => contract.requiredLifecycleOperations[phase]),
+  );
+}
+
+function contractInternalViolations(contract, index) {
+  const failureClass = contract?.failureClass;
+  const invalidField = invalidFailureClassContractField(contract);
+  if (invalidField !== undefined) {
+    return [
+      failureClassContractViolation(
+        "failure-class-contract-invalid",
+        failureClass,
+        index,
+        invalidField,
+        "Declare one closed, codepoint-sorted failure-class obligation record.",
+      ),
+    ];
+  }
+  const requiredOperations = requiredContractOperations(contract);
+  const lifecycleLoss = contract.requiredLifecycleOperations.loss;
+  const checks = [
+    {
+      valid: sameStringSet(contract.requiredLossOperations, lifecycleLoss),
+      detail: "requiredLossOperations",
+    },
+    {
+      valid: sameStringSet(contract.requiredProofOperations, requiredOperations),
+      detail: "requiredProofOperations",
+    },
+    ...[
+      ["requiredCausalOperations", contract.requiredCausalOperations],
+      ["requiredFrameOperations", contract.requiredFrameOperations],
+      ["requiredCauseOperations", contract.requiredCauseOperations],
+      ["requiredResourceOperations", contract.requiredResourceOperations],
+    ].map(([detail, operations]) => ({
+      valid: operations.every((op) => requiredOperations.includes(op)),
+      detail,
+    })),
+  ];
+  const failed = checks.find(({ valid }) => !valid);
+  return failed === undefined
+    ? []
+    : [
+        failureClassContractViolation(
+          "failure-class-contract-inconsistent",
+          failureClass,
+          index,
+          failed.detail,
+          "Keep loss, causal, frame, cause, and proof obligations inside the exact lifecycle membership.",
+        ),
+      ];
+}
+
+function actualFailureClassFacts(members) {
+  return {
+    operations: members.map((operation) => operation.op).toSorted(compareCodepoints),
+    productSurfaces: sortedUnique(members.map((operation) => operation.owner)),
+    lifecycleOperations: lifecycleOperations(members),
+    causalOperations: members
+      .filter((operation) => operation.causal !== "none")
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    lossOperations: members
+      .filter((operation) => operation.lifecycle === "loss")
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    proofOperations: members
+      .filter((operation) => operation.proofIds.length > 0)
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    replayProofIds: sortedUnique(
+      members.flatMap((operation) =>
+        operation.proofIds.filter((proofId) => /replay|seed|fixture/u.test(proofId)),
+      ),
+    ),
+    resourceOperations: members
+      .filter((operation) => ["start", "state", "end"].includes(operation.lifecycle))
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    evidenceClasses: sortedUnique(members.flatMap(operationEvidenceClasses)),
+    frameOperations: members
+      .filter((operation) => operation.fields.frames !== undefined)
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    causeOperations: members
+      .filter((operation) => operation.fields.causeChain !== undefined)
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+  };
+}
+
+function contractFactChecks(contract, facts) {
+  return [
+    ["product-surfaces", contract.requiredProductSurfaces, facts.productSurfaces],
+    ...ACTIVITY_LOG_LIFECYCLE_PHASES.map((phase) => [
+      `lifecycle-${phase}`,
+      contract.requiredLifecycleOperations[phase],
+      facts.lifecycleOperations[phase],
+    ]),
+    ["causal-edges", contract.requiredCausalOperations, facts.causalOperations],
+    ["loss-signals", contract.requiredLossOperations, facts.lossOperations],
+    ["executable-proof", contract.requiredProofOperations, facts.proofOperations],
+    ["replay-references", contract.requiredReplayProofIds, facts.replayProofIds],
+    ["resource-signals", contract.requiredResourceOperations, facts.resourceOperations],
+    ["evidence-classes", contract.requiredEvidenceClasses, facts.evidenceClasses],
+    ["frame-evidence", contract.requiredFrameOperations, facts.frameOperations],
+    ["cause-evidence", contract.requiredCauseOperations, facts.causeOperations],
+  ];
+}
+
+function contractFactViolations(contract, index, members) {
+  const facts = actualFailureClassFacts(members);
+  return contractFactChecks(contract, facts)
+    .filter(([, required, actual]) => !sameStringSet(required, actual))
+    .map(([detail]) =>
+      failureClassContractViolation(
+        "failure-class-contract-unsatisfied",
+        contract.failureClass,
+        index,
+        detail,
+        "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
+      ),
+    );
+}
+
+function invalidFailureClassRegistryAnalysis() {
+  return {
+    contracts: [],
+    violations: [
+      failureClassContractViolation(
+        "failure-class-contract-registry-invalid",
+        undefined,
+        0,
+        "record",
+        "Provide the bounded canonical failure-class obligation registry.",
+      ),
+    ],
+  };
+}
+
+function collectUsableFailureClassContracts(contracts) {
+  const violations = [];
+  const usableContracts = [];
+  const byFailureClass = new Map();
+  contracts.forEach((contract, index) => {
+    const internalViolations = contractInternalViolations(contract, index);
+    violations.push(...internalViolations);
+    if (internalViolations.length > 0) return;
+    const existing = byFailureClass.get(contract.failureClass);
+    if (existing !== undefined) {
+      violations.push(
+        failureClassContractViolation(
+          "failure-class-contract-duplicate",
+          contract.failureClass,
+          index,
+          contract.failureClass,
+          "Keep exactly one canonical obligation declaration per failure class.",
+        ),
+      );
+      return;
+    }
+    byFailureClass.set(contract.failureClass, contract);
+    usableContracts.push(contract);
+  });
+  return { byFailureClass, usableContracts, violations };
+}
+
+function addMissingFailureClassContractViolations(analysis, operations) {
+  const operationClasses = sortedUnique(
+    operations.flatMap((operation) => operation.failureClasses),
+  );
+  for (const failureClass of operationClasses) {
+    if (analysis.byFailureClass.has(failureClass)) continue;
+    analysis.violations.push(
+      failureClassContractViolation(
+        "failure-class-contract-missing",
+        failureClass,
+        0,
+        failureClass,
+        "Declare the failure class and all of its obligations before using it in an operation.",
+      ),
+    );
+  }
+}
+
+function addUnsatisfiedFailureClassContractViolations(analysis, operations) {
+  analysis.usableContracts.forEach((contract, index) => {
+    const members = operations.filter((operation) =>
+      operation.failureClasses.includes(contract.failureClass),
+    );
+    analysis.violations.push(...contractFactViolations(contract, index, members));
+  });
+}
+
+function analyzeFailureClassContracts(contracts, operations) {
+  if (!Array.isArray(contracts)) return invalidFailureClassRegistryAnalysis();
+  const analysis = collectUsableFailureClassContracts(contracts);
+  addMissingFailureClassContractViolations(analysis, operations);
+  addUnsatisfiedFailureClassContractViolations(analysis, operations);
+  return { contracts: analysis.usableContracts, violations: analysis.violations };
+}
+
+export function validateActivityLogFailureClassContracts(contracts, operations) {
+  return analyzeFailureClassContracts(contracts, operations).violations;
+}
+
+function failureClassOperation(operation) {
+  return {
+    op: operation.op,
+    owner: operation.owner,
+    category: operation.category,
+    lifecycle: operation.lifecycle,
+    causal: operation.causal,
+    analyzerProjection: operation.analyzerProjection,
+    safeContextFields: operationContextFields(operation),
+    evidenceClasses: operationEvidenceClasses(operation),
+    frameCauseEvidence: {
+      frames: operation.fields.frames !== undefined,
+      causeChain: operation.fields.causeChain !== undefined,
+    },
+    proofIds: operation.proofIds,
+    replayReferences: operation.proofIds.filter((proofId) => /replay|seed|fixture/u.test(proofId)),
+    missingObligations: operationCoverageMissing(operation),
+  };
+}
+
+function failureClassEntry(failureClass, operations, contract, contractViolations) {
+  const members = operations
+    .filter((operation) => operation.failureClasses.includes(failureClass))
+    .toSorted((left, right) => compareCodepoints(left.op, right.op));
+  const coveredOperations = members.map(failureClassOperation);
+  const missingObligations = [
+    ...new Set(coveredOperations.flatMap((operation) => operation.missingObligations)),
+    ...contractViolations.map(({ detail }) => detail),
+  ].toSorted(compareCodepoints);
+  const facts = actualFailureClassFacts(members);
+  return {
+    failureClass,
+    requirementContract: contract?.failureClass,
+    productSurfaces: [...new Set(members.map((operation) => operation.owner))].toSorted(
+      compareCodepoints,
+    ),
+    lifecycleTransitions: [...new Set(members.map((operation) => operation.lifecycle))].toSorted(
+      compareCodepoints,
+    ),
+    lifecycleOperations: facts.lifecycleOperations,
+    causalEdges: members.map((operation) => ({ op: operation.op, mode: operation.causal })),
+    lossSignals: facts.lossOperations,
+    resourceSignals: facts.resourceOperations,
+    replayReferences: facts.replayProofIds,
+    operations: coveredOperations,
+    missingObligations,
+    completeness: missingObligations.length === 0 ? "complete" : "incomplete",
+  };
+}
+
+function failureClassCoverage(operations, analysis) {
+  const failureClasses = sortedUnique([
+    ...operations.flatMap((operation) => operation.failureClasses),
+    ...analysis.contracts.map((contract) => contract.failureClass),
+  ]);
+  const classes = failureClasses.map((failureClass) => {
+    const contract = analysis.contracts.find(
+      (candidate) => candidate.failureClass === failureClass,
+    );
+    const contractViolations = analysis.violations.filter((violation) =>
+      violation.site.endsWith(`.${failureClass}`),
+    );
+    if (contract === undefined) {
+      contractViolations.push({ detail: "failure-class-contract" });
+    }
+    return failureClassEntry(failureClass, operations, contract, contractViolations);
+  });
+  const completeClassCount = classes.filter((entry) => entry.completeness === "complete").length;
+  return {
+    schemaVersion: 1,
+    releaseExpectation: "100%-complete",
+    supportedClassCount: classes.length,
+    completeClassCount,
+    completeness: completeClassCount === classes.length ? "complete" : "incomplete",
+    classes,
+  };
+}
+
+function failureClassCoverageViolations(coverage) {
+  return coverage.classes
+    .filter((entry) => entry.completeness !== "complete")
+    .map((entry) => ({
+      ...registryViolation(
+        "failure-class-incomplete",
+        `typedRegistry.failureClassCoverage.${entry.failureClass}`,
+        "Add the missing registered completeness, loss, and executable proof obligations.",
+      ),
+      detail: entry.missingObligations.join(","),
+    }));
+}
+
+export function generateTypedActivityLogRegistry(
+  repoRoot = REPO_ROOT,
+  failureClassContracts = ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS,
+) {
+  const program = typedRegistryProgram(repoRoot);
+  const checker = program.getTypeChecker();
+  const operations = [];
+  const bySymbol = new Map();
+  const violations = typedRegistryDiagnostics(program, repoRoot);
+  const sourceFiles = program
+    .getSourceFiles()
+    .filter((sourceFile) => sourceFile.fileName.startsWith(join(repoRoot, "packages")));
+  const context = { repoRoot, checker, operations, bySymbol, violations };
+  collectTypedSites(context, sourceFiles, collectTypedRegistration);
+  collectTypedSites(context, sourceFiles, collectTypedEmission);
+  addDuplicateRegistrationViolations(context);
+  addMissingEmitterViolations(context);
+
+  const sortedOperations = operations.toSorted((left, right) =>
+    compareCodepoints(left.op, right.op),
+  );
+  const exemptions = [...ACTIVITY_LOG_REGISTRY_EXEMPTIONS];
+  const failureClassAnalysis = analyzeFailureClassContracts(
+    failureClassContracts,
+    sortedOperations,
+  );
+  const failureCoverage = failureClassCoverage(sortedOperations, failureClassAnalysis);
+  violations.push(
+    ...validateActivityLogRegistryExemptions(exemptions, sortedOperations),
+    ...failureClassAnalysis.violations,
+    ...failureClassCoverageViolations(failureCoverage),
+  );
+  return {
+    schemaVersion: 1,
+    schemaDigest: activityLogSchemaDigest(),
+    catalogDigest: sha256(
+      JSON.stringify({ operations: sortedOperations, exemptions, failureClassContracts }),
+    ),
+    obligationCategories: ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
+    operations: sortedOperations,
+    exemptionSchema: ACTIVITY_LOG_EXEMPTION_SCHEMA,
+    exemptions,
+    failureClassContracts,
+    failureClassCoverage: failureCoverage,
+    violations: violations.toSorted((left, right) => compareCodepoints(left.site, right.site)),
+  };
+}
+
+function runtimeOperationContract(operation) {
+  return {
+    contractKind: operation.contractKind,
+    schemaVersion: operation.schemaVersion,
+    op: operation.op,
+    category: operation.category,
+    owner: operation.owner,
+    emitter: operation.emitter,
+    fields: operation.fields,
+    causal: operation.causal,
+    lifecycle: operation.lifecycle,
+    analyzerProjection: operation.analyzerProjection,
+    failureClasses: operation.failureClasses,
+    proofIds: operation.proofIds,
+    releaseImpact: operation.releaseImpact,
+  };
+}
+
+function runtimeRegistryModule(typedRegistry) {
+  const operationRegistry = typedRegistry.operations.map(runtimeOperationContract);
+  return [
+    "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
+    `export const ACTIVITY_LOG_REGISTRY_VERSION = ${String(typedRegistry.schemaVersion)} as const;`,
+    `export const ACTIVITY_LOG_SCHEMA_DIGEST = "${typedRegistry.schemaDigest}" as const;`,
+    `export const ACTIVITY_LOG_CATALOG_DIGEST = "${typedRegistry.catalogDigest}" as const;`,
+    `export const ACTIVITY_LOG_OPERATION_REGISTRY = ${JSON.stringify(operationRegistry, null, 2)} as const;`,
+    `export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = ${JSON.stringify(typedRegistry.failureClassCoverage, null, 2)} as const;`,
+    "",
+  ].join("\n");
 }
 
 // Recursively lists `.ts` source files under `dir`, skipping tests (co-located `*.test.ts` and
@@ -975,16 +2278,30 @@ export function generateOpCatalog(repoRoot = REPO_ROOT) {
     const absRoot = join(repoRoot, ...root.split("/"));
     for (const absPath of walkTsFiles(absRoot)) {
       const relPath = relative(repoRoot, absPath).replaceAll("\\", "/");
+      if (relPath === RUNTIME_REGISTRY_RELATIVE_PATH) continue;
       for (const entry of entriesForFile(absPath, relPath)) {
         entries.push({ ...entry, package: pkg });
       }
     }
   }
   const sorted = entries.toSorted(compareEntries);
+  const typedRegistry = generateTypedActivityLogRegistry(repoRoot);
+  const dynamicCount = sorted.filter((entry) => entry.op === "<dynamic>").length;
+  const unknownCategoryCount = sorted.filter((entry) => entry.category === "unknown").length;
   return {
-    $schema: "keiko-op-catalog/1",
+    $schema: "keiko-activity-log-registry/2",
     generatedBy: "scripts/generate-op-catalog.mjs",
     operationContracts: [TOOL_CATALOG_OPERATIONS_PATH],
+    authority: {
+      operationSource: "typedRegistry.operations",
+      legacyDiscovery: "non-authoritative-migration-input",
+    },
+    typedRegistry,
+    legacyDiscovery: {
+      dynamicCount,
+      unknownCategoryCount,
+      authoritative: false,
+    },
     entries: sorted,
     operations: [
       ...new Set(sorted.map((entry) => entry.op).filter((op) => op !== "<dynamic>")),
@@ -1001,17 +2318,36 @@ async function main() {
     printWidth: 100,
     tabWidth: 2,
   });
+  const runtimeRegistryBytes = await format(runtimeRegistryModule(catalog.typedRegistry), {
+    parser: "typescript",
+    printWidth: 100,
+    tabWidth: 2,
+  });
   const outPath = join(REPO_ROOT, ...OUTPUT_RELATIVE_PATH.split("/"));
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, catalogBytes, "utf8");
+  writeFileSync(
+    join(REPO_ROOT, ...RUNTIME_REGISTRY_RELATIVE_PATH.split("/")),
+    runtimeRegistryBytes,
+    "utf8",
+  );
   writeFileSync(join(REPO_ROOT, TOOL_CATALOG_OPERATIONS_PATH), operationsBytes, "utf8");
-  const dynamicCount = catalog.entries.filter((entry) => entry.op === "<dynamic>").length;
+  const dynamicCount = catalog.legacyDiscovery.dynamicCount;
   console.log(
-    `generate:op-catalog OK — ${catalog.entries.length} entries (${dynamicCount} dynamic), ` +
-      `${catalog.violations.length} operation-name violation(s). Wrote ${OUTPUT_RELATIVE_PATH}.`,
+    `generate:op-catalog OK — ${catalog.entries.length} legacy entries ` +
+      `(${dynamicCount} dynamic, non-authoritative), ` +
+      `${catalog.violations.length} operation-name violation(s), ` +
+      `${catalog.typedRegistry.violations.length} typed-registry violation(s). ` +
+      `Wrote ${OUTPUT_RELATIVE_PATH}.`,
   );
   if (catalog.violations.length > 0) {
     console.log(`  violations: ${JSON.stringify(catalog.violations)}`);
+  }
+  if (catalog.typedRegistry.violations.length > 0) {
+    console.error(
+      `  typed registry violations: ${JSON.stringify(catalog.typedRegistry.violations)}`,
+    );
+    process.exitCode = 1;
   }
 }
 

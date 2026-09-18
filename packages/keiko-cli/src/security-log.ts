@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  withActivityLogCorrelation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   emitSecurityLogEvent,
   securityErrorKind,
   type SecurityLogEvent,
@@ -17,47 +22,181 @@ export type CliWindowsSystemSurface =
   | "portable-failure-alert"
   | "start-open-browser";
 
+const WINDOWS_SYSTEM_FAILURE_KIND_FIELD = {
+  type: "string",
+  dataClass: "error-kind",
+  required: true,
+  maxLength: 64,
+} as const;
+
+const WINDOWS_LAUNCHER_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["launcher-install"],
+  },
+  failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
+} as const;
+
+const WINDOWS_LEGACY_LAUNCHER_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["legacy-start-menu-cleanup"],
+  },
+  failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
+} as const;
+
+const WINDOWS_PORTABLE_ALERT_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["portable-failure-alert"],
+  },
+  failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
+} as const;
+
+const WINDOWS_LIFECYCLE_OPENER_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["start-open-browser"],
+  },
+  failureKind: WINDOWS_SYSTEM_FAILURE_KIND_FIELD,
+} as const;
+
+const WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "security",
+  owner: "keiko-cli",
+  emitter: "security-log.emitWindowsSystemRootRefusal",
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["windows-system-root-refused"],
+  releaseImpact: "patch",
+} as const;
+
+const WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "security-log.emitWindowsSystemBinaryMissing",
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["windows-system-binary-unavailable"],
+  releaseImpact: "patch",
+} as const;
+
+const WINDOWS_LAUNCHER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
+  op: "security.windows-launcher.system-root-refused",
+  fields: WINDOWS_LAUNCHER_FIELDS,
+  proofIds: ["windows.launcher.system-root-refused"],
+});
+
+const WINDOWS_LEGACY_LAUNCHER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
+  op: "security.windows-portable-legacy-launcher.system-root-refused",
+  fields: WINDOWS_LEGACY_LAUNCHER_FIELDS,
+  proofIds: ["windows.legacy-launcher.system-root-refused"],
+});
+
+const WINDOWS_PORTABLE_ALERT_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
+  op: "security.windows-portable-alert.system-root-refused",
+  fields: WINDOWS_PORTABLE_ALERT_FIELDS,
+  proofIds: ["windows.portable-alert.system-root-refused"],
+});
+
+const WINDOWS_LIFECYCLE_OPENER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_ROOT_REFUSED_REGISTRATION,
+  op: "security.windows-lifecycle-opener.system-root-refused",
+  fields: WINDOWS_LIFECYCLE_OPENER_FIELDS,
+  proofIds: ["windows.lifecycle-opener.system-root-refused"],
+});
+
+const WINDOWS_LAUNCHER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
+  op: "security.windows-launcher.system-binary-missing",
+  fields: WINDOWS_LAUNCHER_FIELDS,
+  proofIds: ["windows.launcher.system-binary-missing"],
+});
+
+const WINDOWS_LEGACY_LAUNCHER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
+  op: "security.windows-portable-legacy-launcher.system-binary-missing",
+  fields: WINDOWS_LEGACY_LAUNCHER_FIELDS,
+  proofIds: ["windows.legacy-launcher.system-binary-missing"],
+});
+
+const WINDOWS_PORTABLE_ALERT_BINARY_MISSING_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
+  fields: WINDOWS_PORTABLE_ALERT_FIELDS,
+  op: "security.windows-portable-alert.system-binary-missing",
+  proofIds: ["windows.portable-alert.system-binary-missing"],
+});
+
+const WINDOWS_LIFECYCLE_OPENER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
+  ...WINDOWS_SYSTEM_BINARY_MISSING_REGISTRATION,
+  op: "security.windows-lifecycle-opener.system-binary-missing",
+  fields: WINDOWS_LIFECYCLE_OPENER_FIELDS,
+  proofIds: ["windows.lifecycle-opener.system-binary-missing"],
+});
+
 function emitWindowsSystemRootRefusal(
   error: WindowsSystemDirectoryError,
   sink: SecurityLogSink | undefined,
   surface: CliWindowsSystemSurface,
 ): void {
-  const details = {
-    errorKind: securityErrorKind(error),
-    extra: { surface },
-  } as const;
+  const failureKind = securityErrorKind(error);
   switch (surface) {
     case "launcher-install":
-      emitSecurityLogEvent(sink, {
-        ...details,
-        level: "warn",
-        category: "security",
-        op: "security.windows-launcher.system-root-refused",
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          WINDOWS_LAUNCHER_ROOT_REFUSED_OPERATION,
+          { level: "warn", errorKind: "unsafe-target" },
+          { surface, failureKind },
+        ),
+      );
       break;
     case "legacy-start-menu-cleanup":
-      emitSecurityLogEvent(sink, {
-        ...details,
-        level: "warn",
-        category: "security",
-        op: "security.windows-portable-legacy-launcher.system-root-refused",
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          WINDOWS_LEGACY_LAUNCHER_ROOT_REFUSED_OPERATION,
+          { level: "warn", errorKind: "unsafe-target" },
+          { surface, failureKind },
+        ),
+      );
       break;
     case "portable-failure-alert":
-      emitSecurityLogEvent(sink, {
-        ...details,
-        level: "warn",
-        category: "security",
-        op: "security.windows-portable-alert.system-root-refused",
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          WINDOWS_PORTABLE_ALERT_ROOT_REFUSED_OPERATION,
+          { level: "warn", errorKind: "unsafe-target" },
+          { surface, failureKind },
+        ),
+      );
       break;
     case "start-open-browser":
-      emitSecurityLogEvent(sink, {
-        ...details,
-        level: "warn",
-        category: "security",
-        op: "security.windows-lifecycle-opener.system-root-refused",
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          WINDOWS_LIFECYCLE_OPENER_ROOT_REFUSED_OPERATION,
+          { level: "warn", errorKind: "unsafe-target" },
+          { surface, failureKind },
+        ),
+      );
       break;
   }
 }
@@ -67,42 +206,47 @@ function emitWindowsSystemBinaryMissing(
   sink: SecurityLogSink | undefined,
   surface: CliWindowsSystemSurface,
 ): void {
-  const details = {
-    errorKind: securityErrorKind(error),
-    extra: { surface },
-  } as const;
+  const failureKind = securityErrorKind(error);
   switch (surface) {
     case "launcher-install":
-      emitSecurityLogEvent(sink, {
-        ...details,
-        level: "error",
-        category: "diagnostic",
-        op: "security.windows-launcher.system-binary-missing",
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          WINDOWS_LAUNCHER_BINARY_MISSING_OPERATION,
+          { level: "error", errorKind: "unavailable" },
+          { surface, failureKind },
+        ),
+      );
       break;
     case "legacy-start-menu-cleanup":
-      emitSecurityLogEvent(sink, {
-        ...details,
-        level: "error",
-        category: "diagnostic",
-        op: "security.windows-portable-legacy-launcher.system-binary-missing",
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          WINDOWS_LEGACY_LAUNCHER_BINARY_MISSING_OPERATION,
+          { level: "error", errorKind: "unavailable" },
+          { surface, failureKind },
+        ),
+      );
       break;
     case "portable-failure-alert":
-      emitSecurityLogEvent(sink, {
-        ...details,
-        level: "error",
-        category: "diagnostic",
-        op: "security.windows-portable-alert.system-binary-missing",
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          WINDOWS_PORTABLE_ALERT_BINARY_MISSING_OPERATION,
+          { level: "error", errorKind: "unavailable" },
+          { surface, failureKind },
+        ),
+      );
       break;
     case "start-open-browser":
-      emitSecurityLogEvent(sink, {
-        ...details,
-        level: "error",
-        category: "diagnostic",
-        op: "security.windows-lifecycle-opener.system-binary-missing",
-      });
+      emitSecurityLogEvent(
+        sink,
+        activityLogEvent(
+          WINDOWS_LIFECYCLE_OPENER_BINARY_MISSING_OPERATION,
+          { level: "error", errorKind: "unavailable" },
+          { surface, failureKind },
+        ),
+      );
       break;
   }
 }
@@ -151,7 +295,7 @@ export function createCliSecurityLogSink(
       // eagerly creating `<stateDir>/logs` here would run before those fail-closed checks and would
       // also mutate an otherwise read-only command that emits nothing.
       downstream ??= factory(stateDir);
-      downstream.write({ ...event, correlationId: invocationCorrelationId });
+      downstream.write(withActivityLogCorrelation(event, invocationCorrelationId));
     },
   };
 }

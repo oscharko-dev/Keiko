@@ -49,6 +49,13 @@ function sinkFailingOn(failingOp: string, events: KnowledgeLogEvent[]): Knowledg
   };
 }
 
+function warningRecord(value: unknown): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("expected warning metadata record");
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
 describe("openKnowledgeStore — a failing log sink never becomes the failure", () => {
   let tmp: string;
   // The dead-sink specs below report through `process.emitWarning`; the spy is what keeps that
@@ -95,15 +102,15 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
       logSink: sinkFailingOn("knowledge.store.quarantined", events),
     }).close();
 
-    expect(events).toStrictEqual([
-      {
-        level: "error",
-        category: "diagnostic",
-        op: "knowledge.log.sink-failed",
-        errorKind: "ENOSPC",
-        extra: { droppedOp: "knowledge.store.quarantined" },
-      },
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      category: "diagnostic",
+      op: "knowledge.log.sink-failed",
+      errorKind: "unavailable",
+      extra: { failureKind: "ENOSPC" },
+    });
+    expect(events[0]?.extra?.droppedOpDigest).toMatch(/^[0-9a-f]{16}$/u);
   });
 
   it("reports a wholly dead sink on the process warning channel instead of dropping it", () => {
@@ -114,10 +121,9 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
 
     expect(warn).toHaveBeenCalledTimes(1);
     const calls: readonly (readonly unknown[])[] = warn.mock.calls;
-    expect(calls[0]?.[1]).toMatchObject({
-      code: "KEIKO_LOG_SINK_FAILED",
-      detail: "op=knowledge.store.quarantined errorKind=Error",
-    });
+    const warning = warningRecord(calls[0]?.[1]);
+    expect(warning.code).toBe("KEIKO_LOG_SINK_FAILED");
+    expect(warning.detail).toMatch(/^opDigest=[0-9a-f]{16} errorKind=Error$/u);
     // The sink's own message is a body like any other and never reaches the report.
     expect(JSON.stringify(calls)).not.toContain("the activity log sink is down");
   });
@@ -153,7 +159,11 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
     expect(quarantineEvents.map((event) => event.op)).toStrictEqual([
       "knowledge.store.quarantined",
     ]);
-    expect(quarantineEvents[0]).toMatchObject({ level: "error", extra: { reopened: true } });
+    expect(quarantineEvents[0]).toMatchObject({
+      level: "error",
+      errorKind: "read-failed",
+      extra: { reopenState: "reopened" },
+    });
 
     const encryptionEvents: KnowledgeLogEvent[] = [];
     expect(() => {

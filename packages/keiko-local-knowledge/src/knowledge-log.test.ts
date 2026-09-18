@@ -13,11 +13,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   emitKnowledgeLogEvent,
   knowledgeErrorKind,
+  knowledgeLogCorrelationId,
   nullKnowledgeLogSink,
   startKnowledgeLogTimer,
   type KnowledgeLogEvent,
   type KnowledgeLogSink,
 } from "./knowledge-log.js";
+
+function warningRecord(value: unknown): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("expected warning metadata record");
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
 
 // The specs below replace platform functions — `performance.now`, `process.emitWarning`. A spy
 // restored on the last line of its own test is only restored when that test PASSES: an assertion
@@ -187,13 +195,14 @@ describe("emitKnowledgeLogEvent", () => {
     emitKnowledgeLogEvent(sink, { category: "diagnostic", op: "knowledge.store.quarantined" });
 
     expect(events).toHaveLength(1);
-    expect(events[0]).toEqual({
+    expect(events[0]).toMatchObject({
       level: "error",
       category: "diagnostic",
       op: "knowledge.log.sink-failed",
-      errorKind: "ENOSPC",
-      extra: { droppedOp: "knowledge.store.quarantined" },
+      errorKind: "unavailable",
+      extra: { failureKind: "ENOSPC" },
     });
+    expect(events[0]?.extra?.droppedOpDigest).toMatch(/^[0-9a-f]{16}$/u);
   });
 
   it("keeps writing subsequent lines a recovered sink can take", () => {
@@ -224,10 +233,9 @@ describe("emitKnowledgeLogEvent", () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     const calls: readonly (readonly unknown[])[] = warn.mock.calls;
-    expect(calls[0]?.[1]).toMatchObject({
-      code: "KEIKO_LOG_SINK_FAILED",
-      detail: "op=indexing.job.received errorKind=ENOSPC",
-    });
+    const warning = warningRecord(calls[0]?.[1]);
+    expect(warning.code).toBe("KEIKO_LOG_SINK_FAILED");
+    expect(warning.detail).toMatch(/^opDigest=[0-9a-f]{16} errorKind=ENOSPC$/u);
 
     // Per sink, not per process: a replaced sink that also fails is a new fact about the log.
     const replacement: KnowledgeLogSink = {
@@ -275,6 +283,16 @@ describe("startKnowledgeLogTimer", () => {
     vi.spyOn(Date, "now").mockReturnValue(0);
     const elapsed = startKnowledgeLogTimer();
     expect(elapsed()).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("knowledgeLogCorrelationId", () => {
+  it("preserves valid v2 ids and deterministically digests legacy short ids", () => {
+    expect(knowledgeLogCorrelationId("valid-id")).toBe("valid-id");
+    const legacy = knowledgeLogCorrelationId("short");
+    expect(legacy).toMatch(/^[0-9a-f]{16}$/u);
+    expect(legacy).toBe(knowledgeLogCorrelationId("short"));
+    expect(legacy).not.toContain("short");
   });
 });
 

@@ -48,11 +48,7 @@ import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
-import {
-  errorKindOf,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "../observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import type {
   AuxiliaryResearchScopeV1,
   CodingWorkbenchIssueBinding,
@@ -970,6 +966,7 @@ describe("CodingRuntimeOrchestrator", () => {
       (record) => record.op === "coding-runtime.project-memory.context",
     );
     expect(activityLine?.level).toBe("warn");
+    expect(activityLine?.errorKind).toBe("unavailable");
     // Fresh dispatch must still fire; the failure never blocks the initial turn.
     const dispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
     expect(dispatchRequest).not.toHaveProperty("initialContext");
@@ -1078,6 +1075,7 @@ describe("CodingRuntimeOrchestrator", () => {
       (candidate) => candidate.op === "coding-runtime.run.shutdown",
     );
     expect(shutdown).toMatchObject({
+      errorKind: "conflict",
       extra: { runId: "run-1", reason: "server-shutdown", outcome: "refused" },
     });
     // The shutdown ended nothing, so it wrote no new terminal line — and the cause line says so
@@ -1351,14 +1349,14 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.manager.stop).toHaveBeenCalled();
     expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
       expect.objectContaining({
-        errorKind: errorKindOf(unreadable),
+        errorKind: "unavailable",
         extra: expect.objectContaining({ attempt: 1, reason: "evidence-unreadable" }) as unknown,
       }),
     ]);
     expect(linesWithOp(captured, "coding-runtime.run.delivery-evidence-unreadable")).toEqual([
       expect.objectContaining({
         level: "warn",
-        errorKind: errorKindOf(unreadable),
+        errorKind: "unavailable",
         extra: expect.objectContaining({ runId: "run-1" }) as unknown,
       }),
     ]);
@@ -1376,7 +1374,7 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
       expect.objectContaining({
-        errorKind: errorKindOf(thrown),
+        errorKind: "unavailable",
         extra: expect.objectContaining({ attempt: 1, reason: "dispatch-threw" }) as unknown,
       }),
     ]);
@@ -1540,6 +1538,7 @@ describe("CodingRuntimeOrchestrator", () => {
       captured.records.find((candidate) => candidate.op === "coding-runtime.event.dropped"),
     ).toMatchObject({
       level: "warn",
+      errorKind: "conflict",
       extra: {
         eventKind: "operator-decision",
         eventRunId: "run-foreign",
@@ -1564,7 +1563,11 @@ describe("CodingRuntimeOrchestrator", () => {
     const line = captured.records.find(
       (candidate) => candidate.op === "coding-runtime.run.operator-decision",
     );
-    expect(line).toMatchObject({ level: "warn", extra: { state: "not-admissible" } });
+    expect(line).toMatchObject({
+      level: "warn",
+      errorKind: "permission-denied",
+      extra: { state: "not-admissible" },
+    });
   });
 
   // An ad-hoc task legitimately ends with no commit: inferring delivery intent from free text would
@@ -2179,7 +2182,10 @@ describe("CodingRuntimeOrchestrator", () => {
         category: "process",
         op: "coding-runtime.verification-summarized",
         correlationId: runId,
+        errorKind: "validation-failed",
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId,
           verificationEventId: "verification-1",
           verificationKind: "targeted-test",
@@ -2197,6 +2203,8 @@ describe("CodingRuntimeOrchestrator", () => {
         op: "coding-runtime.verification-summarized",
         correlationId: runId,
         extra: {
+          completeness: "complete",
+          loss: "none",
           runId,
           verificationEventId: "verification-2",
           verificationKind: "targeted-test",
@@ -2316,6 +2324,8 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(event.category).toBe("process");
     expect(event.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     expect(event.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       runId: "run-1",
       revision: 5,
       requestId: "permission-7",
@@ -4014,7 +4024,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(refused).toMatchObject({
       category: "process",
       level: "warn",
-      correlationId: "run-1",
+      correlationId: UNKNOWN_CORRELATION_ID,
       extra: { runId: "run-1", stage: "admission" },
     });
     expect(JSON.stringify(captured.records)).not.toContain(ISSUE_REF);
@@ -4063,8 +4073,10 @@ describe("issue-bound runs (#3385)", () => {
     expect(attached).toEqual({
       category: "process",
       op: "coding-runtime.run.issue-context-attached",
-      correlationId: "run-1",
+      correlationId: UNKNOWN_CORRELATION_ID,
       extra: {
+        completeness: "complete",
+        loss: "none",
         runId: "run-1",
         issueNumber: 3385,
         itemCount: 1,
@@ -4129,7 +4141,7 @@ describe("issue-bound runs (#3385)", () => {
         captured.records.find((event) => event.op === "coding-runtime.run.issue-binding-refused"),
       ).toMatchObject({
         category: "process",
-        correlationId: "run-1",
+        correlationId: UNKNOWN_CORRELATION_ID,
         extra: { runId: "run-1", stage: "resolution", issueBindingFailure: failure },
       });
     },
@@ -4154,7 +4166,15 @@ describe("issue-bound runs (#3385)", () => {
     const refused = captured.records.find(
       (event) => event.op === "coding-runtime.run.issue-binding-refused",
     );
-    expect(refused?.errorKind).toBe("Error");
+    // A throwing resolver is a routine issue-unavailable failure, classified by its closed
+    // failure reason rather than as an internal defect.
+    expect(refused?.errorKind).toBe("unavailable");
+    expect(refused?.extra).toMatchObject({
+      completeness: "complete",
+      loss: "none",
+      frames: expect.any(Array) as unknown,
+      causeChain: expect.any(Array) as unknown,
+    });
     expect(JSON.stringify(captured.records)).not.toContain("/Users/private");
   });
 
@@ -4392,7 +4412,7 @@ describe("issue-bound runs (#3385)", () => {
       captured.records.find(
         (event) =>
           event.op === "coding-runtime.run.issue-context-attached" &&
-          event.correlationId === "run-2",
+          event.extra?.runId === "run-2",
       ),
     ).toMatchObject({ extra: { runId: "run-2", issueNumber: 3385 } });
   });
@@ -4419,7 +4439,7 @@ describe("issue-bound runs (#3385)", () => {
       captured.records.find(
         (event) =>
           event.op === "coding-runtime.run.issue-context-attached" &&
-          event.correlationId === "run-2",
+          event.extra?.runId === "run-2",
       ),
     ).toBeDefined();
   });
@@ -5081,8 +5101,8 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     );
     expect(blocked).toMatchObject({
       correlationId: "run-00000001",
-      errorKind: "Error",
-      extra: { runId: "run-00000001", reason: "provider-failed" },
+      errorKind: "unavailable",
+      extra: { runId: "run-00000001", reason: "provider-failed", errorClass: "Error" },
     });
     expect(f.orchestrator.status()).toMatchObject({
       descriptionStatus: { state: "failed", reason: "provider-failed" },

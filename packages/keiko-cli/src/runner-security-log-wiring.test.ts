@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { runDetachedWindowsAlert } from "./portable-launch-notifier.js";
@@ -7,6 +8,7 @@ import { createCliSecurityLogSink } from "./security-log.js";
 import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
+  installLayoutOverrideActivityLogEvent,
   writeInstallLayoutOverrideEvidence,
 } from "./install-layout.js";
 
@@ -192,6 +194,9 @@ describe("Windows CLI security-log production wiring", () => {
     expect(createFileServerLogSink).toHaveBeenCalledTimes(7);
     expect(written).toHaveLength(7);
     expect(written.every(({ op }) => op === "cli.install-layout.normalized")).toBe(true);
+    expect(written.map((event) => validateRegisteredActivityLogEvent(event).op)).toEqual(
+      Array.from({ length: 7 }, () => "cli.install-layout.normalized"),
+    );
   });
 
   it("supplies a deferred sink to every Windows security command without loading the server graph", async () => {
@@ -248,6 +253,43 @@ describe("Windows CLI security-log production wiring", () => {
       { securityLogSinkFactory: factories.restart },
     );
     expect(commandMocks.loadServer).not.toHaveBeenCalled();
+  });
+
+  it("preserves typed registration while binding the invocation correlation", async () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+    const written: PersistedServerLogEvent[] = [];
+    commandMocks.loadServer.mockResolvedValue({
+      createFileServerLogSink: () => ({
+        write: (event): void => {
+          written.push(event);
+        },
+      }),
+    });
+    commandMocks.repair.mockImplementation((_args, _io, _env, deps) => {
+      deps?.securityLogSinkFactory?.("/state").write(
+        installLayoutOverrideActivityLogEvent({
+          correlationId: "00000000-0000-4000-8000-000000000002",
+          overriddenKinds: ["cli-bin"],
+        }),
+      );
+      return 41;
+    });
+    const invocationCorrelationId = "00000000-0000-4000-8000-000000000001";
+
+    await expect(
+      Promise.resolve(
+        runCli(["repair"], io(), {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: invocationCorrelationId,
+        }),
+      ),
+    ).resolves.toBe(41);
+
+    expect(written).toHaveLength(1);
+    expect(written[0]?.correlationId).toBe(invocationCorrelationId);
+    expect(validateRegisteredActivityLogEvent(written[0] ?? {}).op).toBe(
+      "cli.install-layout.normalized",
+    );
   });
 
   it("loads and flushes the file sink only after a security event is emitted", async () => {
@@ -361,8 +403,13 @@ describe("Windows CLI security-log production wiring", () => {
       expect.objectContaining({
         category: "diagnostic",
         op: "portable.windows-alert.spawn-failed",
-        errorKind: "Error",
-        extra: { surface: "portable-failure-alert" },
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          surface: "portable-failure-alert",
+          failureKind: "Error",
+        },
       }),
     ]);
     expect(written[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);

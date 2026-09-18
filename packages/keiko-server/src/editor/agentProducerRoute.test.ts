@@ -542,7 +542,15 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     expect(completed).toMatchObject({
       category: "process",
       op: "editor.producer-turn.completed",
-      extra: { outcome: "completed", toolCallCount: 1, toolNames: ["editor_navigate_symbol"] },
+      extra: {
+        outcome: "completed",
+        toolCallCount: 1,
+        toolNames: ["editor_navigate_symbol"],
+        toolNameLoss: "none",
+        catalogProfile: "editor@1",
+        catalogProfileLoss: "none",
+        advertisedToolRefLoss: "none",
+      },
     });
     expect(JSON.stringify(completed)).not.toContain("reachability probe");
 
@@ -572,15 +580,18 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
       "tool-catalog.invocation-settled",
     ]);
     expect(lifecycle[0]?.extra).toMatchObject({
-      profile: { id: "editor", version: 1 },
+      profileId: "editor",
+      profileVersion: 1,
       resultCount: 4,
     });
     expect(lifecycle[2]?.extra).toMatchObject({
-      toolRef: { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+      toolCanonicalId: "keiko.editor.symbol",
+      toolContractVersion: 1,
       state: "started",
     });
     expect(lifecycle[3]?.extra).toMatchObject({
-      toolRef: { canonicalId: "keiko.editor.symbol", contractVersion: 1 },
+      toolCanonicalId: "keiko.editor.symbol",
+      toolContractVersion: 1,
       status: "completed",
       reason: "none",
       effectStarted: true,
@@ -822,7 +833,8 @@ describe("editor-agent producer tool-scope enforcement (#2489 security hardening
     expect(projection).toMatchObject({
       op: "tool-catalog.projection",
       extra: {
-        profile: { id: "editor", version: 1 },
+        profileId: "editor",
+        profileVersion: 1,
         projectionDigest: response.body.catalog?.projectionDigest,
         resultCount: 3,
       },

@@ -1,6 +1,7 @@
 import { correlationIdOrUnknown } from "../correlation.js";
-import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   CodingRuntimeSnapshot,
   CodingRuntimeSnapshotStore,
@@ -28,6 +29,7 @@ import {
   type CiObservationTicket,
 } from "./codingRuntimeCiReadinessStore.js";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import { GIT_CI_REPAIR_BUDGET_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 function recordObservationRequirement(
   deps: DraftDeliveryDependencies,
@@ -39,17 +41,22 @@ function recordObservationRequirement(
       deps.execution?.activityLog ??
       verified.execution?.activityLog ??
       processServerLogSink()
-    ).write({
-      category: "process",
-      op: "git.ci-repair.budget",
-      correlationId: correlationIdOrUnknown(binding.runId),
-      extra: {
-        phase: "admission",
-        state: "blocked",
-        reason: "ci-observation-required",
-        runId: binding.runId,
-      },
-    });
+    ).write(
+      activityLogEvent(
+        GIT_CI_REPAIR_BUDGET_OPERATION,
+        {
+          level: "warn",
+          correlationId: correlationIdOrUnknown(binding.runId),
+          errorKind: "rate-limited",
+        },
+        {
+          phase: "admission",
+          state: "blocked",
+          reason: "ci-observation-required",
+          runId: binding.runId,
+        },
+      ),
+    );
   };
 }
 
@@ -165,6 +172,15 @@ interface AvailabilityInput {
   readonly allowConfirmed: boolean;
   readonly reason: "invalid-binding" | "storage-unavailable";
 }
+
+function availabilityErrorKind(
+  error: unknown,
+  reason: AvailabilityInput["reason"],
+): "internal" | "unavailable" | "validation-failed" {
+  if (error !== undefined) return "internal";
+  return reason === "invalid-binding" ? "validation-failed" : "unavailable";
+}
+
 function availabilityGuard(input: AvailabilityInput): () => boolean {
   const { deps, verified, binding } = input;
   const snapshots = deps?.snapshots ?? verified?.snapshots;
@@ -182,19 +198,25 @@ function availabilityGuard(input: AvailabilityInput): () => boolean {
     } catch (error_) {
       error = error_;
     }
-    log.write({
-      category: "process",
-      op: "git.ci-repair.budget",
-      correlationId: correlationIdOrUnknown(binding.runId),
-      ...(error === undefined ? {} : { level: "warn" as const, errorKind: "internal" as const }),
-      extra: {
-        phase: "availability",
-        state: "blocked",
-        reason: input.reason,
-        runId: binding.runId,
-        ...(error === undefined ? {} : describeError(error)),
-      },
-    });
+    log.write(
+      activityLogEvent(
+        GIT_CI_REPAIR_BUDGET_OPERATION,
+        {
+          level: "warn",
+          correlationId: correlationIdOrUnknown(binding.runId),
+          errorKind: availabilityErrorKind(error, input.reason),
+        },
+        {
+          phase: "availability",
+          state: "blocked",
+          reason: input.reason,
+          runId: binding.runId,
+          ...(error === undefined
+            ? {}
+            : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+        },
+      ),
+    );
     return false;
   };
 }

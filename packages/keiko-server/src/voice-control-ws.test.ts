@@ -451,6 +451,7 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
         category: "http",
         op: "voice.live-dictation.initial-frame-timeout",
         correlationId: "live-dictation-initial-frame-timeout",
+        errorKind: "timeout",
       }),
     );
   });
@@ -488,7 +489,13 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
         expect.objectContaining({
           category: "http",
           op: "voice.live-dictation.capacity-rejected",
-          extra: { observedCount: 64, reason: "active-session-cap" },
+          errorKind: "rate-limited",
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            observedCount: 64,
+            reason: "active-session-cap",
+          },
         }),
       );
     } finally {

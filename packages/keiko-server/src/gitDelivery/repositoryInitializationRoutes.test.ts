@@ -105,7 +105,7 @@ describe("repository initialization route", () => {
         op: "git.repository.initialize",
         correlationId: CORRELATION_ID,
         status: 200,
-        extra: { outcome: "succeeded" },
+        extra: { completeness: "complete", loss: "none", outcome: "succeeded" },
       }),
     );
     expect(JSON.stringify(events)).not.toContain(root);
@@ -159,7 +159,7 @@ describe("repository initialization route", () => {
         expect.objectContaining({
           correlationId: CORRELATION_ID,
           status: 400,
-          extra: { outcome: "invalid-request" },
+          extra: { completeness: "complete", loss: "none", outcome: "invalid-request" },
         }),
       );
     },
@@ -189,7 +189,10 @@ describe("repository initialization route", () => {
     });
     expect(runner).not.toHaveBeenCalled();
     expect(events).toContainEqual(
-      expect.objectContaining({ status: 413, extra: { outcome: "invalid-request" } }),
+      expect.objectContaining({
+        status: 413,
+        extra: { completeness: "complete", loss: "none", outcome: "invalid-request" },
+      }),
     );
   });
 
@@ -238,7 +241,7 @@ describe("repository initialization route", () => {
       expect.objectContaining({
         correlationId: CORRELATION_ID,
         status: 500,
-        extra: { outcome: "execution-failed" },
+        extra: { completeness: "complete", loss: "none", outcome: "execution-failed" },
       }),
     );
     expect(JSON.stringify({ diagnostics, events })).not.toContain("private path");

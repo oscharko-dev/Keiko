@@ -64,7 +64,36 @@ import {
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
+import {
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+
+const storeOpenFault = vi.hoisted(() => ({
+  callCount: 0,
+  failOnCall: undefined as number | undefined,
+  message: "",
+}));
+
+vi.mock("./local-knowledge-store-open.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./local-knowledge-store-open.js")>();
+  return {
+    ...actual,
+    openKnowledgeStoreForDeps(
+      ...args: Parameters<typeof actual.openKnowledgeStoreForDeps>
+    ): ReturnType<typeof actual.openKnowledgeStoreForDeps> {
+      storeOpenFault.callCount += 1;
+      if (storeOpenFault.callCount === storeOpenFault.failOnCall) {
+        throw new Error(storeOpenFault.message, { cause: new TypeError(storeOpenFault.message) });
+      }
+      return actual.openKnowledgeStoreForDeps(...args);
+    },
+  };
+});
 
 function jsonRequest(body: Record<string, unknown> | undefined, method: string): IncomingMessage {
   const bytes = body === undefined ? [] : [Buffer.from(JSON.stringify(body), "utf8")];
@@ -312,6 +341,10 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2_000, stepMs = 1
 }
 
 afterEach(() => {
+  resetServerLogger();
+  storeOpenFault.callCount = 0;
+  storeOpenFault.failOnCall = undefined;
+  storeOpenFault.message = "";
   localKnowledgeIndexingRegistry.reset();
   while (tempDirs.length > 0) {
     const tempDir = tempDirs.pop();
@@ -1662,6 +1695,59 @@ describe("local-knowledge handlers", () => {
     await indexing;
 
     expect(jobs.n).toBe(1);
+  });
+
+  it("keeps body-free failure frames on a detached run that fails before orchestration", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot);
+    writeFileSync(join(docsRoot, "secret.md"), "customer body must not appear", "utf8");
+    const seeded = seedStore(tmp);
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-pre-orchestrator-failure" as KnowledgeSourceId,
+      displayName: "Docs",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    seeded.store.close();
+    const events: ServerLogEvent[] = [];
+    const sink: ServerLogSink = {
+      write: (event): void => {
+        events.push(event);
+      },
+    };
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const rejectedValue = `private migration failure at ${docsRoot}`;
+    storeOpenFault.message = rejectedValue;
+    storeOpenFault.failOnCall = storeOpenFault.callCount + 2;
+
+    const accepted = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: seeded.capId } },
+      depsFor(tmp),
+    );
+    expect(accepted.status).toBe(202);
+    await awaitDetachedCapsuleIndexing(String(seeded.capId));
+
+    const failed = events.find((event) => event.op === "indexing.detached-run.failed");
+    expect(failed).toMatchObject({
+      errorKind: "internal",
+      extra: { stage: "pre-orchestrator", failureKind: "Error", causeChain: ["TypeError"] },
+    });
+    expect(failed?.extra?.frames).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^packages\/keiko-server\/src\//u)]),
+    );
+    expect(JSON.stringify(failed)).not.toContain(rejectedValue);
+    expect(JSON.stringify(failed)).not.toContain(docsRoot);
+    expect(JSON.stringify(failed)).not.toContain("customer body must not appear");
+
+    // The failed launch must release its capsule slot, or every later start answers 409.
+    const retried = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: seeded.capId } },
+      depsFor(tmp),
+    );
+    expect(retried.status).toBe(202);
+    await awaitDetachedCapsuleIndexing(String(seeded.capId));
   });
 
   it("answers 202 with the job id while the run is still in flight — the request never carries the job", async () => {

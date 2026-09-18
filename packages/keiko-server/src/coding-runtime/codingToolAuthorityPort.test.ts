@@ -545,13 +545,25 @@ describe("CodingToolAuthorityPort", () => {
         category: "security",
         op: "coding-runtime.tool-authority.denied",
         correlationId: "authority-narrowing",
-        extra: { action: "connector", effectiveMode: "governed-assist" },
+        errorKind: "authority-denied",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          action: "connector",
+          effectiveMode: "governed-assist",
+        },
       }),
       expect.objectContaining({
         category: "security",
         op: "coding-runtime.tool-authority.denied",
         correlationId: "authority-narrowing",
-        extra: { action: "egress", effectiveMode: "governed-assist" },
+        errorKind: "authority-denied",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          action: "egress",
+          effectiveMode: "governed-assist",
+        },
       }),
     ]);
     expect(log.lines().join("\n")).not.toContain("private.example.test");
@@ -1622,9 +1634,7 @@ describe("CodingToolAuthorityPort", () => {
       ]);
       for (const event of catalogEvents) expect(event.correlationId).toBe("c".repeat(36));
       const started = catalogEvents[2]?.extra as Record<string, unknown>;
-      expect((started.toolRef as { canonicalId: string }).canonicalId).toBe(
-        "keiko.verification.run",
-      );
+      expect(started.toolCanonicalId).toBe("keiko.verification.run");
     });
 
     // #3413 F8: `edit` is the one covered action whose real production path is `executeStagedEdit`
@@ -1666,7 +1676,7 @@ describe("CodingToolAuthorityPort", () => {
       ]);
       for (const event of catalogEvents) expect(event.correlationId).toBe("d".repeat(36));
       const started = catalogEvents[2]?.extra as Record<string, unknown>;
-      expect((started.toolRef as { canonicalId: string }).canonicalId).toBe("keiko.changeset.edit");
+      expect(started.toolCanonicalId).toBe("keiko.changeset.edit");
     });
 
     it("denies a staged edit before the editor delegate ever runs when the catalog budget denies it", async () => {
@@ -1777,7 +1787,11 @@ describe("CodingToolAuthorityPort", () => {
       expect(commandRunner).toHaveBeenCalledOnce();
       const catalogEvents = log.events.filter((event) => event.op.startsWith("tool-catalog."));
       expect(catalogEvents.map((event) => event.op)).toEqual(["tool-catalog.dispatch-unbound"]);
-      expect(catalogEvents[0]?.extra).toEqual({ action: "command" });
+      expect(catalogEvents[0]?.extra).toEqual({
+        completeness: "complete",
+        loss: "none",
+        action: "command",
+      });
     });
   });
 });

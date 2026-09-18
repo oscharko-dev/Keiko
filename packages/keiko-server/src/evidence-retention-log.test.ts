@@ -35,7 +35,12 @@ describe("evidence retention activity (F82)", () => {
         category: "process",
         op: "evidence.retention",
         correlationId: expect.any(String) as unknown,
-        extra: { source: "editor-verification-run", deletedCount: 3 },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          source: "editor-verification-run",
+          deletedCount: 3,
+        },
       },
     ]);
     expect(lines[0]).not.toHaveProperty("level");

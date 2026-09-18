@@ -745,9 +745,12 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(completed).toMatchObject({
       level: "warn",
       correlationId: "request-correlation-pr-rejected",
-      errorKind: "provider-rejected",
+      errorKind: "unavailable",
     });
-    expect(completed?.extra).toMatchObject({ status: "failed" });
+    expect(completed?.extra).toMatchObject({
+      status: "failed",
+      executionErrorCode: "provider-rejected",
+    });
   });
 
   // #3387 (ADR-0138 D2): an accepted run's PR now requires an actually consumed, server-issued
@@ -814,8 +817,14 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
       level: "error",
       correlationId: "request-correlation-pr-snapshot",
     });
-    expect(typeof failed?.errorKind).toBe("string");
-    expect(failed?.extra).toEqual({ actionKind: "pr-create", phaseReached: "snapshot" });
+    expect(failed?.errorKind).toBe("internal");
+    expect(failed?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      actionKind: "pr-create",
+      phaseReached: "snapshot",
+      failureKind: "Error",
+    });
     expect(JSON.stringify(activity)).not.toContain("host path must stay private");
   });
 
@@ -1388,6 +1397,7 @@ describe("executeGovernedPullRequest — no-spawn refusal is marked, never reach
     expect(marker?.correlationId).toBe("request-correlation-pr-no-spawn");
     expect(marker?.extra?.operation).toBe("pr-create");
     expect(marker?.status).toBe(403);
+    expect(marker?.errorKind).toBe("authority-denied");
   });
 });
 
@@ -1898,11 +1908,17 @@ describe("pr mark-ready routes (#3389)", () => {
     expect(failure).toMatchObject({
       correlationId: "corr-ci-read",
       level: "error",
-      errorKind: "Error",
-      extra: { actionKind: "pr-mark-ready", phaseReached: "readiness" },
+      errorKind: "internal",
+      extra: expect.objectContaining({
+        completeness: "complete",
+        loss: "none",
+        actionKind: "pr-mark-ready",
+        phaseReached: "readiness",
+        failureKind: "Error",
+      }) as unknown,
     });
     expect(failure?.extra?.frames).toBeDefined();
-    expect(failure?.extra?.causeChain).toBeDefined();
+    expect(failure?.extra?.causeChain).toBeUndefined();
     expect(JSON.stringify(failure)).not.toContain("provider response contained a secret");
   });
 
@@ -1935,8 +1951,8 @@ describe("pr mark-ready routes (#3389)", () => {
     expect(activity.find((event) => event.op === "git.delivery.mutation.failed")).toMatchObject({
       correlationId: "corr-mark-ready-failed",
       level: "error",
-      errorKind: "Error",
-      extra: { actionKind: "pr-mark-ready", phaseReached: "dispatch" },
+      errorKind: "internal",
+      extra: { actionKind: "pr-mark-ready", phaseReached: "dispatch", failureKind: "Error" },
     });
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]).toMatchObject({

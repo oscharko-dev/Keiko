@@ -286,7 +286,12 @@ describe("openKnowledgeStoreForDeps wires the store's activity log", (): void =>
         level: "error",
         category: "diagnostic",
         op: "knowledge.store.quarantined",
-        extra: { reopened: true },
+        extra: {
+          completeness: "complete",
+          failureKind: "ERR_SQLITE_ERROR",
+          loss: "none",
+          reopenState: "reopened",
+        },
       }),
     );
   });

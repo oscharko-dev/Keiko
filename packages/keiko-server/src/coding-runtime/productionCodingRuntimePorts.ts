@@ -13,7 +13,6 @@ import {
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
 import { getServerLogger } from "../observability/index.js";
-import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type {
   CodingRuntimeTaskDispatchResult,
@@ -46,6 +45,99 @@ import {
 } from "../gitDelivery/runBoundAuthority.js";
 import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
 import type { PrDescriptionDraftPreview } from "../gitDelivery/prDescriptionTypes.js";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+const CODING_RUNTIME_TASK_REPLACEMENT_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: [
+    "aborted",
+    "adapter-rejected",
+    "commit-rejected",
+    "exception",
+    "interrupt-exception",
+    "interrupt-rejected",
+    "mutation-failed",
+    "no-record",
+    "no-reservation",
+    "pending-mutations-unsettled",
+    "terminal-exception",
+    "terminal-failed",
+  ],
+} as const;
+
+const CODING_RUNTIME_TASK_REPLACEMENT_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const CODING_RUNTIME_TASK_REPLACEMENT_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const CODING_RUNTIME_TASK_REPLACEMENT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.task-replacement",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionCodingRuntimePorts.recordRuntimeReplacementActivity",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    requestId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    expectedRevision: { type: "integer", dataClass: "count", required: true },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["accepted", "rejected", "started"],
+    },
+    reason: CODING_RUNTIME_TASK_REPLACEMENT_REASON_FIELD,
+    frames: CODING_RUNTIME_TASK_REPLACEMENT_FRAMES_FIELD,
+    causeChain: CODING_RUNTIME_TASK_REPLACEMENT_CAUSE_CHAIN_FIELD,
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-task-replacement"],
+  proofIds: ["coding-runtime.task-replacement.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PR_DESCRIPTION_WORKBENCH_EGRESS_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "pr-description.workbench.egress.denied",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionCodingRuntimePorts.logWorkbenchModelEgressDenied",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["authority-expired", "model-egress-denied"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["pr-description-workbench-egress"],
+  proofIds: ["pr-description.workbench.egress.denied.emitted-line"],
+  releaseImpact: "patch",
+});
 
 /** Render transient untrusted context separately from the human's task intent. */
 export function renderInitialTurnContext(attachment: CodingRuntimeIssueAttachment): string {
@@ -691,12 +783,13 @@ function recordRuntimeReplacementActivity(
   reason?: RuntimeDispatchFailureReason,
   error?: unknown,
 ): void {
-  const event = {
-    category: "process" as const,
-    op: "coding-runtime.task-replacement",
-    correlationId: correlationIdOrUnknown(request.correlationId ?? request.runId),
-    ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
-    extra: {
+  const event = activityLogEvent(
+    CODING_RUNTIME_TASK_REPLACEMENT_OPERATION,
+    {
+      correlationId: correlationIdOrUnknown(request.correlationId ?? request.runId),
+      ...(error === undefined ? {} : { errorKind: replacementErrorKind(error) }),
+    },
+    {
       runId: request.runId,
       requestId: request.requestId,
       expectedRevision: request.expectedRevision,
@@ -706,9 +799,17 @@ function recordRuntimeReplacementActivity(
         ? {}
         : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
     },
-  };
+  );
   if (state === "rejected") getServerLogger().warn(event);
   else getServerLogger().info(event);
+}
+
+function replacementErrorKind(error: unknown): ActivityLogErrorKind {
+  const errorClass = contentFreeErrorClass(error).toLowerCase();
+  if (/timeout|timedout/u.test(errorClass)) return "timeout";
+  if (/abort|cancel/u.test(errorClass)) return "cancelled";
+  if (/unavailable|network|connection|econn|enotfound/u.test(errorClass)) return "unavailable";
+  return "internal";
 }
 
 async function abortRuntimeTask(
@@ -1101,12 +1202,16 @@ function logWorkbenchModelEgressDenied(
   runId: string,
   reason: Extract<WorkbenchDescriptionReason, "authority-expired" | "model-egress-denied">,
 ): void {
-  getServerLogger().warn({
-    category: "security",
-    op: "pr-description.workbench.egress.denied",
-    correlationId: isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID,
-    errorKind: reason,
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      PR_DESCRIPTION_WORKBENCH_EGRESS_DENIED_OPERATION,
+      {
+        correlationId: isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID,
+        errorKind: "authority-denied",
+      },
+      { reason },
+    ),
+  );
 }
 
 function resolveWorkbenchSnapshot(

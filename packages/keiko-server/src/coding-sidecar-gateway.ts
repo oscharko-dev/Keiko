@@ -1,5 +1,5 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   findConfiguredCapability,
   resolveCodingSafeSidecarGatewayProfile,
@@ -28,6 +28,10 @@ import type {
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   MODEL_REASONING_EFFORTS,
   validateGatewaySamplingParameters,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
@@ -49,7 +53,7 @@ import {
   type OpenCodeGatewayHandlerCoverage,
 } from "./coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { getServerLogger } from "./observability/index.js";
@@ -132,16 +136,101 @@ const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
 const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
 
+const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.request-validated",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logValidatedRequestBounds",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    maxRequestBytes: { type: "integer", dataClass: "count", required: true },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+    estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    inputMessageCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.request-validated.line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.readiness-insufficient",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.gatewayReadinessProjection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["model-context-window-insufficient"],
+    },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+    minimumRequiredPromptTokens: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-sidecar-gateway-readiness"],
+  proofIds: ["coding-sidecar.gateway.readiness-insufficient.line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.tool-availability",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.resolveToolCatalogHandlerCoverage",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    handlerSetDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    unavailableOptionalTools: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 4,
+      values: ["keiko_research_fetch", "keiko_skill_discover", "keiko_skill", "keiko_child_agent"],
+    },
+    unavailableOptionalToolCount: { type: "integer", dataClass: "count", required: true },
+    offeredOptionalTools: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 4,
+      values: ["keiko_research_fetch", "keiko_skill_discover", "keiko_skill", "keiko_child_agent"],
+    },
+    offeredOptionalToolCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-sidecar-tool-availability"],
+  proofIds: ["coding-sidecar.gateway.tool-availability.line"],
+  releaseImpact: "patch",
+});
+
 // #3390 closeout (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // activity-log line carrying the REASON, so a defect is reconstructable from the log alone instead
 // of only the opaque HTTP status the client saw. `reason` is this closed vocabulary — never a raw
 // message — and is threaded through every 400/403 rejection path below via `logGatewayRejection`.
-const CODING_SIDECAR_GATEWAY_REJECTED_OP = "coding-sidecar.gateway.rejected";
 // The readiness projection (`/api/coding-sidecar/gateway/profile`) demoting an otherwise
 // "available" profile because its context window cannot survive a real request gets its own op:
 // it is not a per-request rejection, it is a standing state of the profile itself.
-const CODING_SIDECAR_GATEWAY_READINESS_OP = "coding-sidecar.gateway.readiness-insufficient";
-const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OP = "coding-sidecar.gateway.tool-availability";
 
 type CodingSidecarGatewayRejectionReason =
   | "request-too-large"
@@ -169,21 +258,133 @@ type CodingSidecarGatewayRejectionReason =
   | "spend-budget-exceeded"
   | "unclassified-rejection";
 
+const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.rejected",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logGatewayRejection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "request-too-large",
+        "body-not-json",
+        "body-empty-messages",
+        "message-shape-invalid",
+        "content-part-unsupported",
+        "tools-not-openai-compatible",
+        "invalid-sampling",
+        "input-messages-exceeded",
+        "prompt-tokens-exceeded",
+        "invalid-model",
+        "tool-contract-drift",
+        "tool-contract-missing",
+        "tool-contract-empty",
+        "origin-not-allowed",
+        "runtime-prompt-budget-denied",
+        "capability-authenticator-unavailable",
+        "capability-missing",
+        "capability-invalid",
+        "spend-bound-unavailable",
+        "spend-ledger-unavailable",
+        "spend-budget-invalid",
+        "spend-pricing-unavailable",
+        "spend-budget-exceeded",
+        "unclassified-rejection",
+      ],
+    },
+    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    expectedToolCount: { type: "integer", dataClass: "count", required: false },
+    receivedToolCount: { type: "integer", dataClass: "count", required: false },
+    unexpectedToolCount: { type: "integer", dataClass: "count", required: false },
+    missingToolCount: { type: "integer", dataClass: "count", required: false },
+    toolMismatchSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    estimatedPromptTokens: { type: "integer", dataClass: "count", required: false },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: false },
+    inputMessageCount: { type: "integer", dataClass: "count", required: false },
+    maxInputMessages: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-sidecar-gateway-rejection"],
+  proofIds: ["coding-sidecar.gateway.rejected.line"],
+  releaseImpact: "patch",
+});
+
+type GatewayRejectionEvidence = Partial<{
+  readonly expectedToolCount: number;
+  readonly receivedToolCount: number;
+  readonly unexpectedToolCount: number;
+  readonly missingToolCount: number;
+  readonly toolMismatchSha256: string;
+  readonly estimatedPromptTokens: number;
+  readonly maxPromptTokens: number;
+  readonly inputMessageCount: number;
+  readonly maxInputMessages: number;
+}>;
+
+function gatewayRejectionErrorKind(
+  reason: CodingSidecarGatewayRejectionReason,
+):
+  | "invalid-request"
+  | "validation-failed"
+  | "permission-denied"
+  | "authority-denied"
+  | "unavailable" {
+  if (reason === "capability-missing" || reason === "capability-invalid") {
+    return "permission-denied";
+  }
+  if (
+    reason === "origin-not-allowed" ||
+    reason === "runtime-prompt-budget-denied" ||
+    reason === "spend-budget-exceeded" ||
+    reason.startsWith("tool-contract-")
+  ) {
+    return "authority-denied";
+  }
+  if (reason.includes("unavailable") || reason === "spend-ledger-unavailable") {
+    return "unavailable";
+  }
+  return reason === "unclassified-rejection" ? "validation-failed" : "invalid-request";
+}
+
 /** Body-free: `reason` is closed, `runId` and every `extra` field are counts/ids, never text. */
 function logGatewayRejection(
   ctx: RouteContext,
   runId: string | undefined,
   status: number,
   reason: CodingSidecarGatewayRejectionReason,
-  extra?: Readonly<Record<string, unknown>>,
+  evidence: GatewayRejectionEvidence = {},
 ): void {
-  getServerLogger().warn({
-    category: "gateway",
-    op: CODING_SIDECAR_GATEWAY_REJECTED_OP,
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status,
-    extra: { reason, ...(runId === undefined ? {} : { runId }), ...extra },
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_REJECTED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        status,
+        errorKind: gatewayRejectionErrorKind(reason),
+      },
+      {
+        reason,
+        ...(runId === undefined ? {} : { runId }),
+        ...evidence,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 // One row per message literal `badRequest`/`validationErrorForChatRequest` actually builds — a
@@ -706,25 +907,33 @@ function resolveToolCatalogHandlerCoverage(
   const unavailable = runtimeCapabilityAuthenticator(deps)?.unavailableOptionalTools?.(runId);
   if (unavailable === undefined) return undefined;
   const unavailableOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
-    .filter((name) => unavailable.has(name as OpenCodeOptionalToolName))
+    .filter((name): name is OpenCodeOptionalToolName =>
+      unavailable.has(name as OpenCodeOptionalToolName),
+    )
     .sort(compareStrings);
   const offeredOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
-    .filter((name) => !unavailable.has(name as OpenCodeOptionalToolName))
+    .filter(
+      (name): name is OpenCodeOptionalToolName =>
+        !unavailable.has(name as OpenCodeOptionalToolName),
+    )
     .sort(compareStrings);
   const coverage = createCanonicalOpenCodeHandlerCoverage(unavailable);
-  getServerLogger().info({
-    category: "gateway",
-    op: CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OP,
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      runId,
-      handlerSetDigest: coverage.handlerSetDigest,
-      unavailableOptionalTools,
-      unavailableOptionalToolCount: unavailableOptionalTools.length,
-      offeredOptionalTools,
-      offeredOptionalToolCount: offeredOptionalTools.length,
-    },
-  });
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        runId,
+        handlerSetDigest: coverage.handlerSetDigest,
+        unavailableOptionalTools,
+        unavailableOptionalToolCount: unavailableOptionalTools.length,
+        offeredOptionalTools,
+        offeredOptionalToolCount: offeredOptionalTools.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   return coverage;
 }
 
@@ -1220,16 +1429,26 @@ function toolContractRejectionReason(tools: readonly ToolDefinition[] | undefine
  * Identifiers only — the mismatching tool NAMES, never a schema or a body — so the activity-log
  * line this feeds stays body-free (AGENTS.md §8) while still naming exactly which tools drifted.
  */
+function toolNameSetDigest(names: readonly string[]): string {
+  const hash = createHash("sha256");
+  hash.update("keiko.coding-sidecar.tool-mismatch.v1\0");
+  for (const name of [...names].sort(compareStrings)) hash.update(`${String(name.length)}:${name}`);
+  return hash.digest("hex");
+}
+
 function toolContractMismatch(
   tools: readonly ToolDefinition[] | undefined,
-): Readonly<Record<string, unknown>> {
+): GatewayRejectionEvidence {
   const expected = new Set<string>(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
   const received = new Set(tools?.map((tool) => tool.name) ?? []);
+  const unexpected = [...received].filter((name) => !expected.has(name));
+  const missing = [...expected].filter((name) => !received.has(name));
   return {
     expectedToolCount: expected.size,
     receivedToolCount: received.size,
-    unexpectedToolNames: [...received].filter((name) => !expected.has(name)),
-    missingToolNames: [...expected].filter((name) => !received.has(name)),
+    unexpectedToolCount: unexpected.length,
+    missingToolCount: missing.length,
+    toolMismatchSha256: toolNameSetDigest([...unexpected, "--missing--", ...missing]),
   };
 }
 
@@ -2090,16 +2309,22 @@ function gatewayReadinessProjection(
   ) {
     return result;
   }
-  getServerLogger().warn({
-    category: "gateway",
-    op: CODING_SIDECAR_GATEWAY_READINESS_OP,
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      reason: "model-context-window-insufficient",
-      maxPromptTokens: result.runMetadata.maxPromptTokens,
-      minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
-    },
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        errorKind: "unavailable",
+      },
+      {
+        reason: "model-context-window-insufficient",
+        maxPromptTokens: result.runMetadata.maxPromptTokens,
+        minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   return { status: "unavailable", reason: "model-context-window-insufficient" };
 }
 
@@ -2321,18 +2546,21 @@ function logValidatedRequestBounds(
   bounds: CodingWorkbenchSidecarGatewayRunMetadata,
   estimatedPromptTokens: number,
 ): void {
-  getServerLogger().info({
-    category: "gateway",
-    op: "coding-sidecar.gateway.request-validated",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      runId,
-      maxRequestBytes: bounds.maxRequestBytes,
-      maxPromptTokens: bounds.maxPromptTokens,
-      estimatedPromptTokens,
-      inputMessageCount: request.messages.length,
-    },
-  });
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId) },
+      {
+        runId,
+        maxRequestBytes: bounds.maxRequestBytes,
+        maxPromptTokens: bounds.maxPromptTokens,
+        estimatedPromptTokens,
+        inputMessageCount: request.messages.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function executeBudgetedGatewayChat(

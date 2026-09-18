@@ -24,11 +24,13 @@ import { installLayoutOverrideEvidence } from "./install-layout.js";
 import { loadServer } from "./lazy-modules.js";
 import type { CliSecurityLogSinkFactory } from "./security-log.js";
 import {
+  SafeArtifactFileError,
   securityErrorKind,
   type SecurityLogEvent,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { withActivityLogCorrelation } from "@oscharko-dev/keiko-contracts/runtime/observability";
 // The version constant comes from the contracts LEAF, not the keiko-sdk barrel:
 // the sdk package eagerly re-exports harness/workflows/evidence/gateway/
 // evaluations, so importing SDK_VERSION from it loaded the entire product graph
@@ -105,6 +107,16 @@ interface DeferredLogFailure {
   readonly message: string;
 }
 
+function withInvocationCorrelation(
+  event: SecurityLogEvent,
+  invocationCorrelationId: string | undefined,
+): SecurityLogEvent {
+  if (invocationCorrelationId === undefined || event.correlationId === invocationCorrelationId) {
+    return event;
+  }
+  return withActivityLogCorrelation(event, invocationCorrelationId);
+}
+
 function pendingSecurityLogEvent(
   stateDir: string,
   event: SecurityLogEvent,
@@ -112,10 +124,7 @@ function pendingSecurityLogEvent(
 ): PendingSecurityLogEvent {
   return {
     stateDir,
-    event:
-      invocationCorrelationId === undefined
-        ? event
-        : { ...event, correlationId: invocationCorrelationId },
+    event: withInvocationCorrelation(event, invocationCorrelationId),
   };
 }
 
@@ -384,7 +393,26 @@ function dispatchCommand(
   io: CliIo,
   env: EnvSource,
 ): number | Promise<number> | undefined {
-  return COMMAND_HANDLERS.get(name)?.(rest, io, env);
+  try {
+    const result = COMMAND_HANDLERS.get(name)?.(rest, io, env);
+    return result instanceof Promise
+      ? result.catch((error: unknown) => reportSafeArtifactFailure(error, io))
+      : result;
+  } catch (error) {
+    return reportSafeArtifactFailure(error, io);
+  }
+}
+
+// A safe-artifact failure (for example an Activity Log directory that cannot be created) is an
+// expected, closed operational outcome: operators recover from its closed kind, so it is reported
+// instead of surfacing as a generic fatal crash. Anything else keeps propagating.
+function reportSafeArtifactFailure(error: unknown, io: CliIo): number {
+  if (!(error instanceof SafeArtifactFileError)) throw error;
+  io.err(
+    `keiko: ${error.artifactClass} safe-artifact failure: ${error.kind}. ` +
+      "See docs/troubleshooting/README.md.\n",
+  );
+  return 1;
 }
 
 function handleMetaCommand(first: string | undefined, io: CliIo): number | undefined {

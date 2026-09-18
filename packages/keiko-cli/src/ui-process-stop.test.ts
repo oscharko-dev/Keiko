@@ -74,7 +74,11 @@ describe("terminateUiProcess", () => {
     expect(killed).toEqual([[42, "SIGTERM"]]);
     expect(existsSync(join(stateDir, "ui.shutdown"))).toBe(false);
     expect(events.map((event) => event.op)).toEqual(["cli.lifecycle.stop-requested"]);
-    expect(events[0]?.extra).toEqual({ channel: "sigterm" });
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      channel: "sigterm",
+    });
   });
 
   it("on Windows writes the sentinel, never SIGTERMs, and clears the request after a graceful death", async () => {
@@ -103,7 +107,11 @@ describe("terminateUiProcess", () => {
     expect(sawSentinel).toBe(true);
     expect(killed).toEqual([]);
     expect(existsSync(join(stateDir, "ui.shutdown"))).toBe(false);
-    expect(events[0]?.extra).toEqual({ channel: "shutdown-request" });
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      channel: "shutdown-request",
+    });
   });
 
   it("on Windows escalates with tree-kill and does not SIGKILL after a successful tree-kill", async () => {
@@ -142,7 +150,11 @@ describe("terminateUiProcess", () => {
     expect(killWindowsTree).toHaveBeenCalledWith(77, treeEnv);
     expect(killProcess).not.toHaveBeenCalled();
     const escalated = events.find((event) => event.op === "cli.lifecycle.stop-escalated");
-    expect(escalated?.extra).toEqual({ windowsTreeKill: "succeeded" });
+    expect(escalated?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      windowsTreeKill: "succeeded",
+    });
   });
 
   it("on Windows does not SIGKILL when tree-kill refuses the current pid", async () => {
@@ -273,6 +285,7 @@ describe("terminateUiProcess", () => {
 
   it("refuses forced stop when the pid file does not prove ownership", async () => {
     const stateDir = makeStateDir();
+    const { sink, events } = recordingSink();
     const killWindowsTree = vi.fn(() => "succeeded" as const);
     const outcome = await terminateUiProcess({
       pid: 5,
@@ -285,14 +298,20 @@ describe("terminateUiProcess", () => {
         /* must not run */
       },
       killWindowsTree,
+      securityLogSink: sink,
       escalate: true,
     });
     expect(outcome).toEqual({ confirmed: false, escalated: false });
     expect(killWindowsTree).not.toHaveBeenCalled();
+    expect(events.find(({ op }) => op === "cli.lifecycle.stop-request-failed")).toMatchObject({
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unverified-pid" },
+    });
   });
 
   it("refuses to signal the current process", async () => {
     const stateDir = makeStateDir();
+    const { sink, events } = recordingSink();
     writeOwnedPid(stateDir, process.pid);
     const killed: (readonly [number, NodeJS.Signals | 0 | undefined])[] = [];
     const outcome = await terminateUiProcess({
@@ -305,10 +324,15 @@ describe("terminateUiProcess", () => {
       killProcess: (pid, signal) => {
         killed.push([pid, signal]);
       },
+      securityLogSink: sink,
       escalate: true,
     });
     expect(outcome).toEqual({ confirmed: false, escalated: false });
     expect(killed).toEqual([]);
+    expect(events.find(({ op }) => op === "cli.lifecycle.stop-request-failed")).toMatchObject({
+      errorKind: "unsafe-target",
+      extra: { failureKind: "refused-self-pid" },
+    });
   });
 
   it("does not emit stop-requested when POSIX SIGTERM fails with EPERM", async () => {
@@ -330,7 +354,12 @@ describe("terminateUiProcess", () => {
       ...verifiedIdentity(),
     });
     expect(events.map((event) => event.op)).toEqual(["cli.lifecycle.stop-request-failed"]);
-    expect(events[0]?.errorKind).toBe("EPERM");
+    expect(events[0]?.errorKind).toBe("unavailable");
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      failureKind: "EPERM",
+    });
   });
 
   it("emits stop-escalation-failed when Windows tree-kill throws and still SIGKILLs", async () => {

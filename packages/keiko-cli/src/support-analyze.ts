@@ -19,8 +19,8 @@
 // position of their FIRST line in the file — the order the operator's machine actually produced
 // them — and a lifetime's lines are kept together behind that rank. A line written before the v2
 // envelope shipped (schemaVersion 1, no pid/instanceId/seq) can still be present in a server.log
-// spanning the upgrade (the sink's own 7-day retention window); it has no lifetime to belong to, so
-// it ranks by its own file position. The result is ONE total order (rank, then seq) rather than a
+// spanning the upgrade or in a retained legacy rotation archive; it has no lifetime to belong to,
+// so it ranks by its own file position. The result is ONE total order (rank, then seq) rather than a
 // comparator that switches rule per pair, which is not transitive and would hand `sort` an
 // undefined result the moment a pre-v2 line sits between two v2 lines of the same process.
 //
@@ -45,6 +45,25 @@ import {
   type ToolDiagnosticRedactor,
 } from "./support-tool-catalog.js";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+  ActivityLogEventValidationError,
+  activityLogOperationSchema,
+  isActivityLogIdentityDigest,
+  isActivityLogInstanceId,
+  isActivityLogErrorKind,
+  isActivityLogPlatformClass,
+  isActivityLogProcessId,
+  isActivityLogProductVersion,
+  isActivityLogSequence,
+  validateActivityLogOperationRecord,
+  type ActivityLogEventEnvelope,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 
 export interface SupportAnalyzeOptions {
@@ -55,6 +74,15 @@ export interface SupportAnalyzeOptions {
 const KNOWN_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   "ts",
   "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
   "pid",
   "instanceId",
   "seq",
@@ -128,6 +156,33 @@ export interface ProcessSummary {
   readonly exitReason?: string | undefined;
 }
 
+export type ActivityLogEvidenceClassification =
+  "supported" | "legacy" | "unsupported" | "corrupt" | "truncated" | "incomplete";
+
+export type ProcessSequenceAnomalyKind = "gap" | "duplicate" | "decreasing" | "reset";
+
+export interface ProcessSequenceAnomaly {
+  readonly kind: ProcessSequenceAnomalyKind;
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly fileIndex: number;
+  readonly previousSeq: number;
+  readonly seq: number;
+  readonly missingFrom?: number | undefined;
+  readonly missingTo?: number | undefined;
+}
+
+export interface ActivityLogEvidenceSummary {
+  readonly classification: ActivityLogEvidenceClassification;
+  readonly supportedLineCount: number;
+  readonly legacyLineCount: number;
+  readonly unsupportedLineCount: number;
+  readonly corruptLineCount: number;
+  readonly truncatedLineCount: number;
+  readonly incompleteLineCount: number;
+  readonly sequenceAnomalies: readonly ProcessSequenceAnomaly[];
+}
+
 export interface AnalyzeAllResult {
   readonly sourceKind: SourceKind;
   // Whole-artifact observation metadata, derived from every valid log record whether it carries a
@@ -137,9 +192,10 @@ export interface AnalyzeAllResult {
   readonly latestInstanceId: string | undefined;
   readonly timelines: readonly LogTimeline[];
   readonly malformedLineCount: number;
+  readonly evidence: ActivityLogEvidenceSummary;
   readonly processes: readonly ProcessSummary[];
   // Lines successfully parsed as log records but missing the full (pid, instanceId, seq) v2
-  // identity triple — pre-v2 lines the sink's own retention window can still be holding.
+  // identity triple — pre-v2 lines the long-lived current file or a legacy archive can still hold.
   readonly legacyLineCount: number;
   // Exactly one entry when legacyLineCount > 0, naming the count; empty otherwise. The honest
   // machine-readable admission that this analyzer fell back to file-position ordering for some
@@ -244,6 +300,7 @@ function extraFields(
 }
 
 interface Identity {
+  readonly schemaVersion: number | undefined;
   readonly pid: number | undefined;
   readonly instanceId: string | undefined;
   readonly seq: number | undefined;
@@ -251,6 +308,7 @@ interface Identity {
 
 function readIdentity(record: Record<string, unknown>): Identity {
   return {
+    schemaVersion: optionalNumber(record, "schemaVersion"),
     pid: optionalNumber(record, "pid"),
     instanceId: optionalString(record, "instanceId"),
     seq: optionalNumber(record, "seq"),
@@ -337,37 +395,328 @@ interface ParsedLine {
 }
 
 type LineClassification =
-  | { readonly kind: "line"; readonly parsed: ParsedLine }
+  | {
+      readonly kind: "line";
+      readonly evidence: "supported" | "legacy";
+      readonly parsed: ParsedLine;
+    }
   | { readonly kind: "section" }
-  | { readonly kind: "malformed" };
+  | {
+      readonly kind: "rejected";
+      readonly evidence: "unsupported" | "corrupt" | "truncated" | "incomplete";
+    };
 
-// A line is malformed when it is not valid JSON, or is valid JSON that is not shaped like a log
-// record (missing ts/category/op) — evidence of corruption, per AGENTS.md §7 never silently
-// skipped. A `$section`-tagged line is bundle metadata, not corruption: it is skipped, not counted.
-function classifyLine(
-  raw: string,
-  fileIndex: number,
-  options: SupportAnalyzeOptions,
-): LineClassification {
-  const record = tryParseJsonObject(raw);
-  if (record === undefined) return { kind: "malformed" };
-  if (typeof record.$section === "string") return { kind: "section" };
+const ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS = [
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
+] as const;
+
+function validProcessId(value: unknown): value is number {
+  return isActivityLogProcessId(value);
+}
+
+function validSequence(value: unknown): value is number {
+  return isActivityLogSequence(value);
+}
+
+function validInstanceId(value: unknown): value is string {
+  return isActivityLogInstanceId(value);
+}
+
+function hasValidProcessIdentity(record: Record<string, unknown>): boolean {
+  return (
+    validProcessId(record.pid) && validInstanceId(record.instanceId) && validSequence(record.seq)
+  );
+}
+
+function hasInvalidPresentProcessIdentity(record: Record<string, unknown>): boolean {
+  return (
+    (record.pid !== undefined && !validProcessId(record.pid)) ||
+    (record.instanceId !== undefined && !validInstanceId(record.instanceId)) ||
+    (record.seq !== undefined && !validSequence(record.seq))
+  );
+}
+
+const ACTIVITY_LOG_COMPATIBILITY_STATE_SET: ReadonlySet<string> = new Set(
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
+);
+const ACTIVITY_LOG_WRITER_CAPABILITY_SET: ReadonlySet<string> = new Set(
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+);
+
+function validRegistryDigests(record: Record<string, unknown>): boolean {
+  return (
+    isActivityLogIdentityDigest(record.schemaDigest) &&
+    isActivityLogIdentityDigest(record.catalogDigest)
+  );
+}
+
+function validRuntimeIdentity(record: Record<string, unknown>): boolean {
+  return (
+    record.buildClass === "node-esm" &&
+    (record.releaseClass === "stable" || record.releaseClass === "prerelease") &&
+    isActivityLogPlatformClass(record.platformClass) &&
+    isActivityLogProductVersion(record.productVersion)
+  );
+}
+
+function validRegistryIdentityShape(record: Record<string, unknown>): boolean {
+  return (
+    typeof record.registryVersion === "number" &&
+    Number.isSafeInteger(record.registryVersion) &&
+    record.registryVersion > 0 &&
+    validRegistryDigests(record) &&
+    validRuntimeIdentity(record) &&
+    typeof record.compatibilityState === "string" &&
+    ACTIVITY_LOG_COMPATIBILITY_STATE_SET.has(record.compatibilityState) &&
+    typeof record.writerCapability === "string" &&
+    ACTIVITY_LOG_WRITER_CAPABILITY_SET.has(record.writerCapability)
+  );
+}
+
+function declaredCompatibility(record: Record<string, unknown>): ActivityLogEvidenceClassification {
+  if (record.compatibilityState === "legacy-supported") return "legacy";
+  if (record.compatibilityState === "unsupported-version") return "unsupported";
+  if (record.compatibilityState === "corrupt") return "corrupt";
+  if (record.compatibilityState === "truncated") return "truncated";
+  if (record.compatibilityState === "incomplete" || record.writerCapability !== "active") {
+    return "incomplete";
+  }
+  return "supported";
+}
+
+function registryIdentityClassification(
+  record: Record<string, unknown>,
+): ActivityLogEvidenceClassification {
+  const present = ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.filter((key) => record[key] !== undefined);
+  if (present.length === 0) return "supported";
+  if (present.length !== ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.length) return "incomplete";
+  if (!validRegistryIdentityShape(record)) return "corrupt";
+  if (
+    record.registryVersion !== ACTIVITY_LOG_REGISTRY_VERSION ||
+    record.schemaDigest !== ACTIVITY_LOG_SCHEMA_DIGEST ||
+    record.catalogDigest !== ACTIVITY_LOG_CATALOG_DIGEST
+  ) {
+    return "unsupported";
+  }
+  return declaredCompatibility(record);
+}
+
+function schemaVersionClassification(
+  schemaVersion: unknown,
+  identityCount: number,
+): ActivityLogEvidenceClassification | undefined {
+  if (schemaVersion === undefined) return identityCount === 0 ? "legacy" : "incomplete";
+  if (
+    typeof schemaVersion !== "number" ||
+    !Number.isSafeInteger(schemaVersion) ||
+    schemaVersion <= 0
+  )
+    return "corrupt";
+  if (schemaVersion === 1) return identityCount === 0 ? "legacy" : "corrupt";
+  if (schemaVersion !== 2) return "unsupported";
+  return undefined;
+}
+
+function identityClassification(
+  record: Record<string, unknown>,
+): ActivityLogEvidenceClassification {
+  const identityValues = [record.pid, record.instanceId, record.seq];
+  const identityCount = identityValues.filter((value) => value !== undefined).length;
+  const hasInvalidPresentIdentity = hasInvalidPresentProcessIdentity(record);
+  const schemaClassification = schemaVersionClassification(record.schemaVersion, identityCount);
+  if (schemaClassification !== undefined) {
+    return schemaClassification === "incomplete" && hasInvalidPresentIdentity
+      ? "corrupt"
+      : schemaClassification;
+  }
+  if (hasInvalidPresentIdentity) return "corrupt";
+  if (identityCount < identityValues.length) return "incomplete";
+  return registryIdentityClassification(record);
+}
+
+function registeredFields(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): Readonly<Record<string, unknown>> {
+  const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const name of Object.keys(registration.fields)) {
+    if (name === "status" && typeof record.status === "number") continue;
+    if (record[name] !== undefined) fields[name] = record[name];
+  }
+  return fields;
+}
+
+const ACTIVITY_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
+
+function validOptionalType(value: unknown, expected: "string" | "number"): boolean {
+  return value === undefined || typeof value === expected;
+}
+
+function validRecordLevel(value: unknown): boolean {
+  return typeof value === "string" && ACTIVITY_LOG_LEVELS.has(value);
+}
+
+function validRecordStatus(
+  value: unknown,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  return (
+    value === undefined ||
+    typeof value === "number" ||
+    (typeof value === "string" && registration.fields.status?.type === "string")
+  );
+}
+
+function validRecordEnvelopeFields(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  return (
+    validRecordLevel(record.level) &&
+    validOptionalType(record.correlationId, "string") &&
+    validOptionalType(record.parentCorrelationId, "string") &&
+    validOptionalType(record.durationMs, "number") &&
+    validRecordStatus(record.status, registration) &&
+    (record.errorKind === undefined || isActivityLogErrorKind(record.errorKind))
+  );
+}
+
+function recordEnvelope(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): ActivityLogEventEnvelope | undefined {
+  if (!validRecordEnvelopeFields(record, registration)) return undefined;
+  const level = optionalString(record, "level") as ActivityLogEventEnvelope["level"];
+  const correlationId = optionalString(record, "correlationId");
+  const parentCorrelationId = optionalString(record, "parentCorrelationId");
+  const durationMs = optionalNumber(record, "durationMs");
+  const status = optionalNumber(record, "status");
+  const errorKind = isActivityLogErrorKind(record.errorKind) ? record.errorKind : undefined;
+  return {
+    ...(level === undefined ? {} : { level: level as ActivityLogEventEnvelope["level"] }),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(typeof status === "number" ? { status } : {}),
+    ...(errorKind === undefined ? {} : { errorKind }),
+  };
+}
+
+function hasUnknownRegisteredField(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  const allowed = new Set(Object.keys(registration.fields));
+  return Object.keys(record).some((key) => !KNOWN_ENVELOPE_KEYS.has(key) && !allowed.has(key));
+}
+
+function registeredRecordClassification(
+  record: Record<string, unknown>,
+  category: string,
+  op: string,
+): ActivityLogEvidenceClassification {
+  const registration = activityLogOperationSchema(op);
+  if (registration === undefined) return "corrupt";
+  const envelope = recordEnvelope(record, registration);
+  if (envelope === undefined) return "corrupt";
+  if (hasUnknownRegisteredField(record, registration)) return "corrupt";
+  try {
+    validateActivityLogOperationRecord(
+      op,
+      category,
+      envelope,
+      registeredFields(record, registration),
+    );
+    return "supported";
+  } catch (error) {
+    return error instanceof ActivityLogEventValidationError && error.kind === "missing-field"
+      ? "incomplete"
+      : "corrupt";
+  }
+}
+
+function isPersistedTimestamp(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+type RejectedEvidence = "unsupported" | "corrupt" | "truncated" | "incomplete";
+
+function rejectedLine(evidence: RejectedEvidence): LineClassification {
+  return { kind: "rejected" as const, evidence };
+}
+
+function invalidJsonEvidence(terminalFragment: boolean): "truncated" | "corrupt" {
+  return terminalFragment ? "truncated" : "corrupt";
+}
+
+interface RequiredLineLabels {
+  readonly ts: string;
+  readonly category: string;
+  readonly op: string;
+}
+
+function requiredLineLabels(record: Record<string, unknown>): RequiredLineLabels | undefined {
   const ts = optionalString(record, "ts");
   const category = optionalString(record, "category");
   const op = optionalString(record, "op");
-  if (ts === undefined || category === undefined || op === undefined) {
-    return { kind: "malformed" };
+  if (ts === undefined || !isPersistedTimestamp(ts)) return undefined;
+  if (category === undefined || op === undefined) return undefined;
+  return { ts, category, op };
+}
+
+function acceptedEvidence(
+  evidence: ActivityLogEvidenceClassification,
+): evidence is "supported" | "legacy" {
+  return evidence === "supported" || evidence === "legacy";
+}
+
+function recordEvidence(
+  record: Record<string, unknown>,
+  labels: RequiredLineLabels,
+  evidence: "supported" | "legacy",
+): ActivityLogEvidenceClassification {
+  if (evidence === "supported" && record.registryVersion !== undefined) {
+    return registeredRecordClassification(record, labels.category, labels.op);
   }
+  return evidence;
+}
+
+// A `$section`-tagged line is bundle metadata, not evidence. Unsupported versions are classified
+// before their unknown envelope is interpreted; every supported or legacy record still requires
+// the common ts/category/op shape.
+function classifyLine(
+  raw: string,
+  fileIndex: number,
+  terminalFragment: boolean,
+  options: SupportAnalyzeOptions,
+): LineClassification {
+  const record = tryParseJsonObject(raw);
+  if (record === undefined) return rejectedLine(invalidJsonEvidence(terminalFragment));
+  if (typeof record.$section === "string") return { kind: "section" };
+  const evidence = identityClassification(record);
+  if (evidence === "unsupported") return rejectedLine(evidence);
+  const labels = requiredLineLabels(record);
+  if (labels === undefined) return rejectedLine("corrupt");
+  if (!acceptedEvidence(evidence)) return rejectedLine(evidence);
+  const recordClassification = recordEvidence(record, labels, evidence);
+  if (!acceptedEvidence(recordClassification)) return rejectedLine(recordClassification);
   const identity = readIdentity(record);
   return {
     kind: "line",
+    evidence: recordClassification,
     parsed: {
-      view: buildView(ts, category, op, record, identity, options),
+      view: buildView(labels.ts, labels.category, labels.op, record, identity, options),
       correlationId: optionalString(record, "correlationId"),
-      hasFullIdentity:
-        identity.pid !== undefined &&
-        identity.instanceId !== undefined &&
-        identity.seq !== undefined,
+      hasFullIdentity: hasValidProcessIdentity(record),
       fileIndex,
     },
   };
@@ -805,12 +1154,129 @@ function buildOpClusters(lines: readonly ParsedLine[]): readonly OpCluster[] {
   }));
 }
 
-function buildWarnings(legacyLineCount: number): readonly string[] {
-  return legacyLineCount > 0
-    ? [
-        `${String(legacyLineCount)} line(s) predate the v2 envelope and were ordered by file position`,
-      ]
-    : [];
+interface MutableEvidenceCounts {
+  supported: number;
+  legacy: number;
+  unsupported: number;
+  corrupt: number;
+  truncated: number;
+  incomplete: number;
+}
+
+function emptyEvidenceCounts(): MutableEvidenceCounts {
+  return { supported: 0, legacy: 0, unsupported: 0, corrupt: 0, truncated: 0, incomplete: 0 };
+}
+
+function incrementEvidence(
+  counts: MutableEvidenceCounts,
+  classification: ActivityLogEvidenceClassification,
+): void {
+  counts[classification] += 1;
+}
+
+function overallEvidenceClassification(
+  counts: MutableEvidenceCounts,
+  anomalies: readonly ProcessSequenceAnomaly[],
+): ActivityLogEvidenceClassification {
+  if (counts.corrupt > 0) return "corrupt";
+  if (counts.truncated > 0) return "truncated";
+  if (counts.unsupported > 0) return "unsupported";
+  // `seq` is allocated process-wide across every state directory. A gap in one analyzed artifact
+  // can therefore be a write to another directory, not missing evidence. Keep reporting the gap,
+  // but only identity violations that cannot arise from cross-directory allocation degrade the
+  // artifact's integrity classification.
+  if (counts.incomplete > 0 || anomalies.some((anomaly) => anomaly.kind !== "gap")) {
+    return "incomplete";
+  }
+  if (counts.legacy > 0) return "legacy";
+  return "supported";
+}
+
+function evidenceSummary(
+  counts: MutableEvidenceCounts,
+  sequenceAnomalies: readonly ProcessSequenceAnomaly[],
+): ActivityLogEvidenceSummary {
+  return {
+    classification: overallEvidenceClassification(counts, sequenceAnomalies),
+    supportedLineCount: counts.supported,
+    legacyLineCount: counts.legacy,
+    unsupportedLineCount: counts.unsupported,
+    corruptLineCount: counts.corrupt,
+    truncatedLineCount: counts.truncated,
+    incompleteLineCount: counts.incomplete,
+    sequenceAnomalies,
+  };
+}
+
+function evidenceWarnings(evidence: ActivityLogEvidenceSummary): readonly string[] {
+  const warnings: string[] = [];
+  if (evidence.legacyLineCount > 0) {
+    warnings.push(
+      `${String(evidence.legacyLineCount)} line(s) predate the v2 envelope and were ordered by file position`,
+    );
+  }
+  for (const classification of ["unsupported", "corrupt", "truncated", "incomplete"] as const) {
+    const count = evidence[`${classification}LineCount`];
+    if (count > 0) warnings.push(`${String(count)} ${classification} Activity Log line(s)`);
+  }
+  if (evidence.sequenceAnomalies.length > 0) {
+    warnings.push(
+      `${String(evidence.sequenceAnomalies.length)} process sequence anomaly/anomalies`,
+    );
+  }
+  return warnings;
+}
+
+interface SequenceState {
+  readonly seen: Set<number>;
+  previous: number;
+}
+
+function sequenceAnomaly(
+  kind: ProcessSequenceAnomalyKind,
+  line: ParsedLine,
+  previousSeq: number,
+  missing?: { readonly from: number; readonly to: number },
+): ProcessSequenceAnomaly {
+  return {
+    kind,
+    pid: orZero(line.view.pid),
+    instanceId: orEmpty(line.view.instanceId),
+    fileIndex: line.fileIndex,
+    previousSeq,
+    seq: orZero(line.view.seq),
+    ...(missing === undefined ? {} : { missingFrom: missing.from, missingTo: missing.to }),
+  };
+}
+
+function lineSequenceAnomalies(line: ParsedLine, state: SequenceState): ProcessSequenceAnomaly[] {
+  const anomalies: ProcessSequenceAnomaly[] = [];
+  const seq = orZero(line.view.seq);
+  if (seq > state.previous + 1) {
+    anomalies.push(
+      sequenceAnomaly("gap", line, state.previous, { from: state.previous + 1, to: seq - 1 }),
+    );
+  }
+  if (state.seen.has(seq)) anomalies.push(sequenceAnomaly("duplicate", line, state.previous));
+  if (seq === 1 && state.previous > 1)
+    anomalies.push(sequenceAnomaly("reset", line, state.previous));
+  if (seq < state.previous) anomalies.push(sequenceAnomaly("decreasing", line, state.previous));
+  state.seen.add(seq);
+  state.previous = seq;
+  return anomalies;
+}
+
+function detectSequenceAnomalies(lines: readonly ParsedLine[]): readonly ProcessSequenceAnomaly[] {
+  const states = new Map<string, SequenceState>();
+  const anomalies: ProcessSequenceAnomaly[] = [];
+  for (const line of lines) {
+    const key = lifetimeKey(line);
+    if (key === undefined) continue;
+    const state = states.get(key) ?? { seen: new Set<number>(), previous: 0 };
+    anomalies.push(...lineSequenceAnomalies(line, state));
+    states.set(key, state);
+  }
+  return anomalies;
 }
 
 interface LatestObservation {
@@ -867,19 +1333,25 @@ export function analyzeLogText(
   const kind = detectSourceKind(lines[0]);
   const contentLines = kind === "bundle" ? lines.slice(1) : lines;
   const parsedLines: ParsedLine[] = [];
+  const evidenceCounts = emptyEvidenceCounts();
   let malformedLineCount = 0;
   for (const [index, raw] of contentLines.entries()) {
-    const classification = classifyLine(raw, index, options);
-    if (classification.kind === "malformed") malformedLineCount += 1;
+    const terminalFragment = index === contentLines.length - 1 && !text.endsWith("\n");
+    const classification = classifyLine(raw, index, terminalFragment, options);
+    if (classification.kind === "section") continue;
+    incrementEvidence(evidenceCounts, classification.evidence);
     if (classification.kind === "line") parsedLines.push(classification.parsed);
+    else if (classification.evidence !== "unsupported") malformedLineCount += 1;
   }
   const groups = groupByCorrelationId(parsedLines);
   const timelines = [...groups.entries()].map(([correlationId, group]) =>
     buildTimeline(correlationId, group),
   );
   const processes = buildProcessSummaries(parsedLines);
-  const legacyLineCount = parsedLines.filter((parsed) => !parsed.hasFullIdentity).length;
-  const warnings = buildWarnings(legacyLineCount);
+  const sequenceAnomalies = detectSequenceAnomalies(parsedLines);
+  const evidence = evidenceSummary(evidenceCounts, sequenceAnomalies);
+  const legacyLineCount = evidence.legacyLineCount;
+  const warnings = evidenceWarnings(evidence);
   const clusters = buildOpClusters(parsedLines);
   const updateAttempts = buildUpdateAttempts(parsedLines);
   const observation = latestObservation(parsedLines);
@@ -888,6 +1360,7 @@ export function analyzeLogText(
     ...observation,
     timelines,
     malformedLineCount,
+    evidence,
     processes,
     legacyLineCount,
     warnings,
@@ -957,6 +1430,24 @@ function renderWarnings(warnings: readonly string[]): string {
   return `${lines.join("\n")}\n`;
 }
 
+function renderSequenceAnomaly(anomaly: ProcessSequenceAnomaly): string {
+  const missing =
+    anomaly.missingFrom === undefined
+      ? ""
+      : ` missing=${String(anomaly.missingFrom)}-${String(anomaly.missingTo)}`;
+  return (
+    `  ${anomaly.kind} pid=${String(anomaly.pid)} instanceId=${anomaly.instanceId} ` +
+    `fileIndex=${String(anomaly.fileIndex)} previousSeq=${String(anomaly.previousSeq)} ` +
+    `seq=${String(anomaly.seq)}${missing}`
+  );
+}
+
+function renderSequenceAnomalies(anomalies: readonly ProcessSequenceAnomaly[]): string {
+  return `Sequence anomalies: ${String(anomalies.length)}\n${anomalies
+    .map((anomaly) => renderSequenceAnomaly(anomaly))
+    .join("\n")}\n`;
+}
+
 function renderCluster(cluster: OpCluster): string {
   const errorKind = cluster.errorKind ?? "-";
   const samples = cluster.sampleCorrelationIds.join(",");
@@ -978,6 +1469,9 @@ export function renderHumanClusters(clusters: readonly OpCluster[]): string {
 export function renderHumanAllTimelines(result: AnalyzeAllResult): string {
   const sections: string[] = [];
   if (result.warnings.length > 0) sections.push(renderWarnings(result.warnings));
+  if (result.evidence.sequenceAnomalies.length > 0) {
+    sections.push(renderSequenceAnomalies(result.evidence.sequenceAnomalies));
+  }
   if (result.processes.length > 0) sections.push(renderProcessSummaries(result.processes));
   sections.push(
     result.timelines.length === 0
@@ -1038,14 +1532,13 @@ function isGatewayAttemptLine(view: ServerLogLineView): boolean {
   );
 }
 
-// `errorKind` is the gateway's own `GatewayError.code` (`logErrorKind`, keiko-model-gateway's
-// observability.ts) — this maps the 4 codes a replay script cares about onto the narrower
-// `GatewayReplayAttempt.outcome` vocabulary; anything else (circuit-open, cancelled, unknown)
-// falls into the generic "provider-error" bucket rather than growing the outcome union for a
-// distinction a replay fixture does not need to make.
+// Current typed events use ADR-0173's closed error-kind vocabulary. Retained pre-registry logs can
+// still carry the gateway's historical `GatewayError.code`, so keep those exact aliases readable
+// rather than making an upgrade erase an otherwise reconstructable replay outcome. Anything else
+// falls into the generic provider-error bucket.
 function attemptOutcome(errorKind: string | undefined): GatewayReplayAttempt["outcome"] {
-  if (errorKind === "GATEWAY_RATE_LIMIT") return "rate-limit";
-  if (errorKind === "GATEWAY_TIMEOUT") return "timeout";
+  if (errorKind === "rate-limited" || errorKind === "GATEWAY_RATE_LIMIT") return "rate-limit";
+  if (errorKind === "timeout" || errorKind === "GATEWAY_TIMEOUT") return "timeout";
   if (errorKind === "GATEWAY_TRANSPORT") return "transport-error";
   return "provider-error";
 }

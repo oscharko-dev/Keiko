@@ -4,6 +4,7 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import type { CodingRepositoryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
+import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   AuxiliaryCapabilityOutcomeV1,
   VerifiedCommitResult,
@@ -24,6 +25,7 @@ import type {
   CodingToolVerificationResult,
   VerificationNotRunStep,
 } from "./codingToolIpc.js";
+import { CODING_RUNTIME_TOOL_RESULT_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 export type CodingToolActionOf<Kind extends CodingToolActionRequest["action"]> = Extract<
   CodingToolActionRequest,
@@ -124,12 +126,17 @@ function discardedResult(
   request: CodingToolActionRequest,
   guard: CodingToolMutationGuard,
 ): { readonly outcome: "failed" } {
-  activityLog.write({
-    category: "process",
-    op: "coding-runtime.tool-result",
-    correlationId: guard.binding?.runId ?? UNKNOWN_CORRELATION_ID,
-    extra: { actionKind: request.action, state: "discarded", reason: "authority-denied" },
-  });
+  activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_RESULT_OPERATION,
+      {
+        level: "warn",
+        correlationId: guard.binding?.runId ?? UNKNOWN_CORRELATION_ID,
+        errorKind: "authority-denied",
+      },
+      { actionKind: request.action, state: "discarded", reason: "authority-denied" },
+    ),
+  );
   return { outcome: "failed" };
 }
 

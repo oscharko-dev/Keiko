@@ -273,7 +273,11 @@ describe("runUiCli", () => {
     expect(code).toBe(1);
     expect(err.join("")).toContain("build:ui");
     expect(sink.events).toEqual([
-      expect.objectContaining({ op: "cli.install-layout.normalized", correlationId }),
+      expect.objectContaining({
+        op: "cli.install-layout.normalized",
+        correlationId,
+        extra: expect.objectContaining({ completeness: "complete", loss: "none" }) as unknown,
+      }),
     ]);
   });
 
@@ -299,6 +303,7 @@ describe("runUiCli", () => {
       ),
     ).rejects.toThrow();
     expect(sink.events.map(({ op }) => op)).toEqual(["cli.install-layout.normalized"]);
+    expect(sink.events[0]?.extra).toMatchObject({ completeness: "complete", loss: "none" });
   });
 
   it("prefers the built workspace checkout over a stale inherited global static root", async () => {
@@ -538,13 +543,19 @@ describe("runUiCli", () => {
     ]);
     expect(sink.events[0]).toMatchObject({
       correlationId: "00000000-0000-4000-8000-000000000001",
-      extra: { overriddenCount: 1, overriddenKinds: ["ui-static-root"] },
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        overriddenCount: 1,
+        overriddenKinds: ["ui-static-root"],
+      },
     });
     expect(sink.closeCallCount).toBe(1);
     const event = sink.events.find(({ op }) => op === "process.fatal");
-    expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_CORRUPT");
+    expect(event?.errorKind).toBe("validation-failed");
     expect(extraOf(event)).toMatchObject({
       kind: "server-error",
+      failureKind: "PORTABLE_UPDATE_RECOVERY_CORRUPT",
       recoveryReason: "corrupt",
       sessionId: "session-1",
     });
@@ -602,7 +613,8 @@ describe("runUiCli", () => {
     expect(phases).toStrictEqual(["pre-listen", "post-listen"]);
     expect(close).toHaveBeenCalledOnce();
     const event = sink.events.find(({ op }) => op === "process.fatal");
-    expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
+    expect(event?.errorKind).toBe("durability-failed");
+    expect(extraOf(event).failureKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
     expect(extraOf(event).recoveryReason).toBe("persistence-failed");
   });
 
@@ -707,7 +719,8 @@ describe("runUiCli", () => {
       level: "warn",
       category: "diagnostic",
       op: "update.runtime.legacy-import-deferred",
-      extra: { reason: "append-failed" },
+      errorKind: "unavailable",
+      extra: { completeness: "complete", loss: "none", reason: "append-failed" },
     });
     expect(events.some((event) => event.op === "process.started")).toBe(true);
     expect(err.join("")).toBe(
@@ -1237,6 +1250,8 @@ describe("runUiCli", () => {
         correlationId,
         level: "info",
         extra: {
+          completeness: "complete",
+          loss: "none",
           overriddenCount: 3,
           overriddenKinds: ["cli-bin", "ui-static-root", "local-state-auditor"],
         },
@@ -1544,8 +1559,9 @@ describe("attachDurableServerErrorListener (KEIKO-0858 / #2906 round 3, comment 
     expect(event?.level).toBe("error");
     expect(event?.category).toBe("process");
     expect(event?.op).toBe("process.fatal");
-    expect(event?.errorKind).toBe("RangeError");
+    expect(event?.errorKind).toBe("internal");
     expect(extraOf(event).kind).toBe("server-error");
+    expect(extraOf(event).failureKind).toBe("RangeError");
   });
 
   // A sink whose write never settles, or a close() that never calls back, must not hang the

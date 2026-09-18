@@ -558,6 +558,8 @@ describe("commit preview — read-only verification context (AC3)", () => {
       correlationId: "commit-preview-1",
       status: 200,
       extra: {
+        completeness: "complete",
+        loss: "none",
         stagedFileCount: 2,
         areaCount: 2,
         touchesTests: false,
@@ -824,7 +826,10 @@ describe("commit draft — explicit model-backed generation", () => {
       op: "git.commit.draft.completed",
       correlationId: UNKNOWN_CORRELATION_ID,
       status: 503,
+      errorKind: "unavailable",
       extra: {
+        completeness: "complete",
+        loss: "none",
         stagedFileCount: 2,
         areaCount: 2,
         touchesTests: false,
@@ -835,10 +840,16 @@ describe("commit draft — explicit model-backed generation", () => {
   });
 
   it("rejects invalid model output without falling back to a generic commit message", async () => {
+    const events: ServerLogEvent[] = [];
     const handler = createHandleCommitDraft({
       execution: seams({
         stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
       }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
     });
 
     const res = await handler(
@@ -855,6 +866,22 @@ describe("commit draft — explicit model-backed generation", () => {
       error: { code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" },
     });
     expect(JSON.stringify(res.body)).not.toContain("update staged changes");
+    expect(events).toContainEqual({
+      category: "diagnostic",
+      op: "git.commit.draft.completed",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      status: 502,
+      errorKind: "validation-failed",
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        stagedFileCount: 2,
+        areaCount: 2,
+        touchesTests: false,
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+      },
+    });
   });
 });
 
@@ -1376,11 +1403,22 @@ describe("commit approve (mints the approval execute consumes) — #3386, ADR-01
       expect.arrayContaining([
         expect.objectContaining({
           op: "git.delivery.authority.admitted",
-          extra: { operation: "commit", phase: "admission", source: "local-user" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            phase: "admission",
+            source: "local-user",
+          },
         }),
         expect.objectContaining({
           op: "git.delivery.commit.approval.minted",
-          extra: { operation: "commit", runId: "local-user-git-widget" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "local-user-git-widget",
+          },
         }),
       ]),
     );
@@ -1496,7 +1534,12 @@ describe("commit approval evidence — body-free activity-log lines (#3386)", ()
           category: "security",
           op: "git.delivery.commit.approval.minted",
           status: 200,
-          extra: { operation: "commit", runId: "test-run" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "test-run",
+          },
         }),
       ]),
     );
@@ -1518,7 +1561,12 @@ describe("commit approval evidence — body-free activity-log lines (#3386)", ()
           category: "security",
           op: "git.delivery.commit.approval.required",
           status: 200,
-          extra: { operation: "commit", runId: "test-run" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "test-run",
+          },
         }),
       ]),
     );

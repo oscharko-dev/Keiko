@@ -25,6 +25,10 @@
 //    and body-free. See `reportServerLogFailure` in `server-log.ts`.
 
 import { performance } from "node:perf_hooks";
+import {
+  activityLogEventRegistration,
+  attachActivityLogEventRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { resolveServerLogThreshold, serverLogLevelEnabled } from "./log-level.js";
 import type { ServerLogLevel, ServerLogThreshold } from "./log-level.js";
@@ -137,10 +141,17 @@ function resolveBinding(parent: ResolvedBinding, context: ServerLogContext): Res
 function mergeExtra(
   binding: ResolvedBinding,
   input: ServerLogEventInput,
+  registeredFields?: ReadonlySet<string>,
 ): Readonly<Record<string, unknown>> | undefined {
-  if (binding.extra === undefined) return input.extra;
-  if (input.extra === undefined) return binding.extra;
-  return { ...binding.extra, ...input.extra };
+  const bound =
+    registeredFields === undefined || binding.extra === undefined
+      ? binding.extra
+      : Object.fromEntries(
+          Object.entries(binding.extra).filter(([name]) => registeredFields.has(name)),
+        );
+  if (bound === undefined || Object.keys(bound).length === 0) return input.extra;
+  if (input.extra === undefined) return bound;
+  return { ...bound, ...input.extra };
 }
 
 function buildEvent(
@@ -148,7 +159,10 @@ function buildEvent(
   input: ServerLogEventInput,
   binding: ResolvedBinding,
 ): ServerLogEvent {
-  return {
+  const registration = activityLogEventRegistration(input);
+  const registeredFields =
+    registration === undefined ? undefined : new Set(Object.keys(registration.fields));
+  const event: ServerLogEvent = {
     level,
     category: input.category ?? binding.category ?? FALLBACK_CATEGORY,
     op: input.op,
@@ -157,8 +171,9 @@ function buildEvent(
     durationMs: input.durationMs,
     status: input.status,
     errorKind: input.errorKind,
-    extra: mergeExtra(binding, input),
+    extra: mergeExtra(binding, input, registeredFields),
   };
+  return attachActivityLogEventRegistration(event, registration);
 }
 
 export interface ServerLoggerOptions {
@@ -250,19 +265,28 @@ export function startLogTimer(): () => number {
 // it, otherwise a null sink, so a unit test that never sets the variable writes nothing.
 let processLogger: ServerLogger | null = null;
 
-function buildProcessLogger(): ServerLogger {
+function buildProcessLogger(): ServerLogger | null {
   const stateDir = process.env.KEIKO_STATE_DIR;
   if (stateDir === undefined || stateDir === "") {
-    return createServerLogger({ sink: nullServerLogSink() });
+    return nullServerLogger();
   }
   // `createFileServerLogSink` is a per-file singleton, so this shares the CLI's descriptor and
   // rotation state rather than opening a second one over the same file.
-  return createServerLogger({ sink: createFileServerLogSink(stateDir) });
+  try {
+    return createServerLogger({ sink: createFileServerLogSink(stateDir) });
+  } catch (error) {
+    reportServerLogFailure(error, { op: "server-log.initialize", loss: "event-dropped" });
+    return null;
+  }
 }
 
 export function getServerLogger(): ServerLogger {
   processLogger ??= buildProcessLogger();
-  return processLogger;
+  // An initialization failure must not become a permanently memoised silent logger. Returning a
+  // one-call fallback preserves the no-throw contract while leaving the slot empty so a later
+  // operation can recover automatically after the filesystem problem is fixed. Repeated failure
+  // notices remain body-free and are throttled by `reportServerLogFailure`.
+  return processLogger ?? nullServerLogger();
 }
 
 // Explicit wiring (the CLI hands over the same sink it gives `createUiServer`) and test setup.

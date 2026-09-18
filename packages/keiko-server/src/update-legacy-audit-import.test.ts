@@ -142,7 +142,8 @@ function canonicalLines(stateDir: string): Record<string, unknown>[] {
     .trim()
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((record) => record.op !== "server-log.safe-open");
 }
 
 describe("legacy update audit import", () => {
@@ -237,18 +238,23 @@ describe("legacy update audit import", () => {
       occurredAt: "2025-01-02T03:04:05.000Z",
       type: "portable-staging-result",
       portableStageId: "a".repeat(32),
+      correlationId: "unknown-correlation-id",
+      completeness: "complete",
+      loss: "none",
     });
     expect(String(lines[0]?.eventId)).toMatch(/^legacy-audit-event-[0-9a-f]{64}$/u);
-    expect(lines[0]).not.toHaveProperty("correlationId");
     expect(lines[0]).not.toHaveProperty("requestId");
     expect(lines[0]).not.toHaveProperty("parentCorrelationId");
     expect(lines[0]?.ts).not.toBe(lines[0]?.occurredAt);
     expect(lines[1]?.snapshotId).toBe(legacyEventId(3));
     expect(lines[2]).toMatchObject({
       op: "update.runtime.legacy-snapshot-imported",
+      correlationId: "unknown-correlation-id",
       historical: true,
       sourceSchemaVersion: 1,
       importedCount: 2,
+      completeness: "complete",
+      loss: "none",
     });
     expect(String(lines[2]?.importId)).toMatch(/^legacy-audit-[0-9a-f]{64}$/u);
     expect(String(lines[2]?.sourceDigest)).toMatch(/^[0-9a-f]{64}$/u);
@@ -432,6 +438,15 @@ describe("legacy update audit import", () => {
       reason: "source-invalid",
     });
 
+    writeFileSync(
+      join(updates, "update-audit.jsonl"),
+      `${JSON.stringify(legacyEvent({ targetVersion: `${"9".repeat(70)}.0.0` }))}\n`,
+    );
+    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
+      status: "deferred",
+      reason: "source-invalid",
+    });
+
     const lines = Array.from({ length: 2_049 }, (_unused, index) =>
       JSON.stringify(legacyEvent({ eventId: legacyEventId(index + 1) })),
     );
@@ -511,7 +526,7 @@ describe("legacy update audit import", () => {
     });
   });
 
-  it("recognizes an exact completion in a rotated allowed log", () => {
+  it("recognizes an exact completion in an allowed legacy archive", () => {
     const stateDir = fixture();
     writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
     const first = importLegacyUpdateAuditSnapshot({ stateDir, level: "info" });
@@ -608,7 +623,18 @@ describe("legacy update audit import", () => {
       status: "deferred",
       reason: "destination-invalid",
     });
-    expect(readFileSync(logPath, "utf8")).toBe(crowdedLog);
+    const after = readFileSync(logPath, "utf8");
+    expect(after.startsWith(crowdedLog)).toBe(true);
+    const appended = after.slice(crowdedLog.length).trim().split("\n");
+    expect(appended).toHaveLength(1);
+    expect(JSON.parse(appended[0] ?? "null")).toMatchObject({
+      op: "server-log.safe-open",
+      persistenceStatus: "opened",
+      completeness: "complete",
+      loss: "none",
+      correlationId: "unknown-correlation-id",
+    });
+    expect(after).not.toContain(stateDir);
   });
 
   it.each(["symlink", "hardlink"])("rejects a %s canonical current file", (kind) => {

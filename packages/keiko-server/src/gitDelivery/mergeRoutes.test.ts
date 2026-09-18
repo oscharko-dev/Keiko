@@ -687,6 +687,7 @@ describe("merge execute (governed)", () => {
     expect(marker?.correlationId).toBe("request-correlation-merge-no-spawn");
     expect(marker?.extra?.operation).toBe("merge");
     expect(marker?.status).toBe(403);
+    expect(marker?.errorKind).toBe("authority-denied");
   });
 
   it("normalizes a provider rejection into a typed reason + recovery disposition (AC3/AC4)", async () => {
@@ -761,8 +762,14 @@ describe("merge execute (governed)", () => {
       level: "error",
       correlationId: "request-correlation-merge-snapshot",
     });
-    expect(typeof failed?.errorKind).toBe("string");
-    expect(failed?.extra).toEqual({ actionKind: "merge", phaseReached: "snapshot" });
+    expect(failed?.errorKind).toBe("internal");
+    expect(failed?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      actionKind: "merge",
+      phaseReached: "snapshot",
+      failureKind: "Error",
+    });
     expect(JSON.stringify(activity)).not.toContain("host path must stay private");
   });
 });
@@ -1105,6 +1112,38 @@ describe("readMergeProviderReadiness — default merge-adapter termination wirin
       extra: { state: "unknown", providerError: true },
     });
     expect(JSON.stringify(events)).not.toContain("private provider body");
+  });
+
+  it("classifies a returned provider error as a structured failure", async () => {
+    const events: ServerLogEvent[] = [];
+    await readMergeProviderReadiness(
+      WIRING_COMMAND,
+      testWorkspace("/repo"),
+      {
+        activityLog: { write: (event): void => void events.push(event) },
+        mergeAdapterFactory: () => ({
+          readMergeReadiness: (): Promise<GitMergeProviderReadiness> =>
+            Promise.resolve({ providerCapableStrategies: [], providerError: true }),
+          mergePullRequest: (): Promise<GitMergeExecResult> =>
+            Promise.reject(new Error("must not merge")),
+        }),
+      },
+      () => 1,
+      "readiness-returned-provider-error",
+    );
+
+    expect(events[0]).toMatchObject({
+      op: "git.delivery.readiness.observed",
+      level: "warn",
+      correlationId: "readiness-returned-provider-error",
+      errorKind: "unavailable",
+      extra: {
+        state: "unknown",
+        providerError: true,
+        errorClass: "ProviderReadinessError",
+        code: "provider-error",
+      },
+    });
   });
 
   it("wires the caller's activityLog + correlationId into the default createNodeGitMergeAdapter call", async () => {

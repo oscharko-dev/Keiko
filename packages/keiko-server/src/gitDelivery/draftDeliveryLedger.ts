@@ -12,11 +12,159 @@ import {
   type DraftDeliveryReason,
   type DraftDeliveryRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import type { GitPushCommand, GitPrCreateCommand } from "@oscharko-dev/keiko-tools";
 import { draftDeliveryId } from "./draftDeliveryFacts.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { draftDeliveryLineageRecord } from "../coding-runtime/codingRuntimeDraftDeliverySource.js";
+
+const DRAFT_DELIVERY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-delivery",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/draftDeliveryLedger.logDraftDeliveryActivity",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "push-proposed",
+        "pushing",
+        "pushed",
+        "pr-proposed",
+        "creating-pr",
+        "draft-created",
+        "recovery-required",
+        "approval-issued",
+        "approval-consumed",
+        "approval",
+        "refused",
+        "failed",
+      ],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "approval-required",
+        "in-flight",
+        "completed",
+        "authority-denied",
+        "remote-drift",
+        "issue-drift",
+        "provider-failed",
+        "ambiguous-remote",
+        "approval-invalid",
+        "payload-changed",
+        "restart-reconciliation",
+        "preflight-failed",
+        "operation-in-flight",
+        "policy-authorized",
+      ],
+    },
+    revision: { type: "integer", dataClass: "count", required: false },
+    proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    proposalDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    recoveryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    headSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    baseSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    remoteDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    issueBindingDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    issueIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
+    verifiedCommitProposalId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    runtimeAuthorityDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    envelopeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    workspaceDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-draft-delivery"],
+  proofIds: ["git.draft-delivery"],
+  releaseImpact: "patch",
+});
+
+export interface DraftDeliveryActivityFields {
+  readonly runId: string;
+  readonly phase:
+    | DraftDeliveryPhase
+    | "approval-issued"
+    | "approval-consumed"
+    | "approval"
+    | "refused"
+    | "failed";
+  readonly reason?: DraftDeliveryReason | "operation-in-flight" | "policy-authorized";
+  readonly revision?: number;
+  readonly proposalId?: string;
+  readonly proposalDigest?: string;
+  readonly recoveryId?: string;
+  readonly headSha?: string;
+  readonly baseSha?: string;
+  readonly remoteDigest?: string;
+  readonly issueBindingDigest?: string;
+  readonly issueIdDigest?: string;
+  readonly issueNumber?: number;
+  readonly verifiedCommitProposalId?: string;
+  readonly runtimeAuthorityDigest?: string;
+  readonly envelopeDigest?: string;
+  readonly workspaceDigest?: string;
+  readonly failureKind?: string;
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+export function logDraftDeliveryActivity(
+  options: DraftDeliveryServiceOptions,
+  correlationId: string,
+  fields: DraftDeliveryActivityFields,
+  failure?: { readonly errorKind: ActivityLogErrorKind },
+): void {
+  (options.execution?.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DRAFT_DELIVERY_OPERATION,
+      {
+        correlationId,
+        ...(failure === undefined ? {} : { level: "warn", errorKind: failure.errorKind }),
+      },
+      fields,
+    ),
+  );
+}
 
 export type DraftDeliveryCommand = GitPushCommand | GitPrCreateCommand;
 export function draftProposalDigest(
@@ -51,29 +199,24 @@ export function draftChanged(
   context: DraftDeliveryRunContext,
   record: DraftDeliveryRecord,
 ): void {
-  (options.execution?.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.draft-delivery",
-    correlationId: context.correlationId,
-    extra: {
-      runId: context.runId,
-      phase: record.phase,
-      reason: record.reason,
-      revision: record.revision,
-      proposalId: record.proposalId,
-      proposalDigest: record.proposalDigest,
-      recoveryId: record.binding.recoveryId,
-      headSha: record.binding.headSha,
-      baseSha: record.binding.baseSha,
-      remoteDigest: record.binding.remoteDigest,
-      issueBindingDigest: record.binding.issueBindingDigest,
-      issueIdDigest: record.binding.issueIdDigest,
-      issueNumber: record.binding.issueNumber,
-      verifiedCommitProposalId: record.binding.verifiedCommitProposalId,
-      runtimeAuthorityDigest: record.binding.runtimeAuthorityDigest,
-      envelopeDigest: record.binding.envelopeDigest,
-      workspaceDigest: record.binding.workspaceDigest,
-    },
+  logDraftDeliveryActivity(options, context.correlationId, {
+    runId: context.runId,
+    phase: record.phase,
+    reason: record.reason,
+    revision: record.revision,
+    proposalId: record.proposalId,
+    proposalDigest: record.proposalDigest,
+    recoveryId: record.binding.recoveryId,
+    headSha: record.binding.headSha,
+    baseSha: record.binding.baseSha,
+    remoteDigest: record.binding.remoteDigest,
+    issueBindingDigest: record.binding.issueBindingDigest,
+    issueIdDigest: record.binding.issueIdDigest,
+    issueNumber: record.binding.issueNumber,
+    verifiedCommitProposalId: record.binding.verifiedCommitProposalId,
+    runtimeAuthorityDigest: record.binding.runtimeAuthorityDigest,
+    envelopeDigest: record.binding.envelopeDigest,
+    workspaceDigest: record.binding.workspaceDigest,
   });
   options.onChanged(record);
 }
@@ -164,15 +307,10 @@ export function draftApprovalChanged(
   proposal: DraftDeliveryProposal,
   phase: "approval-issued" | "approval-consumed",
 ): void {
-  (options.execution?.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.draft-delivery",
-    correlationId: options.context()?.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      runId: proposal.record.binding.runId,
-      phase,
-      proposalId: proposal.record.proposalId,
-      proposalDigest: proposal.record.proposalDigest,
-    },
+  logDraftDeliveryActivity(options, options.context()?.correlationId ?? UNKNOWN_CORRELATION_ID, {
+    runId: proposal.record.binding.runId,
+    phase,
+    proposalId: proposal.record.proposalId,
+    proposalDigest: proposal.record.proposalDigest,
   });
 }

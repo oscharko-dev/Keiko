@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
@@ -345,6 +346,11 @@ describe("runUninstallCli — dry run", () => {
       "cli.uninstall.started",
       "cli.uninstall.completed",
     ]);
+    expect(
+      events
+        .filter(({ op }) => op.startsWith("cli.uninstall."))
+        .every((event) => activityLogEventRegistration(event) !== undefined),
+    ).toBe(true);
     expect(new Set(events.map(({ correlationId: id }) => id))).toEqual(new Set([correlationId]));
     expect(extraOf(events[2])).toMatchObject({ dryRun: true, stateDisposition: "would-remove" });
     expect(existsSync(join(stateDir, "logs"))).toBe(false);
@@ -563,8 +569,9 @@ describe("runUninstallCli — apply", () => {
     expect(existsSync(stateDir)).toBe(true);
     expect(openAttempts).toBe(2);
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ op: "cli.uninstall.failed", errorKind: "Error" });
+    expect(events[0]).toMatchObject({ op: "cli.uninstall.failed", errorKind: "internal" });
     expect(extraOf(events[0]).reason).toBe("activity-log-open-failed");
+    expect(extraOf(events[0]).failureKind).toBe("Error");
   });
 
   it("removes state, keiko scripts (keeping custom), and prints guidance", async () => {
@@ -724,8 +731,9 @@ describe("runUninstallCli — scripts edge cases", () => {
     ).resolves.toBe(1);
     expect(c.err()).toContain("not valid JSON");
     expect(events.map(({ op }) => op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
-    expect(events[1]).toMatchObject({ errorKind: "UninstallPackageParseError" });
+    expect(events[1]).toMatchObject({ errorKind: "internal" });
     expect(extraOf(events[1]).reason).toBe("package-parse-failed");
+    expect(extraOf(events[1]).failureKind).toBe("UninstallPackageParseError");
   });
 
   it("validates scripts before a forced stop or launcher removal", async () => {
@@ -788,8 +796,9 @@ describe("runUninstallCli — scripts edge cases", () => {
     ).resolves.toBe(1);
     expect(c.err()).toContain("not readable");
     expect(events.map(({ op }) => op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
-    expect(events[1]).toMatchObject({ errorKind: "UninstallPackageReadError" });
+    expect(events[1]).toMatchObject({ errorKind: "internal" });
     expect(extraOf(events[1]).reason).toBe("package-read-failed");
+    expect(extraOf(events[1]).failureKind).toBe("UninstallPackageReadError");
   });
 
   it("reports when there are no keiko scripts to remove", async () => {
@@ -1640,10 +1649,11 @@ describe("runUninstallCli — runtime state manifest", () => {
     expect(events.map(({ op }) => op)).toEqual(["cli.uninstall.started", "cli.uninstall.failed"]);
     expect(events[1]).toEqual(
       expect.objectContaining({
-        errorKind: "UninstallPreflightError",
+        errorKind: "internal",
       }),
     );
     expect(extraOf(events[1]).reason).toBe("preflight-refused");
+    expect(extraOf(events[1]).failureKind).toBe("UninstallPreflightError");
   });
 
   it("refuses a non-directory state root without crashing", async () => {

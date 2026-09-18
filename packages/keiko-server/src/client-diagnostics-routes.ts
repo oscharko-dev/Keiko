@@ -11,14 +11,9 @@
 //     browser cannot inject an arbitrary join key onto another request's timeline;
 //   * the optional Git-change response identity is a closed, body-free contract and is projected
 //     field-by-field; unknown browser fields can never enter the activity log;
-//   * the message text is written under `extra.clientNote`, NEVER `extra.message`: `"message"` is
-//     on `log-redaction.ts`'s `DENIED_FIELD_NAMES` and would collapse to `[redacted:key]` even
-//     though the value is already length-bounded by the wire guard. `clientNote` normalises to
-//     `"clientnote"`, which is not denied, so the existing per-value guards (length/secret/
-//     personal/prose/path) do the actual content-safety work on the value itself — the same
-//     "structural, not caller discipline" principle `log-redaction.ts`'s own header states. No new
-//     redaction path is written here; the existing choke point is applied a second time,
-//     server-side, exactly as it is for every other logged field.
+//   * the hostile message text is reduced to a domain-separated SHA-256 digest before it reaches
+//     the logger. Length bounds and generic redaction are useful defenses, but neither makes an
+//     arbitrary client sentence an opaque identifier; the raw message never enters the event.
 //
 // Rate limiting reuses `createInlineCompletionRateLimiter` (the editor's existing token-bucket
 // primitive — AGENTS.md §5 forbids a second one) as a single, process-wide bucket: a flapping tab
@@ -33,6 +28,13 @@ import type { IncomingMessage } from "node:http";
 
 import type { ClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts";
 import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
 import {
   RequestBodyCancelledError,
@@ -56,6 +58,76 @@ const MAX_CLIENT_DIAGNOSTIC_BODY_BYTES = 4_096;
 // page. `minIntervalMs: 0` disables the limiter's own burst/cooldown gate, so only the sliding
 // window cap below applies.
 const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY = "client-diagnostics";
+
+const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.diagnostic.rate-limited",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.noticeRateLimitedDrop",
+  fields: {
+    suppressedDrops: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-diagnostic-rate-limit"],
+  proofIds: ["client.diagnostic.rate-limited.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.diagnostic",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientDiagnostic",
+  fields: {
+    clientNoteDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    readyState: { type: "integer", dataClass: "count", required: false },
+    clientKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["boundary", "unhandled-rejection", "sse-error", "other"],
+    },
+    action: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["review", "approve", "apply"],
+    },
+    disposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["accepted", "discarded"],
+    },
+    relationshipId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    snapshotDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["preview", "approved", "observed", "blocked"],
+    },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-diagnostic"],
+  proofIds: ["client.diagnostic.line"],
+  releaseImpact: "patch",
+});
 
 // One declaration for production and the test reset below — duplicating these three literals let
 // them drift, so the test reset silently exercised a limiter with different bounds than production.
@@ -99,22 +171,47 @@ function noticeRateLimitedDrop(now: number, correlationId: string | undefined): 
   }
   const suppressed = dropNotice.suppressed;
   dropNotice = { lastAt: now, suppressed: 0 };
-  getServerLogger().warn({
-    category: "diagnostic",
-    op: "client.diagnostic.rate-limited",
-    correlationId: correlationIdOrUnknown(correlationId),
-    ...(suppressed > 0 ? { extra: { suppressedDrops: suppressed } } : {}),
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "rate-limited" },
+      {
+        ...(suppressed > 0 ? { suppressedDrops: suppressed } : {}),
+        completeness: "complete",
+        loss: "event-dropped",
+      },
+    ),
+  );
 }
 
-// Projects the validated request onto the activity log. `message` is admitted only as
-// `extra.clientNote` (see module header); `readyState`/`kind` ride along as bounded, closed-shape
-// fields the value guards pass through unchanged.
+export function clientDiagnosticNoteDigest(message: string): string {
+  return sha256Hex(`keiko-client-diagnostic-note-v1\0${message}`);
+}
+
+type ClientDiagnosticKind = NonNullable<ClientDiagnosticIngestRequest["kind"]>;
+
+const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
+  boundary: "internal",
+  "unhandled-rejection": "internal",
+  "sse-error": "unavailable",
+  other: "unknown",
+} as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
+
+function clientDiagnosticErrorKind(
+  kind: ClientDiagnosticIngestRequest["kind"],
+): "internal" | "unavailable" | "unknown" {
+  return kind === undefined ? "unknown" : CLIENT_DIAGNOSTIC_ERROR_KINDS[kind];
+}
+
+// Projects the validated request onto the activity log. `message` is admitted only as a digest;
+// `readyState`/`kind` ride along as bounded, closed-shape fields.
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
 ): void {
-  const extra: Record<string, unknown> = { clientNote: request.message };
+  const extra: Record<string, unknown> = {
+    clientNoteDigest: clientDiagnosticNoteDigest(request.message),
+  };
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
   if (request.gitChangeDescription !== undefined) {
@@ -133,13 +230,15 @@ function logClientDiagnostic(
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId
       : correlationIdOrUnknown(ingestCorrelationId);
-  getServerLogger().warn({
-    category: "diagnostic",
-    op: "client.diagnostic",
-    correlationId,
-    ...(request.kind === undefined ? {} : { errorKind: request.kind }),
-    extra,
-  });
+  extra.completeness = "complete";
+  extra.loss = "none";
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_DIAGNOSTIC_OPERATION,
+      { correlationId, errorKind: clientDiagnosticErrorKind(request.kind) },
+      extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
+    ),
+  );
 }
 
 // Discriminates a rejected read (already a fully-formed `RouteResult`) from a successfully parsed

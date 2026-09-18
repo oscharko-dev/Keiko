@@ -122,9 +122,14 @@ function entryFor(
   return entry;
 }
 
-function activityLogEventWithKind(sink: BufferedServerLogSink, errorKind: string): ServerLogEvent {
-  const line = sink.events.find((event) => event.errorKind === errorKind);
-  if (line === undefined) throw new Error(`no activity-log event with errorKind ${errorKind}`);
+function activityLogEventWithFailureKind(
+  sink: BufferedServerLogSink,
+  failureKind: string,
+): ServerLogEvent {
+  const line = sink.events.find((event) => event.extra?.failureKind === failureKind);
+  if (line === undefined) {
+    throw new Error(`no activity-log event with failureKind ${failureKind}`);
+  }
   return line;
 }
 
@@ -358,8 +363,8 @@ describe("healthy reconciliation (AC4)", () => {
   // server.log` — this proves the SAME reconcile pass also reaches the server activity log
   // (AGENTS.md §8), carrying the SAME correlationId. The evidence `outcome` is always the fixed
   // "reconciled" (this pass always completes); the classification an agent actually needs — was the
-  // workspace found healthy or drifted — rides in `errorKind` as the live `WorkspaceReconciliationStatus`
-  // instead (see activity-log.ts).
+  // workspace found healthy or drifted — rides in `extra.failureKind` as the live
+  // `WorkspaceReconciliationStatus` instead (see activity-log.ts).
   it("emits a task-workspace.lifecycle activity-log line for a healthy reconcile, no errorKind", async () => {
     const activityLog = createBufferedServerLogSink();
     const instance = await provisionTask("t-activity-healthy");
@@ -381,7 +386,7 @@ describe("healthy reconciliation (AC4)", () => {
     expect(extra.workspaceId).toBe(instance.workspaceId);
   });
 
-  it("carries the live WorkspaceReconciliationStatus as errorKind for a drifted reconcile", async () => {
+  it("classifies a drifted reconcile and preserves its live WorkspaceReconciliationStatus", async () => {
     const activityLog = createBufferedServerLogSink();
     const instance = await provisionTask("t-activity-missing");
     rmSync(instance.managedWorktreePath, { recursive: true, force: true });
@@ -389,7 +394,8 @@ describe("healthy reconciliation (AC4)", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.level).toBe("warn");
-    expect(line.errorKind).toBe("missing");
+    expect(line.errorKind).toBe("unavailable");
+    expect(line.extra?.failureKind).toBe("missing");
     expect(line.extra?.outcome).toBe("reconciled");
   });
 });
@@ -477,7 +483,8 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     // path could regress to `pointer-stale` for a READABLE mismatch (a dropped marker argument)
     // while every row assertion stayed green, and the operator would be told a pointer is stale for
     // a fact whose executable exit is `reconcile-pointer` (PR #3381 review).
-    const line = activityLogEventWithKind(activityLog, "stale-pointer");
+    const line = activityLogEventWithFailureKind(activityLog, "stale-pointer");
+    expect(line.errorKind).toBe("target-mutated");
     expect(line.correlationId).toBe("gitdir-mismatch-0001");
     expect(line.extra).toMatchObject({
       operation: "reconcile",
@@ -519,7 +526,9 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     expect(persisted?.gitdirIdentity).toBe(retired);
     // …and the migration is named on the activity log, so the operator is not sent after a
     // replaced worktree for a registration that only predates the rule.
-    expect(activityLogEventWithKind(activityLog, "stale-pointer").extra).toMatchObject({
+    const line = activityLogEventWithFailureKind(activityLog, "stale-pointer");
+    expect(line.errorKind).toBe("target-mutated");
+    expect(line.extra).toMatchObject({
       operation: "reconcile",
       driftMarker: "identity-schema-retired",
     });
@@ -604,7 +613,8 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
         driftMarkers: [],
       });
     }
-    const line = activityLogEventWithKind(activityLog, "REPOSITORY_UNREACHABLE");
+    const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
+    expect(line.errorKind).toBe("unavailable");
     expect(line.correlationId).toBe("unreachable-0001");
     expect(line.extra).toMatchObject({ operation: "reconcile" });
     expect(Array.isArray(line.extra?.causeChain)).toBe(true);
@@ -612,7 +622,7 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     // ONE line and ONE consultation for three rows of one unreachable repository — the shape the
     // ADR documents and the operator reads.
     expect(
-      activityLog.events.filter((event) => event.errorKind === "REPOSITORY_UNREACHABLE"),
+      activityLog.events.filter((event) => event.extra?.failureKind === "REPOSITORY_UNREACHABLE"),
     ).toHaveLength(1);
     expect(attempts.count).toBe(1);
   });
@@ -678,9 +688,9 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
     });
 
     await expect(svc.reconcile(repoRoot, "persist-0001")).rejects.toThrow("disk I/O error");
-    expect(activityLog.events.some((event) => event.errorKind === "REPOSITORY_UNREACHABLE")).toBe(
-      false,
-    );
+    expect(
+      activityLog.events.some((event) => event.extra?.failureKind === "REPOSITORY_UNREACHABLE"),
+    ).toBe(false);
   });
 
   // The evidence line carried placeholder zeros for both measurements (audit finding, 2026-09-03).
@@ -719,7 +729,8 @@ describe("pointer drift (negative: corrupted / moved gitdir)", () => {
       lifecycleState: "active",
       driftMarkers: [],
     });
-    const line = activityLogEventWithKind(activityLog, "IDENTITY_PROOF_FAILED");
+    const line = activityLogEventWithFailureKind(activityLog, "IDENTITY_PROOF_FAILED");
+    expect(line.errorKind).toBe("read-failed");
     expect(line.correlationId).toBe("proof-failed-0001");
     // Body-free by contract: the cause travels as a class chain, never as its message.
     expect(line.extra).toMatchObject({ operation: "reconcile" });

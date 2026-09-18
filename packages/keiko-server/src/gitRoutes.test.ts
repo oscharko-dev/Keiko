@@ -1808,8 +1808,8 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
       category: "diagnostic",
       op: "git.process.failed",
       correlationId: "corr-membership-0001",
-      errorKind: "not-a-repository",
-      extra: { subcommand: "rev-parse", exitCode: 128 },
+      errorKind: "unavailable",
+      extra: { subcommand: "rev-parse", exitCode: 128, failureKind: "not-a-repository" },
     });
   });
 
@@ -1836,8 +1836,13 @@ describe("git route activity log (AGENTS.md §8 Rule 1)", () => {
       category: "security",
       op: "git.process.refused",
       correlationId: "corr-refusal-route-01",
-      errorKind: "git-option-refused",
-      extra: { subcommand: "status", exitCode: 128, refusal: "config-override" },
+      errorKind: "authority-denied",
+      extra: {
+        subcommand: "status",
+        exitCode: 128,
+        refusal: "config-override",
+        failureKind: "git-option-refused",
+      },
     });
   });
 

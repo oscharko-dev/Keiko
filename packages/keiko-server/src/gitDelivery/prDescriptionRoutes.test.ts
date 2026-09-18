@@ -910,7 +910,7 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
     const denial = events.find((event) => event.op === "pr-description.model-egress.denied");
     expect(denial).toBeDefined();
     expect(denial?.correlationId).toBe("corr-model-egress-1");
-    expect(denial?.errorKind).toBe("permission");
+    expect(denial?.errorKind).toBe("permission-denied");
     expect(JSON.stringify(events)).not.toContain("owner/repo");
   });
 });

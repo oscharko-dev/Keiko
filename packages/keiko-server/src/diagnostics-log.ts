@@ -1,4 +1,11 @@
 import { DECLARED_MODEL_MODES } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  activityLogErrorKindOr,
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogFields,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { providerErrorDetail } from "@oscharko-dev/keiko-model-gateway";
 
 import { isValidCorrelationId } from "./correlation.js";
@@ -10,8 +17,116 @@ import {
 } from "./observability/error-classification.js";
 import { closeReasonVocabulary, redactLogFields } from "./observability/log-redaction.js";
 import { redactRoutePath } from "./observability/route-template.js";
-import { createFileServerLogSink } from "./observability/server-log.js";
+import {
+  createFileServerLogSink,
+  reportServerLogFailure,
+  type ServerLogEvent,
+} from "./observability/server-log.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+
+const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server.diagnostic.failure",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "diagnostics-log.diagnosticActivityLogEvent",
+  fields: {
+    diagnosticOperation: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 160,
+    },
+    diagnosticErrorClass: {
+      type: "string",
+      dataClass: "error-kind",
+      required: true,
+      maxLength: 64,
+    },
+    source: { type: "string", dataClass: "opaque-id", required: true, maxLength: 160 },
+    code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    parentCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    gatewayRequestId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 160,
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "integer", dataClass: "duration", required: false },
+    deadlineMs: { type: "integer", dataClass: "duration", required: false },
+    occurrenceCount: { type: "integer", dataClass: "count", required: false },
+    frameBytes: { type: "integer", dataClass: "count", required: false },
+    retainedModelCount: { type: "integer", dataClass: "count", required: false },
+    unsupportedModelCount: { type: "integer", dataClass: "count", required: false },
+    unverifiedEmbeddingModelCount: { type: "integer", dataClass: "count", required: false },
+    droppedEmbeddingModelCount: { type: "integer", dataClass: "count", required: false },
+    semanticSkippedCount: { type: "integer", dataClass: "count", required: false },
+    semanticCandidateCount: { type: "integer", dataClass: "count", required: false },
+    quarantinePruneFailedCount: { type: "integer", dataClass: "count", required: false },
+    audioBytesBucket: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["empty", "q1-of-4", "q2-of-4", "q3-of-4", "q4-of-4", "over-limit"],
+    },
+    diagnosticSummary: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 256,
+    },
+    unsupportedReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 16,
+      values: [
+        "chat",
+        "completion",
+        "responses",
+        "embedding",
+        "rerank",
+        "image_generation",
+        "audio_transcription",
+        "audio_speech",
+        "moderation",
+        "unrecognised-mode",
+        "not-chat-capable",
+      ],
+    },
+    promptTokens: { type: "integer", dataClass: "count", required: false },
+    completionTokens: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["server-diagnostic"],
+  proofIds: ["server-diagnostic.activity-log-line"],
+  releaseImpact: "patch",
+});
 
 // The error-classification primitives below (`contentFreeErrorClass`, `safeProperty`,
 // `machineToken`, and the shapes/sets they use) used to live in this file. They moved to
@@ -281,6 +396,41 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   return fields;
 }
 
+function closedDiagnosticErrorKind(errorClass: string): ActivityLogErrorKind {
+  const registered = activityLogErrorKindOr(errorClass, "internal");
+  if (registered !== "internal" || errorClass === "internal") return registered;
+  if (/timeout/iu.test(errorClass)) return "timeout";
+  if (/cancel/iu.test(errorClass)) return "cancelled";
+  if (/rate.?limit/iu.test(errorClass)) return "rate-limited";
+  if (/permission|forbidden|authority/iu.test(errorClass)) return "permission-denied";
+  if (/unavailable|connection|transport/iu.test(errorClass)) return "unavailable";
+  return "internal";
+}
+
+function activityLogDiagnosticOperation(operation: string): string {
+  const label = diagnosticLabel(operation, OPERATION_LABEL_SHAPE, "server.operation");
+  return label.replace(" ", ":");
+}
+
+function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEvent {
+  const fields = {
+    diagnosticOperation: activityLogDiagnosticOperation(record.operation),
+    diagnosticErrorClass: record.errorClass,
+    ...diagnosticActivityLogFields(record),
+    completeness: "complete",
+    loss: "none",
+  } as ActivityLogFields<typeof SERVER_DIAGNOSTIC_FAILURE_OPERATION>;
+  return activityLogEvent(
+    SERVER_DIAGNOSTIC_FAILURE_OPERATION,
+    {
+      level: "error",
+      correlationId: record.correlationId,
+      errorKind: closedDiagnosticErrorKind(record.errorClass),
+    },
+    fields,
+  );
+}
+
 // Lazy file-log writer. Resolved from KEIKO_STATE_DIR, so the CLI wiring (which sets that env for
 // the child server) picks up the file sink without any explicit bootstrap call — a defense in
 // depth alongside UiServerDeps.activityLog: diagnostics emitted by code paths that do not go
@@ -312,14 +462,14 @@ function buildActivityLogTarget(stateDir: string): ActivityLogTarget {
       // `KEIKO_LOG_LEVEL=warn` would drop exactly the evidence an operator raised the threshold to
       // isolate. `error` also matches what the server logger stamps on `category: "diagnostic"`
       // lines, so both diagnostic paths land on the file at the same level.
-      sink.write({
-        level: "error",
-        category: "diagnostic",
-        op: record.operation,
-        correlationId: record.correlationId,
-        errorKind: record.errorClass,
-        extra: diagnosticActivityLogFields(record),
-      });
+      try {
+        sink.write(diagnosticActivityLogEvent(record));
+      } catch (error) {
+        reportServerLogFailure(error, {
+          correlationId: record.correlationId,
+          loss: "event-dropped",
+        });
+      }
     },
   };
 }
@@ -327,7 +477,19 @@ function buildActivityLogTarget(stateDir: string): ActivityLogTarget {
 function appendDiagnosticToActivityLog(record: ServerDiagnosticRecord): void {
   const stateDir = process.env.KEIKO_STATE_DIR ?? "";
   if (activityLogTarget?.stateDir !== stateDir) {
-    activityLogTarget = buildActivityLogTarget(stateDir);
+    try {
+      activityLogTarget = buildActivityLogTarget(stateDir);
+    } catch (error) {
+      // Same contract as getServerLogger(): record() never throws into the operation it describes.
+      // The failed open is reported body-free and throttled, and is retried on the next record.
+      activityLogTarget = null;
+      reportServerLogFailure(error, {
+        op: "server-log.initialize",
+        correlationId: record.correlationId,
+        loss: "event-dropped",
+      });
+      return;
+    }
   }
   activityLogTarget.write(record);
 }

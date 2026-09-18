@@ -885,11 +885,31 @@ function recordEventExtra(
   extra: Readonly<Record<string, unknown>> | undefined,
   key: string,
 ): Readonly<Record<string, unknown>> {
-  const value = extra?.[key];
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`expected object activity field: ${key}`);
+  if (extra === undefined) throw new TypeError(`expected activity fields for: ${key}`);
+  if (key === "structural") {
+    return Object.fromEntries(
+      Object.entries(extra)
+        .filter(([name]) => name.startsWith("structural"))
+        .map(([name, value]) => [`${name[10]?.toLowerCase() ?? ""}${name.slice(11)}`, value]),
+    );
   }
-  return value as Readonly<Record<string, unknown>>;
+  if (key === "workspaceIo") {
+    return Object.fromEntries(
+      Object.entries(extra)
+        .filter(([name]) => name.startsWith("workspaceIo"))
+        .map(([name, value]) => [`${name[11]?.toLowerCase() ?? ""}${name.slice(12)}`, value]),
+    );
+  }
+  if (key === "uncertainty") {
+    return {
+      scopeIncompleteUncertaintyCount: extra.scopeIncompleteUncertaintyCount,
+      budgetClippedUncertaintyCount: extra.budgetClippedUncertaintyCount,
+      toolUnavailableUncertaintyCount: extra.toolUnavailableUncertaintyCount,
+      unsupportedClaimUncertaintyCount: extra.unsupportedClaimUncertaintyCount,
+      entailmentUnavailableUncertaintyCount: extra.entailmentUnavailableUncertaintyCount,
+    };
+  }
+  throw new TypeError(`unknown activity field group: ${key}`);
 }
 
 function workspaceIoCounts(extra: Readonly<Record<string, unknown>>): WorkspaceIoCounts {
@@ -938,11 +958,11 @@ async function measureRetrievalTraversal(
       activityLog,
     },
   );
-  const completed = activityLog.events.find(
-    (event) => event.op === "search.connected-context.completed",
+  const completedDetails = activityLog.events.find(
+    (event) => event.op === "search.connected-context.completion-details",
   );
-  const structural = recordEventExtra(completed?.extra, "structural");
-  const workspaceIo = recordEventExtra(completed?.extra, "workspaceIo");
+  const structural = recordEventExtra(completedDetails?.extra, "structural");
+  const workspaceIo = recordEventExtra(completedDetails?.extra, "workspaceIo");
   const packPaths = out.pack.files.map((file) => file.scopePath);
   return {
     directoryCount: countFixtureDirectories(fixtureRoot),
@@ -1537,13 +1557,16 @@ describe("runGroundedExploration", () => {
       ).toBe(true);
       expect(out.pack.files.map((file) => file.scopePath)).toContain("src/pipeline.ts");
     }
-    const completed = activityLog.events.filter(
-      (event) => event.op === "search.connected-context.completed",
+    const completedDetails = activityLog.events.filter(
+      (event) => event.op === "search.connected-context.completion-details",
     );
     expect(workspaceIndexFactoryCalls).toBe(2);
-    expect(completed).toHaveLength(2);
+    expect(completedDetails).toHaveLength(2);
     expect(
-      numericEventExtra(recordEventExtra(completed[1]?.extra, "structural"), "textSearchCount"),
+      numericEventExtra(
+        recordEventExtra(completedDetails[1]?.extra, "structural"),
+        "textSearchCount",
+      ),
     ).toBeGreaterThan(1);
   });
 
@@ -3946,10 +3969,10 @@ describe("runGroundedExploration", () => {
       );
       expect(out.pack.usage.searchCalls).toBe(2);
       expect(out.pack.uncertainty.some((u) => u.claim.includes("searchCalls"))).toBe(true);
-      const completed = activityLog.events.find(
-        (event) => event.op === "search.connected-context.completed",
+      const completedDetails = activityLog.events.find(
+        (event) => event.op === "search.connected-context.completion-details",
       );
-      const structural = recordEventExtra(completed?.extra, "structural");
+      const structural = recordEventExtra(completedDetails?.extra, "structural");
       expect(numericEventExtra(structural, "fileSearchCount")).toBe(0);
       expect(numericEventExtra(structural, "textSearchCount")).toBe(0);
       expect(validateConnectedContextPack(out.pack).ok).toBe(true);
@@ -3975,10 +3998,10 @@ describe("runGroundedExploration", () => {
         activityLog,
       },
     );
-    const completed = activityLog.events.find(
-      (event) => event.op === "search.connected-context.completed",
+    const completedDetails = activityLog.events.find(
+      (event) => event.op === "search.connected-context.completion-details",
     );
-    const structural = recordEventExtra(completed?.extra, "structural");
+    const structural = recordEventExtra(completedDetails?.extra, "structural");
 
     expect(out.pack.usage.searchCalls).toBe(11);
     expect(numericEventExtra(structural, "fileSearchCount")).toBe(1);
@@ -5451,7 +5474,7 @@ describe("excerpt reads past the absolute deadline (#3347 P1)", () => {
     expect(elapsedBudgetClaims(out.pack.uncertainty).length).toBeGreaterThan(0);
     expect(
       activityLog.events.find((event) => event.op === "search.connected-context.completed")?.extra
-        ?.retrievalStatus,
-    ).toMatchObject({ elapsedBudgetBlocked: true });
+        ?.retrievalElapsedBudgetBlocked,
+    ).toBe(true);
   });
 });

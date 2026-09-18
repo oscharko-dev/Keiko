@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   WindowsSystemBinaryMissingError,
@@ -33,7 +35,11 @@ const HAS_POWERSHELL =
 // Loading the producer SignedCms verifier can block in Apple's Security framework. The runtime
 // DER-only probe remains active on macOS; full producer parity runs on Linux and Windows.
 const HAS_PARITY_POWERSHELL = HAS_POWERSHELL && process.platform !== "darwin";
-const PRODUCER_RFC3161_SOURCE = readFileSync("scripts/windows-portable-rfc3161.cs", "utf8");
+const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const PRODUCER_RFC3161_SOURCE = readFileSync(
+  resolve(REPOSITORY_ROOT, "scripts/windows-portable-rfc3161.cs"),
+  "utf8",
+);
 const SIGNATURE_HEX = "010203";
 const NONCANONICAL_OID_TST_INFO =
   "304d02010106022a033030300c060a608648800165030402010420" +
@@ -351,7 +357,12 @@ describe("Windows portable Authenticode identity", (): void => {
       expect.objectContaining({
         category: "security",
         correlationId: "unknown-correlation-id",
-        errorKind: "WindowsSystemDirectoryError",
+        errorKind: "unsafe-target",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          failure: "system-directory-refused",
+        },
         level: "warn",
         op: "portable.windows-authenticode.system-binary-refused",
       }),
@@ -377,9 +388,14 @@ describe("Windows portable Authenticode identity", (): void => {
     ).toThrow(WindowsSystemBinaryMissingError);
     expect(events).toEqual([
       expect.objectContaining({
-        category: "diagnostic",
+        category: "security",
         correlationId: "unknown-correlation-id",
-        errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          failure: "system-binary-missing",
+        },
         level: "error",
         op: "portable.windows-authenticode.system-binary-refused",
       }),

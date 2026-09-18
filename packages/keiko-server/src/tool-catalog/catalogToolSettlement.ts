@@ -16,7 +16,6 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
-import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -338,7 +337,7 @@ export class CatalogInvocation {
       truncated: result.page?.truncated ?? false,
       ...(result.status === "failed"
         ? {
-            errorKind: errorKindOf(error),
+            errorKind: "internal",
             frames: keikoStackFrames(error),
             causeChain: causeChain(error),
           }

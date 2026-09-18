@@ -9,14 +9,19 @@ import { connect as netConnect, isIP } from "node:net";
 import type { LookupFunction, Socket } from "node:net";
 import * as tls from "node:tls";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   classifyOutboundHost,
   normalizeHost,
   outboundAddressBlockedReason,
   outboundTargetBlockedReason,
 } from "./egress-policy.js";
+import type { OutboundTargetClass } from "./egress-policy.js";
 import {
-  logEndpointHost,
-  logErrorKind,
+  activityLogErrorKind,
+  logCorrelationId,
   logLevelEnabled,
   logTimer,
   resolveLogSink,
@@ -44,6 +49,187 @@ const NATIVE_FETCH = globalThis.fetch;
 export const MAX_RESPONSE_BYTES = 10_000_000;
 const HTTPS_PROXY_TUNNEL_IDLE_TTL_MS = 30_000;
 const MAX_IDLE_HTTPS_PROXY_TUNNELS_PER_KEY = 2;
+
+const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.tls.trust-failed",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.tlsTrustFailure",
+  fields: {
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
+    afterCaBundleFallback: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-tls-trust"],
+  proofIds: ["http.gateway-tls-trust-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.tls.ca-bundle-fallback",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.fetchDirectWithCaFallback",
+  fields: {
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-tls-trust"],
+  proofIds: ["http.gateway-tls-ca-fallback.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.egress.planned",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.planGatewayProxy",
+  fields: {
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
+    proxied: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+    },
+    proxyEndpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
+    transport: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["native", "injected"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-egress"],
+  proofIds: ["http.gateway-egress-planned.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_FETCH_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.fetch.started",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.logFetchStarted",
+  fields: {
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
+    method: { type: "string", dataClass: "opaque-id", required: true, maxLength: 32 },
+    requestBytes: { type: "integer", dataClass: "count", required: false },
+    timeoutMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "none",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-http-fetch"],
+  proofIds: ["http.gateway-fetch-started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_FETCH_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.fetch.completed",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.logFetchCompleted",
+  fields: {
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-http-fetch"],
+  proofIds: ["http.gateway-fetch-completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.gateway.fetch.failed",
+  category: "http",
+  owner: "keiko-model-gateway",
+  emitter: "http.gatewayFetch",
+  fields: {
+    endpointClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+    },
+    policyReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["undelegated-proxied-hostname"],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-http-fetch", "gateway-egress"],
+  proofIds: ["http.gateway-fetch-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+type LogEndpointClass = OutboundTargetClass | "hostname";
+
+function logEndpointClass(url: string | URL | undefined): LogEndpointClass | undefined {
+  if (url === undefined) return undefined;
+  try {
+    const parsed = typeof url === "string" ? new URL(url) : url;
+    return classifyOutboundHost(parsed.hostname) ?? "hostname";
+  } catch {
+    return undefined;
+  }
+}
 
 export interface GatewayFetchOptions extends RequestInit {
   readonly fetchImpl?: typeof fetch | undefined;
@@ -1158,6 +1344,46 @@ interface DirectFetchPlan {
   readonly log: ModelGatewayLogSink;
 }
 
+function logTlsTrustFailure(
+  url: string,
+  plan: DirectFetchPlan,
+  error: unknown,
+  afterCaBundleFallback: boolean,
+): void {
+  const endpointClass = logEndpointClass(url);
+  const correlationId = logCorrelationId(plan.log);
+  plan.log.write(
+    activityLogEvent(
+      HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION,
+      {
+        level: "warn",
+        ...(correlationId === undefined ? {} : { correlationId }),
+        errorKind: activityLogErrorKind(error),
+      },
+      {
+        ...(endpointClass === undefined ? {} : { endpointClass }),
+        afterCaBundleFallback,
+      },
+    ),
+  );
+}
+
+function logTlsCaFallback(url: string, plan: DirectFetchPlan, error: unknown): void {
+  const endpointClass = logEndpointClass(url);
+  const correlationId = logCorrelationId(plan.log);
+  plan.log.write(
+    activityLogEvent(
+      HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION,
+      {
+        level: "warn",
+        ...(correlationId === undefined ? {} : { correlationId }),
+        errorKind: activityLogErrorKind(error),
+      },
+      endpointClass === undefined ? {} : { endpointClass },
+    ),
+  );
+}
+
 // Extracted from fetchDirectWithCaFallback to keep its cyclomatic complexity within the limit.
 async function attemptCaBundleFallback(
   url: string,
@@ -1174,13 +1400,7 @@ async function attemptCaBundleFallback(
     );
   } catch (fallbackError) {
     if (isRecoverableTlsTrustError(fallbackError)) {
-      plan.log.write({
-        level: "warn",
-        category: "http",
-        op: "http.gateway.tls.trust-failed",
-        errorKind: logErrorKind(fallbackError),
-        extra: { endpoint: logEndpointHost(url), afterCaBundleFallback: true },
-      });
+      logTlsTrustFailure(url, plan, fallbackError, true);
       throw tlsCaFailureError();
     }
     throw fallbackError;
@@ -1206,23 +1426,11 @@ async function fetchDirectWithCaFallback(
     if (plan.useCaFallback && recoverable) {
       // Degradation: the default trust store rejected the peer, so the call is retried against
       // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency.
-      plan.log.write({
-        level: "warn",
-        category: "http",
-        op: "http.gateway.tls.ca-bundle-fallback",
-        errorKind: logErrorKind(error),
-        extra: { endpoint: logEndpointHost(url) },
-      });
+      logTlsCaFallback(url, plan, error);
       return attemptCaBundleFallback(url, init, plan);
     }
     if (recoverable) {
-      plan.log.write({
-        level: "warn",
-        category: "http",
-        op: "http.gateway.tls.trust-failed",
-        errorKind: logErrorKind(error),
-        extra: { endpoint: logEndpointHost(url), afterCaBundleFallback: false },
-      });
+      logTlsTrustFailure(url, plan, error, false);
       throw tlsCaFailureError();
     }
     throw error;
@@ -1337,24 +1545,30 @@ function planGatewayProxy(
   const proxy = proxyRaw === undefined ? undefined : parseProxyUrl(proxyRaw);
   // WHICH ROUTE this call took is the first question asked of a stuck outbound request, and it is
   // decided entirely by configuration the operator cannot see from the failure. Both endpoints are
-  // reduced to scheme://host:port — a proxy URL may carry credentials in its userinfo.
+  // reduced to a closed address class — a proxy URL may carry credentials in its userinfo.
   //
   // Gated: this is a `debug` line on the hot path of every outbound call, and the two
-  // `logEndpointHost` calls below each parse a URL. Asking the sink first means an operator
+  // endpoint-classification calls below each parse a URL. Asking the sink first means an operator
   // running at the default `info` threshold pays a predicate call instead of two URL parses and
   // two allocations per request.
   if (logLevelEnabled(log, "debug")) {
-    log.write({
-      level: "debug",
-      category: "http",
-      op: "http.gateway.egress.planned",
-      extra: {
-        endpoint: logEndpointHost(target),
-        proxied: proxy !== undefined,
-        proxyEndpoint: logEndpointHost(proxy),
-        transport: usesRealTransport ? "native" : "injected",
-      },
-    });
+    const endpointClass = logEndpointClass(target);
+    const proxyEndpointClass = logEndpointClass(proxy);
+    log.write(
+      activityLogEvent(
+        HTTP_GATEWAY_EGRESS_PLANNED_OPERATION,
+        {
+          level: "debug",
+          ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
+        },
+        {
+          ...(endpointClass === undefined ? {} : { endpointClass }),
+          proxied: proxy !== undefined,
+          ...(proxyEndpointClass === undefined ? {} : { proxyEndpointClass }),
+          transport: usesRealTransport ? "native" : "injected",
+        },
+      ),
+    );
   }
   return { doFetch, target, usesRealTransport, proxy };
 }
@@ -1440,7 +1654,7 @@ function requestBodyBytes(body: BodyInit | null | undefined): number | undefined
 // connection and then goes quiet), and it produces no completion, no failure, and therefore no
 // evidence at all: the log stays empty for precisely the window an operator is staring at. This
 // line is written BEFORE the socket work starts, so a stuck call leaves a `started` with no
-// matching `completed` — which names both the endpoint and the deadline it is hanging against.
+// matching `completed` — which names both the endpoint class and the deadline it is hanging against.
 //
 // `info`, not `debug`: a line only readable after an operator has already reproduced the hang
 // under a raised threshold is not evidence of the hang.
@@ -1450,17 +1664,23 @@ function logFetchStarted(
   options: GatewayFetchOptions,
 ): void {
   if (!logLevelEnabled(log, "info")) return;
-  log.write({
-    level: "info",
-    category: "http",
-    op: "http.gateway.fetch.started",
-    extra: {
-      endpoint: logEndpointHost(url),
-      method: options.method ?? "GET",
-      requestBytes: requestBodyBytes(options.body),
-      timeoutMs: options.timeoutMs,
-    },
-  });
+  const endpointClass = logEndpointClass(url);
+  const requestBytes = requestBodyBytes(options.body);
+  log.write(
+    activityLogEvent(
+      HTTP_GATEWAY_FETCH_STARTED_OPERATION,
+      {
+        level: "info",
+        ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
+      },
+      {
+        ...(endpointClass === undefined ? {} : { endpointClass }),
+        method: options.method ?? "GET",
+        ...(requestBytes === undefined ? {} : { requestBytes }),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      },
+    ),
+  );
 }
 
 // THE OUTCOME LINE — `info` for a successful response, `warn` for an answered error.
@@ -1486,14 +1706,19 @@ function logFetchCompleted(
 ): void {
   const level = response.ok ? "info" : "warn";
   if (!logLevelEnabled(log, level)) return;
-  log.write({
-    level,
-    category: "http",
-    op: "http.gateway.fetch.completed",
-    status: response.status,
-    durationMs,
-    extra: { endpoint: logEndpointHost(url) },
-  });
+  const endpointClass = logEndpointClass(url);
+  log.write(
+    activityLogEvent(
+      HTTP_GATEWAY_FETCH_COMPLETED_OPERATION,
+      {
+        level,
+        ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
+        status: response.status,
+        durationMs,
+      },
+      endpointClass === undefined ? {} : { endpointClass },
+    ),
+  );
 }
 
 // Outcome line for one outbound gateway call, paired with the attempt line above. `errorKind`
@@ -1518,19 +1743,24 @@ export async function gatewayFetch(
     logFetchCompleted(log, url, response, elapsed());
     return response;
   } catch (error) {
-    log.write({
-      level: "warn",
-      category: "http",
-      op: "http.gateway.fetch.failed",
-      durationMs: elapsed(),
-      errorKind: logErrorKind(error),
-      extra: {
-        endpoint: logEndpointHost(url),
-        ...(error instanceof OutboundHttpEgressError && error.policyReason !== undefined
-          ? { policyReason: error.policyReason }
-          : {}),
-      },
-    });
+    const endpointClass = logEndpointClass(url);
+    log.write(
+      activityLogEvent(
+        HTTP_GATEWAY_FETCH_FAILED_OPERATION,
+        {
+          level: "warn",
+          ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
+          durationMs: elapsed(),
+          errorKind: activityLogErrorKind(error),
+        },
+        {
+          ...(endpointClass === undefined ? {} : { endpointClass }),
+          ...(error instanceof OutboundHttpEgressError && error.policyReason !== undefined
+            ? { policyReason: error.policyReason }
+            : {}),
+        },
+      ),
+    );
     throw error;
   }
 }

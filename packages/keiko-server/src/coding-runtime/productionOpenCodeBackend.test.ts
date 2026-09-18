@@ -12,14 +12,19 @@ import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 afterEach(() => vi.restoreAllMocks());
 
 import { createOpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
+import { createCodingRuntimeContextUsageRegistry } from "./codingRuntimeContextUsage.js";
 import {
   discoverDevLaneOpenCode,
   type DevLanePortableOpenCodeRuntime,
 } from "./devLanePortableCodingRuntime.js";
 import { stageDevLaneFixture } from "./devLaneFixture/_support.js";
 import { scriptedFunctionalPortable } from "./opencodeFunctionalHarness/_support.js";
-import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
+import {
+  createProductionOpenCodeBackend,
+  recordContextTelemetry,
+} from "./productionOpenCodeBackend.js";
 import type {
   ProductionOpenCodeBackendInput,
   ResolvedPortableOpenCodeRuntime,
@@ -27,6 +32,7 @@ import type {
 import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodingRuntime.js";
 import type { ProductionRuntimeBackendInput } from "./productionCodingRuntimeResolver.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
+import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 
 describe("production OpenCode backend composition", () => {
   it("constructs a resolver without launching the qualified runtime", () => {
@@ -44,6 +50,74 @@ describe("production OpenCode backend composition", () => {
 
       expect(backend.createRun).toEqual(expect.any(Function));
       expect(backend.safeActivityProjection).toBeDefined();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("records accepted and rejected provider context samples with body-free evidence", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-context-log-"));
+    try {
+      const events: ServerLogEvent[] = [];
+      const geometry: OpenCodeContextGeometry = {
+        contextWindowTokens: 128_000,
+        maxInputTokens: 123_904,
+        maxOutputTokens: 4_096,
+      };
+      const run: ProductionRuntimeBackendInput = {
+        ...runInput(root),
+        contextUsage: createCodingRuntimeContextUsageRegistry(),
+      };
+      const log = { write: (event: ServerLogEvent): void => void events.push(event) };
+      const event = {
+        id: "provider-event-1",
+        aggregateId: "session-1",
+        sequence: 1,
+        digest: "e".repeat(64),
+        kind: "observation" as const,
+        providerTokenUsage: { inputTokens: 42_000 },
+      };
+
+      recordContextTelemetry(run, event, geometry, log);
+      recordContextTelemetry(
+        run,
+        {
+          ...event,
+          id: "provider-event-2",
+          sequence: 2,
+          digest: "f".repeat(64),
+          providerTokenUsage: { inputTokens: 124_000 },
+        },
+        geometry,
+        log,
+      );
+
+      expect(events).toHaveLength(2);
+      expect(events[0]).toMatchObject({
+        op: "coding-runtime.context-usage.observed",
+        correlationId: "run-windows",
+        level: "info",
+        extra: {
+          state: "accepted",
+          capacityTokens: 128_000,
+          usedInputTokens: 42_000,
+          reservedOutputTokens: 4_096,
+          sampleDigest: "e".repeat(64),
+        },
+      });
+      expect(events[1]).toMatchObject({
+        op: "coding-runtime.context-usage.observed",
+        correlationId: "run-windows",
+        level: "warn",
+        errorKind: "conflict",
+        extra: {
+          state: "rejected",
+          capacityTokens: 128_000,
+          usedInputTokens: 124_000,
+          reservedOutputTokens: 4_096,
+          sampleDigest: "f".repeat(64),
+        },
+      });
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

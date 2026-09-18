@@ -152,8 +152,13 @@ describe("emitMemoryVaultLogEvent", () => {
       level: "error",
       category: "diagnostic",
       op: "memory-vault.log.sink-failed",
-      errorKind: "ENOSPC",
-      extra: { droppedOp: "memory-vault.store.opened" },
+      errorKind: "unavailable",
+      extra: {
+        completeness: "complete",
+        droppedOpDigest: "3b9d5ea9d495ed7f",
+        failureKind: "ENOSPC",
+        loss: "none",
+      },
     });
   });
 
@@ -161,11 +166,14 @@ describe("emitMemoryVaultLogEvent", () => {
     const { sink, events } = recordingSinkThatFailsOn(["memory-vault.store.opened"]);
 
     emitMemoryVaultLogEvent(sink, { category: "memory", op: "memory-vault.store.opened" });
-    emitMemoryVaultLogEvent(sink, { category: "memory", op: "store.encryption-migrated" });
+    emitMemoryVaultLogEvent(sink, {
+      category: "memory",
+      op: "memory-vault.store.encryption-migrated",
+    });
 
     expect(events.map((event) => event.op)).toEqual([
       "memory-vault.log.sink-failed",
-      "store.encryption-migrated",
+      "memory-vault.store.encryption-migrated",
     ]);
   });
 
@@ -180,13 +188,16 @@ describe("emitMemoryVaultLogEvent", () => {
     };
 
     emitMemoryVaultLogEvent(dead, { category: "memory", op: "memory-vault.store.opened" });
-    emitMemoryVaultLogEvent(dead, { category: "memory", op: "store.encryption-migrated" });
+    emitMemoryVaultLogEvent(dead, {
+      category: "memory",
+      op: "memory-vault.store.encryption-migrated",
+    });
 
     expect(warn).toHaveBeenCalledTimes(1);
     const calls: readonly (readonly unknown[])[] = warn.mock.calls;
     expect(calls[0]?.[1]).toMatchObject({
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: "op=memory-vault.store.opened errorKind=ENOSPC",
+      detail: "opDigest=3b9d5ea9d495ed7f errorKind=ENOSPC",
     });
 
     // Per sink, not per process: a replaced sink that also fails is a new fact about the log.
@@ -197,7 +208,7 @@ describe("emitMemoryVaultLogEvent", () => {
     };
     emitMemoryVaultLogEvent(replacement, {
       category: "memory",
-      op: "store.encryption-migrated",
+      op: "memory-vault.store.encryption-migrated",
     });
     expect(warn).toHaveBeenCalledTimes(2);
   });

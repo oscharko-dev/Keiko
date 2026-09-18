@@ -8,6 +8,10 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { parseRunRequest } from "./run-request.js";
 import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
@@ -15,7 +19,7 @@ import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./r
 import { SSE_HEADERS, writeMessageEvent, writeReadyMessage, startSseHeartbeat } from "./sse.js";
 import { markSseStreamBackpressureKilled } from "./sse-write.js";
 import { getServerLogger } from "./observability/index.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
@@ -48,6 +52,29 @@ import {
 const MAX_BODY_BYTES = 1_000_000;
 const AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT = 128;
 const AGENT_RUN_DEFAULT_PATCH_BUDGET_BYTES = 65_536;
+
+const SSE_RUN_EVENTS_RESUME_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "sse.run-events.resume",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "run-handlers.logResumeDecision",
+  fields: {
+    resumedRuns: { type: "integer", dataClass: "count", required: true },
+    liveOnlyRuns: { type: "integer", dataClass: "count", required: true },
+    fullReplayRuns: { type: "integer", dataClass: "count", required: true },
+    cursorsUnusable: { type: "boolean", dataClass: "closed-enum", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["sse-resume-decision"],
+  proofIds: ["sse.run-events.resume.line"],
+  releaseImpact: "patch",
+});
 
 const VERIFY_NOOP_MODEL: ModelPort = {
   call: () => Promise.reject(new Error("verify runs must not call the model")),
@@ -570,12 +597,18 @@ function logResumeDecision(
   stats: ResumeAttachStats,
   cursorsUnusable: boolean,
 ): void {
-  getServerLogger().info({
-    category: "http",
-    op: "sse.run-events.resume",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: { ...stats, ...(cursorsUnusable ? { cursorsUnusable: true } : {}) },
-  });
+  getServerLogger().info(
+    activityLogEvent(
+      SSE_RUN_EVENTS_RESUME_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        ...stats,
+        ...(cursorsUnusable ? { cursorsUnusable: true } : {}),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 // Attaches every snapshot run at its resume boundary, then logs the per-class attach counts once

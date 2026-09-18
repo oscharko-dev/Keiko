@@ -118,23 +118,83 @@ const NAMESPACE_SNIPPET = [
   "socket.on('timeout', () => { socket.destroy(); process.exit(5); });",
 ].join("");
 
+const MISSING_TARGET_PATH = join(process.cwd(), "missing-linux-gateway-proof-target");
+const DIRECT_NODE_PROOF_ARG_COUNTS = new Map<string, number>([
+  [ROUND_TRIP_SNIPPET, 3],
+  [EXTERNAL_DESTINATION_SNIPPET, 4],
+]);
+const LAUNCHER_NODE_PROOF_ARG_COUNTS = new Map<string, number>([
+  ...DIRECT_NODE_PROOF_ARG_COUNTS,
+  [HELD_ROUND_TRIP_SNIPPET, 5],
+]);
+
+function hasAllowedNodeProofArgs(
+  args: readonly string[],
+  offset: number,
+  expectedCounts: ReadonlyMap<string, number>,
+): boolean {
+  const snippet = args[offset + 1];
+  return (
+    args[offset] === "-e" &&
+    snippet !== undefined &&
+    args.length - offset === expectedCounts.get(snippet)
+  );
+}
+
+function hasAllowedLauncherTarget(args: readonly string[]): boolean {
+  if (args[6] === process.execPath) {
+    return hasAllowedNodeProofArgs(args, 7, LAUNCHER_NODE_PROOF_ARG_COUNTS);
+  }
+  if (args[6] === MISSING_TARGET_PATH) {
+    return hasAllowedNodeProofArgs(args, 7, DIRECT_NODE_PROOF_ARG_COUNTS);
+  }
+  return (
+    args[6] === "/bin/sh" &&
+    args[7] === "-c" &&
+    args[8] === SPOOF_ROUND_TRIP_SNIPPET &&
+    args[9] === "keiko-spoof-proof" &&
+    args[10] === process.execPath &&
+    args[11] === SIBLING_BRIDGE_PROBE_SNIPPET &&
+    args.length === 14
+  );
+}
+
+function validateProofChildArgs(command: string, args: readonly string[]): readonly string[] {
+  if (command !== process.execPath || args.some((argument) => argument.includes("\0"))) {
+    throw new TypeError("linux-gateway-proof-child-invalid");
+  }
+  const isDirectProof = hasAllowedNodeProofArgs(args, 0, DIRECT_NODE_PROOF_ARG_COUNTS);
+  const isLauncherProof =
+    args[0] === linuxGatewayLauncherPath() &&
+    args[1] === "host" &&
+    (args[2] === "bubblewrap" || args[2] === "unshare") &&
+    args[3] === "127.0.0.1" &&
+    hasAllowedLauncherTarget(args);
+  if (!isDirectProof && !isLauncherProof) {
+    throw new TypeError("linux-gateway-proof-child-invalid");
+  }
+  return args;
+}
+
 function runChild(
   command: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
   captureLauncherDiagnostics = false,
 ): Promise<ChildRun> {
+  const validatedArgs = validateProofChildArgs(command, args);
   return new Promise((resolve, reject) => {
     const stdio: StdioOptions = captureLauncherDiagnostics
       ? ["ignore", "pipe", "pipe", "pipe"]
       : ["ignore", "pipe", "pipe"];
-    const child = spawn(command, args, {
+    const child = spawn(process.execPath, validatedArgs, {
       env: captureLauncherDiagnostics
         ? {
             ...env,
             [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: String(LINUX_GATEWAY_DIAGNOSTIC_FD),
           }
         : env,
+      shell: false,
       stdio,
     });
     let stdout = "";
@@ -299,6 +359,47 @@ function requireWrapped(
 }
 
 describe("Linux gateway launcher validation", () => {
+  it("constrains proof children to the real launcher and closed Node snippets", () => {
+    const directArgs = ["-e", ROUND_TRIP_SNIPPET, "1983"] as const;
+    expect(validateProofChildArgs(process.execPath, directArgs)).toBe(directArgs);
+
+    const wrapped = requireWrapped(
+      planIsolatedRun(
+        {
+          command: process.execPath,
+          args: ["-e", ROUND_TRIP_SNIPPET, "1983"],
+          cwd: process.cwd(),
+          network: { mode: "gateway", host: "127.0.0.1", port: 1983 },
+        },
+        { bubblewrap: true, unshare: false, seatbelt: false, docker: false, podman: false },
+        "linux",
+      ),
+    );
+    expect(validateProofChildArgs(wrapped.command, wrapped.args)).toBe(wrapped.args);
+
+    const missingTarget = requireWrapped(
+      planIsolatedRun(
+        {
+          command: MISSING_TARGET_PATH,
+          args: ["-e", ROUND_TRIP_SNIPPET, "1983"],
+          cwd: process.cwd(),
+          network: { mode: "gateway", host: "127.0.0.1", port: 1983 },
+        },
+        { bubblewrap: true, unshare: false, seatbelt: false, docker: false, podman: false },
+        "linux",
+      ),
+    );
+    expect(validateProofChildArgs(missingTarget.command, missingTarget.args)).toBe(
+      missingTarget.args,
+    );
+    expect(() => validateProofChildArgs("/bin/sh", ["-c", "exit 0"])).toThrow(
+      "linux-gateway-proof-child-invalid",
+    );
+    expect(() => validateProofChildArgs(process.execPath, ["-e", "process.exit(0)"])).toThrow(
+      "linux-gateway-proof-child-invalid",
+    );
+  });
+
   it.each([
     ["1", 1],
     ["65535", 65_535],
@@ -657,7 +758,7 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
           planIsolatedRun(
             {
               ...plan(firstGateway.port, firstGateway.port),
-              command: join(process.cwd(), "missing-linux-gateway-proof-target"),
+              command: MISSING_TARGET_PATH,
             },
             availability,
             "linux",

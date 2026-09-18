@@ -13,9 +13,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SecretboxError } from "./errors/secretbox.js";
-import type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
+import {
+  bindSecurityLogCorrelation,
+  type SecurityLogEvent,
+  type SecurityLogSink,
+} from "./log-port.js";
 import {
   NO_LOCAL_VAULT_KEYCHAIN,
   SecretVaultStoreError,
@@ -29,6 +34,15 @@ import {
 
 // A stable 32-byte key used for vault-CRUD tests — same pattern as figmaTokenStore.test.ts.
 const KEY = Buffer.alloc(32, 7);
+const VAULT_FRAME_PATTERN = /^packages\/keiko-security\/(?:dist|src)\/.+\.(?:js|ts):\d+:\d+$/u;
+
+function isVaultFrameArray(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((frame: unknown) => typeof frame === "string" && VAULT_FRAME_PATTERN.test(frame))
+  );
+}
 
 // On macOS /var/folders is a symlink to /private/var/folders. The vault's symlink guard
 // (assertNoSymlinkedPathSegments) rejects paths through symlinks, so we resolve the real path of
@@ -239,9 +253,16 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
       level: "info",
       category: "security",
       op: "security.vault.key-resolved",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
       extra: { source: "env" },
     });
-    expect(Object.keys(event ?? {}).sort()).toEqual(["category", "extra", "level", "op"]);
+    expect(Object.keys(event ?? {}).sort()).toEqual([
+      "category",
+      "correlationId",
+      "extra",
+      "level",
+      "op",
+    ]);
   });
 
   it("emits source=keychain when the keychain tier answers", () => {
@@ -256,9 +277,12 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
       sink,
     });
 
-    expect(events).toEqual([
-      expect.objectContaining({ op: "security.vault.key-resolved", extra: { source: "keychain" } }),
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolved",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      extra: { source: "keychain", completeness: "complete", loss: "none" },
+    });
   });
 
   it("emits source=keyfile when env and keychain are both absent", () => {
@@ -273,12 +297,15 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
       sink,
     });
 
-    expect(events).toEqual([
-      expect.objectContaining({ op: "security.vault.key-resolved", extra: { source: "keyfile" } }),
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolved",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      extra: { source: "keyfile", completeness: "complete", loss: "none" },
+    });
   });
 
-  it("emits nothing when the tier computation throws (a malformed env key)", () => {
+  it("emits structured body-free evidence before rethrowing a key-resolution failure", () => {
     const { sink, events } = recordingSink();
     expect(() =>
       resolveLocalVaultKey({
@@ -291,7 +318,67 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
         sink,
       }),
     ).toThrow("32 bytes");
-    expect(events).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      category: "security",
+      op: "security.vault.key-resolution-failed",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      errorKind: "unavailable",
+      extra: {
+        failureKind: "Error",
+        completeness: "complete",
+        loss: "none",
+      },
+    });
+    expect(isVaultFrameArray(events[0]?.extra?.frames)).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("32 bytes");
+    expect(JSON.stringify(events)).not.toContain(Buffer.alloc(16, 3).toString("base64"));
+  });
+
+  it("classifies a symlinked key path as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-key-sub");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-key-sub");
+    symlinkSync(realSub, linkSub);
+    const { sink, events } = recordingSink();
+
+    expect(() =>
+      resolveLocalVaultKey({
+        env: {},
+        vaultDir: linkSub,
+        envVarName: "KEIKO_TEST_VAULT_KEY",
+        keychainService: "keiko-test-vault",
+        keyfileName: "test-vault.key",
+        keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+        sink,
+      }),
+    ).toThrow("symlinked path");
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolution-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
+  });
+
+  it("lets the real correlation-binding sink replace the sanctioned fallback", () => {
+    const { sink, events } = recordingSink();
+    const bound = bindSecurityLogCorrelation(sink, "vault-request-001");
+    resolveLocalVaultKey({
+      env: { KEIKO_TEST_VAULT_KEY: Buffer.alloc(32, 5).toString("base64") },
+      vaultDir: dir,
+      envVarName: "KEIKO_TEST_VAULT_KEY",
+      keychainService: "keiko-test-vault",
+      keyfileName: "test-vault.key",
+      keychainAccess: NO_LOCAL_VAULT_KEYCHAIN,
+      sink: bound,
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.correlationId).toBe("vault-request-001");
   });
 
   it("stays exactly as silent as before when no sink is wired", () => {
@@ -461,6 +548,7 @@ describe("createLocalSecretVault — setMany", () => {
     expect(events[0]).toMatchObject({
       category: "security",
       op: "security.vault.entries-merged",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
       extra: { count: 2 },
     });
     expect(typeof events[0]?.durationMs).toBe("number");
@@ -499,9 +587,18 @@ describe("createLocalSecretVault — setMany", () => {
     expect(events.filter((event) => event.op === "security.vault.entries-merge-failed")).toEqual([
       expect.objectContaining({
         level: "error",
-        extra: { count: 1 },
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        errorKind: "write-failed",
       }),
     ]);
+    expect(events[0]?.extra?.count).toBe(1);
+    expect(typeof events[0]?.extra?.failureKind).toBe("string");
+    expect(events[0]?.extra?.frames).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^packages\/keiko-security\/src\/.+\.ts:\d+:\d+$/u),
+      ]),
+    );
+    expect(events[0]?.extra?.causeChain).toEqual(["EISDIR"]);
     expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
     expect(JSON.stringify(events)).not.toContain("cred:a");
   });
@@ -581,13 +678,44 @@ describe("createLocalSecretVault — delete", () => {
     vault.set("cred:keep", "keep-secret");
     events.length = 0;
     vault.deleteMany(["cred:a", "cred:b"]);
-    expect(events).toEqual([
-      expect.objectContaining({
-        category: "security",
-        op: "security.vault.entries-deleted",
-        extra: { count: 2 },
-      }),
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "security",
+      op: "security.vault.entries-deleted",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      extra: { count: 2, completeness: "complete", loss: "none" },
+    });
+  });
+
+  it("emits structured body-free evidence when deleteMany cannot read the store", () => {
+    const storePath = join(dir, "vault-delete-fail.enc.json");
+    mkdirSync(storePath);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath,
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(() => {
+      vault.deleteMany(["cred:a"]);
+    }).toThrow();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      op: "security.vault.entries-delete-failed",
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      errorKind: "write-failed",
+      extra: {
+        count: 1,
+        failureKind: "SECRET_VAULT_STORE_INVALID_JSON",
+        causeChain: ["EISDIR"],
+      },
+    });
+    expect(isVaultFrameArray(events[0]?.extra?.frames)).toBe(true);
+    expect(JSON.stringify(events)).not.toContain(storePath);
+    expect(JSON.stringify(events)).not.toContain("cred:a");
   });
 
   it("deleteMany of an empty list does not read an unreadable store", () => {
@@ -725,6 +853,55 @@ describe("createLocalSecretVault — symlink guard", () => {
     expect(() => {
       vault.set("cred:a", "value");
     }).toThrow("symlinked path");
+  });
+
+  it("classifies a blocked setMany through a symlink as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-merge-log-sub");
+    mkdirSync(realSub);
+    const linkSub = join(dir, "link-merge-log-sub");
+    symlinkSync(realSub, linkSub);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(linkSub, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(() => {
+      vault.setMany(new Map([["cred:a", "value"]]));
+    }).toThrow("symlinked path");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.entries-merge-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
+  });
+
+  it("classifies a blocked deleteMany through a symlink as an unsafe target", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const realSub = join(dir, "real-delete-log-sub");
+    mkdirSync(realSub);
+    vaultAt(join(realSub, "vault.enc.json")).set("cred:a", "value");
+    const linkSub = join(dir, "link-delete-log-sub");
+    symlinkSync(realSub, linkSub);
+    const events: SecurityLogEvent[] = [];
+    const vault = createLocalSecretVault({
+      key: KEY,
+      storePath: join(linkSub, "vault.enc.json"),
+      sink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(() => {
+      vault.deleteMany(["cred:a"]);
+    }).toThrow("symlinked path");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.entries-delete-failed",
+      errorKind: "unsafe-target",
+      extra: { failureKind: "unsafe-target" },
+    });
   });
 
   it("throws on read paths through a symlinked directory segment", (ctx) => {
@@ -1009,6 +1186,7 @@ describe("createKeychainVaultKeyAccess", () => {
         level: "warn",
         category: "security",
         op: "security.keychain.fallback",
+        errorKind: "unavailable",
         extra: { reasonKind: "Error", boundedExitKind: "exit-status" },
       });
       expect(typeof event?.durationMs).toBe("number");
@@ -1315,11 +1493,17 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
       level: "warn",
       category: "security",
       op: "security.vault.shard-unreadable",
-      errorKind: "EISDIR",
-      extra: { count: 1 },
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      errorKind: "read-failed",
+      extra: {
+        count: 1,
+        failureKind: "EISDIR",
+      },
     });
+    expect(isVaultFrameArray(event?.extra?.frames)).toBe(true);
     expect(Object.keys(event ?? {}).sort()).toEqual([
       "category",
+      "correlationId",
       "errorKind",
       "extra",
       "level",

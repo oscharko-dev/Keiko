@@ -18,6 +18,10 @@ import type {
   GatewayReadinessReport,
   GatewayReadinessRequest,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { gatewayVerificationFromProbeOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
@@ -81,6 +85,50 @@ const RED_PIXEL_PNG_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP8z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 const MINI_PDF_DATA_URL =
   "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMTQ0XSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MSA+PgpzdHJlYW0KQlQKL0YxIDE4IFRmCjUwIDgwIFRkCihLRUlLTyBQREYgUkVBRElORVNTIFBST0JFKSBUagpFVApzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNjIgMDAwMDAgbiAKMDAwMDAwMDM3MyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9Sb290IDEgMCBSIC9TaXplIDYgPj4Kc3RhcnR4cmVmCjQ0MgolJUVPRgo=";
+
+const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.automatic.started",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logAutomaticReadinessStarted",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    probeCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.automatic.started.line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.automatic.completed",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logAutomaticReadinessCompleted",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    overallStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready", "partial", "failed"],
+    },
+    probeCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.automatic.completed.line"],
+  releaseImpact: "patch",
+});
 
 type ProbeStatus = GatewayReadinessProbeResult["status"];
 
@@ -254,12 +302,13 @@ function logAutomaticReadinessStarted(
   modelId: string,
   probeCount: number,
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "gateway",
-    op: "gateway.readiness.automatic.started",
-    correlationId,
-    extra: { modelId, probeCount },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
+      { correlationId },
+      { modelId: boundedReadinessModelId(modelId), probeCount },
+    ),
+  );
 }
 
 function logAutomaticReadinessCompleted(
@@ -267,16 +316,24 @@ function logAutomaticReadinessCompleted(
   correlationId: string,
   report: GatewayReadinessReport,
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "gateway",
-    op: "gateway.readiness.automatic.completed",
-    correlationId,
-    extra: {
-      modelId: report.modelId,
-      overallStatus: report.overallStatus,
-      probeCount: report.probes.length,
-    },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
+      { correlationId },
+      {
+        modelId: boundedReadinessModelId(report.modelId),
+        overallStatus: report.overallStatus,
+        probeCount: report.probes.length,
+      },
+    ),
+  );
+}
+
+// Configured model ids do not originate at this route's bounded request parser. Keep the full id
+// for provider selection and the response, but project only the operation contract's opaque-id
+// bound into reconstruction evidence.
+function boundedReadinessModelId(modelId: string): string {
+  return modelId.slice(0, MAX_MODEL_ID_CHARS);
 }
 
 async function providerRequest(

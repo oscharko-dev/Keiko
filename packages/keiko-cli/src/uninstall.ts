@@ -33,6 +33,11 @@
 import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  activityLogErrorKindOr,
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   emitSecurityLogEvent,
@@ -685,6 +690,101 @@ type PreparedUninstallActivity =
     }
   | { readonly kind: "refused" };
 
+const UNINSTALL_TARGET_FIELDS = {
+  targetSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  packageTargetSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+} as const;
+
+const CLI_UNINSTALL_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.uninstall.started",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "uninstall.openUninstallActivity",
+  fields: {
+    removeState: { type: "boolean", dataClass: "closed-enum", required: true },
+    removeLaunchers: { type: "boolean", dataClass: "closed-enum", required: true },
+    removeScripts: { type: "boolean", dataClass: "closed-enum", required: true },
+    dryRun: { type: "boolean", dataClass: "closed-enum", required: true },
+    force: { type: "boolean", dataClass: "closed-enum", required: true },
+    ...UNINSTALL_TARGET_FIELDS,
+  },
+  causal: "none",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["cli-uninstall"],
+  proofIds: ["cli.uninstall.started.persisted"],
+  releaseImpact: "patch",
+});
+
+const CLI_UNINSTALL_FAILURE_REASONS = [
+  "activity-log-unavailable",
+  "activity-log-open-failed",
+  "preflight-refused",
+  "server-stop-refused",
+  "launcher-removal-refused",
+  "operation-error",
+  "launcher-error",
+  "package-read-failed",
+  "package-parse-failed",
+] as const;
+
+type CliUninstallFailureReason = (typeof CLI_UNINSTALL_FAILURE_REASONS)[number];
+
+const CLI_UNINSTALL_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.uninstall.failed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "uninstall.emitUninstallFailure",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLI_UNINSTALL_FAILURE_REASONS,
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    ...UNINSTALL_TARGET_FIELDS,
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["cli-uninstall"],
+  proofIds: ["cli.uninstall.failed.persisted"],
+  releaseImpact: "patch",
+});
+
+const CLI_UNINSTALL_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.uninstall.completed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "uninstall.executeUninstall",
+  fields: {
+    ...UNINSTALL_TARGET_FIELDS,
+    stateDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-selected", "absent", "removed", "retained", "would-remove", "would-retain"],
+    },
+    ownedFileCount: { type: "integer", dataClass: "count", required: true },
+    retainedCount: { type: "integer", dataClass: "count", required: true },
+    scriptCount: { type: "integer", dataClass: "count", required: true },
+    dryRun: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["cli-uninstall"],
+  proofIds: ["cli.uninstall.completed.persisted"],
+  releaseImpact: "patch",
+});
+
 interface UninstallActivityContext {
   readonly activityStateDir: string;
   readonly factory: CliSecurityLogSinkFactory | undefined;
@@ -701,24 +801,26 @@ interface UninstallActivityComposition {
 function emitUninstallPreparationFailure(
   context: UninstallActivityContext,
   errorKind: string,
-  reason: string,
+  reason: CliUninstallFailureReason,
 ): void {
   const sink = createCliSecurityLogSink(
     context.activityStateDir,
     context.factory,
     context.correlationId,
   );
-  emitSecurityLogEvent(sink, {
-    level: "error",
-    category: "diagnostic",
-    op: "cli.uninstall.failed",
-    errorKind,
-    extra: {
-      reason,
-      targetSha256: context.targetSha256,
-      packageTargetSha256: context.packageTargetSha256,
-    },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      CLI_UNINSTALL_FAILED_OPERATION,
+      { level: "error", errorKind: activityLogErrorKindOr(errorKind, "internal") },
+      {
+        failureKind: errorKind,
+        reason,
+        targetSha256: context.targetSha256,
+        packageTargetSha256: context.packageTargetSha256,
+      },
+    ),
+  );
 }
 
 function resolveUninstallActivityContext(
@@ -738,6 +840,29 @@ function resolveUninstallActivityContext(
     targetSha256: cliTargetIdentitySha256(stateDir),
     packageTargetSha256: cliTargetIdentitySha256(opts.packagePath),
   };
+}
+
+function emitUninstallStarted(
+  sink: SecurityLogSink | undefined,
+  opts: UninstallOptions,
+  context: UninstallActivityContext,
+): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      CLI_UNINSTALL_STARTED_OPERATION,
+      { level: "info" },
+      {
+        removeState: opts.scopes.state,
+        removeLaunchers: opts.scopes.launchers,
+        removeScripts: opts.scopes.scripts,
+        dryRun: opts.dryRun,
+        force: opts.force,
+        targetSha256: context.targetSha256,
+        packageTargetSha256: context.packageTargetSha256,
+      },
+    ),
+  );
 }
 
 function openUninstallActivity(
@@ -769,20 +894,7 @@ function openUninstallActivity(
     context.factory,
     context.correlationId,
   );
-  emitSecurityLogEvent(sink, {
-    level: "info",
-    category: "diagnostic",
-    op: "cli.uninstall.started",
-    extra: {
-      removeState: opts.scopes.state,
-      removeLaunchers: opts.scopes.launchers,
-      removeScripts: opts.scopes.scripts,
-      dryRun: opts.dryRun,
-      force: opts.force,
-      targetSha256: context.targetSha256,
-      packageTargetSha256: context.packageTargetSha256,
-    },
-  });
+  emitUninstallStarted(sink, opts, context);
   return {
     kind: "ready",
     sink,
@@ -811,7 +923,7 @@ function prepareUninstallActivity(
   try {
     if (
       (opts.scopes.state || opts.scopes.launchers) &&
-      cliControlStateConflictsWithTarget(context.activityStateDir, stateDir)
+      cliControlStateConflictsWithTarget(context.activityStateDir, stateDir, deps.platform)
     ) {
       io.err(
         "keiko uninstall: refusing to run because the reserved CLI control state overlaps the " +
@@ -837,19 +949,21 @@ function prepareUninstallActivity(
 function emitUninstallFailure(
   activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
   errorKind: string,
-  reason: string,
+  reason: CliUninstallFailureReason,
 ): void {
-  emitSecurityLogEvent(activity.sink, {
-    level: "error",
-    category: "diagnostic",
-    op: "cli.uninstall.failed",
-    errorKind,
-    extra: {
-      reason,
-      targetSha256: activity.targetSha256,
-      packageTargetSha256: activity.packageTargetSha256,
-    },
-  });
+  emitSecurityLogEvent(
+    activity.sink,
+    activityLogEvent(
+      CLI_UNINSTALL_FAILED_OPERATION,
+      { level: "error", errorKind: activityLogErrorKindOr(errorKind, "internal") },
+      {
+        failureKind: errorKind,
+        reason,
+        targetSha256: activity.targetSha256,
+        packageTargetSha256: activity.packageTargetSha256,
+      },
+    ),
+  );
 }
 
 async function executeUninstall(
@@ -879,20 +993,22 @@ async function executeUninstall(
     emitUninstallFailure(activity, "LauncherRemovalRefused", "launcher-removal-refused");
     return 1;
   }
-  emitSecurityLogEvent(activity.sink, {
-    level: "info",
-    category: "diagnostic",
-    op: "cli.uninstall.completed",
-    extra: {
-      targetSha256: activity.targetSha256,
-      packageTargetSha256: activity.packageTargetSha256,
-      stateDisposition: stateOutcome.disposition,
-      ownedFileCount: stateOutcome.ownedFileCount,
-      retainedCount: stateOutcome.retainedCount,
-      scriptCount,
-      dryRun: opts.dryRun,
-    },
-  });
+  emitSecurityLogEvent(
+    activity.sink,
+    activityLogEvent(
+      CLI_UNINSTALL_COMPLETED_OPERATION,
+      { level: "info" },
+      {
+        targetSha256: activity.targetSha256,
+        packageTargetSha256: activity.packageTargetSha256,
+        stateDisposition: stateOutcome.disposition,
+        ownedFileCount: stateOutcome.ownedFileCount,
+        retainedCount: stateOutcome.retainedCount,
+        scriptCount,
+        dryRun: opts.dryRun,
+      },
+    ),
+  );
   return 0;
 }
 
@@ -901,7 +1017,7 @@ function reportUninstallException(
   io: CliIo,
   activity: Extract<PreparedUninstallActivity, { readonly kind: "ready" }>,
 ): number {
-  let reason = "operation-error";
+  let reason: CliUninstallFailureReason = "operation-error";
   if (error instanceof LauncherError) reason = "launcher-error";
   if (error instanceof UninstallPackageReadError) reason = "package-read-failed";
   if (error instanceof UninstallPackageParseError) reason = "package-parse-failed";

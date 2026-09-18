@@ -13,6 +13,11 @@ import {
   type GitProcessResult,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { observedGitRunner } from "../gitProcessActivity.js";
@@ -45,6 +50,49 @@ type InitializationOutcome =
   | "timed-out"
   | "unsafe-repository"
   | "execution-failed";
+
+const REPOSITORY_INITIALIZE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.repository.initialize",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/repositoryInitializationRoutes.recordOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "already-initialized",
+        "git-missing",
+        "invalid-request",
+        "not-authorized",
+        "succeeded",
+        "timed-out",
+        "unsafe-repository",
+        "execution-failed",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-repository-initialization"],
+  proofIds: ["git.repository.initialize"],
+  releaseImpact: "minor",
+});
+
+function initializationErrorKind(outcome: InitializationOutcome): ActivityLogErrorKind | undefined {
+  if (outcome === "succeeded") return undefined;
+  if (outcome === "timed-out") return "timeout";
+  if (outcome === "not-authorized") return "authority-denied";
+  if (outcome === "unsafe-repository") return "unsafe-target";
+  if (outcome === "already-initialized") return "conflict";
+  if (outcome === "git-missing") return "unavailable";
+  if (outcome === "invalid-request") return "invalid-request";
+  return "internal";
+}
 
 export interface GitRepositoryInitializeResponse {
   readonly schemaVersion: "1";
@@ -99,13 +147,14 @@ function recordOutcome(
   status: number,
   outcome: InitializationOutcome,
 ): void {
-  log.write({
-    category: "security",
-    op: "git.repository.initialize",
-    correlationId,
-    status,
-    extra: { outcome },
-  });
+  const errorKind = initializationErrorKind(outcome);
+  log.write(
+    activityLogEvent(
+      REPOSITORY_INITIALIZE_OPERATION,
+      { correlationId, status, ...(errorKind === undefined ? {} : { errorKind }) },
+      { outcome },
+    ),
+  );
 }
 
 function unsuccessful(result: GitProcessResult): GitFailureReason | undefined {

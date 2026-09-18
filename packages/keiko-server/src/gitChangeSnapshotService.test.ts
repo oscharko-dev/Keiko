@@ -112,6 +112,22 @@ async function allKinds(workspace: WorkspaceInfo): Promise<void> {
 }
 
 describe("immutable Git change snapshot production", () => {
+  it("preserves the graceful failure result when a native error code exceeds the log bound", async () => {
+    const workspace = await repository();
+    const events: ServerLogEvent[] = [];
+    const code = `E${"R".repeat(90)}`;
+    const service = createGitChangeSnapshotService({
+      runner: () => Promise.reject(Object.assign(new Error("git failed"), { code })),
+      logSink: { write: (event) => events.push(event) },
+    });
+
+    await expect(service.capture(inputFor(workspace))).resolves.toMatchObject({
+      snapshot: { outcome: "failed" },
+    });
+    expect(events.at(-1)?.extra?.code).toBeUndefined();
+    service.close();
+  });
+
   it("keeps canonical digests across clones and refuses lazy fetching missing objects", async () => {
     const workspace = await repository();
     const cloneRoot = await mkdtemp(join(tmpdir(), "keiko-gcs-clone-"));
@@ -468,12 +484,27 @@ describe("immutable Git change snapshot production", () => {
       });
       service.close();
     }
-    const service = createGitChangeSnapshotService();
+    const events: ServerLogEvent[] = [];
+    const service = createGitChangeSnapshotService({
+      logSink: { write: (event): void => void events.push(event) },
+    });
     expect(await service.capture({ ...input, headRef: "missing" })).toMatchObject({
       snapshot: { outcome: "unavailable", reason: "missing-ref" },
     });
     expect(await service.capture({ ...input, headRef: "--output=private" })).toMatchObject({
       snapshot: { outcome: "unavailable", reason: "invalid-ref" },
+    });
+    const captureEvents = events.filter((event) => event.op === "git.snapshot.capture");
+    expect(captureEvents).toHaveLength(2);
+    expect(captureEvents[0]).toMatchObject({
+      correlationId,
+      errorKind: "validation-failed",
+      extra: { outcome: "unavailable", reason: "missing-ref" },
+    });
+    expect(captureEvents[1]).toMatchObject({
+      correlationId,
+      errorKind: "validation-failed",
+      extra: { outcome: "unavailable", reason: "invalid-ref" },
     });
     service.close();
   });

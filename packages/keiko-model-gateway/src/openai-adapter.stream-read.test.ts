@@ -15,7 +15,8 @@ import {
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import {
-  logErrorKind,
+  activityLogErrorKind,
+  logModelId,
   type ModelGatewayLogEvent,
   type ModelGatewayLogSink,
 } from "./observability.js";
@@ -184,7 +185,7 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     expect(provider.cancelled()).toBe(true);
     expect(streamedLine(log.events)).toMatchObject({
       level: "warn",
-      errorKind: "GATEWAY_TIMEOUT",
+      errorKind: "timeout",
       extra: { outcome: "stalled", dataEvents: 1 },
     });
   });
@@ -270,6 +271,26 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     expect(log.events.find((event) => event.op === "chat.request.dispatch")).toMatchObject({
       extra: { stream: true, timeoutMs: 1_000, readBudgetMs: 10_000 },
     });
+  });
+
+  it("sanitizes the model id on both dispatch and stream outcome lines", async () => {
+    const log = recorder();
+    const modelId = "streaming customer alias";
+    await expect(
+      answerOf(
+        adapterWith(
+          () => Promise.resolve(sse([delta("ok"), finish("stop"), DONE])),
+          log.sink,
+        ).callStream({ ...REQUEST, modelId }, { ...CONFIG, modelId }, BOUNDS),
+      ),
+    ).resolves.toMatchObject({ content: "ok" });
+
+    const loggedModelId = logModelId(modelId);
+    expect(log.events.find((event) => event.op === "chat.request.dispatch")?.extra?.modelId).toBe(
+      loggedModelId,
+    );
+    expect(streamedLine(log.events)?.extra?.modelId).toBe(loggedModelId);
+    expect(JSON.stringify(log.events)).not.toContain(modelId);
   });
 });
 
@@ -367,7 +388,7 @@ describe("OpenAiAdapter.callStream with read bounds: the answer matches a whole 
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatchObject({
       level: "warn",
-      errorKind: logErrorKind(failure),
+      errorKind: activityLogErrorKind(failure),
       extra: { outcome: "failed" },
     });
   });
@@ -393,7 +414,7 @@ describe("OpenAiAdapter.callStream with read bounds: the answer matches a whole 
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatchObject({
       level: "warn",
-      errorKind: logErrorKind(failure),
+      errorKind: activityLogErrorKind(failure),
       extra: { outcome: "failed", dataEvents: 0 },
     });
   });
@@ -535,7 +556,7 @@ describe("OpenAiAdapter.callStream through a LiteLLM proxy", () => {
       expect(provider.cancelled()).toBe(true);
       expect(streamedLine(log.events)).toMatchObject({
         level: "warn",
-        errorKind: logErrorKind(failure),
+        errorKind: activityLogErrorKind(failure),
         extra: { outcome: "failed", dataEvents: 2 },
       });
     },

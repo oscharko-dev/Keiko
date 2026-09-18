@@ -431,6 +431,29 @@ function selectedBindingReadiness(
   if (!selectedReady) return "unavailable";
   return state.bindingReadiness ?? "ready";
 }
+
+function emitBindingReadiness(
+  state: CatalogBindingState,
+  identity: ReturnType<typeof lifecycleIdentity>,
+  binding: BoundToolSet,
+): void {
+  if (binding.readiness === "ready") {
+    emitToolLifecycleEvent(state.input.logPort, {
+      ...identity,
+      op: "tool-catalog.bind-ready",
+      readiness: "ready",
+      handlerSetDigest: binding.handlerSetDigest,
+    });
+    return;
+  }
+  emitToolLifecycleEvent(state.input.logPort, {
+    ...identity,
+    op: "tool-catalog.bind-unavailable",
+    readiness: "unavailable",
+    reason: "handler-unavailable",
+  });
+}
+
 function buildCatalogOfferForTool(state: CatalogBindingState, toolRef: ToolRef): OfferedToolSet {
   const context = state.options.context();
   assertCatalogCompatibility(state);
@@ -464,15 +487,7 @@ function buildCatalogOfferForTool(state: CatalogBindingState, toolRef: ToolRef):
     expiresAt: new Date(expiry).toISOString(),
   });
   const identity = lifecycleIdentity(state, context);
-  const bindingReady = binding.readiness === "ready";
-  emitToolLifecycleEvent(state.input.logPort, {
-    ...identity,
-    op: bindingReady ? "tool-catalog.bind-ready" : "tool-catalog.bind-unavailable",
-    readiness: bindingReady ? "ready" : "unavailable",
-    ...(bindingReady
-      ? { handlerSetDigest: binding.handlerSetDigest }
-      : { reason: "handler-unavailable" as const }),
-  });
+  emitBindingReadiness(state, identity, binding);
   emitToolLifecycleEvent(state.input.logPort, {
     ...identity,
     op: "tool-catalog.projection",

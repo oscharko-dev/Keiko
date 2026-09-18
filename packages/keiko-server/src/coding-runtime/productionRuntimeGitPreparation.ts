@@ -1,17 +1,58 @@
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   readVerifiedRepositoryIdentity,
   type VerifiedRepositoryIdentity,
 } from "../gitDelivery/verifiedRepositoryIdentity.js";
 import { gitDeliveryTerminationHandler } from "../gitDelivery/execution.js";
-import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { VerifiedCommitRuntimeDependencies } from "./productionVerifiedCommitRuntime.js";
 import type { CodingRuntimeLaunchResolver } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 
 type LaunchInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[0];
 const PREPARATION_TTL_MS = 5_000;
+const GIT_RUNTIME_IDENTITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.runtime-identity",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionRuntimeGitPreparation.logPreparation",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["prepared", "consumed", "denied", "failed"],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["runtime-git-identity"],
+  proofIds: ["git.runtime-identity.emitted-line"],
+  releaseImpact: "patch",
+});
 interface PreparedContext {
   readonly repositoryIdentity: VerifiedRepositoryIdentity;
   readonly requestDigest: string;
@@ -110,11 +151,23 @@ function logPreparation(
   state: "prepared" | "consumed" | "denied" | "failed",
   error?: unknown,
 ): void {
-  (deps.execution?.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "git.runtime-identity",
-    correlationId: runId,
-    ...(error === undefined ? {} : ({ level: "warn", errorKind: "internal" } as const)),
-    extra: { runId, state, ...(error === undefined ? {} : describeError(error)) },
-  });
+  const failed = state === "denied" || state === "failed";
+  (deps.execution?.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GIT_RUNTIME_IDENTITY_OPERATION,
+      {
+        correlationId: runId,
+        ...(failed
+          ? { level: "warn", errorKind: state === "denied" ? "unavailable" : "internal" }
+          : {}),
+      },
+      {
+        runId,
+        state,
+        ...(error === undefined
+          ? {}
+          : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+      },
+    ),
+  );
 }

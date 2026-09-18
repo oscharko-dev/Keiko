@@ -472,7 +472,7 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     // an `expired-compatibility` rejection is reconstructable next to the fetch duration.
     expect(events[0]).toMatchObject({ extra: { offerRemainingMs: 30_000 } });
     expect(events.at(-1)).toMatchObject({
-      errorKind: "validation",
+      errorKind: "validation-failed",
       extra: {
         phase: "response",
         status: "invalid",

@@ -406,11 +406,18 @@ describe("coding runtime routes", () => {
         level: "warn",
         category: "process",
         op: "coding-runtime.operation.refused",
+        errorKind: "invalid-request",
         // The fixture's context() carries no correlation id; the log line must still fall back to
         // the sanctioned UNKNOWN_CORRELATION_ID rather than silently omitting the field
         // (AGENTS.md §8 rule 1).
         correlationId: UNKNOWN_CORRELATION_ID,
-        extra: { operation: "answer", runId: "run-1", reason: "invalid-intent" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "answer",
+          runId: "run-1",
+          reason: "invalid-intent",
+        },
       }),
     ]);
   });
@@ -449,8 +456,15 @@ describe("coding runtime routes", () => {
     expect(records).toEqual([
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
+        errorKind: "rate-limited",
         correlationId: UNKNOWN_CORRELATION_ID,
-        extra: { operation: "answer", runId: "run-1", reason: "replay-cap-exhausted" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "answer",
+          runId: "run-1",
+          reason: "replay-cap-exhausted",
+        },
       }),
     ]);
   });
@@ -486,8 +500,15 @@ describe("coding runtime routes", () => {
     expect(records).toEqual([
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
+        errorKind: "authority-denied",
         correlationId: "start-corr-1",
-        extra: { operation: "start", runId: "run-9", reason: "authority-resolution-failed" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "start",
+          runId: "run-9",
+          reason: "authority-resolution-failed",
+        },
       }),
     ]);
   });
@@ -529,8 +550,11 @@ describe("coding runtime routes", () => {
     expect(records).toEqual([
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
+        errorKind: "authority-denied",
         correlationId: "retry-corr-1",
         extra: {
+          completeness: "complete",
+          loss: "none",
           operation: "retry",
           runId: "run-1-successor",
           reason: "authority-resolution-failed",
@@ -578,7 +602,12 @@ describe("coding runtime routes", () => {
     expect(records).toContainEqual(
       expect.objectContaining({
         op: "coding-runtime.operation.refused",
-        extra: { operation: "answer", runId: "run-1", reason: "question-answer-rejected" },
+        errorKind: "invalid-request",
+        extra: expect.objectContaining({
+          operation: "answer",
+          runId: "run-1",
+          reason: "question-answer-rejected",
+        }) as unknown,
       }),
     );
     expect(JSON.stringify(records)).not.toContain("free text");
@@ -1097,12 +1126,29 @@ describe("coding runtime routes", () => {
 
   it("fails closed when runtime dependencies are absent and returns 404 for a stale run", async () => {
     const session = pairedAppSession();
+    const records: unknown[] = [];
     await expect(
       handleCreateCodingRuntimeRun(
-        context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie),
-        { codingAppSessionChannel: session.channel } as UiHandlerDeps,
+        context(
+          "{}",
+          {},
+          "/api/coding-workbench/runtime/runs",
+          session.cookie,
+          "runtime-unavailable-correlation",
+        ),
+        {
+          codingAppSessionChannel: session.channel,
+          activityLog: { write: (event: unknown) => void records.push(event) },
+        } as UiHandlerDeps,
       ),
     ).resolves.toMatchObject({ status: 503 });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      op: "coding-runtime.operation.refused",
+      correlationId: "runtime-unavailable-correlation",
+      errorKind: "unavailable",
+      extra: { operation: "start", reason: "runtime-unavailable" },
+    });
     const stopRoute = CODING_RUNTIME_ROUTE_GROUP.find(({ pattern }) => pattern.endsWith("/stop"));
     if (!stopRoute) throw new Error("missing stop route");
     const stale = await stopRoute.handler(
@@ -1261,18 +1307,30 @@ describe("coding runtime routes", () => {
   it("rejects an over-budget mutation body with 413 without buffering it", async () => {
     const session = pairedAppSession();
     const oversized = "x".repeat(64 * 1024 + 1);
+    const records: unknown[] = [];
     const result = await handleCreateCodingRuntimeRun(
       context(
         JSON.stringify({ padding: oversized }),
         {},
         "/api/coding-workbench/runtime/runs",
         session.cookie,
+        "oversized-runtime-correlation",
       ),
-      runtime({ codingAppSessionChannel: session.channel }),
+      runtime({
+        codingAppSessionChannel: session.channel,
+        activityLog: { write: (event: unknown) => void records.push(event) },
+      }),
     );
     expect(result).toMatchObject({ status: 413 });
     expect(JSON.stringify(result.body)).toContain("PAYLOAD_TOO_LARGE");
     expect(JSON.stringify(result.body)).not.toContain("xxxx");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      op: "coding-runtime.operation.refused",
+      correlationId: "oversized-runtime-correlation",
+      errorKind: "invalid-request",
+      extra: { operation: "start", reason: "payload-too-large" },
+    });
   });
 
   it("normalizes an empty mutation body to an empty object for the orchestrator", async () => {
@@ -1592,8 +1650,14 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
         level: "warn",
         category: "process",
         op: "coding-runtime.operation.refused",
+        errorKind: "authority-denied",
         correlationId: "unpaired-start-correlation",
-        extra: { operation: "start", reason: "authority-resolution-failed" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          operation: "start",
+          reason: "authority-resolution-failed",
+        },
       }),
     ]);
     expect(JSON.stringify(records)).not.toContain("secret");
@@ -1642,10 +1706,16 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
           level: "warn",
           category: "process",
           op: "coding-runtime.operation.refused",
+          errorKind: "authority-denied",
           correlationId: `unpaired-${operation}-correlation`,
           // No runId: the precheck fails before a per-run identifier is resolved, matching the
           // unpaired-start log shape above.
-          extra: { operation, reason: "authority-resolution-failed" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation,
+            reason: "authority-resolution-failed",
+          },
         }),
       ]);
     },

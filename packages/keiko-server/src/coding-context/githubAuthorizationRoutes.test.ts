@@ -295,6 +295,8 @@ describe("GitHub issue reader authorization routes (#3385)", () => {
       expect(line).toBeDefined();
       expect(line?.correlationId).toBe("corr-3385");
       expect(line?.extra).toEqual({
+        completeness: "complete",
+        loss: "none",
         repositoryId: deriveRepositoryId(realpathSync(LINK)),
         authorized: true,
         revision: 1,

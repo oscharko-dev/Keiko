@@ -13,6 +13,7 @@ import {
   codingWorkbenchIssueBindingDigest,
   codingWorkbenchRemoteDigest,
   createGitHubIssueResolver,
+  githubIssueResolutionErrorKind,
   type GitHubIssueResolutionDeps,
   type GitHubIssueResolver,
 } from "./githubIssueResolution.js";
@@ -115,6 +116,19 @@ function fixture(): ResolverFixture {
 }
 
 describe("server-resolved issue intake", () => {
+  it.each([
+    ["invalid-reference", undefined, "invalid-request"],
+    ["repository-mismatch", undefined, "conflict"],
+    ["auth-required", undefined, "authority-denied"],
+    ["authority-denied", undefined, "authority-denied"],
+    ["issue-unavailable", undefined, "unavailable"],
+    ["issue-unavailable", "read-failed", "read-failed"],
+    ["clone-failed", "default-branch-read-failed", "read-failed"],
+    ["cancelled", "aborted", "cancelled"],
+  ] as const)("maps %s / %s to %s", (failure, reason, expected) => {
+    expect(githubIssueResolutionErrorKind(failure, reason)).toBe(expected);
+  });
+
   it("derives canonical binding and bounds transient comments while keeping logs body-free", async () => {
     const f = fixture();
     const result = await f.resolve(f.deps, f.input);
@@ -132,7 +146,13 @@ describe("server-resolved issue intake", () => {
       expect.objectContaining({
         op: "coding-workbench.issue.resolved",
         correlationId: "issue-test",
-        extra: { outcome: "resolved", issueNumber: 42, repositoryId: deriveRepositoryId(f.root) },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: "resolved",
+          issueNumber: 42,
+          repositoryId: deriveRepositoryId(f.root),
+        },
       }),
     );
     for (const content of [f.root, f.object.title, f.object.body, f.object.url]) {
@@ -235,8 +255,8 @@ describe("server-resolved issue intake", () => {
     expect(f.events.at(-1)).toMatchObject({
       op: "coding-workbench.issue.resolved",
       correlationId: "issue-test",
-      errorKind: "Error",
-      extra: { reason: "read-failed" },
+      errorKind: "read-failed",
+      extra: { reason: "read-failed", failureKind: "read-failed" },
     });
   });
 
@@ -258,11 +278,17 @@ describe("server-resolved issue intake", () => {
 
   it("distinguishes default-branch read failure from an unavailable default", async () => {
     const f = fixture();
-    f.readDefaultBranch.mockRejectedValue(new Error("private default failure"));
+    f.readDefaultBranch.mockRejectedValue(
+      Object.assign(new Error("private default failure"), { code: `E${"X".repeat(90)}` }),
+    );
     expect(await f.resolve(f.deps, f.input)).toEqual({
       ok: false,
       failure: "clone-failed",
       failureReason: "default-branch-read-failed",
+    });
+    expect(f.events.at(-1)).toMatchObject({
+      errorKind: "read-failed",
+      extra: { failureKind: "read-failed" },
     });
   });
 

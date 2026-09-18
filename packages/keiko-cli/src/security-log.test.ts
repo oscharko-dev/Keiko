@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   type SecurityLogEvent,
   type SecurityLogSink,
@@ -47,6 +48,24 @@ describe("createCliSecurityLogSink", () => {
     );
     expect(events[1]?.correlationId).toBe(events[0]?.correlationId);
     expect(JSON.stringify(events)).not.toContain("untrusted-event-correlation");
+  });
+
+  it("preserves a typed operation registration while binding correlation", () => {
+    const events: SecurityLogEvent[] = [];
+    const sink = createCliSecurityLogSink("/state", () => ({
+      write: (event): void => void events.push(event),
+    }));
+
+    emitCliWindowsSystemFailure(
+      new WindowsSystemDirectoryError("refused"),
+      sink,
+      "portable-failure-alert",
+    );
+
+    const registration = activityLogEventRegistration(
+      events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+    );
+    expect(registration?.op).toBe("security.windows-portable-alert.system-root-refused");
   });
 
   it("does not create correlation state when no production sink was wired", () => {
@@ -115,15 +134,25 @@ describe("emitCliWindowsSystemFailure", () => {
       expect(events).toEqual([
         {
           category: "security",
-          errorKind: "WindowsSystemDirectoryError",
-          extra: { surface },
+          errorKind: "unsafe-target",
+          extra: {
+            surface,
+            failureKind: "WindowsSystemDirectoryError",
+            completeness: "complete",
+            loss: "none",
+          },
           level: "warn",
           op: rootRefused,
         },
         {
           category: "diagnostic",
-          errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
-          extra: { surface },
+          errorKind: "unavailable",
+          extra: {
+            surface,
+            failureKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+            completeness: "complete",
+            loss: "none",
+          },
           level: "error",
           op: binaryMissing,
         },
