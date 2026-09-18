@@ -247,8 +247,8 @@ describe("segment manifests (#3531)", () => {
     const text = readFileSync(path, "utf8");
     const value = JSON.parse(text) as SegmentManifest;
     const tampered = text.replace('"lineCount":', '"lineCount":1');
-    const reordered = `${JSON.stringify({ digest: value.digest, ...value })}\n`;
-    const { digest: _digest, ...body } = value;
+    const { digest, ...body } = value;
+    const reordered = `${JSON.stringify({ digest, ...body })}\n`;
     const foreignBody = { ...body, catalog: { ...body.catalog, catalogDigest: "0".repeat(64) } };
     const foreign = `${JSON.stringify({
       ...foreignBody,
