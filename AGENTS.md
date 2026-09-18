@@ -480,10 +480,12 @@ system that exists, never beside it:
   gate, and required CI runs that exact command. Every run builds the packages and evaluates the
   complete registered inventory: `check:op-catalog` (typed registrations and emitters, closed fields
   and vocabularies, exemptions, failure-class coverage, the failure-surface inventory, and proof and
-  scenario resolution), `check:error-observability`, `arch:check` with `arch:check:negative`, and
-  `check:release-impact`. It takes no changed-file input, so an unchanged emitter is proven again
-  on every run. Each failure names its check, rule, site, and remediation. Run it before every pull
-  request that changes product runtime behaviour.
+  scenario resolution), `test:activity-log-scenarios` (executes every curated end-to-end scenario
+  the inventory resolves, each of which must reach a complete support-analyze report),
+  `check:error-observability`, `arch:check` with `arch:check:negative`, and `check:release-impact`.
+  It takes no changed-file input, so an unchanged emitter is proven again on every run. Each failure
+  names its check, rule, site, and remediation. Run it before every pull request that changes
+  product runtime behaviour.
 
 ### Rule 2 — when you debug, the log is your primary source
 
