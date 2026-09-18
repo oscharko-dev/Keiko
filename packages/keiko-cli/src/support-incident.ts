@@ -12,7 +12,6 @@
 // analyzer's per-class sufficiency to the incident's failure classes. A user report whose window
 // holds no registered failure therefore resolves to `insufficient` with `no-registered-failure`.
 
-import { basename } from "node:path";
 import {
   activityLogOperationSchema,
   isSupportIncidentId,
@@ -23,22 +22,24 @@ import {
   type SupportIncidentSufficiency,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
 import type { SupportIncidentSegmentFile } from "@oscharko-dev/keiko-server";
+import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
 import { flagValue } from "./cli-arg-parsing.js";
 import { loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { resolveStateDir } from "./state-paths.js";
 import {
   ACTIVITY_LOG_EVIDENCE_INTEGRITY,
-  analyzeLogText,
+  analyzeLogLines,
   type ActivityLogEvidenceSummary,
+  type ActivityLogTextLine,
   type AnalyzeAllResult,
 } from "./support-analyze.js";
 import {
   activityLogFailureClassesOf,
   restrictActivityLogSufficiency,
 } from "./support-analyze-sufficiency.js";
-import { readKeptFiles } from "./support-export.js";
 
 export const SUPPORT_INCIDENT_USAGE = `Usage:
   keiko support incident list [--state-dir PATH] [--json]
@@ -130,21 +131,61 @@ export class SupportIncidentWindowError extends Error {
   }
 }
 
-/** Reads the covered segments through the export's hardened reader; fails closed on any skip. */
-export function readSupportIncidentWindow(segments: readonly SupportIncidentSegmentFile[]): string {
+function openIncidentSegment(path: string, stateDir: string): number {
+  return openSafeArtifactFile(path, {
+    artifactClass: "activity-log",
+    mode: "read",
+    trustedRoot: stateDir,
+  });
+}
+
+// Streams every covered segment's lines, in order, through the same hardened, state-dir-rooted
+// safe-artifact open and bounded chunked reader the query engine uses
+// (support-segment-scan.ts's `ActivityLogScanner`) — never a whole segment, let alone the whole
+// window, in one buffer (#3531 audit). Every yielded line is reported `terminated: true`, matching
+// `support-export.ts`'s own reconstruction (`readKeptFiles` rejoins every kept line with its own
+// trailing "\n" before the analyzer ever sees it), so a torn tail classifies identically through
+// either path — this migration changes memory shape only, never a verdict. `onChunk` is the reader's
+// own observability seam (never used in production): it lets a test prove every read stayed inside
+// one bounded chunk instead of trusting the implementation by inspection.
+function* supportIncidentWindowLines(
+  segments: readonly SupportIncidentSegmentFile[],
+  stateDir: string,
+  onChunk?: (chunk: Uint8Array) => void,
+): Generator<ActivityLogTextLine> {
+  for (const segment of segments) {
+    try {
+      for (const line of readActivityLogFileLines(
+        () => openIncidentSegment(segment.path, stateDir),
+        onChunk === undefined ? {} : { onChunk },
+      )) {
+        yield { text: line.text, terminated: true };
+      }
+    } catch (error) {
+      if (!(error instanceof ActivityLogReadError)) throw error;
+      throw new SupportIncidentWindowError("segment-unreadable");
+    }
+  }
+}
+
+/**
+ * Analyzes the incident's covered segments in one bounded streaming pass — never the whole pinned
+ * window in one buffer. The window is analyzed whole or not at all: fails closed, synchronously,
+ * either before any file is opened (`window-too-large`, from the segments' own recorded sizes) or
+ * the moment any covered segment cannot be opened or read in full (`segment-unreadable`); no
+ * partial result is ever returned. `onChunk` is a test-only observability seam (see
+ * `supportIncidentWindowLines`); production callers never pass it.
+ */
+export function resolveSupportIncidentEvidence(
+  segments: readonly SupportIncidentSegmentFile[],
+  stateDir: string,
+  onChunk?: (chunk: Uint8Array) => void,
+): AnalyzeAllResult {
   const total = segments.reduce((sum, segment) => sum + segment.sizeBytes, 0);
   if (total > MAX_SUPPORT_INCIDENT_WINDOW_BYTES) {
     throw new SupportIncidentWindowError("window-too-large");
   }
-  const read = readKeptFiles(
-    segments.map((segment) => ({
-      name: basename(segment.path),
-      path: segment.path,
-      sizeBytes: segment.sizeBytes,
-    })),
-  );
-  if (read.skippedLogFiles.length > 0) throw new SupportIncidentWindowError("segment-unreadable");
-  return read.contentLines.map((line) => `${line}\n`).join("");
+  return analyzeLogLines(supportIncidentWindowLines(segments, stateDir, onChunk));
 }
 
 function incidentFailureClasses(
@@ -195,9 +236,9 @@ function evidenceLineCount(evidence: ActivityLogEvidenceSummary): number {
 export function resolveSupportIncident(
   record: SupportIncidentRecord,
   segments: readonly SupportIncidentSegmentFile[],
-  windowText: string,
+  stateDir: string,
 ): SupportIncident {
-  const analysis = analyzeLogText(windowText);
+  const analysis = resolveSupportIncidentEvidence(segments, stateDir);
   const classification = analysis.evidence.classification;
   return {
     ...record,
@@ -300,7 +341,7 @@ function resolveOrReport(
   if (record === undefined) return undefined;
   const segments = context.server.supportIncidentSegmentFiles(context.stateDir, record);
   try {
-    return resolveSupportIncident(record, segments, readSupportIncidentWindow(segments));
+    return resolveSupportIncident(record, segments, context.stateDir);
   } catch (error) {
     if (!(error instanceof SupportIncidentWindowError)) throw error;
     context.io.err(
