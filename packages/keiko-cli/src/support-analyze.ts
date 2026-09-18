@@ -1325,6 +1325,56 @@ function latestObservation(lines: readonly ParsedLine[]): LatestObservation {
 // every line that could not be read as a log record. A line with no correlationId at all
 // (`process.*` lines, a first-ever request before any id was assigned) belongs to no timeline and
 // is neither malformed nor counted — this module only reconstructs correlated request/run stories.
+// A bundle joins the lines of many Activity Log files (#3530 segments), so a crashed writer's torn
+// tail can sit in the MIDDLE of the bundle. The manifest's `sourceLogFileLines` names each file's
+// line count and whether it ended in a fragment; those positions classify as `truncated` exactly as
+// the bundle's own final fragment does. A malformed or oversized declaration reinterprets nothing,
+// and the declaration can only move an invalid line between two rejected classes.
+const MAX_SOURCE_LOG_FILE_ENTRIES = 100_000;
+
+interface SourceFileBoundary {
+  readonly lineCount: number;
+  readonly terminalFragment: boolean;
+}
+
+function sourceFileBoundary(value: unknown): SourceFileBoundary | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const lineCount: unknown = Reflect.get(value, "lineCount");
+  const terminalFragment: unknown = Reflect.get(value, "terminalFragment");
+  return typeof lineCount === "number" &&
+    Number.isSafeInteger(lineCount) &&
+    lineCount >= 0 &&
+    typeof terminalFragment === "boolean"
+    ? { lineCount, terminalFragment }
+    : undefined;
+}
+
+function leadingSectionCount(contentLines: readonly string[]): number {
+  let count = 0;
+  for (const raw of contentLines) {
+    if (typeof tryParseJsonObject(raw)?.$section !== "string") break;
+    count += 1;
+  }
+  return count;
+}
+
+function bundleFragmentIndexes(
+  manifestLine: string | undefined,
+  contentLines: readonly string[],
+): ReadonlySet<number> {
+  const entries: unknown = tryParseJsonObject(manifestLine ?? "")?.sourceLogFileLines;
+  if (!Array.isArray(entries) || entries.length > MAX_SOURCE_LOG_FILE_ENTRIES) return new Set();
+  const fragments = new Set<number>();
+  let offset = leadingSectionCount(contentLines);
+  for (const entry of entries) {
+    const boundary = sourceFileBoundary(entry);
+    if (boundary === undefined) return new Set();
+    offset += boundary.lineCount;
+    if (boundary.terminalFragment && boundary.lineCount > 0) fragments.add(offset - 1);
+  }
+  return fragments;
+}
+
 export function analyzeLogText(
   text: string,
   options: SupportAnalyzeOptions = {},
@@ -1332,11 +1382,14 @@ export function analyzeLogText(
   const lines = splitLines(text);
   const kind = detectSourceKind(lines[0]);
   const contentLines = kind === "bundle" ? lines.slice(1) : lines;
+  const fragments =
+    kind === "bundle" ? bundleFragmentIndexes(lines[0], contentLines) : new Set<number>();
   const parsedLines: ParsedLine[] = [];
   const evidenceCounts = emptyEvidenceCounts();
   let malformedLineCount = 0;
   for (const [index, raw] of contentLines.entries()) {
-    const terminalFragment = index === contentLines.length - 1 && !text.endsWith("\n");
+    const terminalFragment =
+      fragments.has(index) || (index === contentLines.length - 1 && !text.endsWith("\n"));
     const classification = classifyLine(raw, index, terminalFragment, options);
     if (classification.kind === "section") continue;
     incrementEvidence(evidenceCounts, classification.evidence);

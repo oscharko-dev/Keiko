@@ -19,6 +19,8 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
   type ActivityLogFields,
+  ACTIVITY_LOG_DIRECTORY_NAME,
+  parseActivityLogFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -82,7 +84,6 @@ import {
   buildSupportBundleManifest,
   bundleSha256Hex,
   bundleText,
-  CURRENT_LOG_FILE_NAME,
   DEFAULT_MAX_BUNDLE_BYTES,
   describeErrorKind,
   discoverServerLogFiles,
@@ -93,6 +94,7 @@ import {
   UI_LOG_SECTION,
   type CurrentFileTailTruncated,
   type SkippedLogFile,
+  type SourceLogFileLines,
   type SupportBundleConfigSnapshotSection,
   type SupportBundleEvidenceManifestSection,
 } from "./support-export.js";
@@ -107,14 +109,17 @@ export writes a redacted .jsonl support bundle: a manifest line (local-state aud
 evidence-index count, exactly which log files were copied, and a redacted schema/integrity
 fingerprint for each of the ui, local-knowledge, and memory-vault stores found under --state-dir),
 an always-present config-snapshot section (Keiko's own resolved KEIKO_* runtime configuration,
-redacted), then every line of <state-dir>/logs/server*.log, copied byte-for-byte. A store that has
+redacted), then every line of the Activity Log under <state-dir>/logs/ (its sealed and active
+segments plus any legacy server*.log files, oldest first), copied byte-for-byte. A store that has
 never been used from this state dir, or that cannot be opened (corrupt, or a vault key the
 operator has not supplied), is named in the manifest's storesUnavailable instead of failing the
 export. Default --out is ./keiko-support-<timestamp>.jsonl (colons replaced with '-'); default
 --max-bytes is 50MB — the oldest log files are dropped first when the cap would be exceeded, and
-always named in the manifest's truncatedLogFiles. The current log file is never dropped; if it
+always named in the manifest's truncatedLogFiles. The newest log file is never dropped; if it
 alone still exceeds the cap, only its tail is exported instead, named in the manifest's
-currentFileTailTruncated. A <output>.sha256 sidecar carries a SHA-256 digest of the bundle's bytes.
+currentFileTailTruncated. sourceLogFileLines records each copied file's line count and whether it
+ended in a torn line, so analyze reports such a tail as truncated rather than corrupt.
+A <output>.sha256 sidecar carries a SHA-256 digest of the bundle's bytes.
 Publication exclusively creates the report and sidecar and never replaces an existing destination.
 If a process stops mid-publication, rerun the same explicit --out command; for the default output,
 rerun from the same working directory. Keiko recovers the durable prior bytes before taking a new
@@ -127,9 +132,9 @@ each listed runId (beyond the index-only summary above) for deep replay; a runId
 exist under --state-dir contributes no section. After a successful export the command reports the
 state directory's diagnostic readiness (ready, degraded or unavailable, with closed reasons).
 
-analyze reads FILE (a support bundle or a raw server.log — auto-detected), groups its lines by
-correlationId, and prints one reconstructed timeline per id. Each process lifetime is ordered by
-seq; lifetimes are ordered by the position of their first line in the file, because the log
+analyze reads FILE (a support bundle or one raw Activity Log file — auto-detected), groups its
+lines by correlationId, and prints one reconstructed timeline per id. Each process lifetime is
+ordered by seq; lifetimes are ordered by the position of their first line in the file, because the log
 envelope promises no order across processes. The default and per-correlation reports identify the
 resolved input file, an inferable raw-log state directory, newest valid event and instance, and
 whether the raw log is current and apparently active. A raw log more than five minutes behind the
@@ -326,7 +331,6 @@ function prepareSupportInstallLayoutEvidence(
 }
 
 const SUPPORT_LOG_STALE_AFTER_MS = 5 * 60_000;
-const SERVER_LOG_FILE_PATTERN = /^server(?:-\d{4}-\d{2}-\d{2})?\.log$/;
 
 interface ExportArgs {
   readonly out: string | undefined;
@@ -498,13 +502,15 @@ export function resolveOutPath(cwd: string, outArg: string | undefined, generate
   return isAbsolute(value) ? value : resolve(cwd, value);
 }
 
+// Nothing but the Activity Log store may create files in its directory: a report written there could
+// take a segment's name, and retention owns every closed-grammar name in it.
 function supportDestinationCollidesWithActivityLog(
   cwd: string,
   stateDir: string,
   outArg: string | undefined,
 ): boolean {
   if (outArg === undefined) return false;
-  return resolve(cwd, outArg) === resolve(stateDir, "logs", CURRENT_LOG_FILE_NAME);
+  return dirname(resolve(cwd, outArg)) === resolve(stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
 }
 
 // Never throws: a missing or unreadable evidence directory means zero evidence to report, never a
@@ -548,6 +554,7 @@ interface LogContent {
   readonly contentLines: readonly string[];
   readonly terminalFragment: boolean;
   readonly sourceLogFiles: readonly string[];
+  readonly sourceLogFileLines: readonly SourceLogFileLines[];
   readonly truncatedLogFiles: readonly string[];
   readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
   readonly budgetExceeded: boolean;
@@ -576,6 +583,7 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
     contentLines: read.contentLines,
     terminalFragment: read.terminalFragment,
     sourceLogFiles,
+    sourceLogFileLines: read.sourceLogFileLines,
     truncatedLogFiles: selection.truncatedLogFiles,
     currentFileTailTruncated: read.currentFileTailTruncated,
     budgetExceeded: read.budgetExceeded,
@@ -1232,6 +1240,7 @@ function logContentManifestFields(
 ): Pick<
   ManifestInput,
   | "sourceLogFiles"
+  | "sourceLogFileLines"
   | "truncatedLogFiles"
   | "currentFileTailTruncated"
   | "budgetExceeded"
@@ -1239,6 +1248,7 @@ function logContentManifestFields(
 > {
   return {
     sourceLogFiles: logContent.sourceLogFiles,
+    sourceLogFileLines: logContent.sourceLogFileLines,
     truncatedLogFiles: logContent.truncatedLogFiles,
     currentFileTailTruncated: logContent.currentFileTailTruncated,
     budgetExceeded: logContent.budgetExceeded,
@@ -1577,11 +1587,13 @@ function reportMissingCorrelationId(correlationId: string, io: CliIo): number {
   return 1;
 }
 
+// A raw Activity Log file sits directly in `<state-dir>/logs/` under the closed grammar (a segment or
+// a legacy server*.log); anything else gives no state directory to infer.
 function inferAnalyzedStateDir(filePath: string, sourceKind: SourceKind): string | undefined {
   const logDirectory = dirname(filePath);
   return sourceKind === "raw-log" &&
-    basename(logDirectory) === "logs" &&
-    SERVER_LOG_FILE_PATTERN.test(basename(filePath))
+    basename(logDirectory) === ACTIVITY_LOG_DIRECTORY_NAME &&
+    parseActivityLogFileName(basename(filePath)) !== undefined
     ? dirname(logDirectory)
     : undefined;
 }
