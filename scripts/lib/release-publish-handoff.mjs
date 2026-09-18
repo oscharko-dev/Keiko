@@ -27,6 +27,16 @@ function positiveInteger(value, label) {
   return number;
 }
 
+function triggeringActorLogin(run) {
+  const login = run?.triggering_actor?.login;
+  return typeof login === "string" && login !== "" ? login : undefined;
+}
+
+function isHumanTriggered(run) {
+  const login = triggeringActorLogin(run);
+  return login !== undefined && !login.endsWith("[bot]");
+}
+
 /**
  * @returns {{ action: "authorize" | "existing" | "blocked", reason: string }}
  */
@@ -55,10 +65,17 @@ export function releasePublishHandoffPlan({ releaseRuns, remoteTagSha, sourceSha
       reason: `a superseded publish of ${tag} is still open and must finish or be cancelled`,
     };
   }
-  if (open.some((run) => run.head_sha === sourceSha)) {
+  const exact = open.filter((run) => run.head_sha === sourceSha);
+  if (exact.some((run) => !isHumanTriggered(run))) {
+    return {
+      action: "blocked",
+      reason: `an exact publish of ${tag} has no verified non-bot triggering actor`,
+    };
+  }
+  if (exact.length > 0) {
     return {
       action: "existing",
-      reason: `a human-authorized publish of ${tag} at ${sourceSha} is already open`,
+      reason: `a non-bot publish of ${tag} at ${sourceSha} is already open`,
     };
   }
   return {

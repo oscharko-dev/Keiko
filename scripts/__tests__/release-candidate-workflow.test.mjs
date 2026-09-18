@@ -43,8 +43,8 @@ describe("release candidate workflow", () => {
   });
 
   it("writes the tag at once, with a contents-only App token from its environment", () => {
-    // The tag build now runs beside the commit's CI; the release-required checks gate the publish
-    // request at the end of that build instead (see the stable build publish request below).
+    // The tag build runs beside the commit's CI; the release-required checks gate the read-only
+    // human handoff at the end of that build.
     const { tag } = candidate.jobs;
     expect(tag.needs).toBe("plan");
     // Explicit !cancelled() guard added in Epic #3495 (#3502): the tag job needs the plan job,

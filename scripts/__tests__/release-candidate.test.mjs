@@ -12,7 +12,7 @@ import {
 
 // ADR-0177 D8. On 2026-09-14 the v1.0.0 tag was cut by hand while dev CI was still running, and every
 // target failed its required-check wait one minute before ci turned green. The candidate workflow now
-// points the tag at a dev head only after CI succeeded, and never at a published version.
+// points the tag at the exact dev head and the stable build waits for that head's required checks.
 
 const REPO = "oscharko-dev/Keiko";
 const CANDIDATE = "a".repeat(40);

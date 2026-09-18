@@ -36,9 +36,9 @@ describe("release publish dispatch guard (#3505, Epic #3495)", () => {
     expect(publish.if).toMatch(/!\s*endsWith\(\s*github\.triggering_actor\s*,\s*'\[bot\]'\s*\)/u);
   });
 
-  it("refuses any dispatch by an account not in KEIKO_RELEASE_OWNER_GITHUB_LOGINS", () => {
+  it("requires exact JSON-array membership in KEIKO_RELEASE_OWNER_GITHUB_LOGINS", () => {
     expect(publish.if).toMatch(
-      /contains\(\s*vars\.KEIKO_RELEASE_OWNER_GITHUB_LOGINS\s*,\s*github\.triggering_actor\s*\)/u,
+      /contains\(\s*fromJSON\(vars\.KEIKO_RELEASE_OWNER_GITHUB_LOGINS\)\s*,\s*github\.triggering_actor\s*\)/u,
     );
   });
 
@@ -50,10 +50,16 @@ describe("release publish dispatch guard (#3505, Epic #3495)", () => {
   ])(
     "models %s actor=%s triggering_actor=%s",
     (_label, _actor, triggeringActor, allowlisted, expected) => {
-      const authorized = !triggeringActor.endsWith("[bot]") && allowlisted;
+      const ownerLogins = allowlisted ? [triggeringActor] : ["oscharko"];
+      const authorized =
+        !triggeringActor.endsWith("[bot]") && ownerLogins.includes(triggeringActor);
       expect(authorized).toBe(expected);
     },
   );
+
+  it("does not accept a login merely because it is a substring of an owner login", () => {
+    expect(["oscharko"].includes("osch")).toBe(false);
+  });
 
   it("keeps release credentials scoped to the npm-publish environment", () => {
     expect(publish.environment).toBe("npm-publish");

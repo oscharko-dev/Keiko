@@ -21,11 +21,13 @@ const ENV = {
 
 function run(overrides = {}) {
   return {
+    actor: { login: "oscharko" },
     event: "workflow_dispatch",
     head_branch: TAG,
     head_sha: BUILD,
     id: 7,
     status: "waiting",
+    triggering_actor: { login: "oscharko" },
     ...overrides,
   };
 }
@@ -82,6 +84,13 @@ describe("releasePublishHandoffPlan", () => {
     expect(plan({ releaseRuns: [run({ head_sha: OLDER })] })).toMatchObject({
       action: "blocked",
     });
+  });
+
+  it.each([
+    ["a workflow token", { triggering_actor: { login: "github-actions[bot]" } }],
+    ["missing trigger identity", { triggering_actor: undefined }],
+  ])("blocks an exact open publish with %s", (_label, overrides) => {
+    expect(plan({ releaseRuns: [run(overrides)] })).toMatchObject({ action: "blocked" });
   });
 
   it("ignores completed, other-tag, and non-dispatch runs", () => {

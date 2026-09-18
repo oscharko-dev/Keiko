@@ -68,9 +68,9 @@ jobs:
     #     token holding `actions: write` alone (dependabot, a compromised app) cannot dispatch a
     #     publish. A dispatch from another workflow via GITHUB_TOKEN records github-actions[bot]
     #     here, regardless of the human who caused the upstream event.
-    #   - `contains(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS, github.triggering_actor)`: refuses any
+    #   - exact membership in the JSON-array `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`: refuses any
     #     dispatch by an account that is not in the release-owner allowlist recorded in the repo
-    #     variable. Empty/missing allowlist refuses every dispatch.
+    #     variable. Empty, missing, or malformed configuration refuses every dispatch.
     # The environment scopes the release signing key and npm Trusted Publisher identity. Repository
     # settings currently impose no required-reviewer rule there, so the allowlisted non-bot dispatch
     # is the live human-control boundary and must remain explicit.
@@ -79,7 +79,7 @@ jobs:
       && inputs.publish
       && startsWith(github.ref, 'refs/tags/v')
       && !endsWith(github.triggering_actor, '[bot]')
-      && contains(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS, github.triggering_actor)
+      && contains(fromJSON(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS), github.triggering_actor)
     runs-on: ubuntu-latest
     # The environment scopes credentials but currently has no reviewer rule. Human control comes
     # from the job guard above: a compromised job with actions:write dispatches as a bot and this
@@ -129,8 +129,8 @@ jobs:
       - name: Verify required checks for release SHA
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # The publish request dispatched this run only after every required check passed, so this
-          # re-verifies them and never waits for CI inside the approved deployment.
+          # The stable build emitted the owner handoff only after every required check passed, so
+          # this re-verifies them and never waits for CI inside the authorized deployment.
           RELEASE_CHECK_TIMEOUT_SECONDS: "60"
         run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate publish dist-tag
@@ -189,7 +189,7 @@ jobs:
       - name: Build workspace packages
         # --ignore-scripts builds nothing, and release-publish.mjs imports the portable release trust
         # from @oscharko-dev/keiko-security's packages/*/dist. No publish ran after that import was
-        # added, so this job would have died with ERR_MODULE_NOT_FOUND after the npm-publish approval.
+        # added, so this job would have died with ERR_MODULE_NOT_FOUND after owner authorization.
         run: npm run build:packages
       - name: Publish package
         # No NODE_AUTH_TOKEN/NPM_TOKEN here by design: this job authenticates to the npm

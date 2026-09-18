@@ -4,9 +4,9 @@
 // branch here is proven in-process.
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
-// A release.yml publish is open from its dispatch until it completes, including while it waits for
-// the npm-publish approval: that approval is given for the commit the run was dispatched for, so the
-// tag must not move under it. The publish request reads the same set.
+// A release.yml publish is open from its human dispatch until it completes. Authorization and the
+// portable inputs are bound to the commit the run was dispatched for, so the tag must not move under
+// it. The read-only handoff reads the same set.
 export const OPEN_RUN_STATUSES = new Set([
   "requested",
   "waiting",
