@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c2e6801cbaa8340804e8074ac489b05fea2c6038e451d819e65a2dfc3ac3599b",
+    "catalogDigest": "86c32b06ef61de92860ab488a8ca37b486e2cf7f2f9ac355afa4e85d5413bd1c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -18190,14 +18190,14 @@
             "maxItems": 5
           }
         },
-        "causal": "correlation",
+        "causal": "none",
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "failureClasses": ["lsp-process-runtime"],
         "proofIds": ["lsp.process.runtime-error.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:148",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:320"]
+        "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:149",
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:322"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18256,8 +18256,8 @@
         "failureClasses": ["lsp-process-termination"],
         "proofIds": ["lsp.process.terminated.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:180",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:351"]
+        "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:182",
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:353"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18313,7 +18313,7 @@
         "proofIds": ["lsp.spawn.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:61",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:264"]
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:266"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18371,14 +18371,14 @@
             "maxItems": 5
           }
         },
-        "causal": "correlation",
+        "causal": "none",
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "failureClasses": ["lsp-process-spawn"],
         "proofIds": ["lsp.spawn.failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:98",
-        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:299"]
+        "emitterSites": ["packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:301"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31785,7 +31785,7 @@
           "failure": ["lsp.process.runtime-error"],
           "loss": []
         },
-        "requiredCausalOperations": ["lsp.process.runtime-error"],
+        "requiredCausalOperations": [],
         "requiredLossOperations": [],
         "requiredProofOperations": ["lsp.process.runtime-error"],
         "requiredReplayProofIds": [],
@@ -31812,7 +31812,7 @@
           "failure": ["lsp.spawn.failed"],
           "loss": []
         },
-        "requiredCausalOperations": ["lsp.spawn.completed", "lsp.spawn.failed"],
+        "requiredCausalOperations": ["lsp.spawn.completed"],
         "requiredLossOperations": [],
         "requiredProofOperations": ["lsp.spawn.completed", "lsp.spawn.failed"],
         "requiredReplayProofIds": [],
@@ -56018,7 +56018,7 @@
           "causalEdges": [
             {
               "op": "lsp.process.runtime-error",
-              "mode": "correlation"
+              "mode": "none"
             }
           ],
           "lossSignals": [],
@@ -56030,7 +56030,7 @@
               "owner": "keiko-server",
               "category": "diagnostic",
               "lifecycle": "failure",
-              "causal": "correlation",
+              "causal": "none",
               "analyzerProjection": "failure-cluster",
               "safeContextFields": [
                 {
@@ -56090,7 +56090,7 @@
             },
             {
               "op": "lsp.spawn.failed",
-              "mode": "correlation"
+              "mode": "none"
             }
           ],
           "lossSignals": [],
@@ -56144,7 +56144,7 @@
               "owner": "keiko-server",
               "category": "diagnostic",
               "lifecycle": "failure",
-              "causal": "correlation",
+              "causal": "none",
               "analyzerProjection": "failure-cluster",
               "safeContextFields": [
                 {
@@ -69102,13 +69102,13 @@
     {
       "op": "lsp.process.runtime-error",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:151",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:152",
       "package": "keiko-server"
     },
     {
       "op": "lsp.process.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:183",
+      "site": "packages/keiko-server/src/editor/lsp/lspNodeAdapter.ts:185",
       "package": "keiko-server"
     },
     {

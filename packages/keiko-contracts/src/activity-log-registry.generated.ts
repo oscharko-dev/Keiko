@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c2e6801cbaa8340804e8074ac489b05fea2c6038e451d819e65a2dfc3ac3599b" as const;
+  "86c32b06ef61de92860ab488a8ca37b486e2cf7f2f9ac355afa4e85d5413bd1c" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -17306,7 +17306,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxItems: 5,
       },
     },
-    causal: "correlation",
+    causal: "none",
     lifecycle: "failure",
     analyzerProjection: "failure-cluster",
     failureClasses: ["lsp-process-runtime"],
@@ -17481,7 +17481,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxItems: 5,
       },
     },
-    causal: "correlation",
+    causal: "none",
     lifecycle: "failure",
     analyzerProjection: "failure-cluster",
     failureClasses: ["lsp-process-spawn"],
@@ -46303,7 +46303,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "lsp.process.runtime-error",
-          mode: "correlation",
+          mode: "none",
         },
       ],
       lossSignals: [],
@@ -46315,7 +46315,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "diagnostic",
           lifecycle: "failure",
-          causal: "correlation",
+          causal: "none",
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
@@ -46369,7 +46369,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
         {
           op: "lsp.spawn.failed",
-          mode: "correlation",
+          mode: "none",
         },
       ],
       lossSignals: [],
@@ -46423,7 +46423,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           owner: "keiko-server",
           category: "diagnostic",
           lifecycle: "failure",
-          causal: "correlation",
+          causal: "none",
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
