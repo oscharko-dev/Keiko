@@ -71,7 +71,9 @@ describe("live dictation admission limits (#3190)", () => {
 // ever opened.
 describe("voice-live-dictation Activity Log proofs (#3532)", () => {
   const TEST_PORT = 41_999;
-  const TEST_WS_KEY = "dGhlIHNhbXBsZSBub25jZQ=="; // RFC 6455 §1.2 example Sec-WebSocket-Key.
+  // RFC 6455 §1.2's example Sec-WebSocket-Key: the base64 of its sample nonce, derived here so the
+  // file carries no key-shaped literal for the secret scan to read as a credential.
+  const TEST_WS_KEY = Buffer.from("the sample nonce").toString("base64");
 
   const REALTIME_CAPABLE_CONFIG: GatewayConfig = {
     providers: [

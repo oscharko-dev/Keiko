@@ -69,3 +69,17 @@ regexes = [
   '''\["credential-like token", "sk-proj-abcdef0123456789"\],''',
   '''\["authorization-shaped token", "Bearer-abcdef0123456789xyz"\],''',
 ]
+
+[[allowlists]]
+description = "PR #3554: the RFC 6455 section 1.2 example Sec-WebSocket-Key (base64 of the public string `the sample nonce`) in one immutable history commit of the live-dictation proof test. The generic-api-key rule reads `TEST_WS_KEY = ...` as a key. No credential was involved; the fixture derives the value from the RFC's nonce at runtime afterwards, and `dev` branch protection forbids rewriting the commit. Scoped to the exact commit, file, and fixture line so every other finding remains enforced."
+condition = "AND"
+commits = [
+  "cf6fedf28d0adfb5ea88a5562d0ea727c95c2dbf",
+]
+paths = [
+  '''packages/keiko-server/src/voice-live-dictation\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''const TEST_WS_KEY = "dGhlIHNhbXBsZSBub25jZQ=="; // RFC 6455 §1\.2 example Sec-WebSocket-Key\.''',
+]
