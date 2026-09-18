@@ -12,7 +12,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityLogEvent,
   activityLogEventRegistration,
+  activityLogLossCounters,
   defineActivityLogOperation,
+  resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
@@ -346,5 +348,27 @@ describe("SecurityLogEvent", () => {
       "op",
       "status",
     ]);
+  });
+});
+
+// #3532: the process warning is once per sink, but the process loss ledger counts every line a
+// failing sink loses, so a quiet log can be told apart from a log that stopped working.
+describe("emitSecurityLogEvent loss accounting", () => {
+  it("counts every line a dead sink loses in the process loss ledger", () => {
+    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    resetActivityLogLossCountersForTests();
+    const dead: SecurityLogSink = {
+      write: (): never => {
+        throw new Error("sink is down");
+      },
+    };
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        emitSecurityLogEvent(dead, { category: "security", op: "security.keychain.fallback" });
+      }
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(3);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
   });
 });

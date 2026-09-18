@@ -387,16 +387,21 @@ function parseIncludeEvidenceIds(raw: string | undefined): readonly string[] {
     .filter((id) => id.length > 0);
 }
 
-function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
+// The answers that need no flag parsing: help, and the refusal of a retired ui.log flag.
+function exportArgsEarlyResult(args: readonly string[]): ParseResult<ExportArgs> | undefined {
   if (args.includes("--help") || args.includes("-h")) return { kind: "help" };
-  if (RETIRED_UI_LOG_FLAGS.some((flag) => args.includes(flag))) {
-    return {
-      kind: "usage",
-      message:
-        "keiko support export: --include-ui-log is no longer supported; raw UI output is never " +
-        `part of a support report. Every UI diagnostic is in the Activity Log.\n${USAGE}`,
-    };
-  }
+  if (!RETIRED_UI_LOG_FLAGS.some((flag) => args.includes(flag))) return undefined;
+  return {
+    kind: "usage",
+    message:
+      "keiko support export: --include-ui-log is no longer supported; raw UI output is never " +
+      `part of a support report. Every UI diagnostic is in the Activity Log.\n${USAGE}`,
+  };
+}
+
+function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
+  const early = exportArgsEarlyResult(args);
+  if (early !== undefined) return early;
   const out = flagValue(args, "--out");
   const stateDir = flagValue(args, "--state-dir");
   const maxBytesRaw = flagValue(args, "--max-bytes");

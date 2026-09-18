@@ -93,7 +93,7 @@ import {
   resolveExistingAllowedWorkspaceRealRoot,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
@@ -133,6 +133,7 @@ import {
 } from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
+import { resolveRuntimeStateDir } from "./observability/runtime-state-dir.js";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
@@ -2042,17 +2043,15 @@ function portableCompletionGate(updateRemediation: UpdateRemediationManager): Up
   };
 }
 
-function resolveUpdateStateDir(env: EnvSource): string {
-  const value = env.KEIKO_STATE_DIR ?? ".keiko";
-  return isAbsolute(value) ? value : resolve(process.cwd(), value);
-}
-
+// The update state lives in the same runtime state directory the Activity Log writes to (#3532):
+// one resolver, so an empty `KEIKO_STATE_DIR` no longer puts update state in the working directory
+// itself while the log goes to `<cwd>/.keiko`.
 function buildUpdateLocalState(
   env: EnvSource,
   diagnostics: ServerDiagnosticSink | undefined,
 ): UpdateLocalStateManager {
   return createUpdateLocalStateManager({
-    stateDir: resolveUpdateStateDir(env),
+    stateDir: resolveRuntimeStateDir(env),
     activityLog: processServerLogSink(),
     diagnostics,
   });
