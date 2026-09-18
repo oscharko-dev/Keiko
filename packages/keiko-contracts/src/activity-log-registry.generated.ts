@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1151fa3375a2ee5c81f06ec987164a5533b7facd7cbfccb51b2fdd61de0b2384" as const;
+  "85a6ea540cc898f306dd314df73631cad993b1e695fa0da8d7af6d903e67c9b4" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -603,6 +603,193 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["cli-support-export"],
     proofIds: ["cli.support.export.install-layout-refusal"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "cli.uninstall.completed",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "uninstall.executeUninstall",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      targetSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      packageTargetSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      stateDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["not-selected", "absent", "removed", "retained", "would-remove", "would-retain"],
+      },
+      ownedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      retainedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      scriptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      dryRun: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "none",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["cli-uninstall"],
+    proofIds: ["cli.uninstall.completed.persisted"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "cli.uninstall.failed",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "uninstall.emitUninstallFailure",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "activity-log-unavailable",
+          "activity-log-open-failed",
+          "preflight-refused",
+          "server-stop-refused",
+          "launcher-removal-refused",
+          "operation-error",
+          "launcher-error",
+          "package-read-failed",
+          "package-parse-failed",
+        ],
+      },
+      failureKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: true,
+        maxLength: 64,
+      },
+      targetSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      packageTargetSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+    },
+    causal: "none",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["cli-uninstall"],
+    proofIds: ["cli.uninstall.failed.persisted"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "cli.uninstall.started",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "uninstall.openUninstallActivity",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      removeState: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      removeLaunchers: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      removeScripts: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      dryRun: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      force: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      targetSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      packageTargetSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+    },
+    causal: "none",
+    lifecycle: "start",
+    analyzerProjection: "timeline",
+    failureClasses: ["cli-uninstall"],
+    proofIds: ["cli.uninstall.started.persisted"],
     releaseImpact: "patch",
   },
   {
@@ -12199,7 +12386,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["git-publish-metadata-unavailable", "unclassified"],
+        values: [
+          "git-publish-metadata-unavailable",
+          "git-publish-metadata-read-unavailable",
+          "git-publish-common-directory-unsupported",
+          "git-publish-common-directory-drift",
+          "git-publish-object-directory-invalid",
+          "git-publish-shallow-metadata-invalid",
+          "git-publish-private-root-overlap",
+          "git-publish-directory-invalid",
+          "git-publish-commit-invalid",
+          "git-publish-metadata-drift",
+          "unclassified",
+        ],
       },
       frames: {
         type: "string-array",
@@ -23734,21 +23933,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 300,
-  completeClassCount: 300,
+  supportedClassCount: 301,
+  completeClassCount: 301,
   completeness: "complete",
   classes: [
     {
       failureClass: "activity-log-capacity",
+      requirementContract: "activity-log-capacity",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["server-log.capacity-warning"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "server-log.capacity-warning",
           mode: "correlation",
         },
       ],
-      lossSignals: ["server-log.capacity-warning"],
+      lossSignals: [],
+      resourceSignals: ["server-log.capacity-warning"],
+      replayReferences: [],
       operations: [
         {
           op: "server-log.capacity-warning",
@@ -23810,8 +24019,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "activity-log-contract",
+      requirementContract: "activity-log-contract",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["loss"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [],
+        loss: ["server-log.line-dropped", "server-log.write-failed"],
+      },
       causalEdges: [
         {
           op: "server-log.line-dropped",
@@ -23823,6 +24040,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: ["server-log.line-dropped", "server-log.write-failed"],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "server-log.line-dropped",
@@ -23920,8 +24139,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "activity-log-persistence",
+      requirementContract: "activity-log-persistence",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["loss", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["server-log.safe-open"],
+        end: [],
+        failure: [],
+        loss: ["server-log.target-mutated", "server-log.write-failed"],
+      },
       causalEdges: [
         {
           op: "server-log.safe-open",
@@ -23936,7 +24163,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["server-log.safe-open", "server-log.target-mutated", "server-log.write-failed"],
+      lossSignals: ["server-log.target-mutated", "server-log.write-failed"],
+      resourceSignals: ["server-log.safe-open"],
+      replayReferences: [],
       operations: [
         {
           op: "server-log.safe-open",
@@ -24088,15 +24317,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "activity-log-rotation-deferred",
+      requirementContract: "activity-log-rotation-deferred",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["server-log.rotation"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "server-log.rotation",
           mode: "correlation",
         },
       ],
-      lossSignals: ["server-log.rotation"],
+      lossSignals: [],
+      resourceSignals: ["server-log.rotation"],
+      replayReferences: [],
       operations: [
         {
           op: "server-log.rotation",
@@ -24158,6 +24397,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "activity-log-sink",
+      requirementContract: "activity-log-sink",
       productSurfaces: [
         "keiko-local-knowledge",
         "keiko-memory-consolidation",
@@ -24165,6 +24405,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "keiko-security",
       ],
       lifecycleTransitions: ["loss"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [
+          "consolidation.log.sink-failed",
+          "knowledge.log.sink-failed",
+          "memory-vault.log.sink-failed",
+          "security.log.sink-failed",
+        ],
+      },
       causalEdges: [
         {
           op: "consolidation.log.sink-failed",
@@ -24189,6 +24441,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "memory-vault.log.sink-failed",
         "security.log.sink-failed",
       ],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "consolidation.log.sink-failed",
@@ -24316,8 +24570,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "activity-log-sink-failure",
+      requirementContract: "activity-log-sink-failure",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["loss"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [],
+        loss: ["gateway.log.sink-failed"],
+      },
       causalEdges: [
         {
           op: "gateway.log.sink-failed",
@@ -24325,6 +24587,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: ["gateway.log.sink-failed"],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.log.sink-failed",
@@ -24356,15 +24620,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "atlassian-credential-custody",
+      requirementContract: "atlassian-credential-custody",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["atlassian.credential.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "atlassian.credential.rejected",
           mode: "none",
         },
       ],
-      lossSignals: ["atlassian.credential.rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "atlassian.credential.rejected",
@@ -24396,8 +24670,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "chat-admission",
+      requirementContract: "chat-admission",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["chat.creation.rejected", "chat.regeneration.rejected", "chat.send.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "chat.creation.rejected",
@@ -24412,7 +24694,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["chat.creation.rejected", "chat.regeneration.rejected", "chat.send.rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "chat.creation.rejected",
@@ -24510,15 +24794,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "chat-turn",
+      requirementContract: "chat-turn",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["chat.turn.started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "chat.turn.started",
           mode: "correlation",
         },
       ],
-      lossSignals: ["chat.turn.started"],
+      lossSignals: [],
+      resourceSignals: ["chat.turn.started"],
+      replayReferences: [],
       operations: [
         {
           op: "chat.turn.started",
@@ -24586,15 +24880,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "cli-install-layout-normalization",
+      requirementContract: "cli-install-layout-normalization",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["cli.install-layout.normalized"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "cli.install-layout.normalized",
           mode: "correlation",
         },
       ],
-      lossSignals: ["cli.install-layout.normalized"],
+      lossSignals: [],
+      resourceSignals: ["cli.install-layout.normalized"],
+      replayReferences: [],
       operations: [
         {
           op: "cli.install-layout.normalized",
@@ -24632,15 +24936,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "cli-support-export",
+      requirementContract: "cli-support-export",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["cli.support.export.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "cli.support.export.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["cli.support.export.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "cli.support.export.failed",
@@ -24689,16 +25003,228 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "cli-uninstall",
+      requirementContract: "cli-uninstall",
+      productSurfaces: ["keiko-cli"],
+      lifecycleTransitions: ["end", "failure", "start"],
+      lifecycleOperations: {
+        start: ["cli.uninstall.started"],
+        state: [],
+        end: ["cli.uninstall.completed"],
+        failure: ["cli.uninstall.failed"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "cli.uninstall.completed",
+          mode: "none",
+        },
+        {
+          op: "cli.uninstall.failed",
+          mode: "none",
+        },
+        {
+          op: "cli.uninstall.started",
+          mode: "none",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["cli.uninstall.completed", "cli.uninstall.started"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "cli.uninstall.completed",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "none",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "dryRun",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "ownedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "packageTargetSha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "retainedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "scriptCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "stateDisposition",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "targetSha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["cli.uninstall.completed.persisted"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "cli.uninstall.failed",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "failure",
+          causal: "none",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: true,
+            },
+            {
+              name: "packageTargetSha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "targetSha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "error-kind",
+            "loss-state",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["cli.uninstall.failed.persisted"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "cli.uninstall.started",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "start",
+          causal: "none",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "dryRun",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "force",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "packageTargetSha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "removeLaunchers",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "removeScripts",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "removeState",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "targetSha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["cli.uninstall.started.persisted"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "client-diagnostic",
+      requirementContract: "client-diagnostic",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["client.diagnostic"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "client.diagnostic",
           mode: "correlation",
         },
       ],
-      lossSignals: ["client.diagnostic"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "client.diagnostic",
@@ -24797,8 +25323,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "client-diagnostic-rate-limit",
+      requirementContract: "client-diagnostic-rate-limit",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["loss"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [],
+        loss: ["client.diagnostic.rate-limited"],
+      },
       causalEdges: [
         {
           op: "client.diagnostic.rate-limited",
@@ -24806,6 +25340,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: ["client.diagnostic.rate-limited"],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "client.diagnostic.rate-limited",
@@ -24837,8 +25373,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-app-session-channel",
+      requirementContract: "coding-app-session-channel",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "start"],
+      lifecycleOperations: {
+        start: ["coding-app-session.channel.opened"],
+        state: [],
+        end: ["coding-app-session.channel.closed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-app-session.channel.closed",
@@ -24849,7 +25393,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-app-session.channel.closed", "coding-app-session.channel.opened"],
+      lossSignals: [],
+      resourceSignals: ["coding-app-session.channel.closed", "coding-app-session.channel.opened"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-app-session.channel.closed",
@@ -24898,8 +25444,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-app-session-pairing",
+      requirementContract: "coding-app-session-pairing",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-app-session.local-session.issued", "coding-app-session.paired"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-app-session.local-session.issued",
@@ -24910,7 +25464,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-app-session.local-session.issued", "coding-app-session.paired"],
+      lossSignals: [],
+      resourceSignals: ["coding-app-session.local-session.issued", "coding-app-session.paired"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-app-session.local-session.issued",
@@ -24952,15 +25508,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-app-session-rotation",
+      requirementContract: "coding-app-session-rotation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-app-session.rotated"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-app-session.rotated",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-app-session.rotated"],
+      lossSignals: [],
+      resourceSignals: ["coding-app-session.rotated"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-app-session.rotated",
@@ -24985,15 +25551,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-app-session-sign-out",
+      requirementContract: "coding-app-session-sign-out",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-app-session.signed-out"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-app-session.signed-out",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-app-session.signed-out"],
+      lossSignals: [],
+      resourceSignals: ["coding-app-session.signed-out"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-app-session.signed-out",
@@ -25018,15 +25594,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-context-linked-issue",
+      requirementContract: "coding-context-linked-issue",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-context.linked-issue-skipped"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-context.linked-issue-skipped",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-context.linked-issue-skipped"],
+      lossSignals: [],
+      resourceSignals: ["coding-context.linked-issue-skipped"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-context.linked-issue-skipped",
@@ -25076,15 +25662,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-context-pack",
+      requirementContract: "coding-context-pack",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-context.pack"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-context.pack",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-context.pack"],
+      lossSignals: [],
+      resourceSignals: ["coding-context.pack"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-context.pack",
@@ -25189,15 +25785,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-editor-mutation",
+      requirementContract: "coding-editor-mutation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-runtime.editor-mutation.settled"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.editor-mutation.settled",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.editor-mutation.settled"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.editor-mutation.settled"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.editor-mutation.settled",
@@ -25235,8 +25841,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-repository-search",
+      requirementContract: "coding-repository-search",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "start"],
+      lifecycleOperations: {
+        start: ["coding-repository-handler.started"],
+        state: [],
+        end: ["coding-repository-handler.settled"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-repository-handler.settled",
@@ -25247,7 +25861,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-repository-handler.settled", "coding-repository-handler.started"],
+      lossSignals: [],
+      resourceSignals: ["coding-repository-handler.settled", "coding-repository-handler.started"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-repository-handler.settled",
@@ -25371,15 +25987,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-approval-wait",
+      requirementContract: "coding-runtime-approval-wait",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.approval.waiting"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.approval.waiting",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.approval.waiting"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.approval.waiting"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.approval.waiting",
@@ -25453,8 +26079,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-authority-mint",
+      requirementContract: "coding-runtime-authority-mint",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "start"],
+      lifecycleOperations: {
+        start: ["coding-runtime.authority.minted"],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.authority.mint-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.authority.mint-failed",
@@ -25465,7 +26099,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.authority.mint-failed", "coding-runtime.authority.minted"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.authority.minted"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.authority.mint-failed",
@@ -25569,15 +26205,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-authority-revalidation",
+      requirementContract: "coding-runtime-authority-revalidation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.authority.revalidation-refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.authority.revalidation-refused",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.authority.revalidation-refused"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.authority.revalidation-refused",
@@ -25627,15 +26273,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-compaction",
+      requirementContract: "coding-runtime-compaction",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.compaction"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.compaction",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.compaction"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.compaction"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.compaction",
@@ -25715,15 +26371,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-context-usage",
+      requirementContract: "coding-runtime-context-usage",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.context-usage.observed"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.context-usage.observed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.context-usage.observed"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.context-usage.observed"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.context-usage.observed",
@@ -25779,8 +26445,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-delivery-continuation",
+      requirementContract: "coding-runtime-delivery-continuation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.run.delivery-continued"],
+        end: [],
+        failure: ["coding-runtime.run.delivery-continuation-refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.run.delivery-continuation-refused",
@@ -25791,10 +26465,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "coding-runtime.run.delivery-continuation-refused",
-        "coding-runtime.run.delivery-continued",
-      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.run.delivery-continued"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.run.delivery-continuation-refused",
@@ -25954,8 +26627,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-delivery-evidence",
+      requirementContract: "coding-runtime-delivery-evidence",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [
+          "coding-runtime.run.delivery-evidence-unreadable",
+          "coding-runtime.run.delivery-unevidenced",
+        ],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.run.delivery-evidence-unreadable",
@@ -25966,10 +26650,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "coding-runtime.run.delivery-evidence-unreadable",
-        "coding-runtime.run.delivery-unevidenced",
-      ],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.run.delivery-evidence-unreadable",
@@ -26128,15 +26811,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-description-authority",
+      requirementContract: "coding-runtime-description-authority",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.description-authority"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.description-authority",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.description-authority"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.description-authority"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.description-authority",
@@ -26230,15 +26923,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-description-generation",
+      requirementContract: "coding-runtime-description-generation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.description"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.description",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.description"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.description"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.description",
@@ -26369,8 +27072,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-dev-lane",
+      requirementContract: "coding-runtime-dev-lane",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "start"],
+      lifecycleOperations: {
+        start: ["coding-runtime.dev-lane.activated"],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.dev-lane.refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.dev-lane.activated",
@@ -26381,7 +27092,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.dev-lane.activated", "coding-runtime.dev-lane.refused"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.dev-lane.activated"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.dev-lane.activated",
@@ -26467,15 +27180,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-event-drop",
+      requirementContract: "coding-runtime-event-drop",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.event.dropped"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.event.dropped",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.event.dropped"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.event.dropped",
@@ -26525,15 +27248,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-follow-up-dispatch",
+      requirementContract: "coding-runtime-follow-up-dispatch",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.follow-up.dispatch-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.follow-up.dispatch-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.follow-up.dispatch-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.follow-up.dispatch-failed",
@@ -26589,15 +27322,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-initial-turn-dispatch",
+      requirementContract: "coding-runtime-initial-turn-dispatch",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.initial-turn.dispatch-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.initial-turn.dispatch-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.initial-turn.dispatch-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.initial-turn.dispatch-failed",
@@ -26653,15 +27396,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-initial-turn-stop",
+      requirementContract: "coding-runtime-initial-turn-stop",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.initial-turn.stop-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.initial-turn.stop-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.initial-turn.stop-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.initial-turn.stop-failed",
@@ -26717,15 +27470,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-issue-binding",
+      requirementContract: "coding-runtime-issue-binding",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.run.issue-binding-refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.run.issue-binding-refused",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.run.issue-binding-refused"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.run.issue-binding-refused",
@@ -26787,15 +27550,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-issue-context",
+      requirementContract: "coding-runtime-issue-context",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.run.issue-context-attached"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.run.issue-context-attached",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.run.issue-context-attached"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.run.issue-context-attached"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.run.issue-context-attached",
@@ -26851,15 +27624,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-operation-refusal",
+      requirementContract: "coding-runtime-operation-refusal",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.operation.refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.operation.refused",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.operation.refused"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.operation.refused",
@@ -26903,8 +27686,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-operator-decision",
+      requirementContract: "coding-runtime-operator-decision",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.run.operator-decision"],
+        end: ["coding-runtime.operator-decision"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.operator-decision",
@@ -26915,7 +27706,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.operator-decision", "coding-runtime.run.operator-decision"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.operator-decision", "coding-runtime.run.operator-decision"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.operator-decision",
@@ -27031,15 +27824,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-project-memory",
+      requirementContract: "coding-runtime-project-memory",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.project-memory.context"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.project-memory.context",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.project-memory.context"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.project-memory.context"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.project-memory.context",
@@ -27095,15 +27898,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-question-authority",
+      requirementContract: "coding-runtime-question-authority",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.question.authority-resolution-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.question.authority-resolution-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.question.authority-resolution-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.question.authority-resolution-failed",
@@ -27159,15 +27972,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-question-list",
+      requirementContract: "coding-runtime-question-list",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.question.list-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.question.list-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.question.list-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.question.list-failed",
@@ -27223,15 +28046,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-question-revision-rebound",
+      requirementContract: "coding-runtime-question-revision-rebound",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.question.list-revision-rebound"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.question.list-revision-rebound",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.question.list-revision-rebound"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.question.list-revision-rebound"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.question.list-revision-rebound",
@@ -27275,8 +28108,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-readiness",
+      requirementContract: "coding-runtime-readiness",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.readiness.phase"],
+        end: [],
+        failure: ["coding-runtime.readiness.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.readiness.failed",
@@ -27287,7 +28128,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.readiness.failed", "coding-runtime.readiness.phase"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.readiness.phase"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.readiness.failed",
@@ -27397,15 +28240,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-recovery-acknowledgement",
+      requirementContract: "coding-runtime-recovery-acknowledgement",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.run.recovery-acknowledged"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.run.recovery-acknowledged",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.run.recovery-acknowledged"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.run.recovery-acknowledged"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.run.recovery-acknowledged",
@@ -27443,15 +28296,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-repository-rerank",
+      requirementContract: "coding-runtime-repository-rerank",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-runtime.repository-rerank"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.repository-rerank",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.repository-rerank"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.repository-rerank"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.repository-rerank",
@@ -27538,15 +28401,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-run-settlement",
+      requirementContract: "coding-runtime-run-settlement",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-runtime.run.settled"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.run.settled",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.run.settled"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.run.settled"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.run.settled",
@@ -27687,15 +28560,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-run-start",
+      requirementContract: "coding-runtime-run-start",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["coding-runtime.run.started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.run.started",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.run.started"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.run.started"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.run.started",
@@ -27787,15 +28670,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-shutdown",
+      requirementContract: "coding-runtime-shutdown",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-runtime.run.shutdown"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.run.shutdown",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.run.shutdown"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.run.shutdown"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.run.shutdown",
@@ -27863,15 +28756,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-skill-discovery",
+      requirementContract: "coding-runtime-skill-discovery",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-runtime.skill-discovery"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.skill-discovery",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.skill-discovery"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.skill-discovery"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.skill-discovery",
@@ -27957,15 +28860,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-task-replacement",
+      requirementContract: "coding-runtime-task-replacement",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.task-replacement"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.task-replacement",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.task-replacement"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.task-replacement"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.task-replacement",
@@ -28040,15 +28953,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-tool-availability",
+      requirementContract: "coding-runtime-tool-availability",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.tool-availability.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.tool-availability.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.tool-availability.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.tool-availability.failed",
@@ -28116,15 +29039,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-tool-result",
+      requirementContract: "coding-runtime-tool-result",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.tool-result"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.tool-result",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.tool-result"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.tool-result"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.tool-result",
@@ -28199,8 +29132,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-runtime-verification",
+      requirementContract: "coding-runtime-verification",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.verification"],
+        end: ["coding-runtime.verification-summarized"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.verification",
@@ -28211,7 +29152,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.verification", "coding-runtime.verification-summarized"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.verification", "coding-runtime.verification-summarized"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.verification",
@@ -28358,8 +29301,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-safe-activity-projection",
+      requirementContract: "coding-safe-activity-projection",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["loss"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [],
+        loss: ["coding-runtime.safe-activity"],
+      },
       causalEdges: [
         {
           op: "coding-runtime.safe-activity",
@@ -28367,6 +29318,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: ["coding-runtime.safe-activity"],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.safe-activity",
@@ -28416,15 +29369,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-sidecar-gateway-readiness",
+      requirementContract: "coding-sidecar-gateway-readiness",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-sidecar.gateway.readiness-insufficient"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-sidecar.gateway.readiness-insufficient",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-sidecar.gateway.readiness-insufficient"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-sidecar.gateway.readiness-insufficient",
@@ -28468,15 +29431,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-sidecar-gateway-rejection",
+      requirementContract: "coding-sidecar-gateway-rejection",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-sidecar.gateway.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-sidecar.gateway.rejected",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-sidecar.gateway.rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-sidecar.gateway.rejected",
@@ -28575,15 +29548,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-sidecar-gateway-request",
+      requirementContract: "coding-sidecar-gateway-request",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-sidecar.gateway.request-validated"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-sidecar.gateway.request-validated",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-sidecar.gateway.request-validated"],
+      lossSignals: [],
+      resourceSignals: ["coding-sidecar.gateway.request-validated"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-sidecar.gateway.request-validated",
@@ -28639,15 +29622,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-sidecar-tool-availability",
+      requirementContract: "coding-sidecar-tool-availability",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-sidecar.gateway.tool-availability"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-sidecar.gateway.tool-availability",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-sidecar.gateway.tool-availability"],
+      lossSignals: [],
+      resourceSignals: ["coding-sidecar.gateway.tool-availability"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-sidecar.gateway.tool-availability",
@@ -28716,15 +29709,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-sidecar-tool-facade-rejection",
+      requirementContract: "coding-sidecar-tool-facade-rejection",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-sidecar.tool-facade.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-sidecar.tool-facade.rejected",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-sidecar.tool-facade.rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-sidecar.tool-facade.rejected",
@@ -28756,15 +29759,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-tool-authority",
+      requirementContract: "coding-tool-authority",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.tool-authority.denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.tool-authority.denied",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.tool-authority.denied"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.tool-authority.denied",
@@ -28802,15 +29815,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-workbench-issue-preview",
+      requirementContract: "coding-workbench-issue-preview",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-workbench.issue.previewed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-workbench.issue.previewed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-workbench.issue.previewed"],
+      lossSignals: [],
+      resourceSignals: ["coding-workbench.issue.previewed"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-workbench.issue.previewed",
@@ -28860,15 +29883,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-workbench-issue-resolution",
+      requirementContract: "coding-workbench-issue-resolution",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-workbench.issue.resolved"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-workbench.issue.resolved",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-workbench.issue.resolved"],
+      lossSignals: [],
+      resourceSignals: ["coding-workbench.issue.resolved"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-workbench.issue.resolved",
@@ -28944,15 +29977,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "coding-workspace-read",
+      requirementContract: "coding-workspace-read",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.workspace-read"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.workspace-read",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.workspace-read"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.workspace-read"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.workspace-read",
@@ -29028,15 +30071,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "command-termination",
+      requirementContract: "command-termination",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["command.terminated"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "command.terminated",
           mode: "correlation",
         },
       ],
-      lossSignals: ["command.terminated"],
+      lossSignals: [],
+      resourceSignals: ["command.terminated"],
+      replayReferences: [],
       operations: [
         {
           op: "command.terminated",
@@ -29086,15 +30139,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "compaction-fact-classification",
+      requirementContract: "compaction-fact-classification",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["chat.compaction.facts.classified"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "chat.compaction.facts.classified",
           mode: "correlation",
         },
       ],
-      lossSignals: ["chat.compaction.facts.classified"],
+      lossSignals: [],
+      resourceSignals: ["chat.compaction.facts.classified"],
+      replayReferences: [],
       operations: [
         {
           op: "chat.compaction.facts.classified",
@@ -29132,8 +30195,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "connected-context-retrieval",
+      requirementContract: "connected-context-retrieval",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure", "start", "state"],
+      lifecycleOperations: {
+        start: ["search.connected-context.started"],
+        state: ["search.connected-context.completion-details"],
+        end: ["search.connected-context.completed"],
+        failure: ["search.connected-context.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "search.connected-context.completed",
@@ -29152,12 +30223,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
+      lossSignals: [],
+      resourceSignals: [
         "search.connected-context.completed",
         "search.connected-context.completion-details",
-        "search.connected-context.failed",
         "search.connected-context.started",
       ],
+      replayReferences: [],
       operations: [
         {
           op: "search.connected-context.completed",
@@ -29949,15 +31021,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "consolidation-summary-generation",
+      requirementContract: "consolidation-summary-generation",
       productSurfaces: ["keiko-memory-consolidation"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["consolidation.summary.fallback"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "consolidation.summary.fallback",
           mode: "none",
         },
       ],
-      lossSignals: ["consolidation.summary.fallback"],
+      lossSignals: [],
+      resourceSignals: ["consolidation.summary.fallback"],
+      replayReferences: [],
       operations: [
         {
           op: "consolidation.summary.fallback",
@@ -29989,15 +31071,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "debug-runtime-selection",
+      requirementContract: "debug-runtime-selection",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["dap.debug-runtime.selected"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "dap.debug-runtime.selected",
           mode: "correlation",
         },
       ],
-      lossSignals: ["dap.debug-runtime.selected"],
+      lossSignals: [],
+      resourceSignals: ["dap.debug-runtime.selected"],
+      replayReferences: [],
       operations: [
         {
           op: "dap.debug-runtime.selected",
@@ -30053,15 +31145,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "discovery-scope",
+      requirementContract: "discovery-scope",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["indexing.discovery.scope-error"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.discovery.scope-error",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.discovery.scope-error"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.discovery.scope-error",
@@ -30118,8 +31220,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "discovery-truncated",
+      requirementContract: "discovery-truncated",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["loss"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [],
+        loss: ["indexing.discovery.limit-reached"],
+      },
       causalEdges: [
         {
           op: "indexing.discovery.limit-reached",
@@ -30127,6 +31237,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: ["indexing.discovery.limit-reached"],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.discovery.limit-reached",
@@ -30176,15 +31288,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "document-chunking",
+      requirementContract: "document-chunking",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["indexing.chunking.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.chunking.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.chunking.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.chunking.failed",
@@ -30259,15 +31381,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "document-chunking-gap",
+      requirementContract: "document-chunking-gap",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["indexing.document.chunked"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.document.chunked",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.document.chunked"],
+      lossSignals: [],
+      resourceSignals: ["indexing.document.chunked"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.document.chunked",
@@ -30311,15 +31443,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "document-embedding-gap",
+      requirementContract: "document-embedding-gap",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["indexing.document.embedded"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.document.embedded",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.document.embedded"],
+      lossSignals: [],
+      resourceSignals: ["indexing.document.embedded"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.document.embedded",
@@ -30375,15 +31517,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "document-extraction",
+      requirementContract: "document-extraction",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["indexing.document.extraction-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.document.extraction-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.document.extraction-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.document.extraction-failed",
@@ -30433,15 +31585,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "document-extraction-gap",
+      requirementContract: "document-extraction-gap",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["indexing.document.extracted"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.document.extracted",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.document.extracted"],
+      lossSignals: [],
+      resourceSignals: ["indexing.document.extracted"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.document.extracted",
@@ -30479,15 +31641,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "document-extraction-stall",
+      requirementContract: "document-extraction-stall",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["indexing.document.extraction-started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.document.extraction-started",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.document.extraction-started"],
+      lossSignals: [],
+      resourceSignals: ["indexing.document.extraction-started"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.document.extraction-started",
@@ -30537,15 +31709,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "document-indexing",
+      requirementContract: "document-indexing",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["indexing.document.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.document.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.document.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.document.failed",
@@ -30608,15 +31790,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "document-not-refreshed",
+      requirementContract: "document-not-refreshed",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["indexing.document.skipped"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.document.skipped",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.document.skipped"],
+      lossSignals: [],
+      resourceSignals: ["indexing.document.skipped"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.document.skipped",
@@ -30691,8 +31883,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "editor-local-history-rekey",
+      requirementContract: "editor-local-history-rekey",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["editor.local-history.rekey.completed"],
+        failure: ["editor.local-history.rekey.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "editor.local-history.rekey.completed",
@@ -30703,7 +31903,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["editor.local-history.rekey.completed", "editor.local-history.rekey.failed"],
+      lossSignals: [],
+      resourceSignals: ["editor.local-history.rekey.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "editor.local-history.rekey.completed",
@@ -30771,15 +31973,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "editor-producer-turn",
+      requirementContract: "editor-producer-turn",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["editor.producer-turn.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "editor.producer-turn.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["editor.producer-turn.completed"],
+      lossSignals: [],
+      resourceSignals: ["editor.producer-turn.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "editor.producer-turn.completed",
@@ -30884,15 +32096,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "editor-workspace-watch-authority",
+      requirementContract: "editor-workspace-watch-authority",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["editor.workspace-watch.authority-revoked"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "editor.workspace-watch.authority-revoked",
           mode: "correlation",
         },
       ],
-      lossSignals: ["editor.workspace-watch.authority-revoked"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "editor.workspace-watch.authority-revoked",
@@ -30936,8 +32158,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-batch",
+      requirementContract: "embedding-batch",
       productSurfaces: ["keiko-local-knowledge", "keiko-model-gateway"],
       lifecycleTransitions: ["failure", "start", "state"],
+      lifecycleOperations: {
+        start: ["embedding.batch.dispatch"],
+        state: ["embedding.batch.minimal-shape-retry"],
+        end: [],
+        failure: [
+          "embedding.batch.array-unsupported",
+          "embedding.batch.failed",
+          "embedding.batch.invalid-response",
+        ],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.array-unsupported",
@@ -30960,13 +32194,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
-        "embedding.batch.array-unsupported",
-        "embedding.batch.dispatch",
-        "embedding.batch.failed",
-        "embedding.batch.invalid-response",
-        "embedding.batch.minimal-shape-retry",
-      ],
+      lossSignals: [],
+      resourceSignals: ["embedding.batch.dispatch", "embedding.batch.minimal-shape-retry"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.array-unsupported",
@@ -31217,15 +32447,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-batch-grouping",
+      requirementContract: "embedding-batch-grouping",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.batch.grouped"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.grouped",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.grouped"],
+      lossSignals: [],
+      resourceSignals: ["embedding.batch.grouped"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.grouped",
@@ -31287,15 +32527,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-budgeting",
+      requirementContract: "embedding-budgeting",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["embedding.batch.budgeting-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.budgeting-failed",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.budgeting-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.budgeting-failed",
@@ -31345,15 +32595,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-cancelled",
+      requirementContract: "embedding-cancelled",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["embedding.batch.cancelled"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.cancelled",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.cancelled"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.cancelled",
@@ -31415,8 +32675,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-compatibility",
+      requirementContract: "embedding-compatibility",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: [
+          "embedding.batch.degrading-to-scalar",
+          "embedding.batch.scalar-memo-hit",
+          "embedding.endpoint.strict-shape-memoized",
+        ],
+        end: ["embedding.batch.degraded-to-scalar"],
+        failure: ["embedding.batch.degrade-inconclusive", "embedding.batch.degrade-skipped"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.degrade-inconclusive",
@@ -31443,14 +32715,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
-        "embedding.batch.degrade-inconclusive",
-        "embedding.batch.degrade-skipped",
+      lossSignals: [],
+      resourceSignals: [
         "embedding.batch.degraded-to-scalar",
         "embedding.batch.degrading-to-scalar",
         "embedding.batch.scalar-memo-hit",
         "embedding.endpoint.strict-shape-memoized",
       ],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.degrade-inconclusive",
@@ -31656,15 +32928,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-identity-adoption",
+      requirementContract: "embedding-identity-adoption",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.preflight.identity-adopted"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.preflight.identity-adopted",
           mode: "correlation",
         },
       ],
-      lossSignals: ["embedding.preflight.identity-adopted"],
+      lossSignals: [],
+      resourceSignals: ["embedding.preflight.identity-adopted"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.preflight.identity-adopted",
@@ -31708,8 +32990,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-identity-mismatch",
+      requirementContract: "embedding-identity-mismatch",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["embedding.identity.rejected", "embedding.preflight.identity-rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.identity.rejected",
@@ -31720,7 +33010,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["embedding.identity.rejected", "embedding.preflight.identity-rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.identity.rejected",
@@ -31831,15 +33123,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-identity-refresh",
+      requirementContract: "embedding-identity-refresh",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.preflight.identity-refreshed"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.preflight.identity-refreshed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["embedding.preflight.identity-refreshed"],
+      lossSignals: [],
+      resourceSignals: ["embedding.preflight.identity-refreshed"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.preflight.identity-refreshed",
@@ -31883,15 +33185,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-identity-rejection",
+      requirementContract: "embedding-identity-rejection",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["embedding.batch.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.rejected",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.rejected",
@@ -31953,15 +33265,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-not-started",
+      requirementContract: "embedding-not-started",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["indexing.document.embedding-started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.document.embedding-started",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.document.embedding-started"],
+      lossSignals: [],
+      resourceSignals: ["indexing.document.embedding-started"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.document.embedding-started",
@@ -32017,15 +33339,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-partial-failure",
+      requirementContract: "embedding-partial-failure",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["embedding.batch.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.completed",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.completed"],
+      lossSignals: [],
+      resourceSignals: ["embedding.batch.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.completed",
@@ -32081,15 +33413,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-partial-progress",
+      requirementContract: "embedding-partial-progress",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.batch.partial-progress"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.partial-progress",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.partial-progress"],
+      lossSignals: [],
+      resourceSignals: ["embedding.batch.partial-progress"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.partial-progress",
@@ -32189,15 +33531,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-persistence",
+      requirementContract: "embedding-persistence",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["embedding.batch.persist-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.persist-failed",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.persist-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.persist-failed",
@@ -32259,15 +33611,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-preflight",
+      requirementContract: "embedding-preflight",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["embedding.preflight.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.preflight.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["embedding.preflight.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.preflight.failed",
@@ -32348,15 +33710,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-preflight-cache",
+      requirementContract: "embedding-preflight-cache",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.preflight.cache-hit"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.preflight.cache-hit",
           mode: "correlation",
         },
       ],
-      lossSignals: ["embedding.preflight.cache-hit"],
+      lossSignals: [],
+      resourceSignals: ["embedding.preflight.cache-hit"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.preflight.cache-hit",
@@ -32424,15 +33796,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-preflight-identity",
+      requirementContract: "embedding-preflight-identity",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["embedding.preflight.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.preflight.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["embedding.preflight.completed"],
+      lossSignals: [],
+      resourceSignals: ["embedding.preflight.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.preflight.completed",
@@ -32500,15 +33882,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-preflight-stall",
+      requirementContract: "embedding-preflight-stall",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["embedding.preflight.started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.preflight.started",
           mode: "correlation",
         },
       ],
-      lossSignals: ["embedding.preflight.started"],
+      lossSignals: [],
+      resourceSignals: ["embedding.preflight.started"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.preflight.started",
@@ -32576,8 +33968,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-request",
+      requirementContract: "embedding-request",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["failure", "start", "state"],
+      lifecycleOperations: {
+        start: ["embedding.request.dispatch"],
+        state: ["embedding.request.minimal-shape-retry"],
+        end: [],
+        failure: ["embedding.request.failed", "embedding.request.minimal-shape-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.request.dispatch",
@@ -32596,12 +33996,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
-        "embedding.request.dispatch",
-        "embedding.request.failed",
-        "embedding.request.minimal-shape-failed",
-        "embedding.request.minimal-shape-retry",
-      ],
+      lossSignals: [],
+      resourceSignals: ["embedding.request.dispatch", "embedding.request.minimal-shape-retry"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.request.dispatch",
@@ -32755,8 +34152,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-retry",
+      requirementContract: "embedding-retry",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.batch.retry", "embedding.chunk.retry"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.retry",
@@ -32767,7 +34172,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.retry", "embedding.chunk.retry"],
+      lossSignals: [],
+      resourceSignals: ["embedding.batch.retry", "embedding.chunk.retry"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.retry",
@@ -32941,15 +34348,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-retry-exhausted",
+      requirementContract: "embedding-retry-exhausted",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["embedding.chunk.retry-exhausted"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.chunk.retry-exhausted",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.chunk.retry-exhausted"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.chunk.retry-exhausted",
@@ -33024,8 +34441,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-scalar-ladder",
+      requirementContract: "embedding-scalar-ladder",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.scalar-ladder.item-completed"],
+        end: ["embedding.scalar-ladder.completed"],
+        failure: [
+          "embedding.scalar-ladder.deadline-expired",
+          "embedding.scalar-ladder.item-failed",
+        ],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.scalar-ladder.completed",
@@ -33044,12 +34472,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
+      lossSignals: [],
+      resourceSignals: [
         "embedding.scalar-ladder.completed",
-        "embedding.scalar-ladder.deadline-expired",
         "embedding.scalar-ladder.item-completed",
-        "embedding.scalar-ladder.item-failed",
       ],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.scalar-ladder.completed",
@@ -33207,15 +34635,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-transport-selection",
+      requirementContract: "embedding-transport-selection",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.batch.transport-selected"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.transport-selected",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.transport-selected"],
+      lossSignals: [],
+      resourceSignals: ["embedding.batch.transport-selected"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.transport-selected",
@@ -33289,15 +34727,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "embedding-transport-unavailable",
+      requirementContract: "embedding-transport-unavailable",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["embedding.batch.transport-unavailable"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.batch.transport-unavailable",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.batch.transport-unavailable"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.batch.transport-unavailable",
@@ -33347,15 +34795,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "evidence-persistence",
+      requirementContract: "evidence-persistence",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["task-workspace.lifecycle"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "task-workspace.lifecycle",
           mode: "correlation",
         },
       ],
-      lossSignals: ["task-workspace.lifecycle"],
+      lossSignals: [],
+      resourceSignals: ["task-workspace.lifecycle"],
+      replayReferences: [],
       operations: [
         {
           op: "task-workspace.lifecycle",
@@ -33461,15 +34919,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "evidence-retention",
+      requirementContract: "evidence-retention",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["evidence.retention"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "evidence.retention",
           mode: "correlation",
         },
       ],
-      lossSignals: ["evidence.retention"],
+      lossSignals: [],
+      resourceSignals: ["evidence.retention"],
+      replayReferences: [],
       operations: [
         {
           op: "evidence.retention",
@@ -33507,8 +34975,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-chat-call",
+      requirementContract: "gateway-chat-call",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "start"],
+      lifecycleOperations: {
+        start: ["gateway.chat.started"],
+        state: [],
+        end: ["gateway.chat.completed"],
+        failure: ["gateway.chat.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.chat.completed",
@@ -33523,7 +34999,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["gateway.chat.completed", "gateway.chat.failed", "gateway.chat.started"],
+      lossSignals: [],
+      resourceSignals: ["gateway.chat.completed", "gateway.chat.started"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.chat.completed",
@@ -33725,15 +35203,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-chat-provider-call",
+      requirementContract: "gateway-chat-provider-call",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["chat.request.dispatch"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "chat.request.dispatch",
           mode: "correlation",
         },
       ],
-      lossSignals: ["chat.request.dispatch"],
+      lossSignals: [],
+      resourceSignals: ["chat.request.dispatch"],
+      replayReferences: [],
       operations: [
         {
           op: "chat.request.dispatch",
@@ -33809,8 +35297,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-circuit-breaker",
+      requirementContract: "gateway-circuit-breaker",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.circuit.half-open"],
+        end: ["gateway.circuit.closed"],
+        failure: ["gateway.circuit.opened", "gateway.circuit.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.circuit.closed",
@@ -33829,12 +35325,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
-        "gateway.circuit.closed",
-        "gateway.circuit.half-open",
-        "gateway.circuit.opened",
-        "gateway.circuit.rejected",
-      ],
+      lossSignals: [],
+      resourceSignals: ["gateway.circuit.closed", "gateway.circuit.half-open"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.circuit.closed",
@@ -34029,15 +35522,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-configuration",
+      requirementContract: "gateway-configuration",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.config.resolved"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.config.resolved",
           mode: "none",
         },
       ],
-      lossSignals: ["gateway.config.resolved"],
+      lossSignals: [],
+      resourceSignals: ["gateway.config.resolved"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.config.resolved",
@@ -34075,8 +35578,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-egress",
+      requirementContract: "gateway-egress",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["http.gateway.egress.planned"],
+        end: [],
+        failure: ["http.gateway.fetch.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "http.gateway.egress.planned",
@@ -34087,7 +35598,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: ["http.gateway.egress.planned", "http.gateway.fetch.failed"],
+      lossSignals: [],
+      resourceSignals: ["http.gateway.egress.planned"],
+      replayReferences: [],
       operations: [
         {
           op: "http.gateway.egress.planned",
@@ -34167,8 +35680,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-http-fetch",
+      requirementContract: "gateway-http-fetch",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "start"],
+      lifecycleOperations: {
+        start: ["http.gateway.fetch.started"],
+        state: [],
+        end: ["http.gateway.fetch.completed"],
+        failure: ["http.gateway.fetch.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "http.gateway.fetch.completed",
@@ -34183,11 +35704,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
-        "http.gateway.fetch.completed",
-        "http.gateway.fetch.failed",
-        "http.gateway.fetch.started",
-      ],
+      lossSignals: [],
+      resourceSignals: ["http.gateway.fetch.completed", "http.gateway.fetch.started"],
+      replayReferences: [],
       operations: [
         {
           op: "http.gateway.fetch.completed",
@@ -34298,8 +35817,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-instance-lifecycle",
+      requirementContract: "gateway-instance-lifecycle",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.instance.bound", "gateway.instance.reset", "gateway.instance.reused"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.instance.bound",
@@ -34314,7 +35841,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: ["gateway.instance.bound", "gateway.instance.reset", "gateway.instance.reused"],
+      lossSignals: [],
+      resourceSignals: [
+        "gateway.instance.bound",
+        "gateway.instance.reset",
+        "gateway.instance.reused",
+      ],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.instance.bound",
@@ -34418,15 +35951,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-instance-unavailable",
+      requirementContract: "gateway-instance-unavailable",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.instance.unavailable"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.instance.unavailable",
           mode: "none",
         },
       ],
-      lossSignals: ["gateway.instance.unavailable"],
+      lossSignals: [],
+      resourceSignals: ["gateway.instance.unavailable"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.instance.unavailable",
@@ -34464,8 +36007,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-readiness",
+      requirementContract: "gateway-readiness",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "start"],
+      lifecycleOperations: {
+        start: ["gateway.readiness.automatic.started"],
+        state: [],
+        end: ["gateway.readiness.automatic.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.readiness.automatic.completed",
@@ -34476,7 +36027,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["gateway.readiness.automatic.completed", "gateway.readiness.automatic.started"],
+      lossSignals: [],
+      resourceSignals: [
+        "gateway.readiness.automatic.completed",
+        "gateway.readiness.automatic.started",
+      ],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.readiness.automatic.completed",
@@ -34556,8 +36112,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-retry",
+      requirementContract: "gateway-retry",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.retry.scheduled"],
+        end: [],
+        failure: ["gateway.retry.budget-exhausted", "gateway.retry.exhausted"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.retry.budget-exhausted",
@@ -34572,11 +36136,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
-        "gateway.retry.budget-exhausted",
-        "gateway.retry.exhausted",
-        "gateway.retry.scheduled",
-      ],
+      lossSignals: [],
+      resourceSignals: ["gateway.retry.scheduled"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.retry.budget-exhausted",
@@ -34766,15 +36328,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-route-rejection",
+      requirementContract: "gateway-route-rejection",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["gateway.route.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.route.rejected",
           mode: "none",
         },
       ],
-      lossSignals: ["gateway.route.rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.route.rejected",
@@ -34818,15 +36390,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-spend-ceiling",
+      requirementContract: "gateway-spend-ceiling",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.spend.ceiling"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.spend.ceiling",
           mode: "correlation",
         },
       ],
-      lossSignals: ["gateway.spend.ceiling"],
+      lossSignals: [],
+      resourceSignals: ["gateway.spend.ceiling"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.spend.ceiling",
@@ -34876,15 +36458,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-spend-measurement",
+      requirementContract: "gateway-spend-measurement",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["gateway.spend.settled"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.spend.settled",
           mode: "correlation",
         },
       ],
-      lossSignals: ["gateway.spend.settled"],
+      lossSignals: [],
+      resourceSignals: ["gateway.spend.settled"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.spend.settled",
@@ -34940,15 +36532,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-spend-policy",
+      requirementContract: "gateway-spend-policy",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["gateway.spend.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.spend.rejected",
           mode: "correlation",
         },
       ],
-      lossSignals: ["gateway.spend.rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.spend.rejected",
@@ -34998,15 +36600,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-spend-reservation",
+      requirementContract: "gateway-spend-reservation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["gateway.spend.reserved"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.spend.reserved",
           mode: "correlation",
         },
       ],
-      lossSignals: ["gateway.spend.reserved"],
+      lossSignals: [],
+      resourceSignals: ["gateway.spend.reserved"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.spend.reserved",
@@ -35044,8 +36656,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-stream-call",
+      requirementContract: "gateway-stream-call",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "start", "state"],
+      lifecycleOperations: {
+        start: ["gateway.stream.started"],
+        state: ["gateway.stream.buffered-fallback"],
+        end: ["gateway.stream.abandoned", "gateway.stream.completed"],
+        failure: ["gateway.stream.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.stream.abandoned",
@@ -35068,13 +36688,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
+      lossSignals: [],
+      resourceSignals: [
         "gateway.stream.abandoned",
         "gateway.stream.buffered-fallback",
         "gateway.stream.completed",
-        "gateway.stream.failed",
         "gateway.stream.started",
       ],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.stream.abandoned",
@@ -35373,15 +36994,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-stream-read",
+      requirementContract: "gateway-stream-read",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["chat.response.streamed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "chat.response.streamed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["chat.response.streamed"],
+      lossSignals: [],
+      resourceSignals: ["chat.response.streamed"],
+      replayReferences: [],
       operations: [
         {
           op: "chat.response.streamed",
@@ -35462,8 +37093,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-tls-trust",
+      requirementContract: "gateway-tls-trust",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["http.gateway.tls.ca-bundle-fallback"],
+        end: [],
+        failure: ["http.gateway.tls.trust-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "http.gateway.tls.ca-bundle-fallback",
@@ -35474,7 +37113,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: ["http.gateway.tls.ca-bundle-fallback", "http.gateway.tls.trust-failed"],
+      lossSignals: [],
+      resourceSignals: ["http.gateway.tls.ca-bundle-fallback"],
+      replayReferences: [],
       operations: [
         {
           op: "http.gateway.tls.ca-bundle-fallback",
@@ -35536,15 +37177,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-tool-calling-capability",
+      requirementContract: "gateway-tool-calling-capability",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.tool-calling.verification"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.tool-calling.verification",
           mode: "correlation",
         },
       ],
-      lossSignals: ["gateway.tool-calling.verification"],
+      lossSignals: [],
+      resourceSignals: ["gateway.tool-calling.verification"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.tool-calling.verification",
@@ -35582,8 +37233,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-tool-catalog",
+      requirementContract: "gateway-tool-catalog",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "start", "state"],
+      lifecycleOperations: {
+        start: ["gateway.tool-catalog.projected"],
+        state: ["gateway.tool-catalog.native-passthrough"],
+        end: ["gateway.tool-catalog.call-bound"],
+        failure: ["gateway.tool-catalog.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.tool-catalog.call-bound",
@@ -35602,12 +37261,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
+      lossSignals: [],
+      resourceSignals: [
         "gateway.tool-catalog.call-bound",
         "gateway.tool-catalog.native-passthrough",
         "gateway.tool-catalog.projected",
-        "gateway.tool-catalog.rejected",
       ],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.tool-catalog.call-bound",
@@ -35820,15 +37480,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "gateway-tool-schema-rejection",
+      requirementContract: "gateway-tool-schema-rejection",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.tool-catalog.repair"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "gateway.tool-catalog.repair",
           mode: "correlation",
         },
       ],
-      lossSignals: ["gateway.tool-catalog.repair"],
+      lossSignals: [],
+      resourceSignals: ["gateway.tool-catalog.repair"],
+      replayReferences: [],
       operations: [
         {
           op: "gateway.tool-catalog.repair",
@@ -35944,8 +37614,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-change-chat-connect",
+      requirementContract: "git-change-chat-connect",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git-change.chat.connected"],
+        failure: ["git-change.chat.blocked"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git-change.chat.blocked",
@@ -35956,7 +37634,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["git-change.chat.blocked", "git-change.chat.connected"],
+      lossSignals: [],
+      resourceSignals: ["git-change.chat.connected"],
+      replayReferences: [],
       operations: [
         {
           op: "git-change.chat.blocked",
@@ -36037,8 +37717,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-change-chat-refresh",
+      requirementContract: "git-change-chat-refresh",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git-change.chat.refreshed", "git-change.chat.stale"],
+        end: [],
+        failure: ["git-change.chat.blocked"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git-change.chat.blocked",
@@ -36053,11 +37741,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "git-change.chat.blocked",
-        "git-change.chat.refreshed",
-        "git-change.chat.stale",
-      ],
+      lossSignals: [],
+      resourceSignals: ["git-change.chat.refreshed", "git-change.chat.stale"],
+      replayReferences: [],
       operations: [
         {
           op: "git-change.chat.blocked",
@@ -36143,15 +37829,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-change-description-apply",
+      requirementContract: "git-change-description-apply",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git-change.chat.apply"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git-change.chat.apply",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git-change.chat.apply"],
+      lossSignals: [],
+      resourceSignals: ["git-change.chat.apply"],
+      replayReferences: [],
       operations: [
         {
           op: "git-change.chat.apply",
@@ -36183,15 +37879,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-change-description-target",
+      requirementContract: "git-change-description-target",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git-change.chat.description-target.denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git-change.chat.description-target.denied",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git-change.chat.description-target.denied"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git-change.chat.description-target.denied",
@@ -36223,15 +37929,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-ci-observation",
+      requirementContract: "git-ci-observation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.ci-observation"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.ci-observation",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.ci-observation"],
+      lossSignals: [],
+      resourceSignals: ["git.ci-observation"],
+      replayReferences: [],
       operations: [
         {
           op: "git.ci-observation",
@@ -36417,15 +38133,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-ci-repair-budget",
+      requirementContract: "git-ci-repair-budget",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.ci-repair.budget"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.ci-repair.budget",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.ci-repair.budget"],
+      lossSignals: [],
+      resourceSignals: ["git.ci-repair.budget"],
+      replayReferences: [],
       operations: [
         {
           op: "git.ci-repair.budget",
@@ -36616,15 +38342,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-commit-draft",
+      requirementContract: "git-commit-draft",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.commit.draft.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.commit.draft.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.commit.draft.completed"],
+      lossSignals: [],
+      resourceSignals: ["git.commit.draft.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "git.commit.draft.completed",
@@ -36680,15 +38416,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-commit-preview",
+      requirementContract: "git-commit-preview",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.commit.preview.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.commit.preview.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.commit.preview.completed"],
+      lossSignals: [],
+      resourceSignals: ["git.commit.preview.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "git.commit.preview.completed",
@@ -36744,8 +38490,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-approval",
+      requirementContract: "git-delivery-approval",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: [
+          "git.delivery.commit.approval.required",
+          "git.delivery.pr-mark-ready.approval.required",
+          "git.delivery.pr.approval.required",
+          "git.delivery.push.approval.required",
+        ],
+        end: [
+          "git.delivery.commit.approval.minted",
+          "git.delivery.pr-mark-ready.approval.minted",
+          "git.delivery.pr.approval.minted",
+          "git.delivery.push.approval.minted",
+          "git.delivery.sync.approval.minted",
+        ],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.commit.approval.minted",
@@ -36784,7 +38549,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
+      lossSignals: [],
+      resourceSignals: [
         "git.delivery.commit.approval.minted",
         "git.delivery.commit.approval.required",
         "git.delivery.pr-mark-ready.approval.minted",
@@ -36795,6 +38561,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "git.delivery.push.approval.required",
         "git.delivery.sync.approval.minted",
       ],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.commit.approval.minted",
@@ -37126,15 +38893,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-authority",
+      requirementContract: "git-delivery-authority",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.delivery.authority.denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.authority.denied",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.authority.denied"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.authority.denied",
@@ -37178,15 +38955,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-authority-continuity",
+      requirementContract: "git-delivery-authority-continuity",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.delivery.dispatch.no-spawn"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.dispatch.no-spawn",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.dispatch.no-spawn"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.dispatch.no-spawn",
@@ -37218,15 +39005,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-authority-gap",
+      requirementContract: "git-delivery-authority-gap",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.delivery.authority.admitted"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.authority.admitted",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.authority.admitted"],
+      lossSignals: [],
+      resourceSignals: ["git.delivery.authority.admitted"],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.authority.admitted",
@@ -37276,15 +39073,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-dirty-buffer",
+      requirementContract: "git-delivery-dirty-buffer",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.delivery.buffers.checked"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.buffers.checked",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.buffers.checked"],
+      lossSignals: [],
+      resourceSignals: ["git.delivery.buffers.checked"],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.buffers.checked",
@@ -37328,15 +39135,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-mutation",
+      requirementContract: "git-delivery-mutation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.delivery.mutation.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.mutation.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.mutation.completed"],
+      lossSignals: [],
+      resourceSignals: ["git.delivery.mutation.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.mutation.completed",
@@ -37464,15 +39281,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-precondition",
+      requirementContract: "git-delivery-precondition",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.delivery.mutation.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.mutation.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.mutation.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.mutation.failed",
@@ -37534,15 +39361,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-readiness-provider",
+      requirementContract: "git-delivery-readiness-provider",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.delivery.readiness.observed"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.readiness.observed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.readiness.observed"],
+      lossSignals: [],
+      resourceSignals: ["git.delivery.readiness.observed"],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.readiness.observed",
@@ -37637,15 +39474,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-delivery-repository-binding",
+      requirementContract: "git-delivery-repository-binding",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.delivery.repository.mismatch"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.repository.mismatch",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.repository.mismatch"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.repository.mismatch",
@@ -37694,15 +39541,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-denied-path-exclusion",
+      requirementContract: "git-denied-path-exclusion",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.raw-status.denied-paths-excluded"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.raw-status.denied-paths-excluded",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.raw-status.denied-paths-excluded"],
+      lossSignals: [],
+      resourceSignals: ["git.raw-status.denied-paths-excluded"],
+      replayReferences: [],
       operations: [
         {
           op: "git.raw-status.denied-paths-excluded",
@@ -37734,8 +39591,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-diff-search-bounded",
+      requirementContract: "git-diff-search-bounded",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["loss"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [],
+        loss: ["git.runtime-diff.search-bounded"],
+      },
       causalEdges: [
         {
           op: "git.runtime-diff.search-bounded",
@@ -37743,6 +39608,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: ["git.runtime-diff.search-bounded"],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.runtime-diff.search-bounded",
@@ -37786,15 +39653,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-draft-checks",
+      requirementContract: "git-draft-checks",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.draft-checks"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.draft-checks",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.draft-checks"],
+      lossSignals: [],
+      resourceSignals: ["git.draft-checks"],
+      replayReferences: [],
       operations: [
         {
           op: "git.draft-checks",
@@ -37919,15 +39796,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-draft-delivery",
+      requirementContract: "git-draft-delivery",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.draft-delivery"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.draft-delivery",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.draft-delivery"],
+      lossSignals: [],
+      resourceSignals: ["git.draft-delivery"],
+      replayReferences: [],
       operations: [
         {
           op: "git.draft-delivery",
@@ -38094,15 +39981,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-draft-push-preparation",
+      requirementContract: "git-draft-push-preparation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.draft-push.preparation"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.draft-push.preparation",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.draft-push.preparation"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.draft-push.preparation",
@@ -38164,15 +40061,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-draft-related-issues",
+      requirementContract: "git-draft-related-issues",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.draft-related-issues"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.draft-related-issues",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.draft-related-issues"],
+      lossSignals: [],
+      resourceSignals: ["git.draft-related-issues"],
+      replayReferences: [],
       operations: [
         {
           op: "git.draft-related-issues",
@@ -38254,15 +40161,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-draft-remote-observation",
+      requirementContract: "git-draft-remote-observation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.draft-remote.observed"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.draft-remote.observed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.draft-remote.observed"],
+      lossSignals: [],
+      resourceSignals: ["git.draft-remote.observed"],
+      replayReferences: [],
       operations: [
         {
           op: "git.draft-remote.observed",
@@ -38354,15 +40271,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-draft-repository-drift",
+      requirementContract: "git-draft-repository-drift",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.draft-delivery.repository-drift"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.draft-delivery.repository-drift",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.draft-delivery.repository-drift"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.draft-delivery.repository-drift",
@@ -38400,15 +40327,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-draft-target-resolution",
+      requirementContract: "git-draft-target-resolution",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.draft-target.resolved"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.draft-target.resolved",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.draft-target.resolved"],
+      lossSignals: [],
+      resourceSignals: ["git.draft-target.resolved"],
+      replayReferences: [],
       operations: [
         {
           op: "git.draft-target.resolved",
@@ -38477,15 +40414,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-draft-template",
+      requirementContract: "git-draft-template",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.draft-template"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.draft-template",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.draft-template"],
+      lossSignals: [],
+      resourceSignals: ["git.draft-template"],
+      replayReferences: [],
       operations: [
         {
           op: "git.draft-template",
@@ -38597,15 +40544,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-journey-observation",
+      requirementContract: "git-journey-observation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.journey-observation"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.journey-observation",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.journey-observation"],
+      lossSignals: [],
+      resourceSignals: ["git.journey-observation"],
+      replayReferences: [],
       operations: [
         {
           op: "git.journey-observation",
@@ -38742,15 +40699,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-journey-outcome-persistence",
+      requirementContract: "git-journey-outcome-persistence",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.journey-outcome.recorded"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.journey-outcome.recorded",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.journey-outcome.recorded"],
+      lossSignals: [],
+      resourceSignals: ["git.journey-outcome.recorded"],
+      replayReferences: [],
       operations: [
         {
           op: "git.journey-outcome.recorded",
@@ -38806,15 +40773,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-journey-readiness",
+      requirementContract: "git-journey-readiness",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.journey-readiness.refreshed"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.journey-readiness.refreshed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.journey-readiness.refreshed"],
+      lossSignals: [],
+      resourceSignals: ["git.journey-readiness.refreshed"],
+      replayReferences: [],
       operations: [
         {
           op: "git.journey-readiness.refreshed",
@@ -38913,15 +40890,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-pr-description",
+      requirementContract: "git-pr-description",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.pr-description"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.pr-description",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.pr-description"],
+      lossSignals: [],
+      resourceSignals: ["git.pr-description"],
+      replayReferences: [],
       operations: [
         {
           op: "git.pr-description",
@@ -39032,15 +41019,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-pr-description-receipt",
+      requirementContract: "git-pr-description-receipt",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.pr-description.receipt"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.pr-description.receipt",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.pr-description.receipt"],
+      lossSignals: [],
+      resourceSignals: ["git.pr-description.receipt"],
+      replayReferences: [],
       operations: [
         {
           op: "git.pr-description.receipt",
@@ -39134,15 +41131,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-pr-mark-ready-drift",
+      requirementContract: "git-pr-mark-ready-drift",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.delivery.pr-mark-ready.drift"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.pr-mark-ready.drift",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.pr-mark-ready.drift"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.pr-mark-ready.drift",
@@ -39204,15 +41211,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-pr-mark-ready-execution",
+      requirementContract: "git-pr-mark-ready-execution",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.delivery.pr-mark-ready.executed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.pr-mark-ready.executed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.pr-mark-ready.executed"],
+      lossSignals: [],
+      resourceSignals: ["git.delivery.pr-mark-ready.executed"],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.pr-mark-ready.executed",
@@ -39274,15 +41291,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-pr-mark-ready-refresh",
+      requirementContract: "git-pr-mark-ready-refresh",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.delivery.pr-mark-ready.readiness-refreshed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.pr-mark-ready.readiness-refreshed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.pr-mark-ready.readiness-refreshed"],
+      lossSignals: [],
+      resourceSignals: ["git.delivery.pr-mark-ready.readiness-refreshed"],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.pr-mark-ready.readiness-refreshed",
@@ -39326,15 +41353,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-process-failure",
+      requirementContract: "git-process-failure",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.process.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.process.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.process.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.process.failed",
@@ -39415,15 +41452,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-process-refusal",
+      requirementContract: "git-process-refusal",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.process.refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.process.refused",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.process.refused"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.process.refused",
@@ -39510,15 +41557,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-repository-initialization",
+      requirementContract: "git-repository-initialization",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.repository.initialize"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.repository.initialize",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.repository.initialize"],
+      lossSignals: [],
+      resourceSignals: ["git.repository.initialize"],
+      replayReferences: [],
       operations: [
         {
           op: "git.repository.initialize",
@@ -39550,15 +41607,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-runtime-action",
+      requirementContract: "git-runtime-action",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.runtime-action"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.runtime-action",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.runtime-action"],
+      lossSignals: [],
+      resourceSignals: ["git.runtime-action"],
+      replayReferences: [],
       operations: [
         {
           op: "git.runtime-action",
@@ -39670,8 +41737,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-snapshot-access",
+      requirementContract: "git-snapshot-access",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.snapshot.read"],
+        end: ["git.snapshot.invalidated"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.snapshot.invalidated",
@@ -39682,7 +41757,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.snapshot.invalidated", "git.snapshot.read"],
+      lossSignals: [],
+      resourceSignals: ["git.snapshot.invalidated", "git.snapshot.read"],
+      replayReferences: [],
       operations: [
         {
           op: "git.snapshot.invalidated",
@@ -39731,15 +41808,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-snapshot-capacity",
+      requirementContract: "git-snapshot-capacity",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.snapshot.capacity-denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.snapshot.capacity-denied",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.snapshot.capacity-denied"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.snapshot.capacity-denied",
@@ -39777,15 +41864,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-snapshot-capture",
+      requirementContract: "git-snapshot-capture",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.snapshot.capture"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.snapshot.capture",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.snapshot.capture"],
+      lossSignals: [],
+      resourceSignals: ["git.snapshot.capture"],
+      replayReferences: [],
       operations: [
         {
           op: "git.snapshot.capture",
@@ -39885,15 +41982,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-snapshot-expiry",
+      requirementContract: "git-snapshot-expiry",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["git.snapshot.expired"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.snapshot.expired",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.snapshot.expired"],
+      lossSignals: [],
+      resourceSignals: ["git.snapshot.expired"],
+      replayReferences: [],
       operations: [
         {
           op: "git.snapshot.expired",
@@ -39925,15 +42032,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-snapshot-recheck",
+      requirementContract: "git-snapshot-recheck",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.snapshot.recheck"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.snapshot.recheck",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.snapshot.recheck"],
+      lossSignals: [],
+      resourceSignals: ["git.snapshot.recheck"],
+      replayReferences: [],
       operations: [
         {
           op: "git.snapshot.recheck",
@@ -39965,8 +42082,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-snapshot-reservation",
+      requirementContract: "git-snapshot-reservation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.snapshot.reserved"],
+        end: ["git.snapshot.released"],
+        failure: ["git.snapshot.reserve-denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.snapshot.released",
@@ -39981,11 +42106,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "git.snapshot.released",
-        "git.snapshot.reserve-denied",
-        "git.snapshot.reserved",
-      ],
+      lossSignals: [],
+      resourceSignals: ["git.snapshot.released", "git.snapshot.reserved"],
+      replayReferences: [],
       operations: [
         {
           op: "git.snapshot.released",
@@ -40051,15 +42174,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-upstream-tracking",
+      requirementContract: "git-upstream-tracking",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["git.delivery.push.upstream-tracking-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.delivery.push.upstream-tracking-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.delivery.push.upstream-tracking-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "git.delivery.push.upstream-tracking-failed",
@@ -40084,15 +42217,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "git-verified-commit",
+      requirementContract: "git-verified-commit",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.verified-commit"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.verified-commit",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.verified-commit"],
+      lossSignals: [],
+      resourceSignals: ["git.verified-commit"],
+      replayReferences: [],
       operations: [
         {
           op: "git.verified-commit",
@@ -40259,15 +42402,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "github-code-context-read",
+      requirementContract: "github-code-context-read",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-context.github.read"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-context.github.read",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-context.github.read"],
+      lossSignals: [],
+      resourceSignals: ["coding-context.github.read"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-context.github.read",
@@ -40330,8 +42483,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "github-issue-reader-authorization",
+      requirementContract: "github-issue-reader-authorization",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: [
+          "coding-context.github-authorization.changed",
+          "coding-context.github-authorization.evaluated",
+        ],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-context.github-authorization.changed",
@@ -40342,10 +42506,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
+      lossSignals: [],
+      resourceSignals: [
         "coding-context.github-authorization.changed",
         "coding-context.github-authorization.evaluated",
       ],
+      replayReferences: [],
       operations: [
         {
           op: "coding-context.github-authorization.changed",
@@ -40449,15 +42615,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "github-remote-resolution",
+      requirementContract: "github-remote-resolution",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-context.github-remote.evaluated"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-context.github-remote.evaluated",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-context.github-remote.evaluated"],
+      lossSignals: [],
+      resourceSignals: ["coding-context.github-remote.evaluated"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-context.github-remote.evaluated",
@@ -40495,15 +42671,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "harness-context-compaction",
+      requirementContract: "harness-context-compaction",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["harness.context.compacted"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "harness.context.compacted",
           mode: "correlation",
         },
       ],
-      lossSignals: ["harness.context.compacted"],
+      lossSignals: [],
+      resourceSignals: ["harness.context.compacted"],
+      replayReferences: [],
       operations: [
         {
           op: "harness.context.compacted",
@@ -40547,15 +42733,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "http-request",
+      requirementContract: "http-request",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["request"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "request",
           mode: "correlation",
         },
       ],
-      lossSignals: ["request"],
+      lossSignals: [],
+      resourceSignals: ["request"],
+      replayReferences: [],
       operations: [
         {
           op: "request",
@@ -40629,8 +42825,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "http-request-body",
+      requirementContract: "http-request-body",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["http.request.body.received"],
+        failure: [
+          "http.request.body.cancelled",
+          "http.request.body.failed",
+          "http.request.body.rejected",
+        ],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "http.request.body.cancelled",
@@ -40649,12 +42857,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "http.request.body.cancelled",
-        "http.request.body.failed",
-        "http.request.body.received",
-        "http.request.body.rejected",
-      ],
+      lossSignals: [],
+      resourceSignals: ["http.request.body.received"],
+      replayReferences: [],
       operations: [
         {
           op: "http.request.body.cancelled",
@@ -40812,8 +43017,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "indexing-cancellation",
+      requirementContract: "indexing-cancellation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "start", "state"],
+      lifecycleOperations: {
+        start: ["indexing.cancel.requested"],
+        state: ["indexing.cancel.accepted"],
+        end: [],
+        failure: ["indexing.cancel.refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.cancel.accepted",
@@ -40828,11 +43041,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "indexing.cancel.accepted",
-        "indexing.cancel.refused",
-        "indexing.cancel.requested",
-      ],
+      lossSignals: [],
+      resourceSignals: ["indexing.cancel.accepted", "indexing.cancel.requested"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.cancel.accepted",
@@ -40924,8 +43135,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "indexing-detached-run",
+      requirementContract: "indexing-detached-run",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "start"],
+      lifecycleOperations: {
+        start: ["indexing.detached-run.launched"],
+        state: [],
+        end: [],
+        failure: ["indexing.detached-run.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.detached-run.failed",
@@ -40936,7 +43155,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "parent-correlation",
         },
       ],
-      lossSignals: ["indexing.detached-run.failed", "indexing.detached-run.launched"],
+      lossSignals: [],
+      resourceSignals: ["indexing.detached-run.launched"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.detached-run.failed",
@@ -41016,15 +43237,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "indexing-job-cancelled",
+      requirementContract: "indexing-job-cancelled",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["indexing.job.finished"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.job.finished",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.job.finished"],
+      lossSignals: [],
+      resourceSignals: ["indexing.job.finished"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.job.finished",
@@ -41105,15 +43336,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "indexing-job-failed",
+      requirementContract: "indexing-job-failed",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["indexing.job.finished"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.job.finished",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.job.finished"],
+      lossSignals: [],
+      resourceSignals: ["indexing.job.finished"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.job.finished",
@@ -41194,15 +43435,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "indexing-job-stall",
+      requirementContract: "indexing-job-stall",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["indexing.job.started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.job.started",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.job.started"],
+      lossSignals: [],
+      resourceSignals: ["indexing.job.started"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.job.started",
@@ -41300,15 +43551,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "indexing-prologue",
+      requirementContract: "indexing-prologue",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["indexing.job.received"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.job.received",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.job.received"],
+      lossSignals: [],
+      resourceSignals: ["indexing.job.received"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.job.received",
@@ -41358,8 +43619,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "indexing-route",
+      requirementContract: "indexing-route",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "start"],
+      lifecycleOperations: {
+        start: ["indexing.start.accepted"],
+        state: [],
+        end: [],
+        failure: ["indexing.start.refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.start.accepted",
@@ -41370,7 +43639,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.start.accepted", "indexing.start.refused"],
+      lossSignals: [],
+      resourceSignals: ["indexing.start.accepted"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.start.accepted",
@@ -41444,15 +43715,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "install-mode-probe-failed",
+      requirementContract: "install-mode-probe-failed",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["process.started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "process.started",
           mode: "none",
         },
       ],
-      lossSignals: ["process.started"],
+      lossSignals: [],
+      resourceSignals: ["process.started"],
+      replayReferences: [],
       operations: [
         {
           op: "process.started",
@@ -41552,15 +43833,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "knowledge-store-corruption",
+      requirementContract: "knowledge-store-corruption",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["knowledge.store.quarantined"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "knowledge.store.quarantined",
           mode: "none",
         },
       ],
-      lossSignals: ["knowledge.store.quarantined"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "knowledge.store.quarantined",
@@ -41598,15 +43889,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "knowledge-store-encryption",
+      requirementContract: "knowledge-store-encryption",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["knowledge.store.encryption-rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "knowledge.store.encryption-rejected",
           mode: "none",
         },
       ],
-      lossSignals: ["knowledge.store.encryption-rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "knowledge.store.encryption-rejected",
@@ -41644,15 +43945,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "knowledge-store-reopen",
+      requirementContract: "knowledge-store-reopen",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["knowledge.store.quarantined"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "knowledge.store.quarantined",
           mode: "none",
         },
       ],
-      lossSignals: ["knowledge.store.quarantined"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "knowledge.store.quarantined",
@@ -41690,15 +44001,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "legacy-update-audit-import",
+      requirementContract: "legacy-update-audit-import",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["update.runtime.legacy-import-deferred"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "update.runtime.legacy-import-deferred",
           mode: "none",
         },
       ],
-      lossSignals: ["update.runtime.legacy-import-deferred"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "update.runtime.legacy-import-deferred",
@@ -41730,15 +44051,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "lsp-java-version-probe",
+      requirementContract: "lsp-java-version-probe",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["lsp.java.version-probe.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "lsp.java.version-probe.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["lsp.java.version-probe.completed"],
+      lossSignals: [],
+      resourceSignals: ["lsp.java.version-probe.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "lsp.java.version-probe.completed",
@@ -41787,15 +44118,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "lsp-process-ownership",
+      requirementContract: "lsp-process-ownership",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["lsp.process.ownership.changed"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "lsp.process.ownership.changed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["lsp.process.ownership.changed"],
+      lossSignals: [],
+      resourceSignals: ["lsp.process.ownership.changed"],
+      replayReferences: [],
       operations: [
         {
           op: "lsp.process.ownership.changed",
@@ -41845,15 +44186,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "lsp-process-runtime",
+      requirementContract: "lsp-process-runtime",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["lsp.process.runtime-error"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "lsp.process.runtime-error",
           mode: "correlation",
         },
       ],
-      lossSignals: ["lsp.process.runtime-error"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "lsp.process.runtime-error",
@@ -41897,8 +44248,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "lsp-process-spawn",
+      requirementContract: "lsp-process-spawn",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["lsp.spawn.completed"],
+        failure: ["lsp.spawn.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "lsp.spawn.completed",
@@ -41909,7 +44268,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["lsp.spawn.completed", "lsp.spawn.failed"],
+      lossSignals: [],
+      resourceSignals: ["lsp.spawn.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "lsp.spawn.completed",
@@ -42008,15 +44369,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "lsp-process-termination",
+      requirementContract: "lsp-process-termination",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["lsp.process.terminated"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "lsp.process.terminated",
           mode: "correlation",
         },
       ],
-      lossSignals: ["lsp.process.terminated"],
+      lossSignals: [],
+      resourceSignals: ["lsp.process.terminated"],
+      replayReferences: [],
       operations: [
         {
           op: "lsp.process.terminated",
@@ -42072,15 +44443,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-audit-state-cache",
+      requirementContract: "memory-audit-state-cache",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["memory.audit.state-cache.seeded"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory.audit.state-cache.seeded",
           mode: "correlation",
         },
       ],
-      lossSignals: ["memory.audit.state-cache.seeded"],
+      lossSignals: [],
+      resourceSignals: ["memory.audit.state-cache.seeded"],
+      replayReferences: ["memory.audit.state-cache.seeded.count"],
       operations: [
         {
           op: "memory.audit.state-cache.seeded",
@@ -42112,15 +44493,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-capture-novelty",
+      requirementContract: "memory-capture-novelty",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["memory.capture.novelty-gate"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory.capture.novelty-gate",
           mode: "none",
         },
       ],
-      lossSignals: ["memory.capture.novelty-gate"],
+      lossSignals: [],
+      resourceSignals: ["memory.capture.novelty-gate"],
+      replayReferences: [],
       operations: [
         {
           op: "memory.capture.novelty-gate",
@@ -42182,8 +44573,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-embedding-invalidation",
+      requirementContract: "memory-embedding-invalidation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["memory.embedding.invalidated"],
+        end: [],
+        failure: ["memory.embedding.invalidation-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory.embedding.invalidated",
@@ -42194,7 +44593,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: ["memory.embedding.invalidated", "memory.embedding.invalidation-failed"],
+      lossSignals: [],
+      resourceSignals: ["memory.embedding.invalidated"],
+      replayReferences: [],
       operations: [
         {
           op: "memory.embedding.invalidated",
@@ -42250,8 +44651,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-embedding-request",
+      requirementContract: "memory-embedding-request",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["embedding.memory.succeeded"],
+        failure: ["embedding.memory.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.memory.failed",
@@ -42262,7 +44671,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.memory.failed", "embedding.memory.succeeded"],
+      lossSignals: [],
+      resourceSignals: ["embedding.memory.succeeded"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.memory.failed",
@@ -42361,15 +44772,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-embedding-storage",
+      requirementContract: "memory-embedding-storage",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["memory.embedding.store-rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory.embedding.store-rejected",
           mode: "none",
         },
       ],
-      lossSignals: ["memory.embedding.store-rejected"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "memory.embedding.store-rejected",
@@ -42401,15 +44822,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-embedding-unavailable",
+      requirementContract: "memory-embedding-unavailable",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["embedding.memory.unavailable"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "embedding.memory.unavailable",
           mode: "none",
         },
       ],
-      lossSignals: ["embedding.memory.unavailable"],
+      lossSignals: [],
+      resourceSignals: ["embedding.memory.unavailable"],
+      replayReferences: [],
       operations: [
         {
           op: "embedding.memory.unavailable",
@@ -42447,15 +44878,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-pressure",
+      requirementContract: "memory-pressure",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["process.heartbeat"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "process.heartbeat",
           mode: "none",
         },
       ],
-      lossSignals: ["process.heartbeat"],
+      lossSignals: [],
+      resourceSignals: ["process.heartbeat"],
+      replayReferences: [],
       operations: [
         {
           op: "process.heartbeat",
@@ -42511,15 +44952,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-vault-corruption",
+      requirementContract: "memory-vault-corruption",
       productSurfaces: ["keiko-memory-vault"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["memory-vault.store.quarantined"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory-vault.store.quarantined",
           mode: "none",
         },
       ],
-      lossSignals: ["memory-vault.store.quarantined"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "memory-vault.store.quarantined",
@@ -42557,15 +45008,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-vault-encryption-checkpoint",
+      requirementContract: "memory-vault-encryption-checkpoint",
       productSurfaces: ["keiko-memory-vault"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["memory-vault.store.encryption-checkpoint-degraded"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory-vault.store.encryption-checkpoint-degraded",
           mode: "none",
         },
       ],
-      lossSignals: ["memory-vault.store.encryption-checkpoint-degraded"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "memory-vault.store.encryption-checkpoint-degraded",
@@ -42615,15 +45076,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-vault-encryption-migration",
+      requirementContract: "memory-vault-encryption-migration",
       productSurfaces: ["keiko-memory-vault"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["memory-vault.store.encryption-migrated"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory-vault.store.encryption-migrated",
           mode: "none",
         },
       ],
-      lossSignals: ["memory-vault.store.encryption-migrated"],
+      lossSignals: [],
+      resourceSignals: ["memory-vault.store.encryption-migrated"],
+      replayReferences: [],
       operations: [
         {
           op: "memory-vault.store.encryption-migrated",
@@ -42667,15 +45138,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-vault-open",
+      requirementContract: "memory-vault-open",
       productSurfaces: ["keiko-memory-vault"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["memory-vault.store.opened"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory-vault.store.opened",
           mode: "none",
         },
       ],
-      lossSignals: ["memory-vault.store.opened"],
+      lossSignals: [],
+      resourceSignals: ["memory-vault.store.opened"],
+      replayReferences: [],
       operations: [
         {
           op: "memory-vault.store.opened",
@@ -42707,15 +45188,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "memory-vault-reopen",
+      requirementContract: "memory-vault-reopen",
       productSurfaces: ["keiko-memory-vault"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["memory-vault.store.quarantined"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "memory-vault.store.quarantined",
           mode: "none",
         },
       ],
-      lossSignals: ["memory-vault.store.quarantined"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "memory-vault.store.quarantined",
@@ -42753,15 +45244,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "native-file-dialog-projection",
+      requirementContract: "native-file-dialog-projection",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["native-file-dialog.selection.projected"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "native-file-dialog.selection.projected",
           mode: "correlation",
         },
       ],
-      lossSignals: ["native-file-dialog.selection.projected"],
+      lossSignals: [],
+      resourceSignals: ["native-file-dialog.selection.projected"],
+      replayReferences: [],
       operations: [
         {
           op: "native-file-dialog.selection.projected",
@@ -42805,15 +45306,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "native-runtime-invalid",
+      requirementContract: "native-runtime-invalid",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["search.native-runtime-resolved"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "search.native-runtime-resolved",
           mode: "none",
         },
       ],
-      lossSignals: ["search.native-runtime-resolved"],
+      lossSignals: [],
+      resourceSignals: ["search.native-runtime-resolved"],
+      replayReferences: [],
       operations: [
         {
           op: "search.native-runtime-resolved",
@@ -42863,15 +45374,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "native-runtime-unavailable",
+      requirementContract: "native-runtime-unavailable",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["search.native-runtime-resolved"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "search.native-runtime-resolved",
           mode: "none",
         },
       ],
-      lossSignals: ["search.native-runtime-resolved"],
+      lossSignals: [],
+      resourceSignals: ["search.native-runtime-resolved"],
+      replayReferences: [],
       operations: [
         {
           op: "search.native-runtime-resolved",
@@ -42921,8 +45442,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "portable-normal-startup-recovery",
+      requirementContract: "portable-normal-startup-recovery",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["portable.normal-startup-recovery.completed"],
+        failure: ["portable.normal-startup-recovery.required"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "portable.normal-startup-recovery.completed",
@@ -42933,10 +45462,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "portable.normal-startup-recovery.completed",
-        "portable.normal-startup-recovery.required",
-      ],
+      lossSignals: [],
+      resourceSignals: ["portable.normal-startup-recovery.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "portable.normal-startup-recovery.completed",
@@ -43003,15 +45531,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "portable-release-trust",
+      requirementContract: "portable-release-trust",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["update.release-trust.verify"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "update.release-trust.verify",
           mode: "correlation",
         },
       ],
-      lossSignals: ["update.release-trust.verify"],
+      lossSignals: [],
+      resourceSignals: ["update.release-trust.verify"],
+      replayReferences: [],
       operations: [
         {
           op: "update.release-trust.verify",
@@ -43074,15 +45612,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "portable-tree-attestation",
+      requirementContract: "portable-tree-attestation",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["security.portable-tree-attestation.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.portable-tree-attestation.failed",
           mode: "none",
         },
       ],
-      lossSignals: ["security.portable-tree-attestation.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.portable-tree-attestation.failed",
@@ -43120,8 +45668,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "portable-update-evidence",
+      requirementContract: "portable-update-evidence",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["update.portable-asset.redirect-refused", "update.portable-fetch.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "update.portable-asset.redirect-refused",
@@ -43132,7 +45688,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["update.portable-asset.redirect-refused", "update.portable-fetch.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "update.portable-asset.redirect-refused",
@@ -43222,8 +45780,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-apply",
+      requirementContract: "pr-description-apply",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "start"],
+      lifecycleOperations: {
+        start: ["pr-description.apply.started"],
+        state: [],
+        end: ["pr-description.apply.succeeded"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.apply.started",
@@ -43234,7 +45800,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.apply.started", "pr-description.apply.succeeded"],
+      lossSignals: [],
+      resourceSignals: ["pr-description.apply.started", "pr-description.apply.succeeded"],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.apply.started",
@@ -43314,15 +45882,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-apply-blocked",
+      requirementContract: "pr-description-apply-blocked",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["pr-description.apply.blocked"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.apply.blocked",
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.apply.blocked"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.apply.blocked",
@@ -43366,15 +45944,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-apply-failed",
+      requirementContract: "pr-description-apply-failed",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["pr-description.apply.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.apply.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.apply.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.apply.failed",
@@ -43418,15 +46006,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-authority",
+      requirementContract: "pr-description-authority",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["pr-description.authority.revalidation.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.authority.revalidation.failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.authority.revalidation.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.authority.revalidation.failed",
@@ -43464,8 +46062,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-chat-authority",
+      requirementContract: "pr-description-chat-authority",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["pr-description.chat.turn.admitted"],
+        end: [],
+        failure: ["pr-description.chat.turn.denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.chat.turn.admitted",
@@ -43476,7 +46082,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.chat.turn.admitted", "pr-description.chat.turn.denied"],
+      lossSignals: [],
+      resourceSignals: ["pr-description.chat.turn.admitted"],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.chat.turn.admitted",
@@ -43538,8 +46146,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-chat-generation",
+      requirementContract: "pr-description-chat-generation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["pr-description.chat.generated"],
+        failure: ["pr-description.chat.unavailable"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.chat.generated",
@@ -43550,7 +46166,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.chat.generated", "pr-description.chat.unavailable"],
+      lossSignals: [],
+      resourceSignals: ["pr-description.chat.generated"],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.chat.generated",
@@ -43649,8 +46267,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-generation",
+      requirementContract: "pr-description-generation",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "start"],
+      lifecycleOperations: {
+        start: ["pr-description.generation.started"],
+        state: [],
+        end: ["pr-description.generation.completed"],
+        failure: ["pr-description.generation.failed", "pr-description.generation.unavailable"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.generation.completed",
@@ -43669,12 +46295,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "pr-description.generation.completed",
-        "pr-description.generation.failed",
-        "pr-description.generation.started",
-        "pr-description.generation.unavailable",
-      ],
+      lossSignals: [],
+      resourceSignals: ["pr-description.generation.completed", "pr-description.generation.started"],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.generation.completed",
@@ -43875,8 +46498,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-model-call",
+      requirementContract: "pr-description-model-call",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["end", "failure", "start"],
+      lifecycleOperations: {
+        start: ["pr-description.model.started"],
+        state: [],
+        end: ["pr-description.model.completed"],
+        failure: ["pr-description.model.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.model.completed",
@@ -43891,11 +46522,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "pr-description.model.completed",
-        "pr-description.model.failed",
-        "pr-description.model.started",
-      ],
+      lossSignals: [],
+      resourceSignals: ["pr-description.model.completed", "pr-description.model.started"],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.model.completed",
@@ -44042,15 +46671,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-model-egress",
+      requirementContract: "pr-description-model-egress",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["pr-description.model-egress.denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.model-egress.denied",
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.model-egress.denied"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.model-egress.denied",
@@ -44075,15 +46714,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-repository-binding",
+      requirementContract: "pr-description-repository-binding",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["pr-description.repository.mismatch"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.repository.mismatch",
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.repository.mismatch"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.repository.mismatch",
@@ -44108,15 +46757,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "pr-description-workbench-egress",
+      requirementContract: "pr-description-workbench-egress",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["pr-description.workbench.egress.denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "pr-description.workbench.egress.denied",
           mode: "correlation",
         },
       ],
-      lossSignals: ["pr-description.workbench.egress.denied"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "pr-description.workbench.egress.denied",
@@ -44148,15 +46807,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "process-fatal",
+      requirementContract: "process-fatal",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["process.fatal"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "process.fatal",
           mode: "none",
         },
       ],
-      lossSignals: ["process.fatal"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "process.fatal",
@@ -44224,15 +46893,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "process-shutdown",
+      requirementContract: "process-shutdown",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["process.exiting"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "process.exiting",
           mode: "none",
         },
       ],
-      lossSignals: ["process.exiting"],
+      lossSignals: [],
+      resourceSignals: ["process.exiting"],
+      replayReferences: [],
       operations: [
         {
           op: "process.exiting",
@@ -44282,15 +46961,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "process-stall",
+      requirementContract: "process-stall",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["process.heartbeat"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "process.heartbeat",
           mode: "none",
         },
       ],
-      lossSignals: ["process.heartbeat"],
+      lossSignals: [],
+      resourceSignals: ["process.heartbeat"],
+      replayReferences: [],
       operations: [
         {
           op: "process.heartbeat",
@@ -44346,15 +47035,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "process-startup",
+      requirementContract: "process-startup",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["process.started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "process.started",
           mode: "none",
         },
       ],
-      lossSignals: ["process.started"],
+      lossSignals: [],
+      resourceSignals: ["process.started"],
+      replayReferences: [],
       operations: [
         {
           op: "process.started",
@@ -44454,15 +47153,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "read-only-child-run",
+      requirementContract: "read-only-child-run",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["coding-runtime.read-only-child.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.read-only-child.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.read-only-child.completed"],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.read-only-child.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.read-only-child.completed",
@@ -44506,15 +47215,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "read-only-child-runner",
+      requirementContract: "read-only-child-runner",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["coding-runtime.read-only-child.runner-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "coding-runtime.read-only-child.runner-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["coding-runtime.read-only-child.runner-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "coding-runtime.read-only-child.runner-failed",
@@ -44576,15 +47295,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "repository-fingerprint-diff",
+      requirementContract: "repository-fingerprint-diff",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["repository.fingerprint-diff.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "repository.fingerprint-diff.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["repository.fingerprint-diff.completed"],
+      lossSignals: [],
+      resourceSignals: ["repository.fingerprint-diff.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "repository.fingerprint-diff.completed",
@@ -44640,15 +47369,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "rerank-degradation",
+      requirementContract: "rerank-degradation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["search.rerank.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "search.rerank.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["search.rerank.completed"],
+      lossSignals: [],
+      resourceSignals: ["search.rerank.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "search.rerank.completed",
@@ -44735,8 +47474,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "runtime-confinement",
+      requirementContract: "runtime-confinement",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "start"],
+      lifecycleOperations: {
+        start: ["runtime.confinement.spawned"],
+        state: [],
+        end: [],
+        failure: ["runtime.confinement.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "runtime.confinement.failed",
@@ -44747,7 +47494,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["runtime.confinement.failed", "runtime.confinement.spawned"],
+      lossSignals: [],
+      resourceSignals: ["runtime.confinement.spawned"],
+      replayReferences: [],
       operations: [
         {
           op: "runtime.confinement.failed",
@@ -44887,15 +47636,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "runtime-confinement-unavailable",
+      requirementContract: "runtime-confinement-unavailable",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["runtime.confinement.unavailable"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "runtime.confinement.unavailable",
           mode: "correlation",
         },
       ],
-      lossSignals: ["runtime.confinement.unavailable"],
+      lossSignals: [],
+      resourceSignals: ["runtime.confinement.unavailable"],
+      replayReferences: [],
       operations: [
         {
           op: "runtime.confinement.unavailable",
@@ -44944,15 +47703,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "runtime-git-identity",
+      requirementContract: "runtime-git-identity",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.runtime-identity"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.runtime-identity",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.runtime-identity"],
+      lossSignals: [],
+      resourceSignals: ["git.runtime-identity"],
+      replayReferences: [],
       operations: [
         {
           op: "git.runtime-identity",
@@ -45008,15 +47777,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "runtime-shutdown",
+      requirementContract: "runtime-shutdown",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["server.runtime.shutdown"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "server.runtime.shutdown",
           mode: "correlation",
         },
       ],
-      lossSignals: ["server.runtime.shutdown"],
+      lossSignals: [],
+      resourceSignals: ["server.runtime.shutdown"],
+      replayReferences: [],
       operations: [
         {
           op: "server.runtime.shutdown",
@@ -45153,8 +47932,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "security-atomic-publish",
+      requirementContract: "security-atomic-publish",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["security.fs.atomic-rename-retried"],
+        end: [],
+        failure: ["security.fs.atomic-rename-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.fs.atomic-rename-failed",
@@ -45165,7 +47952,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: ["security.fs.atomic-rename-failed", "security.fs.atomic-rename-retried"],
+      lossSignals: [],
+      resourceSignals: ["security.fs.atomic-rename-retried"],
+      replayReferences: [],
       operations: [
         {
           op: "security.fs.atomic-rename-failed",
@@ -45233,15 +48022,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "security-keychain-access",
+      requirementContract: "security-keychain-access",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["security.keychain.fallback"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.keychain.fallback",
           mode: "none",
         },
       ],
-      lossSignals: ["security.keychain.fallback"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.keychain.fallback",
@@ -45279,8 +48078,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "security-vault-delete",
+      requirementContract: "security-vault-delete",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["security.vault.entries-deleted"],
+        failure: ["security.vault.entries-delete-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.vault.entries-delete-failed",
@@ -45291,7 +48098,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["security.vault.entries-delete-failed", "security.vault.entries-deleted"],
+      lossSignals: [],
+      resourceSignals: ["security.vault.entries-deleted"],
+      replayReferences: [],
       operations: [
         {
           op: "security.vault.entries-delete-failed",
@@ -45371,8 +48180,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "security-vault-key-resolution",
+      requirementContract: "security-vault-key-resolution",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["security.vault.key-resolved"],
+        failure: ["security.vault.key-resolution-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.vault.key-resolution-failed",
@@ -45383,7 +48200,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["security.vault.key-resolution-failed", "security.vault.key-resolved"],
+      lossSignals: [],
+      resourceSignals: ["security.vault.key-resolved"],
+      replayReferences: [],
       operations: [
         {
           op: "security.vault.key-resolution-failed",
@@ -45456,15 +48275,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "security-vault-read",
+      requirementContract: "security-vault-read",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["security.vault.shard-unreadable"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.vault.shard-unreadable",
           mode: "correlation",
         },
       ],
-      lossSignals: ["security.vault.shard-unreadable"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.vault.shard-unreadable",
@@ -45520,15 +48349,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "security-vault-rollback",
+      requirementContract: "security-vault-rollback",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["security.vault.entries-rollback-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.vault.entries-rollback-failed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["security.vault.entries-rollback-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.vault.entries-rollback-failed",
@@ -45584,8 +48423,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "security-vault-write",
+      requirementContract: "security-vault-write",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["security.vault.entries-merged"],
+        failure: ["security.vault.entries-merge-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.vault.entries-merge-failed",
@@ -45596,7 +48443,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["security.vault.entries-merge-failed", "security.vault.entries-merged"],
+      lossSignals: [],
+      resourceSignals: ["security.vault.entries-merged"],
+      replayReferences: [],
       operations: [
         {
           op: "security.vault.entries-merge-failed",
@@ -45676,15 +48525,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "server-diagnostic",
+      requirementContract: "server-diagnostic",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["server.diagnostic.failure"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "server.diagnostic.failure",
           mode: "correlation",
         },
       ],
-      lossSignals: ["server.diagnostic.failure"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "server.diagnostic.failure",
@@ -45869,15 +48728,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "shutdown-hook-failed",
+      requirementContract: "shutdown-hook-failed",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["process.exiting"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "process.exiting",
           mode: "none",
         },
       ],
-      lossSignals: ["process.exiting"],
+      lossSignals: [],
+      resourceSignals: ["process.exiting"],
+      replayReferences: [],
       operations: [
         {
           op: "process.exiting",
@@ -45927,15 +48796,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "source-discovery-incomplete",
+      requirementContract: "source-discovery-incomplete",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["indexing.source.completed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.source.completed",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.source.completed"],
+      lossSignals: [],
+      resourceSignals: ["indexing.source.completed"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.source.completed",
@@ -46003,15 +48882,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "source-discovery-stall",
+      requirementContract: "source-discovery-stall",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["indexing.source.started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "indexing.source.started",
           mode: "correlation",
         },
       ],
-      lossSignals: ["indexing.source.started"],
+      lossSignals: [],
+      resourceSignals: ["indexing.source.started"],
+      replayReferences: [],
       operations: [
         {
           op: "indexing.source.started",
@@ -46055,15 +48944,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "speech-language-normalization",
+      requirementContract: "speech-language-normalization",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["speech.stt.language.normalized"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "speech.stt.language.normalized",
           mode: "none",
         },
       ],
-      lossSignals: ["speech.stt.language.normalized"],
+      lossSignals: [],
+      resourceSignals: ["speech.stt.language.normalized"],
+      replayReferences: [],
       operations: [
         {
           op: "speech.stt.language.normalized",
@@ -46107,15 +49006,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "speech-mime-correction",
+      requirementContract: "speech-mime-correction",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["speech.tts.mime.corrected"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "speech.tts.mime.corrected",
           mode: "none",
         },
       ],
-      lossSignals: ["speech.tts.mime.corrected"],
+      lossSignals: [],
+      resourceSignals: ["speech.tts.mime.corrected"],
+      replayReferences: [],
       operations: [
         {
           op: "speech.tts.mime.corrected",
@@ -46153,15 +49062,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "speech-stream-response",
+      requirementContract: "speech-stream-response",
       productSurfaces: ["keiko-model-gateway"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["speech.tts.stream.peek.failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "speech.tts.stream.peek.failed",
           mode: "none",
         },
       ],
-      lossSignals: ["speech.tts.stream.peek.failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "speech.tts.stream.peek.failed",
@@ -46199,15 +49118,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "sse-resume-decision",
+      requirementContract: "sse-resume-decision",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["sse.run-events.resume"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "sse.run-events.resume",
           mode: "correlation",
         },
       ],
-      lossSignals: ["sse.run-events.resume"],
+      lossSignals: [],
+      resourceSignals: ["sse.run-events.resume"],
+      replayReferences: [],
       operations: [
         {
           op: "sse.run-events.resume",
@@ -46257,15 +49186,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "sse-stream",
+      requirementContract: "sse-stream",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["sse.stream.closed"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "sse.stream.closed",
           mode: "none",
         },
       ],
-      lossSignals: ["sse.stream.closed"],
+      lossSignals: [],
+      resourceSignals: ["sse.stream.closed"],
+      replayReferences: [],
       operations: [
         {
           op: "sse.stream.closed",
@@ -46309,15 +49248,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "startup-recovery-failed",
+      requirementContract: "startup-recovery-failed",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["process.fatal"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "process.fatal",
           mode: "none",
         },
       ],
-      lossSignals: ["process.fatal"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "process.fatal",
@@ -46385,15 +49334,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "store-encryption-checkpoint",
+      requirementContract: "store-encryption-checkpoint",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["store.encryption-checkpoint-degraded"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "store.encryption-checkpoint-degraded",
           mode: "none",
         },
       ],
-      lossSignals: ["store.encryption-checkpoint-degraded"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "store.encryption-checkpoint-degraded",
@@ -46443,15 +49402,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "store-encryption-migration",
+      requirementContract: "store-encryption-migration",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["store.encryption-migrated"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "store.encryption-migrated",
           mode: "none",
         },
       ],
-      lossSignals: ["store.encryption-migrated"],
+      lossSignals: [],
+      resourceSignals: ["store.encryption-migrated"],
+      replayReferences: [],
       operations: [
         {
           op: "store.encryption-migrated",
@@ -46489,15 +49458,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "support-analysis",
+      requirementContract: "support-analysis",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["support.analyze.classified"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "support.analyze.classified",
           mode: "correlation",
         },
       ],
-      lossSignals: ["support.analyze.classified"],
+      lossSignals: [],
+      resourceSignals: ["support.analyze.classified"],
+      replayReferences: [],
       operations: [
         {
           op: "support.analyze.classified",
@@ -46583,15 +49562,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "support-publication",
+      requirementContract: "support-publication",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["support.export.publication"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "support.export.publication",
           mode: "correlation",
         },
       ],
-      lossSignals: ["support.export.publication"],
+      lossSignals: [],
+      resourceSignals: ["support.export.publication"],
+      replayReferences: [],
       operations: [
         {
           op: "support.export.publication",
@@ -46713,15 +49702,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "support-publication-acknowledgement",
+      requirementContract: "support-publication-acknowledgement",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["support.export.publication"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "support.export.publication",
           mode: "correlation",
         },
       ],
-      lossSignals: ["support.export.publication"],
+      lossSignals: [],
+      resourceSignals: ["support.export.publication"],
+      replayReferences: [],
       operations: [
         {
           op: "support.export.publication",
@@ -46843,15 +49842,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "task-workspace-lifecycle",
+      requirementContract: "task-workspace-lifecycle",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["task-workspace.lifecycle"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "task-workspace.lifecycle",
           mode: "correlation",
         },
       ],
-      lossSignals: ["task-workspace.lifecycle"],
+      lossSignals: [],
+      resourceSignals: ["task-workspace.lifecycle"],
+      replayReferences: [],
       operations: [
         {
           op: "task-workspace.lifecycle",
@@ -46957,8 +49966,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "task-workspace-repository-registration",
+      requirementContract: "task-workspace-repository-registration",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["task-workspace.repository.registered"],
+        end: [],
+        failure: ["task-workspace.repository.registration-refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "task-workspace.repository.registered",
@@ -46969,10 +49986,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "task-workspace.repository.registered",
-        "task-workspace.repository.registration-refused",
-      ],
+      lossSignals: [],
+      resourceSignals: ["task-workspace.repository.registered"],
+      replayReferences: [],
       operations: [
         {
           op: "task-workspace.repository.registered",
@@ -47040,15 +50056,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "tool-catalog-binding",
+      requirementContract: "tool-catalog-binding",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["tool-catalog.bind-ready"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "tool-catalog.bind-ready",
           mode: "correlation",
         },
       ],
-      lossSignals: ["tool-catalog.bind-ready"],
+      lossSignals: [],
+      resourceSignals: ["tool-catalog.bind-ready"],
+      replayReferences: [],
       operations: [
         {
           op: "tool-catalog.bind-ready",
@@ -47117,15 +50143,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "tool-catalog-binding-unavailable",
+      requirementContract: "tool-catalog-binding-unavailable",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["tool-catalog.bind-unavailable"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "tool-catalog.bind-unavailable",
           mode: "correlation",
         },
       ],
-      lossSignals: ["tool-catalog.bind-unavailable"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "tool-catalog.bind-unavailable",
@@ -47194,15 +50230,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "tool-catalog-dispatch-unbound",
+      requirementContract: "tool-catalog-dispatch-unbound",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["tool-catalog.dispatch-unbound"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "tool-catalog.dispatch-unbound",
           mode: "correlation",
         },
       ],
-      lossSignals: ["tool-catalog.dispatch-unbound"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "tool-catalog.dispatch-unbound",
@@ -47234,15 +50280,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "tool-catalog-invocation",
+      requirementContract: "tool-catalog-invocation",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["tool-catalog.invocation-started"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "tool-catalog.invocation-started",
           mode: "correlation",
         },
       ],
-      lossSignals: ["tool-catalog.invocation-started"],
+      lossSignals: [],
+      resourceSignals: ["tool-catalog.invocation-started"],
+      replayReferences: [],
       operations: [
         {
           op: "tool-catalog.invocation-started",
@@ -47335,15 +50391,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "tool-catalog-invocation-settlement",
+      requirementContract: "tool-catalog-invocation-settlement",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["tool-catalog.invocation-settled"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "tool-catalog.invocation-settled",
           mode: "correlation",
         },
       ],
-      lossSignals: ["tool-catalog.invocation-settled"],
+      lossSignals: [],
+      resourceSignals: ["tool-catalog.invocation-settled"],
+      replayReferences: [],
       operations: [
         {
           op: "tool-catalog.invocation-settled",
@@ -47510,8 +50576,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "tool-catalog-late-completion",
+      requirementContract: "tool-catalog-late-completion",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["loss"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [],
+        loss: ["tool-catalog.completion-discarded"],
+      },
       causalEdges: [
         {
           op: "tool-catalog.completion-discarded",
@@ -47519,6 +50593,8 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: ["tool-catalog.completion-discarded"],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "tool-catalog.completion-discarded",
@@ -47611,15 +50687,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "tool-catalog-projection",
+      requirementContract: "tool-catalog-projection",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["tool-catalog.projection"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "tool-catalog.projection",
           mode: "correlation",
         },
       ],
-      lossSignals: ["tool-catalog.projection"],
+      lossSignals: [],
+      resourceSignals: ["tool-catalog.projection"],
+      replayReferences: [],
       operations: [
         {
           op: "tool-catalog.projection",
@@ -47688,15 +50774,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "ui-process-stop",
+      requirementContract: "ui-process-stop",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["cli.lifecycle.stop-requested"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "cli.lifecycle.stop-requested",
           mode: "none",
         },
       ],
-      lossSignals: ["cli.lifecycle.stop-requested"],
+      lossSignals: [],
+      resourceSignals: ["cli.lifecycle.stop-requested"],
+      replayReferences: [],
       operations: [
         {
           op: "cli.lifecycle.stop-requested",
@@ -47728,8 +50824,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "ui-process-stop-escalation",
+      requirementContract: "ui-process-stop-escalation",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["cli.lifecycle.stop-escalated"],
+        end: [],
+        failure: ["cli.lifecycle.stop-escalation-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "cli.lifecycle.stop-escalated",
@@ -47740,7 +50844,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: ["cli.lifecycle.stop-escalated", "cli.lifecycle.stop-escalation-failed"],
+      lossSignals: [],
+      resourceSignals: ["cli.lifecycle.stop-escalated"],
+      replayReferences: [],
       operations: [
         {
           op: "cli.lifecycle.stop-escalated",
@@ -47796,15 +50902,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "ui-process-stop-request",
+      requirementContract: "ui-process-stop-request",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["cli.lifecycle.stop-request-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "cli.lifecycle.stop-request-failed",
           mode: "none",
         },
       ],
-      lossSignals: ["cli.lifecycle.stop-request-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "cli.lifecycle.stop-request-failed",
@@ -47836,15 +50952,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "ui-store-migration",
+      requirementContract: "ui-store-migration",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["store.journey-outcomes.migration"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "store.journey-outcomes.migration",
           mode: "none",
         },
       ],
-      lossSignals: ["store.journey-outcomes.migration"],
+      lossSignals: [],
+      resourceSignals: ["store.journey-outcomes.migration"],
+      replayReferences: [],
       operations: [
         {
           op: "store.journey-outcomes.migration",
@@ -47894,15 +51020,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "ui-store-open",
+      requirementContract: "ui-store-open",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["store.opened"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "store.opened",
           mode: "none",
         },
       ],
-      lossSignals: ["store.opened"],
+      lossSignals: [],
+      resourceSignals: ["store.opened"],
+      replayReferences: [],
       operations: [
         {
           op: "store.opened",
@@ -47964,8 +51100,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "update-candidate-authority",
+      requirementContract: "update-candidate-authority",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure", "start"],
+      lifecycleOperations: {
+        start: ["update.candidate.issued"],
+        state: [],
+        end: ["update.candidate.consumed"],
+        failure: ["update.candidate.rejected"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "update.candidate.consumed",
@@ -47980,11 +51124,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "update.candidate.consumed",
-        "update.candidate.issued",
-        "update.candidate.rejected",
-      ],
+      lossSignals: [],
+      resourceSignals: ["update.candidate.consumed", "update.candidate.issued"],
+      replayReferences: [],
       operations: [
         {
           op: "update.candidate.consumed",
@@ -48113,15 +51255,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "update-runtime",
+      requirementContract: "update-runtime",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["update.runtime.event"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "update.runtime.event",
           mode: "correlation",
         },
       ],
-      lossSignals: ["update.runtime.event"],
+      lossSignals: [],
+      resourceSignals: ["update.runtime.event"],
+      replayReferences: [],
       operations: [
         {
           op: "update.runtime.event",
@@ -48331,15 +51483,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "update-runtime-legacy-import",
+      requirementContract: "update-runtime-legacy-import",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["update.runtime.legacy-snapshot-imported"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "update.runtime.legacy-snapshot-imported",
           mode: "correlation",
         },
       ],
-      lossSignals: ["update.runtime.legacy-snapshot-imported"],
+      lossSignals: [],
+      resourceSignals: ["update.runtime.legacy-snapshot-imported"],
+      replayReferences: [],
       operations: [
         {
           op: "update.runtime.legacy-snapshot-imported",
@@ -48408,15 +51570,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "update-session-lifecycle",
+      requirementContract: "update-session-lifecycle",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["update.session.lifecycle"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "update.session.lifecycle",
           mode: "correlation",
         },
       ],
-      lossSignals: ["update.session.lifecycle"],
+      lossSignals: [],
+      resourceSignals: ["update.session.lifecycle"],
+      replayReferences: [],
       operations: [
         {
           op: "update.session.lifecycle",
@@ -48510,15 +51682,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "vector-index-identity-mismatch",
+      requirementContract: "vector-index-identity-mismatch",
       productSurfaces: ["keiko-local-knowledge"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["search.index-invalidated-for-capsule"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "search.index-invalidated-for-capsule",
           mode: "none",
         },
       ],
-      lossSignals: ["search.index-invalidated-for-capsule"],
+      lossSignals: [],
+      resourceSignals: ["search.index-invalidated-for-capsule"],
+      replayReferences: [],
       operations: [
         {
           op: "search.index-invalidated-for-capsule",
@@ -48556,15 +51738,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "verification-dependency-bootstrap",
+      requirementContract: "verification-dependency-bootstrap",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["editor.verification.dependencies"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "editor.verification.dependencies",
           mode: "correlation",
         },
       ],
-      lossSignals: ["editor.verification.dependencies"],
+      lossSignals: [],
+      resourceSignals: ["editor.verification.dependencies"],
+      replayReferences: [],
       operations: [
         {
           op: "editor.verification.dependencies",
@@ -48626,15 +51818,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "verification-runner-failure",
+      requirementContract: "verification-runner-failure",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["editor.verification.execute"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "editor.verification.execute",
           mode: "correlation",
         },
       ],
-      lossSignals: ["editor.verification.execute"],
+      lossSignals: [],
+      resourceSignals: ["editor.verification.execute"],
+      replayReferences: [],
       operations: [
         {
           op: "editor.verification.execute",
@@ -48763,15 +51965,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "verification-runner-refusal",
+      requirementContract: "verification-runner-refusal",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["editor.verification.execute"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "editor.verification.execute",
           mode: "correlation",
         },
       ],
-      lossSignals: ["editor.verification.execute"],
+      lossSignals: [],
+      resourceSignals: ["editor.verification.execute"],
+      replayReferences: [],
       operations: [
         {
           op: "editor.verification.execute",
@@ -48900,15 +52112,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "verified-commit-authority",
+      requirementContract: "verified-commit-authority",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["git.verified-commit.authority"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "git.verified-commit.authority",
           mode: "correlation",
         },
       ],
-      lossSignals: ["git.verified-commit.authority"],
+      lossSignals: [],
+      resourceSignals: ["git.verified-commit.authority"],
+      replayReferences: [],
       operations: [
         {
           op: "git.verified-commit.authority",
@@ -48977,8 +52199,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "voice-live-dictation-admission",
+      requirementContract: "voice-live-dictation-admission",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [
+          "voice.live-dictation.capacity-rejected",
+          "voice.live-dictation.initial-frame-timeout",
+        ],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "voice.live-dictation.capacity-rejected",
@@ -48989,10 +52222,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: [
-        "voice.live-dictation.capacity-rejected",
-        "voice.live-dictation.initial-frame-timeout",
-      ],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "voice.live-dictation.capacity-rejected",
@@ -49047,15 +52279,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "voice-realtime-policy",
+      requirementContract: "voice-realtime-policy",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["voice.realtime.policy-decision"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "voice.realtime.policy-decision",
           mode: "correlation",
         },
       ],
-      lossSignals: ["voice.realtime.policy-decision"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "voice.realtime.policy-decision",
@@ -49093,8 +52335,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "voice-realtime-session",
+      requirementContract: "voice-realtime-session",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "start"],
+      lifecycleOperations: {
+        start: ["voice.realtime.session-started"],
+        state: [],
+        end: ["voice.realtime.session-ended"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "voice.realtime.session-ended",
@@ -49105,7 +52355,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["voice.realtime.session-ended", "voice.realtime.session-started"],
+      lossSignals: [],
+      resourceSignals: ["voice.realtime.session-ended", "voice.realtime.session-started"],
+      replayReferences: [],
       operations: [
         {
           op: "voice.realtime.session-ended",
@@ -49160,15 +52412,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "windows-alert-spawn",
+      requirementContract: "windows-alert-spawn",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["portable.windows-alert.spawn-failed"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "portable.windows-alert.spawn-failed",
           mode: "none",
         },
       ],
-      lossSignals: ["portable.windows-alert.spawn-failed"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "portable.windows-alert.spawn-failed",
@@ -49206,15 +52468,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "windows-authenticode-system-binary",
+      requirementContract: "windows-authenticode-system-binary",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["portable.windows-authenticode.system-binary-refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "portable.windows-authenticode.system-binary-refused",
           mode: "correlation",
         },
       ],
-      lossSignals: ["portable.windows-authenticode.system-binary-refused"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "portable.windows-authenticode.system-binary-refused",
@@ -49246,15 +52518,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "windows-local-volume",
+      requirementContract: "windows-local-volume",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["security.windows-local-volume.refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.windows-local-volume.refused",
           mode: "none",
         },
       ],
-      lossSignals: ["security.windows-local-volume.refused"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.windows-local-volume.refused",
@@ -49292,15 +52574,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "windows-shortcut-system-binary",
+      requirementContract: "windows-shortcut-system-binary",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["security.windows-shortcut.system-binary-missing"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.windows-shortcut.system-binary-missing",
           mode: "none",
         },
       ],
-      lossSignals: ["security.windows-shortcut.system-binary-missing"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.windows-shortcut.system-binary-missing",
@@ -49338,15 +52630,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "windows-shortcut-system-root",
+      requirementContract: "windows-shortcut-system-root",
       productSurfaces: ["keiko-security"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["security.windows-shortcut.system-root-refused"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.windows-shortcut.system-root-refused",
           mode: "none",
         },
       ],
-      lossSignals: ["security.windows-shortcut.system-root-refused"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.windows-shortcut.system-root-refused",
@@ -49384,8 +52686,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "windows-system-binary-unavailable",
+      requirementContract: "windows-system-binary-unavailable",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [
+          "security.windows-launcher.system-binary-missing",
+          "security.windows-lifecycle-opener.system-binary-missing",
+          "security.windows-portable-alert.system-binary-missing",
+          "security.windows-portable-legacy-launcher.system-binary-missing",
+        ],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.windows-launcher.system-binary-missing",
@@ -49404,12 +52719,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
-        "security.windows-launcher.system-binary-missing",
-        "security.windows-lifecycle-opener.system-binary-missing",
-        "security.windows-portable-alert.system-binary-missing",
-        "security.windows-portable-legacy-launcher.system-binary-missing",
-      ],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.windows-launcher.system-binary-missing",
@@ -49537,8 +52849,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "windows-system-root-refused",
+      requirementContract: "windows-system-root-refused",
       productSurfaces: ["keiko-cli"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: [
+          "security.windows-launcher.system-root-refused",
+          "security.windows-lifecycle-opener.system-root-refused",
+          "security.windows-portable-alert.system-root-refused",
+          "security.windows-portable-legacy-launcher.system-root-refused",
+        ],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "security.windows-launcher.system-root-refused",
@@ -49557,12 +52882,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "none",
         },
       ],
-      lossSignals: [
-        "security.windows-launcher.system-root-refused",
-        "security.windows-lifecycle-opener.system-root-refused",
-        "security.windows-portable-alert.system-root-refused",
-        "security.windows-portable-legacy-launcher.system-root-refused",
-      ],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "security.windows-launcher.system-root-refused",
@@ -49690,15 +53012,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "workspace-identity-capability",
+      requirementContract: "workspace-identity-capability",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["task-workspace.identity.creation-time-probe"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "task-workspace.identity.creation-time-probe",
           mode: "correlation",
         },
       ],
-      lossSignals: ["task-workspace.identity.creation-time-probe"],
+      lossSignals: [],
+      resourceSignals: ["task-workspace.identity.creation-time-probe"],
+      replayReferences: [],
       operations: [
         {
           op: "task-workspace.identity.creation-time-probe",
@@ -49736,15 +53068,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "workspace-reconnect",
+      requirementContract: "workspace-reconnect",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["project.workspace.reconnect"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "project.workspace.reconnect",
           mode: "correlation",
         },
       ],
-      lossSignals: ["project.workspace.reconnect"],
+      lossSignals: [],
+      resourceSignals: ["project.workspace.reconnect"],
+      replayReferences: [],
       operations: [
         {
           op: "project.workspace.reconnect",
@@ -49776,15 +53118,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "workspace-root-denial",
+      requirementContract: "workspace-root-denial",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["workspace.root.denied"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "workspace.root.denied",
           mode: "correlation",
         },
       ],
-      lossSignals: ["workspace.root.denied"],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
       operations: [
         {
           op: "workspace.root.denied",
@@ -49846,8 +53198,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "workspace-script-trust",
+      requirementContract: "workspace-script-trust",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["workspace-script-trust.granted"],
+        end: ["workspace-script-trust.revoked"],
+        failure: [],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "workspace-script-trust.granted",
@@ -49858,7 +53218,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["workspace-script-trust.granted", "workspace-script-trust.revoked"],
+      lossSignals: [],
+      resourceSignals: ["workspace-script-trust.granted", "workspace-script-trust.revoked"],
+      replayReferences: [],
       operations: [
         {
           op: "workspace-script-trust.granted",
@@ -49938,8 +53300,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     },
     {
       failureClass: "workspace-script-trust-admission",
+      requirementContract: "workspace-script-trust-admission",
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["workspace-script-trust.run-manifest-admitted"],
+        end: ["workspace-script-trust.run-manifest-revoked"],
+        failure: ["workspace-script-trust.run-manifest-not-admitted"],
+        loss: [],
+      },
       causalEdges: [
         {
           op: "workspace-script-trust.run-manifest-admitted",
@@ -49954,11 +53324,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "parent-correlation",
         },
       ],
-      lossSignals: [
+      lossSignals: [],
+      resourceSignals: [
         "workspace-script-trust.run-manifest-admitted",
-        "workspace-script-trust.run-manifest-not-admitted",
         "workspace-script-trust.run-manifest-revoked",
       ],
+      replayReferences: [],
       operations: [
         {
           op: "workspace-script-trust.run-manifest-admitted",

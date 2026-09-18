@@ -61,6 +61,23 @@ function snapshotIsDeliverable(state: string): boolean {
 
 type TargetFailure = Extract<DraftDeliveryTargetResolution, { ok: false }>;
 
+const GIT_PUBLISH_PREPARATION_REASONS = [
+  "git-publish-metadata-unavailable",
+  "git-publish-metadata-read-unavailable",
+  "git-publish-common-directory-unsupported",
+  "git-publish-common-directory-drift",
+  "git-publish-object-directory-invalid",
+  "git-publish-shallow-metadata-invalid",
+  "git-publish-private-root-overlap",
+  "git-publish-directory-invalid",
+  "git-publish-commit-invalid",
+  "git-publish-metadata-drift",
+] as const;
+type GitPublishPreparationReason = (typeof GIT_PUBLISH_PREPARATION_REASONS)[number];
+const GIT_PUBLISH_PREPARATION_REASON_SET: ReadonlySet<string> = new Set(
+  GIT_PUBLISH_PREPARATION_REASONS,
+);
+
 const GIT_DRAFT_PUSH_PREPARATION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -80,19 +97,7 @@ const GIT_DRAFT_PUSH_PREPARATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [
-        "git-publish-metadata-unavailable",
-        "git-publish-metadata-read-unavailable",
-        "git-publish-common-directory-unsupported",
-        "git-publish-common-directory-drift",
-        "git-publish-object-directory-invalid",
-        "git-publish-shallow-metadata-invalid",
-        "git-publish-private-root-overlap",
-        "git-publish-directory-invalid",
-        "git-publish-commit-invalid",
-        "git-publish-metadata-drift",
-        "unclassified",
-      ],
+      values: [...GIT_PUBLISH_PREPARATION_REASONS, "unclassified"],
     },
     frames: {
       type: "string-array",
@@ -761,36 +766,11 @@ class DraftDeliveryFactory {
 
 // A closed `git-publish-*` slug from the publish view, or undefined for anything else — never free
 // text, so the preparation line stays body-free whatever an unexpected error carries.
-function publishPreparationReason(
-  error: unknown,
-):
-  | "git-publish-metadata-unavailable"
-  | "git-publish-metadata-read-unavailable"
-  | "git-publish-common-directory-unsupported"
-  | "git-publish-common-directory-drift"
-  | "git-publish-object-directory-invalid"
-  | "git-publish-shallow-metadata-invalid"
-  | "git-publish-private-root-overlap"
-  | "git-publish-directory-invalid"
-  | "git-publish-commit-invalid"
-  | "git-publish-metadata-drift"
-  | "unclassified" {
-  if (!(error instanceof Error) || !/^git-publish-[a-z-]+$/u.test(error.message)) {
-    return "unclassified";
-  }
-  switch (error.message) {
-    case "git-publish-metadata-unavailable":
-    case "git-publish-metadata-read-unavailable":
-    case "git-publish-common-directory-unsupported":
-    case "git-publish-common-directory-drift":
-    case "git-publish-object-directory-invalid":
-    case "git-publish-shallow-metadata-invalid":
-    case "git-publish-private-root-overlap":
-    case "git-publish-directory-invalid":
-    case "git-publish-commit-invalid":
-    case "git-publish-metadata-drift":
-      return error.message;
-    default:
-      return "unclassified";
-  }
+function publishPreparationReason(error: unknown): GitPublishPreparationReason | "unclassified" {
+  if (!(error instanceof Error)) return "unclassified";
+  return isGitPublishPreparationReason(error.message) ? error.message : "unclassified";
+}
+
+function isGitPublishPreparationReason(value: string): value is GitPublishPreparationReason {
+  return GIT_PUBLISH_PREPARATION_REASON_SET.has(value);
 }

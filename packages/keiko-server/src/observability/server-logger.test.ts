@@ -396,7 +396,7 @@ describe("process-wide server logger", () => {
     }).not.toThrow();
   });
 
-  it("degrades without crashing when the activity-log directory cannot be created", () => {
+  it("recovers after the activity-log directory becomes writable", () => {
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     writeFileSync(join(stateDir, "logs"), "occupied");
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
@@ -413,6 +413,24 @@ describe("process-wide server logger", () => {
       completeness: "unknown",
       loss: "event-dropped",
     });
+    expect(stderr).toHaveBeenCalledTimes(1);
+
+    rmSync(join(stateDir, "logs"));
+    const recovered = getServerLogger();
+    recovered.info(
+      updateRuntimeActivityEvent("request-init-recovered", {
+        eventId: "event-init-recovered",
+        type: "user-confirmed",
+        occurredAt: "2026-09-18T00:00:00.000Z",
+        status: "succeeded",
+      }),
+    );
+
+    expect(recovered.level).toBe("debug");
+    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).toContain(
+      '"eventId":"event-init-recovered"',
+    );
+    expect(stderr).toHaveBeenCalledTimes(1);
   });
 
   it("persists registered initialization evidence and rejects an unregistered call", () => {

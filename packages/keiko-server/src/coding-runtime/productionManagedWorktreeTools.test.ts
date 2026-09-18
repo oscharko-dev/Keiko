@@ -2309,7 +2309,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     const failure = events.find(
       (event) => event.op === "coding-runtime.repository-rerank" && event.level === "warn",
     );
-    expect(failure?.errorKind).toBeDefined();
+    expect(failure?.errorKind).toBe("unavailable");
     expect(failure?.extra).toMatchObject({ reason: "pod-query-failed" });
     expect(Array.isArray((failure?.extra as { frames?: unknown }).frames)).toBe(true);
     expect(records.map((record) => record.operation)).toContain("coding-runtime.repository-rerank");

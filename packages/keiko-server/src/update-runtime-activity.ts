@@ -289,6 +289,23 @@ export function updateRuntimeActivityEvent(
   );
 }
 
+const UPDATE_RUNTIME_WARNING_ERROR_KIND: Readonly<
+  Record<UpdateRuntimeWarningCode, ActivityLogErrorKind>
+> = {
+  "audit-persistence-failed": "durability-failed",
+  "state-snapshot-unavailable": "unavailable",
+  "manual-review-required": "conflict",
+  "remediation-execution-failed": "internal",
+  "remediation-outcome-uncertain": "conflict",
+};
+
+const UPDATE_RUNTIME_TYPE_ERROR_KIND: Readonly<
+  Partial<Record<UpdateRuntimeEventType, ActivityLogErrorKind>>
+> = {
+  "portable-download-result": "unavailable",
+  "portable-staging-result": "write-failed",
+};
+
 function updateRuntimeErrorKind(fields: UpdateRuntimeActivityFields): ActivityLogErrorKind {
   const failure = fields.portableSidecarFailureCode;
   if (failure !== undefined) {
@@ -296,21 +313,9 @@ function updateRuntimeErrorKind(fields: UpdateRuntimeActivityFields): ActivityLo
     if (failure === "sidecar-payload-missing") return "unavailable";
     return "validation-failed";
   }
-  switch (fields.warningCode) {
-    case "audit-persistence-failed":
-      return "durability-failed";
-    case "state-snapshot-unavailable":
-      return "unavailable";
-    case "manual-review-required":
-    case "remediation-outcome-uncertain":
-      return "conflict";
-    case "remediation-execution-failed":
-    case undefined:
-      break;
-  }
-  if (fields.type === "portable-download-result") return "unavailable";
-  if (fields.type === "portable-staging-result") return "write-failed";
-  return "internal";
+  if (fields.warningCode !== undefined)
+    return UPDATE_RUNTIME_WARNING_ERROR_KIND[fields.warningCode];
+  return UPDATE_RUNTIME_TYPE_ERROR_KIND[fields.type] ?? "internal";
 }
 
 export function updateLegacySnapshotImportedEvent(input: {

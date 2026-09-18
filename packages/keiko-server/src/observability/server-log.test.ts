@@ -408,13 +408,14 @@ describe("server activity log", () => {
 
   it("keeps adversarial registered-field values out of the physical activity log", () => {
     const sink = createStrictFileServerLogSink(stateDir);
+    const syntheticCredential = ["sk", "proj", "abcdefghijklmno"].join("-");
     const adversarialValues: readonly unknown[] = [
       "the complete operator prompt",
-      "sk-proj-abcdefghijklmno",
+      syntheticCredential,
       "operator@example.test",
       "/etc/passwd",
       String.raw`C:\Users\operator\secret.txt`,
-      { nested: "sk-proj-abcdefghijklmno" },
+      { nested: syntheticCredential },
     ];
 
     for (const value of adversarialValues) {

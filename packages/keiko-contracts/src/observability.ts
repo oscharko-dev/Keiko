@@ -284,6 +284,31 @@ export type ActivityLogImplementationObligation =
   (typeof ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS)[number];
 
 /**
+ * Canonical, explicit reconstruction obligations for one registered failure class.
+ *
+ * This checked-in manifest and the typed operation declarations are the two inputs to the single
+ * generated Activity Log registry. The generator validates their exact agreement; it never infers
+ * an obligation from the generated catalog or treats observed coverage as its own requirement.
+ */
+export interface ActivityLogFailureClassContract {
+  readonly contractKind: "activity-log-failure-class";
+  readonly schemaVersion: 1;
+  readonly failureClass: string;
+  readonly requiredProductSurfaces: readonly string[];
+  readonly requiredLifecycleOperations: Readonly<
+    Record<ActivityLogLifecyclePhase, readonly string[]>
+  >;
+  readonly requiredCausalOperations: readonly string[];
+  readonly requiredLossOperations: readonly string[];
+  readonly requiredProofOperations: readonly string[];
+  readonly requiredReplayProofIds: readonly string[];
+  readonly requiredResourceOperations: readonly string[];
+  readonly requiredEvidenceClasses: readonly ActivityLogDataClass[];
+  readonly requiredFrameOperations: readonly string[];
+  readonly requiredCauseOperations: readonly string[];
+}
+
+/**
  * A narrowly reviewed exception to one failure-class proof at one registered operation.
  *
  * The shape cannot authorize fields, data classes, unknown operations, silent loss, or incomplete

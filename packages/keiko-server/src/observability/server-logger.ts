@@ -273,7 +273,7 @@ export function startLogTimer(): () => number {
 // it, otherwise a null sink, so a unit test that never sets the variable writes nothing.
 let processLogger: ServerLogger | null = null;
 
-function buildProcessLogger(): ServerLogger {
+function buildProcessLogger(): ServerLogger | null {
   const stateDir = process.env.KEIKO_STATE_DIR;
   if (stateDir === undefined || stateDir === "") {
     return nullServerLogger();
@@ -284,13 +284,17 @@ function buildProcessLogger(): ServerLogger {
     return createServerLogger({ sink: createFileServerLogSink(stateDir) });
   } catch (error) {
     reportServerLogFailure(error, { op: "server-log.initialize", loss: "event-dropped" });
-    return nullServerLogger();
+    return null;
   }
 }
 
 export function getServerLogger(): ServerLogger {
   processLogger ??= buildProcessLogger();
-  return processLogger;
+  // An initialization failure must not become a permanently memoised silent logger. Returning a
+  // one-call fallback preserves the no-throw contract while leaving the slot empty so a later
+  // operation can recover automatically after the filesystem problem is fixed. Repeated failure
+  // notices remain body-free and are throttled by `reportServerLogFailure`.
+  return processLogger ?? nullServerLogger();
 }
 
 // Explicit wiring (the CLI hands over the same sink it gives `createUiServer`) and test setup.

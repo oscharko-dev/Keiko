@@ -1328,7 +1328,7 @@ function recordRerankFailure(input: ProductionManagedWorktreeToolInput, error: u
   (input.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       CODING_RUNTIME_REPOSITORY_RERANK_OPERATION,
-      { correlationId, level: "warn", errorKind: managedToolErrorKind(error) },
+      { correlationId, level: "warn", errorKind: "unavailable" },
       {
         runId: input.authorityRef.runId,
         reason: "pod-query-failed",

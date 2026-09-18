@@ -56,7 +56,7 @@ describe("prDescriptionProjection — logDescription failure classification", ()
     fixture = new DescriptionFixture();
     const code = `E${"X".repeat(90)}`;
 
-    expect(() =>
+    expect(() => {
       logDescription(
         fixture.options,
         fixture.context,
@@ -64,8 +64,8 @@ describe("prDescriptionProjection — logDescription failure classification", ()
         "provider-failed",
         undefined,
         Object.assign(new Error("provider failed"), { code }),
-      ),
-    ).not.toThrow();
+      );
+    }).not.toThrow();
 
     const line = fixture.events.find((event) => event.op === "git.pr-description");
     expect(line?.extra?.failureKind).toBe("internal");

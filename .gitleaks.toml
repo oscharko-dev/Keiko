@@ -54,3 +54,18 @@ regexTarget = "line"
 regexes = [
   '''apiKey: \["example-test-token-", "1234567890abcd"\]\.join\(""\),''',
 ]
+
+[[allowlists]]
+description = "PR #3542: two synthetic credential-shaped Activity Log rejection fixtures in immutable checkpoint 5e556765; both are assembled from fragments afterwards. Scoped to the exact commit, file, and two fixture lines so every other finding remains enforced."
+condition = "AND"
+commits = [
+  "5e556765f6f9ba13bc5cb0ab353a15d2acfcd2c0",
+]
+paths = [
+  '''scripts/__tests__/op-catalog-drift\.test\.mjs''',
+]
+regexTarget = "line"
+regexes = [
+  '''\["credential-like token", "sk-proj-abcdef0123456789"\],''',
+  '''\["authorization-shaped token", "Bearer-abcdef0123456789xyz"\],''',
+]

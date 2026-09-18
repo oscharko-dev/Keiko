@@ -79,6 +79,7 @@ import {
   ACTIVITY_LOG_RELEASE_IMPACTS,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
 } from "../packages/keiko-contracts/dist/observability.js";
+import { ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS } from "../packages/keiko-contracts/dist/activity-log-failure-class-contracts.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import {
@@ -121,6 +122,21 @@ const REGISTRATION_FIELD_KEYS = new Set([
   "maxLength",
   "maxItems",
   "values",
+]);
+const FAILURE_CLASS_CONTRACT_KEYS = new Set([
+  "contractKind",
+  "schemaVersion",
+  "failureClass",
+  "requiredProductSurfaces",
+  "requiredLifecycleOperations",
+  "requiredCausalOperations",
+  "requiredLossOperations",
+  "requiredProofOperations",
+  "requiredReplayProofIds",
+  "requiredResourceOperations",
+  "requiredEvidenceClasses",
+  "requiredFrameOperations",
+  "requiredCauseOperations",
 ]);
 const REGISTRATION_TOKEN = /^[A-Za-z][A-Za-z0-9._/-]{0,159}$/u;
 const REGISTRATION_CLOSED_VALUE = /^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,159}$/u;
@@ -1002,13 +1018,347 @@ function operationCoverageMissing(operation) {
   return missing;
 }
 
+function sortedUnique(values) {
+  return [...new Set(values)].toSorted(compareCodepoints);
+}
+
+function sameStringSet(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function isCanonicalStringArray(value, validValue, allowEmpty = true) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) return false;
+  if (!value.every((item) => typeof item === "string" && validValue(item))) return false;
+  return sameStringSet(value, sortedUnique(value));
+}
+
 function lifecycleOperations(members) {
   return Object.fromEntries(
     ACTIVITY_LOG_LIFECYCLE_PHASES.map((phase) => [
       phase,
-      members.filter((operation) => operation.lifecycle === phase).map((operation) => operation.op),
+      members
+        .filter((operation) => operation.lifecycle === phase)
+        .map((operation) => operation.op)
+        .toSorted(compareCodepoints),
     ]),
   );
+}
+
+function failureClassContractSite(failureClass, index) {
+  return typeof failureClass === "string"
+    ? `typedRegistry.failureClassContracts.${failureClass}`
+    : `typedRegistry.failureClassContracts[${String(index)}]`;
+}
+
+function failureClassContractViolation(code, failureClass, index, detail, correctiveAction) {
+  return {
+    ...registryViolation(code, failureClassContractSite(failureClass, index), correctiveAction),
+    detail,
+  };
+}
+
+function invalidFailureClassLifecycle(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "record";
+  if (
+    !sameStringSet(
+      Object.keys(value).toSorted(compareCodepoints),
+      [...ACTIVITY_LOG_LIFECYCLE_PHASES].toSorted(compareCodepoints),
+    )
+  ) {
+    return "keys";
+  }
+  return ACTIVITY_LOG_LIFECYCLE_PHASES.find(
+    (phase) => !isCanonicalStringArray(value[phase], (op) => OP_NAME_PATTERN.test(op)),
+  );
+}
+
+function failureClassContractIdentityChecks(contract, invalidLifecycle) {
+  return [
+    { field: "contractKind", valid: contract.contractKind === "activity-log-failure-class" },
+    { field: "schemaVersion", valid: contract.schemaVersion === 1 },
+    {
+      field: "failureClass",
+      valid:
+        typeof contract.failureClass === "string" && REGISTRATION_TOKEN.test(contract.failureClass),
+    },
+    {
+      field: "requiredProductSurfaces",
+      valid: isCanonicalStringArray(
+        contract.requiredProductSurfaces,
+        (owner) => REGISTRATION_TOKEN.test(owner),
+        false,
+      ),
+    },
+    { field: "requiredLifecycleOperations", valid: invalidLifecycle === undefined },
+  ];
+}
+
+function failureClassContractOperationChecks(contract) {
+  const validOperation = (op) => OP_NAME_PATTERN.test(op);
+  return [
+    {
+      field: "requiredCausalOperations",
+      valid: isCanonicalStringArray(contract.requiredCausalOperations, validOperation),
+    },
+    {
+      field: "requiredLossOperations",
+      valid: isCanonicalStringArray(contract.requiredLossOperations, validOperation),
+    },
+    {
+      field: "requiredProofOperations",
+      valid: isCanonicalStringArray(contract.requiredProofOperations, validOperation),
+    },
+    {
+      field: "requiredReplayProofIds",
+      valid: isCanonicalStringArray(contract.requiredReplayProofIds, (proofId) =>
+        REGISTRATION_TOKEN.test(proofId),
+      ),
+    },
+    {
+      field: "requiredResourceOperations",
+      valid: isCanonicalStringArray(contract.requiredResourceOperations, validOperation),
+    },
+    {
+      field: "requiredEvidenceClasses",
+      valid: isCanonicalStringArray(
+        contract.requiredEvidenceClasses,
+        (dataClass) => REGISTRATION_DATA_CLASSES.has(dataClass),
+        false,
+      ),
+    },
+    {
+      field: "requiredFrameOperations",
+      valid: isCanonicalStringArray(contract.requiredFrameOperations, validOperation),
+    },
+    {
+      field: "requiredCauseOperations",
+      valid: isCanonicalStringArray(contract.requiredCauseOperations, validOperation),
+    },
+  ];
+}
+
+function invalidFailureClassContractField(contract) {
+  if (typeof contract !== "object" || contract === null || Array.isArray(contract)) return "record";
+  if (!Object.keys(contract).every((key) => FAILURE_CLASS_CONTRACT_KEYS.has(key))) {
+    return "unknown-key";
+  }
+  const invalidLifecycle = invalidFailureClassLifecycle(contract.requiredLifecycleOperations);
+  const checks = [
+    ...failureClassContractIdentityChecks(contract, invalidLifecycle),
+    ...failureClassContractOperationChecks(contract),
+  ];
+  return (
+    checks.find(({ valid }) => !valid)?.field ??
+    (invalidLifecycle === undefined ? undefined : `requiredLifecycleOperations.${invalidLifecycle}`)
+  );
+}
+
+function requiredContractOperations(contract) {
+  return sortedUnique(
+    ACTIVITY_LOG_LIFECYCLE_PHASES.flatMap((phase) => contract.requiredLifecycleOperations[phase]),
+  );
+}
+
+function contractInternalViolations(contract, index) {
+  const failureClass = contract?.failureClass;
+  const invalidField = invalidFailureClassContractField(contract);
+  if (invalidField !== undefined) {
+    return [
+      failureClassContractViolation(
+        "failure-class-contract-invalid",
+        failureClass,
+        index,
+        invalidField,
+        "Declare one closed, codepoint-sorted failure-class obligation record.",
+      ),
+    ];
+  }
+  const requiredOperations = requiredContractOperations(contract);
+  const lifecycleLoss = contract.requiredLifecycleOperations.loss;
+  const checks = [
+    {
+      valid: sameStringSet(contract.requiredLossOperations, lifecycleLoss),
+      detail: "requiredLossOperations",
+    },
+    {
+      valid: sameStringSet(contract.requiredProofOperations, requiredOperations),
+      detail: "requiredProofOperations",
+    },
+    ...[
+      ["requiredCausalOperations", contract.requiredCausalOperations],
+      ["requiredFrameOperations", contract.requiredFrameOperations],
+      ["requiredCauseOperations", contract.requiredCauseOperations],
+      ["requiredResourceOperations", contract.requiredResourceOperations],
+    ].map(([detail, operations]) => ({
+      valid: operations.every((op) => requiredOperations.includes(op)),
+      detail,
+    })),
+  ];
+  const failed = checks.find(({ valid }) => !valid);
+  return failed === undefined
+    ? []
+    : [
+        failureClassContractViolation(
+          "failure-class-contract-inconsistent",
+          failureClass,
+          index,
+          failed.detail,
+          "Keep loss, causal, frame, cause, and proof obligations inside the exact lifecycle membership.",
+        ),
+      ];
+}
+
+function actualFailureClassFacts(members) {
+  return {
+    operations: members.map((operation) => operation.op).toSorted(compareCodepoints),
+    productSurfaces: sortedUnique(members.map((operation) => operation.owner)),
+    lifecycleOperations: lifecycleOperations(members),
+    causalOperations: members
+      .filter((operation) => operation.causal !== "none")
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    lossOperations: members
+      .filter((operation) => operation.lifecycle === "loss")
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    proofOperations: members
+      .filter((operation) => operation.proofIds.length > 0)
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    replayProofIds: sortedUnique(
+      members.flatMap((operation) =>
+        operation.proofIds.filter((proofId) => /replay|seed|fixture/u.test(proofId)),
+      ),
+    ),
+    resourceOperations: members
+      .filter((operation) => ["start", "state", "end"].includes(operation.lifecycle))
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    evidenceClasses: sortedUnique(members.flatMap(operationEvidenceClasses)),
+    frameOperations: members
+      .filter((operation) => operation.fields.frames !== undefined)
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+    causeOperations: members
+      .filter((operation) => operation.fields.causeChain !== undefined)
+      .map((operation) => operation.op)
+      .toSorted(compareCodepoints),
+  };
+}
+
+function contractFactChecks(contract, facts) {
+  return [
+    ["product-surfaces", contract.requiredProductSurfaces, facts.productSurfaces],
+    ...ACTIVITY_LOG_LIFECYCLE_PHASES.map((phase) => [
+      `lifecycle-${phase}`,
+      contract.requiredLifecycleOperations[phase],
+      facts.lifecycleOperations[phase],
+    ]),
+    ["causal-edges", contract.requiredCausalOperations, facts.causalOperations],
+    ["loss-signals", contract.requiredLossOperations, facts.lossOperations],
+    ["executable-proof", contract.requiredProofOperations, facts.proofOperations],
+    ["replay-references", contract.requiredReplayProofIds, facts.replayProofIds],
+    ["resource-signals", contract.requiredResourceOperations, facts.resourceOperations],
+    ["evidence-classes", contract.requiredEvidenceClasses, facts.evidenceClasses],
+    ["frame-evidence", contract.requiredFrameOperations, facts.frameOperations],
+    ["cause-evidence", contract.requiredCauseOperations, facts.causeOperations],
+  ];
+}
+
+function contractFactViolations(contract, index, members) {
+  const facts = actualFailureClassFacts(members);
+  return contractFactChecks(contract, facts)
+    .filter(([, required, actual]) => !sameStringSet(required, actual))
+    .map(([detail]) =>
+      failureClassContractViolation(
+        "failure-class-contract-unsatisfied",
+        contract.failureClass,
+        index,
+        detail,
+        "Make the typed operation memberships satisfy the explicit canonical failure-class obligation.",
+      ),
+    );
+}
+
+function invalidFailureClassRegistryAnalysis() {
+  return {
+    contracts: [],
+    violations: [
+      failureClassContractViolation(
+        "failure-class-contract-registry-invalid",
+        undefined,
+        0,
+        "record",
+        "Provide the bounded canonical failure-class obligation registry.",
+      ),
+    ],
+  };
+}
+
+function collectUsableFailureClassContracts(contracts) {
+  const violations = [];
+  const usableContracts = [];
+  const byFailureClass = new Map();
+  contracts.forEach((contract, index) => {
+    const internalViolations = contractInternalViolations(contract, index);
+    violations.push(...internalViolations);
+    if (internalViolations.length > 0) return;
+    const existing = byFailureClass.get(contract.failureClass);
+    if (existing !== undefined) {
+      violations.push(
+        failureClassContractViolation(
+          "failure-class-contract-duplicate",
+          contract.failureClass,
+          index,
+          contract.failureClass,
+          "Keep exactly one canonical obligation declaration per failure class.",
+        ),
+      );
+      return;
+    }
+    byFailureClass.set(contract.failureClass, contract);
+    usableContracts.push(contract);
+  });
+  return { byFailureClass, usableContracts, violations };
+}
+
+function addMissingFailureClassContractViolations(analysis, operations) {
+  const operationClasses = sortedUnique(
+    operations.flatMap((operation) => operation.failureClasses),
+  );
+  for (const failureClass of operationClasses) {
+    if (analysis.byFailureClass.has(failureClass)) continue;
+    analysis.violations.push(
+      failureClassContractViolation(
+        "failure-class-contract-missing",
+        failureClass,
+        0,
+        failureClass,
+        "Declare the failure class and all of its obligations before using it in an operation.",
+      ),
+    );
+  }
+}
+
+function addUnsatisfiedFailureClassContractViolations(analysis, operations) {
+  analysis.usableContracts.forEach((contract, index) => {
+    const members = operations.filter((operation) =>
+      operation.failureClasses.includes(contract.failureClass),
+    );
+    analysis.violations.push(...contractFactViolations(contract, index, members));
+  });
+}
+
+function analyzeFailureClassContracts(contracts, operations) {
+  if (!Array.isArray(contracts)) return invalidFailureClassRegistryAnalysis();
+  const analysis = collectUsableFailureClassContracts(contracts);
+  addMissingFailureClassContractViolations(analysis, operations);
+  addUnsatisfiedFailureClassContractViolations(analysis, operations);
+  return { contracts: analysis.usableContracts, violations: analysis.violations };
+}
+
+export function validateActivityLogFailureClassContracts(contracts, operations) {
+  return analyzeFailureClassContracts(contracts, operations).violations;
 }
 
 function failureClassOperation(operation) {
@@ -1031,38 +1381,53 @@ function failureClassOperation(operation) {
   };
 }
 
-function failureClassEntry(failureClass, operations) {
+function failureClassEntry(failureClass, operations, contract, contractViolations) {
   const members = operations
     .filter((operation) => operation.failureClasses.includes(failureClass))
     .toSorted((left, right) => compareCodepoints(left.op, right.op));
   const coveredOperations = members.map(failureClassOperation);
   const missingObligations = [
     ...new Set(coveredOperations.flatMap((operation) => operation.missingObligations)),
+    ...contractViolations.map(({ detail }) => detail),
   ].toSorted(compareCodepoints);
+  const facts = actualFailureClassFacts(members);
   return {
     failureClass,
+    requirementContract: contract?.failureClass,
     productSurfaces: [...new Set(members.map((operation) => operation.owner))].toSorted(
       compareCodepoints,
     ),
     lifecycleTransitions: [...new Set(members.map((operation) => operation.lifecycle))].toSorted(
       compareCodepoints,
     ),
-    lifecycleOperations: lifecycleOperations(members),
+    lifecycleOperations: facts.lifecycleOperations,
     causalEdges: members.map((operation) => ({ op: operation.op, mode: operation.causal })),
-    lossSignals: members
-      .filter((operation) => operation.lifecycle === "loss")
-      .map((operation) => operation.op),
+    lossSignals: facts.lossOperations,
+    resourceSignals: facts.resourceOperations,
+    replayReferences: facts.replayProofIds,
     operations: coveredOperations,
     missingObligations,
     completeness: missingObligations.length === 0 ? "complete" : "incomplete",
   };
 }
 
-function failureClassCoverage(operations) {
-  const failureClasses = [
-    ...new Set(operations.flatMap((operation) => operation.failureClasses)),
-  ].toSorted(compareCodepoints);
-  const classes = failureClasses.map((failureClass) => failureClassEntry(failureClass, operations));
+function failureClassCoverage(operations, analysis) {
+  const failureClasses = sortedUnique([
+    ...operations.flatMap((operation) => operation.failureClasses),
+    ...analysis.contracts.map((contract) => contract.failureClass),
+  ]);
+  const classes = failureClasses.map((failureClass) => {
+    const contract = analysis.contracts.find(
+      (candidate) => candidate.failureClass === failureClass,
+    );
+    const contractViolations = analysis.violations.filter((violation) =>
+      violation.site.endsWith(`.${failureClass}`),
+    );
+    if (contract === undefined) {
+      contractViolations.push({ detail: "failure-class-contract" });
+    }
+    return failureClassEntry(failureClass, operations, contract, contractViolations);
+  });
   const completeClassCount = classes.filter((entry) => entry.completeness === "complete").length;
   return {
     schemaVersion: 1,
@@ -1087,7 +1452,10 @@ function failureClassCoverageViolations(coverage) {
     }));
 }
 
-export function generateTypedActivityLogRegistry(repoRoot = REPO_ROOT) {
+export function generateTypedActivityLogRegistry(
+  repoRoot = REPO_ROOT,
+  failureClassContracts = ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS,
+) {
   const program = typedRegistryProgram(repoRoot);
   const checker = program.getTypeChecker();
   const operations = [];
@@ -1106,19 +1474,27 @@ export function generateTypedActivityLogRegistry(repoRoot = REPO_ROOT) {
     compareCodepoints(left.op, right.op),
   );
   const exemptions = [...ACTIVITY_LOG_REGISTRY_EXEMPTIONS];
-  const failureCoverage = failureClassCoverage(sortedOperations);
+  const failureClassAnalysis = analyzeFailureClassContracts(
+    failureClassContracts,
+    sortedOperations,
+  );
+  const failureCoverage = failureClassCoverage(sortedOperations, failureClassAnalysis);
   violations.push(
     ...validateActivityLogRegistryExemptions(exemptions, sortedOperations),
+    ...failureClassAnalysis.violations,
     ...failureClassCoverageViolations(failureCoverage),
   );
   return {
     schemaVersion: 1,
     schemaDigest: activityLogSchemaDigest(),
-    catalogDigest: sha256(JSON.stringify({ operations: sortedOperations, exemptions })),
+    catalogDigest: sha256(
+      JSON.stringify({ operations: sortedOperations, exemptions, failureClassContracts }),
+    ),
     obligationCategories: ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
     operations: sortedOperations,
     exemptionSchema: ACTIVITY_LOG_EXEMPTION_SCHEMA,
     exemptions,
+    failureClassContracts,
     failureClassCoverage: failureCoverage,
     violations: violations.toSorted((left, right) => compareCodepoints(left.site, right.site)),
   };
