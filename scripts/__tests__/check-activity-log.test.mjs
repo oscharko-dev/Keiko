@@ -88,7 +88,8 @@ describe("the Activity Log gate command", () => {
     expect(result.passed).toBe(true);
     expect(result.results.every((entry) => entry.passed)).toBe(true);
     expect(lines.at(-1)).toBe(
-      `check:activity-log PASS — ${String(STEP_COUNT)} checks over the full registered inventory in 1.5 s.`,
+      `check:activity-log PASS — ${String(STEP_COUNT)} checks over the full registered ` +
+        `inventory in ${((100 + 200 * STEP_COUNT) / 1000).toFixed(1)} s.`,
     );
   });
 
@@ -1042,19 +1043,35 @@ describe("rule families the gate composes", () => {
       ).toContainEqual(expect.objectContaining({ code: "surface-unmapped" }));
     });
 
-    it("rejects a removed proof link and a proof outside the owning package", () => {
+    it("rejects a removed proof link and a proof placed in another package", () => {
       const scenario = requiredScenario();
       expect(inventory({ calls: [scenarioCall(scenario)] }).violations).toContainEqual(
         expect.objectContaining({ code: "proof-unresolved", detail: "fixture.gate.baseline" }),
       );
+      const foreign = "packages/keiko-server/src/elsewhere.test.ts";
+      expect(
+        inventory({
+          calls: [{ ...proofCall, file: foreign, site: `${foreign}:1` }, scenarioCall(scenario)],
+        }).violations,
+      ).toEqual([
+        expect.objectContaining({ code: "proof-outside-owner", site: `${foreign}:1` }),
+        expect.objectContaining({ code: "proof-unresolved", detail: "fixture.gate.baseline" }),
+      ]);
+    });
+
+    it("lets the cross-package suite assert a proof line without ever resolving the proof", () => {
+      const scenario = requiredScenario();
+      const rootSuite = "tests/activity-log-scenarios/gate.test.ts";
       expect(
         inventory({
           calls: [
-            { ...proofCall, file: "tests/elsewhere.test.ts", site: "tests/elsewhere.test.ts:1" },
+            { ...proofCall, file: rootSuite, site: `${rootSuite}:5` },
             scenarioCall(scenario),
           ],
         }).violations,
-      ).toContainEqual(expect.objectContaining({ code: "proof-outside-owner" }));
+      ).toEqual([
+        expect.objectContaining({ code: "proof-unresolved", detail: "fixture.gate.baseline" }),
+      ]);
     });
 
     it("rejects a missing scenario mapping and an unknown scenario name", () => {
