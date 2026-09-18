@@ -147,12 +147,6 @@ const PROCESS_STARTED_OPERATION = defineActivityLogOperation({
         "x64",
       ],
     },
-    productVersion: {
-      type: "string",
-      dataClass: "safe-version",
-      required: true,
-      maxLength: 64,
-    },
     host: { type: "string", dataClass: "closed-enum", required: true, values: ["127.0.0.1"] },
     port: { type: "integer", dataClass: "count", required: true },
     stateDirSource: {
@@ -1345,7 +1339,6 @@ async function reportProcessStarted(
         nodeVersion: process.version,
         platform: process.platform,
         arch: process.arch,
-        productVersion: KEIKO_PRODUCT_VERSION,
         host: UI_HOST,
         port: parsed.port,
         stateDirSource,

@@ -76,6 +76,7 @@ import {
   ACTIVITY_LOG_LIFECYCLE_PHASES,
   ACTIVITY_LOG_LOSS_STATES,
   ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES,
+  ACTIVITY_LOG_RESERVED_FIELD_NAMES,
   ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
   ACTIVITY_LOG_RELEASE_IMPACTS,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
@@ -969,6 +970,26 @@ function rejectRequiredOmittedWhenEmptyField(context, site, fields) {
   return true;
 }
 
+// The sink stamps the envelope names itself and redaction drops a producer value for any of them, so
+// a registered field with one of those names never reaches the line as declared (#3532: a skill
+// catalog digest persisted as the log format's own catalog digest, a PR-description schema version as
+// the envelope's).
+function rejectReservedEnvelopeField(context, site, fields) {
+  const name = ACTIVITY_LOG_RESERVED_FIELD_NAMES.find(
+    (fieldName) => fields[fieldName] !== undefined,
+  );
+  if (name === undefined) return false;
+  context.violations.push({
+    ...registryViolation(
+      "registration-reserved-field",
+      site,
+      "Rename the field: the sink stamps a reserved envelope field of that name and redaction drops a producer value for it.",
+    ),
+    detail: `fields.${name}`,
+  });
+  return true;
+}
+
 function collectTypedRegistration(context, sourceFile, node) {
   if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
@@ -976,6 +997,7 @@ function collectTypedRegistration(context, sourceFile, node) {
   if (value === undefined) return;
   if (rejectInvalidRegistrationField(context, site, value)) return;
   if (rejectRequiredOmittedWhenEmptyField(context, site, value.fields)) return;
+  if (rejectReservedEnvelopeField(context, site, value.fields)) return;
   const invalidGlobalField = invalidGlobalFieldOverride(value.fields);
   if (invalidGlobalField !== undefined) {
     pushInvalidRegistration(

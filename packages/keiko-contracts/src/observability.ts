@@ -623,6 +623,32 @@ export const ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES = [
   ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME,
 ] as const;
 
+/**
+ * The envelope fields the central sink stamps on every persisted record (ADR-0173 D1). Redaction
+ * drops a producer field with one of these names before the merge, so a registration never declares
+ * one: its value would be silently replaced by the sink's own (a skill catalog digest once persisted
+ * as the log format's catalog digest). The op-catalog generator rejects that declaration.
+ */
+export const ACTIVITY_LOG_RESERVED_FIELD_NAMES = [
+  "ts",
+  "level",
+  "category",
+  "op",
+  "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
+  "pid",
+  "instanceId",
+  "seq",
+] as const;
+
 function isBodyFreeMachineValue(value: string): boolean {
   if (value.length === 0 || value.startsWith("{") || value.startsWith("<")) return false;
   for (const character of value) {

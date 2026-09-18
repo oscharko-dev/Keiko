@@ -115,18 +115,6 @@ const TEST_FILE_OPERATION = defineActivityLogOperation({
         "invalid-field-vocabulary",
       ],
     },
-    writerCapability: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["unavailable"],
-    },
-    compatibilityState: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["incomplete"],
-    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
     reason: {
@@ -165,8 +153,6 @@ function registeredTestEvent(event: ServerLogEvent): ServerLogEvent {
     },
     {
       failedOp: testEventMarker(event),
-      writerCapability: "unavailable",
-      compatibilityState: "incomplete",
       completeness: "unknown",
       loss: "event-dropped",
     },
@@ -532,8 +518,6 @@ const event = (index) => activityLogEvent(operation, {
   errorKind: "write-failed",
 }, {
   failedOp: "worker." + workerId + "." + index + "." + "x".repeat(index % 7 * 11),
-  writerCapability: "unavailable",
-  compatibilityState: "incomplete",
   completeness: "unknown",
   loss: "event-dropped",
 });
