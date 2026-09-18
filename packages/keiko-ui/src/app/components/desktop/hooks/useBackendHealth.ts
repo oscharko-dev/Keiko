@@ -8,6 +8,8 @@
 
 import { useEffect, useState } from "react";
 import { fetchHealth, type HealthSnapshot } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
 export const HEALTH_POLL_INTERVAL_MS = 60_000;
 
@@ -20,13 +22,22 @@ export function useBackendHealth(): BackendHealth {
   const [backendHealth, setBackendHealth] = useState<BackendHealth>({ state: "loading" });
   useEffect(() => {
     let cancelled = false;
+    let failureReported = false;
     async function readHealth(): Promise<void> {
       try {
         const health = await fetchHealth();
+        failureReported = false;
         if (!cancelled) setBackendHealth({ state: "loaded", health });
-      } catch {
-        // A failed read is itself the visible outcome: the footer shows the version as
-        // unavailable and no readiness it can no longer vouch for.
+      } catch (error) {
+        // The footer shows the version as unavailable and drops a readiness it can no longer vouch
+        // for. The failure is reported once per failure streak, by class only: a stopped server
+        // must not turn into one diagnostic per poll.
+        if (!failureReported) {
+          failureReported = true;
+          reportClientDiagnostic(`[keiko] health read failed: ${clientErrorSummary(error)}`, {
+            correlationId: correlationIdOf(error),
+          });
+        }
         if (!cancelled) setBackendHealth({ state: "unavailable" });
       }
     }
