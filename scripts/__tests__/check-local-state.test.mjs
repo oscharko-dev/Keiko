@@ -1130,6 +1130,19 @@ describe("observability-stores: closed grammar and bounded size (#3533 audit)", 
     expect(classById(result, "file-modes").findings.join(" ")).toContain("support-incidents/");
   });
 
+  it("flags loose permissions on an Activity Log file as a real failure, not informational", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stateDir = freshStateDir("observability-loose-activity-log");
+    const dir = join(stateDir, "logs");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const segmentPath = join(dir, "activity-20260918T120000000Z-4242-0a1b2c3d-000001.jsonl");
+    writeFileSync(segmentPath, "{}\n", { mode: 0o600 });
+    chmodSync(segmentPath, 0o644);
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "file-modes").status).toBe("fail");
+    expect(classById(result, "file-modes").findings.join(" ")).toContain("logs/");
+  });
+
   it("flags loose permissions on an activity-log-manifests file as a real failure, not informational", (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const stateDir = freshStateDir("observability-loose-manifest");

@@ -60,6 +60,10 @@ const EDITOR_HOT_EXIT_KEYFILE = "editor-hot-exit-vault.key";
 // only `incident-*.json` carries a stated byte bound (MAX_SUPPORT_INCIDENT_RECORD_BYTES) -- a
 // claim's whole content is one incidentId (32 hex characters), inherently small.
 const SUPPORT_INCIDENT_SUBDIR = "support-incidents";
+// Source of truth: packages/keiko-contracts/src/activity-log-files.ts (ACTIVITY_LOG_DIRECTORY_NAME,
+// #3530). Every file the Activity Log writes there is owner-only: active segments 0o600, sealed
+// ones read-only, legacy files tightened on first contact.
+const ACTIVITY_LOG_SUBDIR = "logs";
 const SUPPORT_INCIDENT_FILE_PATTERN = /^incident-[a-f0-9]{32}\.json$/u;
 const SUPPORT_INCIDENT_FINGERPRINT_CLAIM_PATTERN = /^fingerprint-[a-f0-9]{64}\.claim$/u;
 const SUPPORT_INCIDENT_SLOT_CLAIM_PATTERN = /^slot-[0-9]{2}\.claim$/u;
@@ -159,6 +163,7 @@ const SENSITIVE_TOP_DIRS = new Set([
   UPDATE_SUBDIR,
   EDITOR_HOT_EXIT_SUBDIR,
   SUPPORT_INCIDENT_SUBDIR,
+  ACTIVITY_LOG_SUBDIR,
   ACTIVITY_LOG_MANIFESTS_SUBDIR,
 ]);
 
