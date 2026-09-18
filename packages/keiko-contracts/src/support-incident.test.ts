@@ -164,6 +164,51 @@ describe("defectFingerprintPreimage", () => {
       "unknown",
     ]);
   });
+
+  it("collides two indistinguishable defects by design, and separates a different frame signature (#3533 audit)", () => {
+    // "Failure A" and "failure B": the same owning surface, operation and closed errorKind, and
+    // frames that normalize to the identical module-identity signature -- but everything NOT
+    // allowlisted differs exactly as it would between two real, unrelated occurrences. A raw
+    // message and an absolute path never reach this function at all (DefectFingerprintInput has
+    // no field for either), so "differing only" in them is true by construction; frames differ in
+    // line/column (stripped by normalizeKeikoFrame) and each carries one foreign, non-Keiko path
+    // that KEIKO_FRAME_PATTERN drops outright rather than normalizes. Time and process/instance
+    // identity are equally absent from the type, and additionally differ here simply because the
+    // two preimages are computed at different moments in this same test. They are indistinguishable
+    // from body-free evidence, so they collide into one fingerprint by design (the COLLISIONS
+    // comment above this contract) -- documented, but never asserted until now.
+    const failureA: DefectFingerprintInput = {
+      surface: "bff",
+      op: "chat.send.rejected",
+      errorKind: "internal",
+      frames: [
+        "packages/keiko-server/dist/chat/send.js:120:7",
+        "/Users/alice/keiko/packages/keiko-server/dist/chat/send.js:1:1", // foreign path: dropped
+        "packages/keiko-contracts/dist/observability.js:10:1",
+      ],
+    };
+    const failureB: DefectFingerprintInput = {
+      surface: "bff",
+      op: "chat.send.rejected",
+      errorKind: "internal",
+      // A rebuild, a source checkout, and an unrelated call site within the same two modules --
+      // nothing here is shared with failureA's frames except the module identities themselves.
+      frames: [
+        "packages/keiko-server/src/chat/send.ts:9999:1",
+        "C:\\Users\\bob\\keiko\\packages\\keiko-server\\dist\\chat\\send.js:1:1", // foreign: dropped
+        "packages/keiko-contracts/src/observability.ts:1:1",
+      ],
+    };
+    expect(defectFingerprintPreimage(failureB)).toBe(defectFingerprintPreimage(failureA));
+
+    // A genuinely different call-stack shape is itself an allowlisted input, so it must NOT
+    // collide: this is not a function that always returns the same value.
+    const differentShape: DefectFingerprintInput = {
+      ...failureA,
+      frames: ["packages/keiko-server/dist/chat/receive.js:1:1"],
+    };
+    expect(defectFingerprintPreimage(differentShape)).not.toBe(defectFingerprintPreimage(failureA));
+  });
 });
 
 describe("Keiko frame normalization", () => {
