@@ -37,6 +37,7 @@ describe("check-error-observability gate — stratified site sample", () => {
         "memory-consolidation.log-port.sink-failed",
         "memory-consolidation.summary-fallback",
         "security.macos-keychain.fallback",
+        "quality-intelligence.capsule-store-open",
       ]),
     );
     expect(ids.filter((id) => id.startsWith("memory-handlers.")).length).toBeGreaterThanOrEqual(2);

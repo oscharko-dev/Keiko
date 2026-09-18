@@ -424,7 +424,7 @@
   "summary": {
     "operationCount": 415,
     "proofCount": 423,
-    "resolvedProofCount": 13,
+    "resolvedProofCount": 14,
     "failureClassCount": 307,
     "scenarioCount": 29,
     "resolvedScenarioCount": 0
@@ -13230,8 +13230,8 @@
       "op": "gateway.retry.exhausted",
       "owner": "keiko-model-gateway",
       "surface": "model-gateway",
-      "status": "unresolved",
-      "testFiles": []
+      "status": "resolved",
+      "testFiles": ["packages/keiko-model-gateway/src/resilience.test.ts"]
     },
     {
       "proofId": "gateway.retry.scheduled.emitted-line",

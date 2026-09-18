@@ -438,8 +438,11 @@ system that exists, never beside it:
   failed durability, and an unavailable primary sink may never masquerade as an active complete
   writer. Persist the applicable closed completeness/loss/capability state when the primary path is
   available; otherwise use the existing independent body-free diagnostic fallbacks and state their
-  loss ceiling honestly. An explicit `silent` log level produces no reconstruction evidence and
-  must never be interpreted as an active writer.
+  loss ceiling honestly. Every lost event is counted in the closed loss ledger and persisted as
+  `activity-log.loss`, and diagnostic readiness (`ready`, `degraded`, `unavailable`) is reported in
+  `/api/health`, `keiko status` and the UI. An explicit `silent` log level suppresses ordinary events
+  only: lifecycle, loss and readiness evidence is still written, and readiness reports `degraded`
+  (`level-silent`) so a silent interval never passes for an active complete writer.
 - **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
   hashes, ids, route templates, byte sizes, durations — never prompts, responses, file contents,
   secrets, paths, endpoints or PII (ADR-0173 D4). New fields go into `extra` and through the

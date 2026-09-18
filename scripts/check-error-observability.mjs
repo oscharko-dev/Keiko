@@ -16,6 +16,8 @@
 //   9. memory-consolidation.log-port.sink-failed — keiko-memory-consolidation's own structural log port
 //  10. memory-consolidation.summary-fallback — keiko-memory-consolidation's runConsolidation fallback path
 //  11. security.macos-keychain.fallback — keiko-security's own structural log port
+//  12. quality-intelligence.capsule-store-open — keiko-server, the QI capsule resolver's store-open
+//                                         catch, which swallowed the failure before #3532
 //
 // Before this widening the gate forced exactly ONE synchronous throw through the top-level server.ts
 // catch and asserted against exactly one produced record — real coverage of the other ~100
@@ -35,9 +37,10 @@
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
@@ -160,6 +163,18 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
     "packages/keiko-cli/src/ui.ts:safeCliErrorKind",
     "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
+  ],
+  [
+    "packages/keiko-cli/src/ui.ts:warnShutdownHookFailed",
+    "The process warning is the last independent channel; its own failure has no channel left.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-readiness.ts:activityLogCatalogCoherent",
+    "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-logger.ts:isMandatoryActivityLogEvent",
+    "A hostile registration accessor makes the event ordinary instead of failing the emitting call.",
   ],
   [
     "packages/keiko-contracts/src/observability.ts:registrationMatchesCanonical",
@@ -956,6 +971,58 @@ function makeKeychainFallbackProbe() {
   };
 }
 
+// #3532: the Quality Intelligence capsule resolver used to swallow a knowledge-store open failure
+// and degrade silently to QI_CAPSULE_UNAVAILABLE. The failure is now reported once, on the operator
+// diagnostic path, before the resolver degrades to its empty result.
+function makeQualityIntelligenceCapsuleStoreProbe() {
+  const correlationId = `gate-qi-capsule-${randomUUID()}`;
+  return {
+    id: "quality-intelligence.capsule-store-open",
+    async run() {
+      const mod = await import(distPath("keiko-server", "qualityIntelligence/capsuleAdapter.js"));
+      const root = mkdtempSync(join(tmpdir(), "keiko-gate-qi-capsule-"));
+      try {
+        // A regular file where the knowledge-store directory belongs makes every open fail.
+        writeFileSync(join(root, "local-knowledge"), "occupied");
+        const records = [];
+        const resolver = mod.makeCapsuleResolver(
+          { uiDbPath: join(root, "ui.db"), diagnostics: { record: (r) => records.push(r) } },
+          correlationId,
+        );
+        const documents = resolver?.capsule("gate-capsule");
+        check(
+          Array.isArray(documents) && documents.length === 0,
+          "qi capsule resolver did not degrade to an empty result",
+        );
+        resolver?.close();
+        return records;
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    assertShape(record) {
+      check(
+        record.correlationId === correlationId,
+        `qi capsule correlationId: ${record.correlationId}`,
+      );
+      check(
+        record.operation === "quality-intelligence.capsule-source",
+        `qi capsule operation: ${record.operation}`,
+      );
+      check(record.source === "qi.capsule-adapter", `qi capsule source: ${record.source}`);
+      check(
+        record.message ===
+          "Quality Intelligence could not open the knowledge store for a capsule source.",
+        `qi capsule message: ${record.message}`,
+      );
+      check(
+        typeof record.errorClass === "string" && record.errorClass.length > 0,
+        "qi capsule errorClass missing",
+      );
+    },
+  };
+}
+
 export const SITE_PROBES = [
   makeSinkTerminalTeeProbe(),
   makeMemoryGetProbe(),
@@ -967,6 +1034,7 @@ export const SITE_PROBES = [
   makeConsolidationLogPortProbe(),
   makeConsolidationSummaryFallbackProbe(),
   makeKeychainFallbackProbe(),
+  makeQualityIntelligenceCapsuleStoreProbe(),
 ];
 
 async function runProbe(probe, exercised) {

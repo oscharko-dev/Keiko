@@ -65,8 +65,7 @@ A process seals its active segment in four cases:
 - the process shuts down;
 - a pin is requested.
 
-The seal writes a final `activity-log.segment.sealed` line with the seq range, line count, bytes,
-duration and dropped-event count. It then drops `.active` from the name and makes the file
+The seal writes a final `activity-log.segment.sealed` line with the seq range (ending with its own seq), the line count and bytes of the lines before it, the duration and the dropped-event count. It then drops `.active` from the name and makes the file
 read-only.
 
 If a process crashes, its active segment stays behind. The next Keiko process seals it as it is, at

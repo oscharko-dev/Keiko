@@ -102,7 +102,7 @@ looks identical to "the setting didn't save" but is a different, fail-closed con
 **Resolution**
 
 1. If an inline error is present, retry the selection after confirming the local UI/BFF process is
-   healthy (`.keiko/ui.log`).
+   healthy (`keiko status`).
 2. If no error was shown, reselect the mode and confirm no error appears this time, then reload to
    verify it now persists.
 
