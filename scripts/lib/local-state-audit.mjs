@@ -55,6 +55,22 @@ const RETIRED_CODE_INTELLIGENCE_SUBDIR = "code-intelligence";
 const EDITOR_HOT_EXIT_SUBDIR = "editor-hot-exit";
 const EDITOR_HOT_EXIT_VAULT = "snapshots.vault";
 const EDITOR_HOT_EXIT_KEYFILE = "editor-hot-exit-vault.key";
+// Source of truth: packages/keiko-contracts/src/support-incident.ts (#3533). The store holds one
+// closed-grammar record per local incident candidate plus its cross-process dedup/quota claims;
+// only `incident-*.json` carries a stated byte bound (MAX_SUPPORT_INCIDENT_RECORD_BYTES) -- a
+// claim's whole content is one incidentId (32 hex characters), inherently small.
+const SUPPORT_INCIDENT_SUBDIR = "support-incidents";
+const SUPPORT_INCIDENT_FILE_PATTERN = /^incident-[a-f0-9]{32}\.json$/u;
+const SUPPORT_INCIDENT_FINGERPRINT_CLAIM_PATTERN = /^fingerprint-[a-f0-9]{64}\.claim$/u;
+const SUPPORT_INCIDENT_SLOT_CLAIM_PATTERN = /^slot-[0-9]{2}\.claim$/u;
+const MAX_SUPPORT_INCIDENT_RECORD_BYTES = 4096;
+// Source of truth: packages/keiko-cli/src/support-segment-manifest-names.ts (grammar, #3531) and
+// packages/keiko-cli/src/support-segment-manifest.ts's MAX_SEGMENT_MANIFEST_BYTES (bound). The
+// segment id shape mirrors keiko-contracts activity-log-files.ts's SEGMENT_ID_PATTERN.
+const ACTIVITY_LOG_MANIFESTS_SUBDIR = "activity-log-manifests";
+const ACTIVITY_LOG_MANIFEST_FILE_PATTERN =
+  /^manifest-\d{8}T\d{9}Z-[1-9]\d{0,9}-[a-f0-9]{8}-\d{6,9}\.json$/u;
+const MAX_SEGMENT_MANIFEST_BYTES = 256 * 1024;
 const LOCAL_SECRET_VAULT_VERSION = 1;
 const HOT_EXIT_REF_PATTERN = /^hot-exit:[a-f0-9]{64}$/u;
 const ATLASSIAN_SCHEMA_VERSION = "1";
@@ -142,6 +158,8 @@ const SENSITIVE_TOP_DIRS = new Set([
   EVIDENCE_SUBDIR,
   UPDATE_SUBDIR,
   EDITOR_HOT_EXIT_SUBDIR,
+  SUPPORT_INCIDENT_SUBDIR,
+  ACTIVITY_LOG_MANIFESTS_SUBDIR,
 ]);
 
 function isSensitiveFile(relPath, name) {
@@ -1536,6 +1554,76 @@ function auditRuntimeIntegrity(stateDir) {
   return pass(id, title, ["no unresolved DB or QI quarantine artifacts were found"]);
 }
 
+// ── Class 8: closed-grammar, bounded support-incidents/ and activity-log-manifests/ ──────────
+// Both stores are body-free control/derived-metadata artifacts over the Activity Log, never a copy
+// of raw event content, so — like the rest of this auditor, which never decrypts content — this
+// class checks SHAPE (closed file-name grammar) and BOUND (the contract's own stated byte ceiling)
+// rather than content. `rules` is tried in order; the first matching pattern's maxBytes applies
+// (undefined means the grammar states no bound for that file kind, e.g. a claim).
+const SUPPORT_INCIDENT_RULES = [
+  { pattern: SUPPORT_INCIDENT_FILE_PATTERN, maxBytes: MAX_SUPPORT_INCIDENT_RECORD_BYTES },
+  { pattern: SUPPORT_INCIDENT_FINGERPRINT_CLAIM_PATTERN, maxBytes: undefined },
+  { pattern: SUPPORT_INCIDENT_SLOT_CLAIM_PATTERN, maxBytes: undefined },
+];
+const ACTIVITY_LOG_MANIFEST_RULES = [
+  { pattern: ACTIVITY_LOG_MANIFEST_FILE_PATTERN, maxBytes: MAX_SEGMENT_MANIFEST_BYTES },
+];
+
+function matchingGrammarRule(name, rules) {
+  return rules.find((rule) => rule.pattern.test(name));
+}
+
+function auditClosedGrammarStore(stateDir, subdir, rules, findings) {
+  const dir = join(stateDir, subdir);
+  if (!existsSync(dir)) return;
+  const symlink = firstSymlinkInPath(stateDir, subdir);
+  if (symlink !== undefined) {
+    findings.push(symlinkFinding(stateDir, symlink));
+    return;
+  }
+  for (const name of readdirSync(dir)) {
+    const abs = join(dir, name);
+    const rel = `${subdir}/${name}`;
+    const stat = lstatSync(abs);
+    if (stat.isSymbolicLink()) {
+      findings.push(symlinkFinding(stateDir, abs));
+      continue;
+    }
+    if (!stat.isFile()) {
+      findings.push(`${rel} is not a regular file`);
+      continue;
+    }
+    const rule = matchingGrammarRule(name, rules);
+    if (rule === undefined) {
+      findings.push(`${rel} does not match the closed grammar (foreign or malformed file name)`);
+      continue;
+    }
+    if (rule.maxBytes !== undefined && stat.size > rule.maxBytes) {
+      findings.push(`${rel} is ${stat.size} bytes (expected at most ${rule.maxBytes})`);
+    }
+  }
+}
+
+function auditObservabilityStores(stateDir) {
+  const id = "observability-stores";
+  const title = "Support incidents and Activity Log manifests";
+  const incidentsDir = join(stateDir, SUPPORT_INCIDENT_SUBDIR);
+  const manifestsDir = join(stateDir, ACTIVITY_LOG_MANIFESTS_SUBDIR);
+  if (!existsSync(incidentsDir) && !existsSync(manifestsDir)) {
+    return skip(id, title, "neither store is present");
+  }
+  const findings = [];
+  auditClosedGrammarStore(stateDir, SUPPORT_INCIDENT_SUBDIR, SUPPORT_INCIDENT_RULES, findings);
+  auditClosedGrammarStore(
+    stateDir,
+    ACTIVITY_LOG_MANIFESTS_SUBDIR,
+    ACTIVITY_LOG_MANIFEST_RULES,
+    findings,
+  );
+  if (findings.length > 0) return fail(id, title, findings);
+  return pass(id, title, ["every file matches its store's closed grammar and stated byte bound"]);
+}
+
 // Runs every confidentiality-class check over `stateDir`. The overall result is ok unless a class
 // fails; a skipped class (an absent store) never fails the audit.
 export function auditLocalState(stateDir) {
@@ -1554,6 +1642,7 @@ export function auditLocalState(stateDir) {
     auditKnowledgeEncryption(stateDir),
     auditEvidence(stateDir),
     auditRuntimeIntegrity(stateDir),
+    auditObservabilityStores(stateDir),
   ];
   return { ok: classes.every((c) => c.status !== "fail"), stateDir, classes };
 }
