@@ -155,17 +155,19 @@ const CODING_RUNTIME_TOOL_AVAILABILITY_FAILED_OPERATION = defineActivityLogOpera
       required: true,
       values: ["configuration-resolution-failed"],
     },
+    // Optional: persisted-line redaction omits an empty frames/causeChain array (an error without
+    // Keiko frames or without a cause), so a required one would reject that ordinary failure line.
     frames: {
       type: "string-array",
       dataClass: "opaque-id",
-      required: true,
+      required: false,
       maxLength: 512,
       maxItems: 8,
     },
     causeChain: {
       type: "string-array",
       dataClass: "error-kind",
-      required: true,
+      required: false,
       maxLength: 128,
       maxItems: 5,
     },

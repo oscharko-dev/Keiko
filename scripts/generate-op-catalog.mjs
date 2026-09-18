@@ -75,6 +75,7 @@ import {
   ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
   ACTIVITY_LOG_LIFECYCLE_PHASES,
   ACTIVITY_LOG_LOSS_STATES,
+  ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES,
   ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
   ACTIVITY_LOG_RELEASE_IMPACTS,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
@@ -949,12 +950,32 @@ function registrationLiteral(context, node, site) {
   return undefined;
 }
 
+// Persisted-line redaction omits an empty `frames`/`causeChain` array, so a registration that
+// declares one required would reject every failure line without Keiko frames or a cause (#3532:
+// found twice as separate product defects). The rule is registry-wide so the class cannot recur.
+function rejectRequiredOmittedWhenEmptyField(context, site, fields) {
+  const name = ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES.find(
+    (fieldName) => fields[fieldName]?.required === true,
+  );
+  if (name === undefined) return false;
+  context.violations.push({
+    ...registryViolation(
+      "registration-omitted-field-required",
+      site,
+      "Declare frames and causeChain optional: redaction omits an empty array, so a required one rejects every failure line without Keiko frames or a cause.",
+    ),
+    detail: `fields.${name}`,
+  });
+  return true;
+}
+
 function collectTypedRegistration(context, sourceFile, node) {
   if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
   const value = registrationLiteral(context, node, site);
   if (value === undefined) return;
   if (rejectInvalidRegistrationField(context, site, value)) return;
+  if (rejectRequiredOmittedWhenEmptyField(context, site, value.fields)) return;
   const invalidGlobalField = invalidGlobalFieldOverride(value.fields);
   if (invalidGlobalField !== undefined) {
     pushInvalidRegistration(

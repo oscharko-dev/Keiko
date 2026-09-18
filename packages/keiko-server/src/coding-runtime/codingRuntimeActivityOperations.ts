@@ -98,18 +98,26 @@ const RUNTIME_CONFINEMENT_DIAGNOSTIC_KINDS = [
   "unsupported-platform",
 ] as const;
 
+// Optional, like every other diagnostic-trace field pair in this package (e.g.
+// `CODING_RUNTIME_OPTIONAL_DIAGNOSTIC_FIELDS` in codingRuntimeOrchestrator.ts): the shared
+// redaction pipeline (`redactAcceptedField` in observability/log-redaction.ts) drops an empty
+// guarded array outright rather than persisting `[]`, and both fields are routinely empty on a
+// genuine confinement failure -- `causeChain` whenever the thrown error carries no `.cause`,
+// `frames` whenever none of its stack frames anchor to a known workspace package. `required: true`
+// would demand a field the production sink itself omits whenever there is nothing to report, so a
+// persisted line could never satisfy its own contract.
 const RUNTIME_CONFINEMENT_FAILURE_TRACE_FIELDS = {
   frames: {
     type: "string-array",
     dataClass: "opaque-id",
-    required: true,
+    required: false,
     maxLength: 512,
     maxItems: 8,
   },
   causeChain: {
     type: "string-array",
     dataClass: "error-kind",
-    required: true,
+    required: false,
     maxLength: 128,
     maxItems: 5,
   },

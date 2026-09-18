@@ -80,10 +80,18 @@ const OPEN_CODE_READINESS_PHASE_FIELD = {
   values: OPEN_CODE_READINESS_PHASES,
 } as const;
 
+// `required: false`, not `true`: `keikoStackFrames`/`causeChain` always return an array, empty
+// when there is nothing to report (no stack, no cause) — the shared redaction pipeline
+// (`log-redaction.ts`'s guarded-array hatch, matching `diagnostics-log.ts`'s documented
+// `nonEmpty` contract for these exact field names) degrades that empty array to absent on every
+// persisted line, same as every other operation that carries `frames`/`causeChain`. Declaring
+// either field required here made the real file sink silently persist a line missing a
+// registration-required field whenever the causing error had no capturable stack or `.cause`
+// chain — the common case for a plain thrown error — without the write path ever catching it.
 const OPEN_CODE_READINESS_FRAMES_FIELD = {
   type: "string-array",
   dataClass: "opaque-id",
-  required: true,
+  required: false,
   maxLength: 512,
   maxItems: 8,
 } as const;
@@ -91,7 +99,7 @@ const OPEN_CODE_READINESS_FRAMES_FIELD = {
 const OPEN_CODE_READINESS_CAUSE_CHAIN_FIELD = {
   type: "string-array",
   dataClass: "error-kind",
-  required: true,
+  required: false,
   maxLength: 128,
   maxItems: 5,
 } as const;
