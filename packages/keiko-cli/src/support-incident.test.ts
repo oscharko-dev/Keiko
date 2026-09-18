@@ -282,11 +282,10 @@ describe("keiko support incident", () => {
       { segmentId: "s1", state: "sealed" as const, sizeBytes: statSync(first).size, path: first },
       { segmentId: "s2", state: "sealed" as const, sizeBytes: statSync(second).size, path: second },
     ];
+    const totalBytes = segments.reduce((sum, segment) => sum + segment.sizeBytes, 0);
     // The fixture must genuinely exceed several read chunks, or a bug that reads the whole segment
     // in one call could still pass by accident.
-    expect(segments[0].sizeBytes + segments[1].sizeBytes).toBeGreaterThan(
-      ACTIVITY_LOG_READ_CHUNK_BYTES * 2,
-    );
+    expect(totalBytes).toBeGreaterThan(ACTIVITY_LOG_READ_CHUNK_BYTES * 2);
 
     // `readActivityLogFileLines`'s own observability seam (never used in production) reports every
     // raw chunk it reads, in order, before yielding the lines inside it — the same seam
@@ -304,9 +303,7 @@ describe("keiko support incident", () => {
     for (const size of chunkSizes) {
       expect(size).toBeLessThanOrEqual(ACTIVITY_LOG_READ_CHUNK_BYTES);
     }
-    expect(chunkSizes.reduce((sum, size) => sum + size, 0)).toBe(
-      segments[0].sizeBytes + segments[1].sizeBytes,
-    );
+    expect(chunkSizes.reduce((sum, size) => sum + size, 0)).toBe(totalBytes);
     // The whole-file primitive (`readKeptFiles`/`readVerifiedLogText`'s own `readFileSync`) is
     // structurally unreachable from this path: `support-incident.ts` no longer imports it at all.
     expect(readFileSync(join(import.meta.dirname, "support-incident.ts"), "utf8")).not.toContain(
