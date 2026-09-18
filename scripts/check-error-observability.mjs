@@ -260,13 +260,115 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "packages/keiko-server/src/observability/server-log.ts:safeArtifactErrorKind",
     "A hostile prototype trap is reduced to absent data inside the last-resort log sink.",
   ],
+  // #3530 segmented Activity Log store: fail-closed probes, and failure outcomes that a registered
+  // storage event persists.
   [
-    "packages/keiko-server/src/observability/server-log.ts:handleStillCurrent",
-    "A failed file-identity check invalidates the cached handle and forces a safe reopen.",
+    "packages/keiko-server/src/observability/activity-log-store.ts:regularFileStat",
+    "A vanished or unreadable entry is classified as absent from the Activity Log listing.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:currentHandleIdentity",
-    "A failed file-identity check invalidates the cached handle and forces a safe reopen.",
+    "packages/keiko-server/src/observability/activity-log-store.ts:readPinRecord",
+    "An unreadable pin record protects nothing; the caller removes it and persists pin.expired invalid-record.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:processIsAlive",
+    "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:lastCompleteLineOp",
+    "An unparsable tail line is classified as carrying no seal line.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:lineSeq",
+    "An unparsable line is classified as carrying no sequence number.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:activityLogSegmentSeqSpan",
+    "An unreadable span is reported as unknown in the registered quota-exhaustion marker.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:activityLogFreeBytes",
+    "Free space that cannot be measured is reported as absent, never as plenty.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:activeLogKey",
+    "A directory that cannot be resolved is keyed by its lexical path; opening it still fails closed.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:closeQuietly",
+    "Best-effort close of a descriptor the writer has already stopped using.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:currentSegmentSize",
+    "A failed identity read makes the caller treat the segment as mutated and fail closed.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:sharesInode",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:pathMissing",
+    "The catch classifies the closed ENOENT result of an existence probe.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:readSealedTail",
+    "An unreadable tail is persisted as tailState unknown in the registered recovery event.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:finishInterruptedSeal",
+    "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:settleOrphanDescriptor",
+    "Best-effort fsync and read-only mode on a recovered segment; the sealing rename still decides.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:recoverOrphanedSegment",
+    "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:removePinRecordQuietly",
+    "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:tightenLegacyFile",
+    "A legacy file that cannot be narrowed stays in place; the retention event persists the failure.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:removeRetentionTarget",
+    "A failed deletion is persisted by the registered retention event and retried after a backoff.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:withdrawSegment",
+    "A segment left in place is this process's abandoned segment; maintenance seals it with evidence.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:restrictSealedMode",
+    "Best-effort read-only mode after a successful seal; the segment stays owner-private.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:descriptorAtPath",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:persistPostWriteMutation",
+    "The mutation evidence stays queued; the caller reports the event whose location is unknown.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:createPin",
+    "The catch returns the closed storage-unavailable rejection the registered pin.created event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:ownedDirectory",
+    "A failed ownership read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:batchIsWritable",
+    "An unformattable batch is deferred to its caller before any line is written.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:syncActiveSegment",
+    "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
   ],
 ]);
 
