@@ -646,11 +646,13 @@ bounded memory. There are two kinds of question:
   `parentCorrelationId` and every descendant, such as a background job the request started.
   Unrelated correlations, siblings included, are never selected. A narrow context is added: the
   uncorrelated process signals (lifecycle, resource, loss, backpressure, disk) of the same process
-  lifetimes, within `--context-ms` (default 5000) of the closure. An incident or fingerprint is
-  resolved through the local support incidents. A reported incident also selects its whole pinned
-  window and treats every correlation in it as a root.
+  lifetimes, within `--context-ms` (0 to 600000, default 5000) of the closure. An incident or
+  fingerprint is resolved through the local support incidents. A reported incident also selects its
+  whole pinned window and treats every correlation in it as a root. The three selectors exclude each
+  other and do not combine with the event filters.
 - **Matching events.** `--parent-correlation-id`, `--op`, `--error-kind`, `--failure-class`, `--from`
-  and `--to` select single events and combine with AND.
+  and `--to` select single events and combine with AND. An operation, error kind or failure class
+  must be one the registry declares.
 
 | Command                                      | What it does                                                           |
 | -------------------------------------------- | ---------------------------------------------------------------------- |
@@ -679,7 +681,8 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   line states the selection and its sufficiency.
 - **Exit codes.** `query` exits `0` when it printed a result, whatever its sufficiency; `1` when the
   selection cannot be resolved, the log cannot be listed, or the query's own evidence cannot be
-  written; `2` on a usage error. `manifest verify` exits `1` when a stored manifest differs from its
+  written; `2` on a usage error. `manifest rebuild` exits `1` when a segment cannot be read or a
+  manifest cannot be written. `manifest verify` exits `1` when a stored manifest differs from its
   segment or a segment cannot be read. A segment that has no manifest yet is not an error: the next
   query builds it.
 - **Manifests.** Each sealed segment has a derived, rebuildable manifest in
@@ -692,10 +695,27 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   Activity Log writer never writes one: query, export and rebuild do, and they remove the manifests
   of segments retention has deleted. A missing, torn or stale manifest is rebuilt, and deleting the
   directory is always safe.
-- **Bounds.** A checked-in long-history test builds 40 sealed segments of 2 MiB and runs the built
-  command under a 112 MiB heap cap. Peak resident memory may grow by at most 32 MiB over the same
-  command on an empty state directory, and instrumented reads prove that segments the manifests rule
-  out are never opened.
+- **Bounds.** Reads use one 64 KiB buffer and hold at most one line of up to 1 MiB. A closure holds
+  at most 4096 correlations, a result at most `--max-bytes`. The correlation filter uses about 10
+  bits per key (roughly 1% false positives), at most 128 KiB. A checked-in long-history test builds
+  80 MiB of history in 40 sealed segments and runs the built command under a 112 MiB heap cap. Peak
+  resident memory may grow by at most 32 MiB over the same command on an empty state directory, and
+  instrumented reads prove that segments the manifests rule out are never opened. Measured on macOS
+  arm64 with Node 24: the empty-state baseline takes 0.94 s, of which about 0.93 s is loading the
+  server modules; a cold query that builds all 40 manifests takes 2.1 to 2.5 s; a warm query takes
+  1.1 to 1.2 s and opens 3 segments (two hold the closure, one is a filter false positive). Peak
+  memory grew by at most about 7 MiB over the baseline.
+- **Versioned output.** `--json` forms name themselves and their version: `keiko.support.query`,
+  `keiko.support.manifest`, the stored `keiko.activity-log.segment-manifest`, and the export
+  manifest line's `selection` member, `keiko.support.export-selection`, all at version 1.
+  `keiko support analyze --json` now carries `kind` and `schemaVersion` as well:
+  `keiko.support.analyze` for every timeline and `keiko.support.analyze-timeline` with
+  `--correlation-id`, both at version 1. Every field the earlier output had is unchanged, so an
+  existing reader such as `keiko investigate --from-timeline` keeps working; `--seed` already
+  carried `schemaVersion`, and `--clusters --json` still prints a bare array.
+- **Analyze streams too.** `keiko support analyze` reads its file through the same bounded line
+  reader, including for `--seed` and `--emit-fixture`. A seed's `sourceArtifact.sha256` is the
+  SHA-256 of the file's bytes, the value `shasum -a 256` and a report's `.sha256` file state.
 - **Evidence.** `support.query.completed`, `support.query.failed` and `support.manifest.rebuilt`
   record the query class, candidate and result counts, selected bytes, truncation, integrity and
   loss, never the query text, an event body, a name or a path.
