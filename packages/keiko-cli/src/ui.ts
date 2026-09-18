@@ -963,8 +963,11 @@ function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessE
   // heartbeat-teardown failure never vanishes with the shutdown path that produced it.
   // Only the error's CLASS is recorded, never its message: a message is foreign free text, and
   // the producer side never reads one — the same rule every other instrumentation site follows.
-  const onShutdownErrorKind =
-    runShutdownHook(activity.onShutdown) ?? runShutdownHook(activity.beforeExitEvidence);
+  // Both hooks always run: a failing heartbeat stop must never skip the exit evidence (the BFF's
+  // trailing suppressed counts and the exit loss summary). The first failure's class is recorded.
+  const onShutdownError = runShutdownHook(activity.onShutdown);
+  const beforeExitError = runShutdownHook(activity.beforeExitEvidence);
+  const onShutdownErrorKind = onShutdownError ?? beforeExitError;
   const { activityLog, startedAt, closeActivityLog } = activity;
   if (activityLog === undefined || startedAt === undefined) {
     if (onShutdownErrorKind !== undefined) warnShutdownHookFailed(onShutdownErrorKind);
@@ -1529,7 +1532,7 @@ interface ReportStartedInput {
 // Last-resort exit evidence: an exit that none of the shutdown branches observed (a
 // `process.exit` from elsewhere) still records `process.exiting` synchronously from Node's `exit`
 // event. The shared latch makes this a no-op after any ordinary shutdown.
-function armProcessExitFallback(activity: WaitForShutdownActivity): () => void {
+export function armProcessExitFallback(activity: WaitForShutdownActivity): () => void {
   const onExit = (): void => {
     writeProcessExiting(activity, "process-exit");
   };

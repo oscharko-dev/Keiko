@@ -11,9 +11,11 @@ import type { Server } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  armProcessExitFallback,
   createLiveCspSource,
   createPortableHandoffShutdownTrigger,
   parseUiArgs,
+  ProcessExitLatch,
   runUiCli,
   startProcessHeartbeat,
   waitForShutdown,
@@ -1570,6 +1572,29 @@ describe("attachDurableServerErrorListener (KEIKO-0858 / #2906 round 3, comment 
     expect(extraOf(event).failureKind).toBe("RangeError");
   });
 
+  // #3532: the fatal server-error branch ends the process too, so it records the process's one
+  // exit line as `fatal-exception` BEFORE the bounded close — the close it triggers can no longer
+  // relabel the crash as an ordinary `server-close`.
+  it("records the fatal exit before the bounded close", async () => {
+    const { attachDurableServerErrorListener } = await import("./ui.js");
+    const { server, emitter, close } = fakeCloseableServer();
+    const io: CliIo = { out: (): void => undefined, err: (): void => undefined };
+    const exit = vi.fn();
+    const order: string[] = [];
+    close.mockImplementation((callback?: () => void) => {
+      order.push("close");
+      callback?.();
+    });
+    attachDurableServerErrorListener(server, io, createRecordingSink(), exit, 3_000, () => {
+      order.push("fatal-exit");
+    });
+    emitter.emit("error", new RangeError("descriptor exhaustion"));
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+    expect(order).toEqual(["fatal-exit", "close"]);
+  });
+
   // A sink whose write never settles, or a close() that never calls back, must not hang the
   // fatal path forever — the bounded grace timer forces the exit exactly like the SIGINT/SIGTERM
   // path already does for a lingering connection.
@@ -1946,15 +1971,14 @@ describe("waitForShutdown", () => {
   // Emitting a real signal event would also invoke the test runner's own handlers,
   // so each signal test detaches every pre-existing listener and restores it after.
   function withIsolatedSignalListeners<T>(run: () => Promise<T>): Promise<T> {
-    const priorSigint = process.rawListeners("SIGINT");
-    const priorSigterm = process.rawListeners("SIGTERM");
-    process.removeAllListeners("SIGINT");
-    process.removeAllListeners("SIGTERM");
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const prior = signals.map((signal) => [signal, process.rawListeners(signal)] as const);
+    for (const signal of signals) process.removeAllListeners(signal);
     return run().finally(() => {
-      process.removeAllListeners("SIGINT");
-      process.removeAllListeners("SIGTERM");
-      for (const listener of priorSigint) process.on("SIGINT", listener as () => void);
-      for (const listener of priorSigterm) process.on("SIGTERM", listener as () => void);
+      for (const [signal, listeners] of prior) {
+        process.removeAllListeners(signal);
+        for (const listener of listeners) process.on(signal, listener as () => void);
+      }
     });
   }
 
@@ -2070,6 +2094,82 @@ describe("waitForShutdown", () => {
         expect(extra.uptimeMs).toBeGreaterThanOrEqual(5_000);
         expect(sink.closeCallCount).toBe(1);
       });
+    });
+
+    it("reports reason 'sighup' for a closed terminal instead of dying silently", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+        });
+        process.emit("SIGHUP");
+        await expect(promise).resolves.toBeUndefined();
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("sighup");
+      });
+    });
+
+    // #3532 review finding (PR #3554): a throwing heartbeat stop used to short-circuit the exit
+    // evidence hook, dropping the exit loss summary and the BFF's trailing suppressed counts.
+    it("always runs the exit evidence hook, even when the heartbeat stop throws", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const beforeExitEvidence = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown: () => {
+            throw new RangeError("heartbeat teardown failed");
+          },
+          beforeExitEvidence,
+        });
+        process.emit("SIGTERM");
+        await expect(promise).resolves.toBeUndefined();
+        expect(beforeExitEvidence).toHaveBeenCalledTimes(1);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).onShutdownErrorKind).toBe("RangeError");
+      });
+    });
+
+    it("writes exactly one exit line per process through the shared latch", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const exitLatch = new ProcessExitLatch();
+        expect(exitLatch.claim()).toBe(true);
+        const beforeExitEvidence = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          exitLatch,
+          beforeExitEvidence,
+        });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        expect(sink.events.filter((event) => event.op === "process.exiting")).toEqual([]);
+        expect(beforeExitEvidence).not.toHaveBeenCalled();
+      });
+    });
+
+    it("records an exit no shutdown branch observed from the process exit event", () => {
+      const sink = createRecordingSink();
+      const priorExit = process.rawListeners("exit");
+      const disarm = armProcessExitFallback({ activityLog: sink, startedAt: Date.now() });
+      try {
+        const added = process
+          .rawListeners("exit")
+          .filter((listener) => !priorExit.includes(listener));
+        expect(added).toHaveLength(1);
+        (added[0] as (code: number) => void)(0);
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).reason).toBe("process-exit");
+      } finally {
+        disarm();
+      }
+      expect(process.rawListeners("exit")).toHaveLength(priorExit.length);
     });
 
     it("reports reason 'sigterm'", async () => {
