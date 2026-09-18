@@ -1118,6 +1118,19 @@ when it re-serializes to its own bytes and its digest matches; anything else is 
 query, export and rebuild commands write manifests, never the Activity Log writer, and each pass
 removes the manifests of segments that retention deleted, so the store follows the log's own bound.
 
+**Residual same-user manifest forging.** The trust boundary is the same OS user as D14's segments.
+A process already executing as that user could hand-edit a stored manifest — for example, to make
+it falsely claim a segment holds none of a query's correlation keys — and pair the edit with a
+digest recomputed over the forged content, so the manifest's own self-consistency check accepts it:
+the digest binds a manifest to its own bytes, not to the segment it describes. A forged manifest can
+therefore hide a segment from a routine query or export, which trusts a stored manifest without
+re-deriving it from the segment every time. It cannot alter the segment itself: the segment's own
+bytes, and the digest a fresh derivation would compute from them, stay exactly what the writer
+sealed. `keiko support manifest verify` detects the forgery by deriving every manifest again,
+directly from its segment, and reporting any stored manifest that differs from that derivation.
+This residual is part of the same OS-user threat model D14 already states and is never a reason to
+disable or defer manifests.
+
 **A closure is selected whole.** A correlation, an incident or a defect fingerprint selects the
 registered causal closure: the roots, every ancestor over `parentCorrelationId` and every
 descendant, and never an unrelated correlation. A narrow context adds only the uncorrelated process
