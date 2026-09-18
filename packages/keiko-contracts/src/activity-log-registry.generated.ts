@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "aef1814edb06c600020cd19916f213f2bf8bb3274e812823a4d5c8a796ee6cf5" as const;
+  "2615d0bef2a23870293a32ca1b434099c1503e884c5558b319528600c4a49558" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -23072,6 +23072,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       mismatchCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      missingCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -52652,6 +52657,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "mismatchCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "missingCount",
               type: "integer",
               dataClass: "count",
               required: true,
