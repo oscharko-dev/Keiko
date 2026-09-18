@@ -102,7 +102,7 @@ export const MAX_SUPPORT_INCIDENT_RECORD_BYTES = 4096;
 
 const INCIDENT_FILE_PATTERN = /^incident-([a-f0-9]{32})\.json$/u;
 const FINGERPRINT_CLAIM_FILE_PATTERN = /^fingerprint-([a-f0-9]{64})\.claim$/u;
-const SLOT_CLAIM_FILE_PATTERN = /^slot-([0-9]{2})\.claim$/u;
+const SLOT_CLAIM_FILE_PATTERN = /^slot-(\d{2})\.claim$/u;
 const OPERATION_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*$/u;
 const MAX_OPERATION_LENGTH = 96;
 
