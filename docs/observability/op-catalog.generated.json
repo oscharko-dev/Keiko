@@ -26258,7 +26258,9 @@
         "trackingIssue",
         "expiresOn"
       ],
-      "maximumEntries": 64
+      "maximumEntries": 64,
+      "owner": "registered-operation-owner",
+      "maximumValidityDays": 180
     },
     "exemptions": [],
     "failureClassContracts": [
