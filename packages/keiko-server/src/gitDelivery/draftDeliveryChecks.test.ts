@@ -19,6 +19,10 @@ import {
   spliceDraftChecksSection,
 } from "./draftDeliveryChecks.js";
 import type { VerificationCheckRecord } from "./verificationChecks.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const COMMITTED = "c".repeat(64);
 const HEAD = "6".repeat(40);
@@ -185,6 +189,11 @@ describe("reading the delivered commit's checks (F57)", () => {
         },
       },
     ]);
+    const persisted = expectActivityLogProof(
+      "git.draft-checks.emitted-line",
+      formatActivityLogProofLine(log[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "listed", recordCount: 3, omittedCount: 1 });
   });
   it("lists the delivered commit's checks when a later proposal is the latest result", () => {
     const later = uncommittedReceipt({

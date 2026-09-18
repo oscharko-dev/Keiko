@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "ff9b7252ab00c96e1d6b342b2f2ea9b80d15d7921fb23f436478cacbdee0357d" as const;
+  "6c35ba76f477fbaf57d2abba63b54c1190bf6fbba622c58d548f555c5918d223" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3365,14 +3365,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -3417,14 +3417,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -3469,14 +3469,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -3704,14 +3704,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -3756,14 +3756,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -13294,14 +13294,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: true,
+        required: false,
         maxLength: 128,
         maxItems: 5,
       },
@@ -29319,13 +29319,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "operation",
@@ -29393,13 +29393,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "operation",
@@ -29467,13 +29467,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "operation",
@@ -29969,13 +29969,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "operation",
@@ -30043,13 +30043,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "operation",
@@ -42052,13 +42052,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: true,
+              required: false,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
             },
             {
               name: "reason",

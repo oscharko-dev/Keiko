@@ -6,6 +6,10 @@ import {
   setServerLogger,
 } from "./observability/server-logger.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 function capture(): {
   readonly lines: ServerLogEvent[];
@@ -86,5 +90,19 @@ describe("evidence retention activity (F82)", () => {
     expect(formatted).toContain('"op":"evidence.retention"');
     expect(formatted).toContain('"source":"browser-capture"');
     expect(formatted).toContain('"deletedCount":4');
+  });
+
+  // Activity Log proof (#3532): the observer's own event, formatted exactly as the production file
+  // sink persists it, resolves evidence.retention.line for the op-catalog.
+  it("resolves the evidence.retention Activity Log proof", () => {
+    const { lines, sink } = capture();
+    evidenceRetentionObserver("terminal-execution", sink)(7);
+    const [event] = lines;
+    if (event === undefined) throw new Error("no retention line");
+    const persisted = expectActivityLogProof(
+      "evidence.retention.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({ source: "terminal-execution", deletedCount: 7 });
   });
 });

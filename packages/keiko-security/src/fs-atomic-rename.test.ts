@@ -19,6 +19,10 @@ import {
   type AtomicPublishRenameFn,
 } from "./fs-atomic-rename.js";
 import type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 function eperm(message = "operation not permitted"): NodeJS.ErrnoException {
   return Object.assign(new Error(message), { code: "EPERM" });
@@ -134,6 +138,11 @@ describe("atomicPublishRename", () => {
       "attempts",
       "failureKind",
     ]);
+    const persisted = expectActivityLogProof(
+      "security.fs.atomic-rename-retried.attempts",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ attempts: 3, failureKind: "EPERM" });
   });
 
   it("retries EBUSY on win32", () => {
@@ -273,6 +282,11 @@ describe("atomicPublishRename", () => {
         },
       }),
     ]);
+    const persisted = expectActivityLogProof(
+      "security.fs.atomic-rename-failed.attempts",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ attempts: 1, failureKind: "EPERM" });
   });
 
   it("wraps a non-Error rename failure", () => {

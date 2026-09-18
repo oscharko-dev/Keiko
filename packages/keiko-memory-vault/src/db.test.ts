@@ -25,6 +25,10 @@ import { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
 import { insertMemoryRow } from "./memories.js";
 import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const cleanups: string[] = [];
 
@@ -201,6 +205,11 @@ describe("openMemoryDatabase corruption path", () => {
       extra: { reopened: true },
     });
     expect(typeof events[0]?.extra?.failureKind).toBe("string");
+    const persisted = expectActivityLogProof(
+      "memory-vault.store.quarantined.recovery",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ reopened: true });
   });
 
   it("never lets a throwing sink surface as an open failure", () => {

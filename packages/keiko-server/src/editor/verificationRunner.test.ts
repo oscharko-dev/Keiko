@@ -33,6 +33,10 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { ServerLogEvent } from "../observability/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const PACKAGE_JSON = JSON.stringify({
   name: "fixture",
@@ -451,6 +455,12 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
           }) as unknown,
         }),
       );
+      const executeLine = events.find((event) => event.op === "editor.verification.execute");
+      const proven = expectActivityLogProof(
+        "editor.verification.execute.emitted-line",
+        formatActivityLogProofLine(executeLine ?? {}),
+      );
+      expect(proven).toMatchObject({ state: "refused", reason: "WORKSPACE_TRUST_REQUIRED" });
       expect(typecheckTrust()).toBe("approval-required");
 
       worktreeGranted = true;
@@ -1038,6 +1048,11 @@ describe("VerificationRunnerManager — runToReport's dependency-bootstrap and s
       extra: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
     });
     expect(JSON.stringify(dependencyLines)).not.toContain(workspaceRoot);
+    const proven = expectActivityLogProof(
+      "editor.verification.dependencies.emitted-line",
+      formatActivityLogProofLine(dependencyLines[0] ?? {}),
+    );
+    expect(proven).toMatchObject({ state: "installed", lockfile: "created" });
   });
 
   it("carries the install's registry egress counts on the dependencies line", async () => {

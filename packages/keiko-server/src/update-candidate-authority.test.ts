@@ -7,6 +7,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const NOW = Date.parse("2026-09-04T12:00:00.000Z");
 
@@ -289,6 +293,25 @@ describe("UpdateCandidateAuthority", () => {
         },
       },
     ]);
+    const issuedProof = expectActivityLogProof(
+      "update.candidate.issued.identity",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(issuedProof).toMatchObject({
+      correlationId: "request-preflight-3405-0123456789abcdef",
+      candidateId: "candidate-3405-0123456789abcdef",
+      targetVersion: "0.3.18",
+    });
+    const consumedProof = expectActivityLogProof(
+      "update.candidate.consumed.identity",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+    expect(consumedProof).toMatchObject({
+      correlationId: "request-3405-0123456789abcdef",
+      parentCorrelationId: "request-preflight-3405-0123456789abcdef",
+      candidateId: "candidate-3405-0123456789abcdef",
+      targetVersion: "0.3.18",
+    });
   });
 
   it("emits a closed rejection reason and error kind", () => {
@@ -325,6 +348,16 @@ describe("UpdateCandidateAuthority", () => {
         },
       }),
     ]);
+    const rejectedProof = expectActivityLogProof(
+      "update.candidate.rejected.reason",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(rejectedProof).toMatchObject({
+      correlationId: "request-unknown-01234567",
+      errorKind: "invalid-request",
+      candidateId: "unknown-candidate-01234567",
+      reason: "unknown",
+    });
   });
 
   it("reports a canonical activity sink failure through bounded diagnostics", () => {

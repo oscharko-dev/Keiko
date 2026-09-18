@@ -28,6 +28,10 @@ import {
   type WorkspaceScriptTrustService,
   type WorkspaceRunManifestAdmissionRefusal,
 } from "./workspace-script-trust.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const MANIFEST = JSON.stringify({
   name: "fixture",
@@ -362,6 +366,16 @@ describe("WorkspaceScriptTrustService", () => {
       ).toBeDefined();
     }
     expect(JSON.stringify(records)).not.toContain(root);
+    const provenGrant = expectActivityLogProof(
+      "workspace-script-trust.granted.line",
+      formatActivityLogProofLine(records[0] ?? {}),
+    );
+    expect(provenGrant).toMatchObject({ basis: "known" });
+    const provenRevoke = expectActivityLogProof(
+      "workspace-script-trust.revoked.line",
+      formatActivityLogProofLine(records[1] ?? {}),
+    );
+    expect(provenRevoke).toMatchObject({ basis: "known" });
   });
 
   it("projects server-owned status and preserves an honest digest-invalidation reason", () => {
@@ -1175,6 +1189,14 @@ describe("managed task worktrees below the state directory", () => {
         }),
       );
       expect(JSON.stringify(events)).not.toContain("vite build");
+      const admittedLine = events.find(
+        (event) => event.op === "workspace-script-trust.run-manifest-admitted",
+      );
+      const provenAdmitted = expectActivityLogProof(
+        "workspace-script-trust.run-manifest-admitted.line",
+        formatActivityLogProofLine(admittedLine ?? {}),
+      );
+      expect(provenAdmitted).toMatchObject({ basis: "known" });
 
       // Bytes changed by anything other than a governed effect no longer match the admission.
       writeFileSync(
@@ -1204,6 +1226,14 @@ describe("managed task worktrees below the state directory", () => {
           extra: { count: 1, completeness: "complete", loss: "none" },
         }),
       );
+      const revokedLine = events.find(
+        (event) => event.op === "workspace-script-trust.run-manifest-revoked",
+      );
+      const provenRevoked = expectActivityLogProof(
+        "workspace-script-trust.run-manifest-revoked.line",
+        formatActivityLogProofLine(revokedLine ?? {}),
+      );
+      expect(provenRevoked).toMatchObject({ count: 1 });
     } finally {
       managedStore.close();
     }
@@ -1214,12 +1244,18 @@ describe("managed task worktrees below the state directory", () => {
     const managedStore = createInMemoryUiStore();
     const events: ServerLogEvent[] = [];
     function expectRefusalLogged(reason: WorkspaceRunManifestAdmissionRefusal): void {
-      expect(events.at(-1)).toMatchObject({
+      const line = events.at(-1);
+      expect(line).toMatchObject({
         op: "workspace-script-trust.run-manifest-not-admitted",
         correlationId: "run-trust-0001",
         errorKind: "authority-denied",
         extra: { reason, completeness: "complete", loss: "none" },
       });
+      const proven = expectActivityLogProof(
+        "workspace-script-trust.run-manifest-not-admitted.line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+      expect(proven).toMatchObject({ reason });
     }
     try {
       managedStore.createProject(fixture.repositoryRoot, "repository");

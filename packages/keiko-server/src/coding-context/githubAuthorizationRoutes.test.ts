@@ -18,6 +18,10 @@ import {
   handlePutGitHubIssueReaderAuthorization,
 } from "./githubAuthorizationRoutes.js";
 import type { RouteContext } from "../routes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // `createProject` verifies the path exists, so these are real directories rather than literals.
 let ROOT = "";
@@ -304,6 +308,15 @@ describe("GitHub issue reader authorization routes (#3385)", () => {
       const serialized = JSON.stringify(line);
       expect(serialized).not.toContain(LINK);
       expect(serialized).not.toContain(realpathSync(LINK));
+      const persisted = expectActivityLogProof(
+        "coding-context.github-authorization.changed.line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+      expect(persisted).toMatchObject({
+        repositoryId: deriveRepositoryId(realpathSync(LINK)),
+        authorized: true,
+        revision: 1,
+      });
       store.close();
     });
   });

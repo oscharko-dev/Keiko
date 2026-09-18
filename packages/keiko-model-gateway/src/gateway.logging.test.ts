@@ -17,6 +17,10 @@ import type {
   NormalizedResponse,
   ProviderAdapter,
 } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
@@ -137,6 +141,11 @@ describe("Gateway construction — activity log", () => {
     expect(resolved.category).toBe("gateway");
     expect(resolved.extra?.providerCount).toBe(2);
     expect(resolved.extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const persisted = expectActivityLogProof(
+      "gateway.config.resolved.emitted-line",
+      formatActivityLogProofLine(resolved),
+    );
+    expect(persisted).toMatchObject({ providerCount: 2 });
   });
 
   // AUDIT-SEC-002-adjacent: a misconfigured provider entry can carry a bare token as URL userinfo
@@ -183,6 +192,14 @@ describe("Gateway routing — activity log", () => {
     expect(rejected.category).toBe("gateway");
     expect(rejected.errorKind).toBe("unavailable");
     expect(rejected.extra).toMatchObject({
+      modelId: "not-configured",
+      reason: "no-provider-configured",
+    });
+    const persisted = expectActivityLogProof(
+      "gateway.route.rejected.emitted-line",
+      formatActivityLogProofLine(rejected),
+    );
+    expect(persisted).toMatchObject({
       modelId: "not-configured",
       reason: "no-provider-configured",
     });
@@ -270,6 +287,11 @@ describe("Gateway.chat — activity log", () => {
       activityLogEventRegistration(started as unknown as Readonly<Record<PropertyKey, unknown>>)
         ?.fields.streaming,
     ).toEqual({ type: "boolean", dataClass: "closed-enum", required: true });
+    const persisted = expectActivityLogProof(
+      "gateway.chat.started.emitted-line",
+      formatActivityLogProofLine(started),
+    );
+    expect(persisted).toMatchObject({ modelId: "example-chat-model", streaming: false });
   });
 
   // The failure the whole effort exists for: the attempt is on record even though no outcome
@@ -319,6 +341,11 @@ describe("Gateway.chat — activity log", () => {
     // A stream is one attempt: it carries no retry budget, only its `timeoutMs`.
     expect(started.extra).not.toHaveProperty("requestBudgetMs");
     expect(ops(log.events)).not.toContain("gateway.chat.started");
+    const persisted = expectActivityLogProof(
+      "gateway.stream.started.emitted-line",
+      formatActivityLogProofLine(started),
+    );
+    expect(persisted).toMatchObject({ modelId: "example-chat-model", streaming: true });
   });
 
   it("skips the attempt line for a sink that declines info, without touching the call", async () => {
@@ -358,6 +385,11 @@ describe("Gateway.chat — activity log", () => {
       streaming: false,
     });
     expect(typeof completed.durationMs).toBe("number");
+    const persisted = expectActivityLogProof(
+      "gateway.chat.completed.emitted-line",
+      formatActivityLogProofLine(completed),
+    );
+    expect(persisted).toMatchObject({ modelId: "example-chat-model", finishReason: "stop" });
   });
 
   it("writes a failed line with the error KIND and no message text", async () => {
@@ -372,6 +404,11 @@ describe("Gateway.chat — activity log", () => {
     expect(failed.errorKind).toBe("internal");
     expect(JSON.stringify(failed)).not.toContain("sk-leak-me");
     expect(ops(log.events)).not.toContain("gateway.chat.completed");
+    const persisted = expectActivityLogProof(
+      "gateway.chat.failed.emitted-line",
+      formatActivityLogProofLine(failed),
+    );
+    expect(persisted).toMatchObject({ modelId: "example-chat-model", streaming: false });
   });
 
   it("stays silent — and behaviourally identical — when no sink is wired", async () => {
@@ -396,6 +433,14 @@ describe("Gateway.chatStream — activity log", () => {
     const fallback = eventFor(log.events, "gateway.stream.buffered-fallback");
     expect(fallback.level).toBe("warn");
     expect(fallback.extra).toMatchObject({
+      modelId: "example-chat-model",
+      reason: "adapter-has-no-stream",
+    });
+    const fallbackPersisted = expectActivityLogProof(
+      "gateway.stream.buffered-fallback.emitted-line",
+      formatActivityLogProofLine(fallback),
+    );
+    expect(fallbackPersisted).toMatchObject({
       modelId: "example-chat-model",
       reason: "adapter-has-no-stream",
     });
@@ -428,6 +473,11 @@ describe("Gateway.chatStream — activity log", () => {
       completionTokens: 1,
     });
     expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
+    const persisted = expectActivityLogProof(
+      "gateway.stream.completed.emitted-line",
+      formatActivityLogProofLine(streamCompleted),
+    );
+    expect(persisted).toMatchObject({ chunkCount: 2, promptTokens: 1, completionTokens: 1 });
   });
 
   it("skips a leading empty delta and times firstTokenMs off the first real one", async () => {
@@ -465,6 +515,11 @@ describe("Gateway.chatStream — activity log", () => {
     expect(failed.errorKind).toBe("internal");
     expect(failed.extra).toMatchObject({ chunkCount: 1, afterFirstChunk: true, streaming: true });
     expect(ops(log.events)).not.toContain("gateway.stream.completed");
+    const persisted = expectActivityLogProof(
+      "gateway.stream.failed.emitted-line",
+      formatActivityLogProofLine(failed),
+    );
+    expect(persisted).toMatchObject({ chunkCount: 1, afterFirstChunk: true, streaming: true });
   });
 
   // A consumer that stops iterating closes the generator through `return()`, which runs NEITHER
@@ -498,6 +553,11 @@ describe("Gateway.chatStream — activity log", () => {
     expect(ops(log.events).filter((op) => op === "gateway.stream.abandoned")).toHaveLength(1);
     expect(ops(log.events)).not.toContain("gateway.stream.completed");
     expect(ops(log.events)).not.toContain("gateway.stream.failed");
+    const persisted = expectActivityLogProof(
+      "gateway.stream.abandoned.emitted-line",
+      formatActivityLogProofLine(abandoned),
+    );
+    expect(persisted).toMatchObject({ chunkCount: 1, reason: "consumer-stopped-iterating" });
   });
 
   it("writes no abandoned line when the stream is drained to the end", async () => {

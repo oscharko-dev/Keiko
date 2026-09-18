@@ -99,17 +99,26 @@ const GIT_DRAFT_PUSH_PREPARATION_OPERATION = defineActivityLogOperation({
       required: true,
       values: [...GIT_PUBLISH_PREPARATION_REASONS, "unclassified"],
     },
+    // Not `required: true` (matching `GIT_DRAFT_TARGET_RESOLVED_OPERATION` below and
+    // `GIT_RUNTIME_IDENTITY_OPERATION` in productionRuntimeGitPreparation.ts): `redactAcceptedField`
+    // (log-redaction.ts) drops an empty `frames`/`causeChain` array outright rather than persisting
+    // `[]`, and an empty array is the ORDINARY outcome here, not an edge case — most thrown `Error`s
+    // carry no `.cause` at all (`causeChain` is then `[]`), and a frame outside every known
+    // `packages/*/(dist|src)` anchor is dropped by `keikoStackFrames` itself (`frames` can also be
+    // `[]`). Marking either field required made every such failure's persisted line fail its own
+    // registration (`validateActivityLogOperationFields` rejects a required field the redaction
+    // pass just removed) — the exact silent-evidence-loss this file's own header exists to close.
     frames: {
       type: "string-array",
       dataClass: "opaque-id",
-      required: true,
+      required: false,
       maxLength: 512,
       maxItems: 8,
     },
     causeChain: {
       type: "string-array",
       dataClass: "error-kind",
-      required: true,
+      required: false,
       maxLength: 128,
       maxItems: 5,
     },

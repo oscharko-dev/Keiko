@@ -175,6 +175,24 @@ describe("projectActivityLogSufficiency", () => {
     expect(classEntry(lines, "activity-log-loss")?.status).toBe("complete");
   });
 
+  it("scopes a port sink failure to its own package's classes in the same process", () => {
+    const lines = [
+      line("security.vault.key-resolved", "corr-vault-0001"),
+      line("gateway.chat.started", "corr-chat-0009"),
+      line("gateway.chat.failed", "corr-chat-0009"),
+      line("security.log.sink-failed", undefined, {
+        droppedOpDigest: "0123456789abcdef",
+        failureKind: "Error",
+        loss: "event-dropped",
+      }),
+    ];
+    expect(classEntry(lines, "security-vault-key-resolution")).toEqual(
+      expect.objectContaining({ status: "degraded", reasons: ["activity-log-loss"] }),
+    );
+    expect(classEntry(lines, "gateway-chat-call")?.status).toBe("complete");
+    expect(classEntry(lines, "activity-log-sink")?.status).toBe("complete");
+  });
+
   it("attributes a dropped line to the classes of the operation it names", () => {
     const lines = [
       line("gateway.chat.started", "corr-chat-0007"),

@@ -23,6 +23,10 @@ import { createCodingAppSessionChannel, type CodingAppSessionChannel } from "./s
 import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const CANARY = { kind: "probe", body: "handler-canary" } as const;
 
@@ -246,6 +250,10 @@ describe("app-session lifecycle lines (F65)", () => {
         extra: { completeness: "complete", loss: "none" },
       },
     ]);
+    expectActivityLogProof(
+      "coding-app-session.paired.request",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
   });
 
   it("logs only a local-session issue, correlated and body-free", () => {
@@ -266,6 +274,10 @@ describe("app-session lifecycle lines (F65)", () => {
         extra: { completeness: "complete", loss: "none" },
       },
     ]);
+    expectActivityLogProof(
+      "coding-app-session.local-session.issued.request",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
   });
 
   it("does not log an already active local session", () => {
@@ -303,6 +315,14 @@ describe("app-session lifecycle lines (F65)", () => {
       "coding-app-session.rotated",
       "coding-app-session.signed-out",
     ]);
+    expectActivityLogProof(
+      "coding-app-session.rotated.request",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expectActivityLogProof(
+      "coding-app-session.signed-out.request",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
   });
 
   // PR #3452 review: the log never shows a sign-out that did not happen. An absent or unknown

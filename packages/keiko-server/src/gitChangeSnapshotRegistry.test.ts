@@ -6,12 +6,16 @@
 // prove the reservation mechanism actually protects a still-in-use reference from the LRU
 // eviction sweep, rather than only asserting the API shape.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts";
 import { GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import { GitChangeSnapshotRegistry } from "./gitChangeSnapshotRegistry.js";
 import type { GitSnapshotContent } from "./gitChangeSnapshotRegistry.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const FIXED_NOW = Date.parse("2026-01-01T00:00:00.000Z");
 const correlationId = "registry-regression";
@@ -99,10 +103,17 @@ function buildRegistry(): { registry: GitChangeSnapshotRegistry; events: ServerL
 
 describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
   it("keeps a reserved reference alive across an eviction sweep that would otherwise remove it", () => {
-    const { registry } = buildRegistry();
+    const { registry, events } = buildRegistry();
     const protectedScope = {};
     const protectedRef = registry.put(content("0".repeat(64)), protectedScope, correlationId);
     expect(registry.reserve(protectedRef, protectedScope, correlationId)).toBe(true);
+    const reservedEvent = events.find((event) => event.op === "git.snapshot.reserved");
+    if (reservedEvent === undefined) throw new Error("expected a reserved event");
+    const persistedReserved = expectActivityLogProof(
+      "git.snapshot.reserved.line",
+      formatActivityLogProofLine(reservedEvent),
+    );
+    expect(persistedReserved).toMatchObject({ correlationId, category: "process" });
 
     // Fill every remaining slot with unreserved entries, one past capacity, so `put` must evict
     // something to make room for the last insert below.
@@ -122,6 +133,14 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
     // ...and capacity was still enforced against the unreserved entries: the most recent insert
     // is present, but an early unreserved insert was reclaimed to make room for it.
     expect(registry.get(lastRef, lastScope, correlationId)).toBeDefined();
+    const readEvents = events.filter((event) => event.op === "git.snapshot.read");
+    const [firstRead] = readEvents;
+    if (firstRead === undefined) throw new Error("expected a read event");
+    const persistedRead = expectActivityLogProof(
+      "git.snapshot.read.line",
+      formatActivityLogProofLine(firstRead),
+    );
+    expect(persistedRead).toMatchObject({ allowed: true });
   });
 
   it("refuses to reserve an unknown reference or a mismatched scope (fail-closed)", () => {
@@ -135,7 +154,7 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
   });
 
   it("caps the number of simultaneous reservations so eviction can never be starved entirely", () => {
-    const { registry } = buildRegistry();
+    const { registry, events } = buildRegistry();
     const entries = Array.from({ length: 25 }, (_, index) => {
       const scope = {};
       const ref = registry.put(content(index.toString(16).padStart(64, "0")), scope, correlationId);
@@ -150,6 +169,13 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
     // The 25th reservation attempt must be refused: honoring it would let every slot become
     // reserved, leaving `put`'s eviction sweep with nothing left to reclaim.
     expect(registry.reserve(twentyFifth.ref, twentyFifth.scope, correlationId)).toBe(false);
+    const deniedEvent = events.find((event) => event.op === "git.snapshot.reserve-denied");
+    if (deniedEvent === undefined) throw new Error("expected a reserve-denied event");
+    const persistedDenied = expectActivityLogProof(
+      "git.snapshot.reserve-denied.line",
+      formatActivityLogProofLine(deniedEvent),
+    );
+    expect(persistedDenied).toMatchObject({ reservedCount: 24, errorKind: "conflict" });
     // Re-reserving an already-reserved reference stays idempotent and does not count twice
     // against the cap.
     const [first] = firstTwentyFour;
@@ -158,12 +184,19 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
   });
 
   it("makes a released reference evictable again", () => {
-    const { registry } = buildRegistry();
+    const { registry, events } = buildRegistry();
     const scope = {};
     const ref = registry.put(content("2".repeat(64)), scope, correlationId);
     expect(registry.reserve(ref, scope, correlationId)).toBe(true);
 
     registry.release(ref, scope, correlationId);
+    const releasedEvent = events.find((event) => event.op === "git.snapshot.released");
+    if (releasedEvent === undefined) throw new Error("expected a released event");
+    const persistedReleased = expectActivityLogProof(
+      "git.snapshot.released.line",
+      formatActivityLogProofLine(releasedEvent),
+    );
+    expect(persistedReleased).toMatchObject({ correlationId, category: "process" });
 
     for (let index = 0; index < 32; index += 1) {
       registry.put(content(index.toString(16).padStart(64, "0")), {}, correlationId);
@@ -172,11 +205,18 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
   });
 
   it("drops a reservation when its record is removed by ordinary means (no reservation leak)", () => {
-    const { registry } = buildRegistry();
+    const { registry, events } = buildRegistry();
     const scope = {};
     const first = registry.put(content("3".repeat(64)), scope, correlationId);
     registry.reserve(first, scope, correlationId);
     registry.revoke(first, scope, correlationId);
+    const invalidatedEvent = events.find((event) => event.op === "git.snapshot.invalidated");
+    if (invalidatedEvent === undefined) throw new Error("expected an invalidated event");
+    const persistedInvalidated = expectActivityLogProof(
+      "git.snapshot.invalidated.line",
+      formatActivityLogProofLine(invalidatedEvent),
+    );
+    expect(persistedInvalidated).toMatchObject({ correlationId, category: "security" });
 
     // Re-using the same reference string after revocation must not resurrect the old reservation:
     // `reserve` only succeeds against a live record with a matching scope.
@@ -214,7 +254,42 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
 
     // The failed insertion must not have been admitted: still exactly the six reserved records,
     // and total retained bytes must never have crossed the cap.
-    expect(events.some((event) => event.op === "git.snapshot.capacity-denied")).toBe(true);
+    const deniedEvent = events.find((event) => event.op === "git.snapshot.capacity-denied");
+    if (deniedEvent === undefined) throw new Error("expected a capacity-denied event");
+    const persistedDenied = expectActivityLogProof(
+      "git.snapshot.capacity-denied.line",
+      formatActivityLogProofLine(deniedEvent),
+    );
+    expect(persistedDenied).toMatchObject({
+      reservedCount: 6,
+      recordCount: 6,
+      errorKind: "conflict",
+    });
     expect(retainedBytes).toBeLessThan(BYTE_CAP);
+  });
+
+  it("logs an expiry when a retained snapshot's own timer fires (op git.snapshot.expired)", () => {
+    vi.useFakeTimers();
+    try {
+      const { registry, events } = buildRegistry();
+      const scope = {};
+      const digest = "6".repeat(64);
+      registry.put(content(digest), scope, correlationId);
+
+      // `content()` uses the fixture's default `expiresAt` (2026-01-01T01:00:00.000Z), one hour
+      // after `FIXED_NOW` — advancing fake time past it fires the registry's own scheduled timer
+      // rather than the read-time `prune()` sweep the other tests exercise.
+      vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+
+      const expiredEvent = events.find((event) => event.op === "git.snapshot.expired");
+      if (expiredEvent === undefined) throw new Error("expected an expiry event");
+      const persistedExpired = expectActivityLogProof(
+        "git.snapshot.expired.line",
+        formatActivityLogProofLine(expiredEvent),
+      );
+      expect(persistedExpired).toMatchObject({ snapshotDigest: digest });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

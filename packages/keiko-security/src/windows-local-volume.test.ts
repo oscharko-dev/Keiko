@@ -7,6 +7,10 @@ import {
   type WindowsLocalVolumeRunner,
 } from "./windows-local-volume.js";
 import { WindowsSystemBinaryMissingError } from "./windows-system-directory.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const POWERSHELL = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
 interface Invocation {
@@ -153,6 +157,11 @@ describe("Windows local volume authority", () => {
     expect(events[0]?.extra).toMatchObject({ failureKind: "Error", phase: "verify" });
     expect(JSON.stringify(events)).not.toContain(path);
     expect(JSON.stringify(events)).not.toContain("private failure detail");
+    const persisted = expectActivityLogProof(
+      "security.windows-local-volume.refused.phase",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "Error", phase: "verify" });
   });
 
   it.each([

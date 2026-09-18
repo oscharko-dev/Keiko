@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { captureActivityLog } from "../activityLogCapture.test-support.js";
 import { logGitDeliveryApprovalEvent, parseVerifiedCommitSha } from "./approvalEvents.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const SHA_40 = "a".repeat(40);
 const SHA_64 = "b".repeat(64);
@@ -63,6 +67,11 @@ describe("logGitDeliveryApprovalEvent", () => {
         activity.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
       ),
     ).toMatchObject({ op: "git.delivery.push.approval.required" });
+    const persisted = expectActivityLogProof(
+      "git.delivery.push.approval.required.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "push", runId: "run-1" });
   });
 
   it("writes the pr approval-minted line with the shared shape", () => {
@@ -88,5 +97,122 @@ describe("logGitDeliveryApprovalEvent", () => {
         activity.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
       ),
     ).toMatchObject({ op: "git.delivery.pr.approval.minted" });
+    const persisted = expectActivityLogProof(
+      "git.delivery.pr.approval.minted.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "pr", runId: "run-2" });
+  });
+
+  it("resolves the pr approval-required activity-log proof", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryApprovalEvent(
+      activity.sink,
+      "git.delivery.pr.approval.required",
+      "pr",
+      "corr-0003",
+      "run-3",
+    );
+    const persisted = expectActivityLogProof(
+      "git.delivery.pr.approval.required.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "pr", runId: "run-3" });
+  });
+
+  it("resolves the push approval-minted activity-log proof", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryApprovalEvent(
+      activity.sink,
+      "git.delivery.push.approval.minted",
+      "push",
+      "corr-0004",
+      "run-4",
+    );
+    const persisted = expectActivityLogProof(
+      "git.delivery.push.approval.minted.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "push", runId: "run-4" });
+  });
+
+  it("resolves the commit approval-required activity-log proof", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryApprovalEvent(
+      activity.sink,
+      "git.delivery.commit.approval.required",
+      "commit",
+      "corr-0005",
+      "run-5",
+    );
+    const persisted = expectActivityLogProof(
+      "git.delivery.commit.approval.required.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "commit", runId: "run-5" });
+  });
+
+  it("resolves the commit approval-minted activity-log proof", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryApprovalEvent(
+      activity.sink,
+      "git.delivery.commit.approval.minted",
+      "commit",
+      "corr-0006",
+      "run-6",
+    );
+    const persisted = expectActivityLogProof(
+      "git.delivery.commit.approval.minted.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "commit", runId: "run-6" });
+  });
+
+  it("resolves the sync approval-minted activity-log proof", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryApprovalEvent(
+      activity.sink,
+      "git.delivery.sync.approval.minted",
+      "fetch",
+      "corr-0007",
+      "run-7",
+    );
+    const persisted = expectActivityLogProof(
+      "git.delivery.sync.approval.minted.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "fetch", runId: "run-7" });
+  });
+
+  it("resolves the pr-mark-ready approval-required activity-log proof", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryApprovalEvent(
+      activity.sink,
+      "git.delivery.pr-mark-ready.approval.required",
+      "pr-mark-ready",
+      "corr-0008",
+      "run-8",
+    );
+    const persisted = expectActivityLogProof(
+      "git.delivery.pr-mark-ready.approval.required.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "pr-mark-ready", runId: "run-8" });
+  });
+
+  it("resolves the pr-mark-ready approval-minted activity-log proof", () => {
+    const activity = captureActivityLog();
+    logGitDeliveryApprovalEvent(
+      activity.sink,
+      "git.delivery.pr-mark-ready.approval.minted",
+      "pr-mark-ready",
+      "corr-0009",
+      "run-9",
+    );
+    const persisted = expectActivityLogProof(
+      "git.delivery.pr-mark-ready.approval.minted.emitted-line",
+      formatActivityLogProofLine(activity.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ operation: "pr-mark-ready", runId: "run-9" });
   });
 });

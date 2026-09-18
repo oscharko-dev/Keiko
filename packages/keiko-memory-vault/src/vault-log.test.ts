@@ -22,6 +22,10 @@ import {
   type MemoryVaultLogEvent,
   type MemoryVaultLogSink,
 } from "./vault-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // The specs below replace platform functions — `performance.now`, `process.emitWarning`. A spy
 // restored on the last line of its own test is only restored when that test PASSES: an assertion
@@ -163,6 +167,14 @@ describe("emitMemoryVaultLogEvent", () => {
         failureKind: "ENOSPC",
         loss: "none",
       },
+    });
+    const persisted = expectActivityLogProof(
+      "memory-vault.log.sink-failed.body-free",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      droppedOpDigest: "3b9d5ea9d495ed7f",
+      failureKind: "ENOSPC",
     });
   });
 

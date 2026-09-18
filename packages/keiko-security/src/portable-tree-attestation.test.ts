@@ -19,6 +19,10 @@ import {
   PortableTreeAttestationError,
   type PortableTreeKht1Operation,
 } from "./portable-tree-attestation.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const roots: string[] = [];
 const workers: { readonly worker: Worker; readonly control: Int32Array }[] = [];
@@ -340,5 +344,20 @@ describe("portable KHT1 tree attestation", () => {
     ]);
     expect(JSON.stringify(events)).not.toContain("content that must not reach the log");
     expect(JSON.stringify(events)).not.toContain(root);
+
+    const [asyncEvent, syncEvent] = events;
+    const persistedAsync = expectActivityLogProof(
+      "security.portable-tree-attestation.failed.driver",
+      formatActivityLogProofLine(asyncEvent ?? {}),
+    );
+    expect(persistedAsync).toMatchObject({ driver: "async", failureKind: "ENOENT" });
+    const persistedSync = expectActivityLogProof(
+      "security.portable-tree-attestation.failed.driver",
+      formatActivityLogProofLine(syncEvent ?? {}),
+    );
+    expect(persistedSync).toMatchObject({
+      driver: "sync",
+      failureKind: "PortableTreeAttestationError",
+    });
   });
 });
