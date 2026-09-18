@@ -493,8 +493,40 @@ function countList(values: readonly SegmentManifestCount[]): readonly SegmentMan
 
 // Re-creates every object in the one canonical key order; the digest and the stored bytes are both
 // taken over this form, so a reordered or padded file never validates.
+function canonicalProcesses(value: SegmentManifest["processes"]): SegmentManifest["processes"] {
+  return {
+    complete: value.complete,
+    entries: value.entries.map((entry) => ({
+      pid: entry.pid,
+      instanceId: entry.instanceId,
+      firstSeq: entry.firstSeq,
+      lastSeq: entry.lastSeq,
+      lineCount: entry.lineCount,
+    })),
+  };
+}
+
+function canonicalEvidence(evidence: SegmentManifestEvidence): SegmentManifestEvidence {
+  return {
+    classification: evidence.classification,
+    supportedLineCount: evidence.supportedLineCount,
+    legacyLineCount: evidence.legacyLineCount,
+    unsupportedLineCount: evidence.unsupportedLineCount,
+    corruptLineCount: evidence.corruptLineCount,
+    truncatedLineCount: evidence.truncatedLineCount,
+    incompleteLineCount: evidence.incompleteLineCount,
+    sequenceAnomalies: {
+      gap: evidence.sequenceAnomalies.gap,
+      duplicate: evidence.sequenceAnomalies.duplicate,
+      decreasing: evidence.sequenceAnomalies.decreasing,
+      reset: evidence.sequenceAnomalies.reset,
+    },
+    completeness: evidence.completeness,
+    loss: evidence.loss,
+  };
+}
+
 function canonicalBody(value: SegmentManifestBody): SegmentManifestBody {
-  const { evidence } = value;
   return {
     kind: value.kind,
     schemaVersion: value.schemaVersion,
@@ -511,33 +543,8 @@ function canonicalBody(value: SegmentManifestBody): SegmentManifestBody {
       terminated: value.segment.terminated,
     },
     time: value.time === null ? null : { firstTs: value.time.firstTs, lastTs: value.time.lastTs },
-    processes: {
-      complete: value.processes.complete,
-      entries: value.processes.entries.map((entry) => ({
-        pid: entry.pid,
-        instanceId: entry.instanceId,
-        firstSeq: entry.firstSeq,
-        lastSeq: entry.lastSeq,
-        lineCount: entry.lineCount,
-      })),
-    },
-    evidence: {
-      classification: evidence.classification,
-      supportedLineCount: evidence.supportedLineCount,
-      legacyLineCount: evidence.legacyLineCount,
-      unsupportedLineCount: evidence.unsupportedLineCount,
-      corruptLineCount: evidence.corruptLineCount,
-      truncatedLineCount: evidence.truncatedLineCount,
-      incompleteLineCount: evidence.incompleteLineCount,
-      sequenceAnomalies: {
-        gap: evidence.sequenceAnomalies.gap,
-        duplicate: evidence.sequenceAnomalies.duplicate,
-        decreasing: evidence.sequenceAnomalies.decreasing,
-        reset: evidence.sequenceAnomalies.reset,
-      },
-      completeness: evidence.completeness,
-      loss: evidence.loss,
-    },
+    processes: canonicalProcesses(value.processes),
+    evidence: canonicalEvidence(value.evidence),
     categories: countList(value.categories),
     ops: countList(value.ops),
     errorKinds: countList(value.errorKinds),
@@ -667,15 +674,18 @@ function validEvidence(value: unknown): boolean {
   );
 }
 
+// A saturated filter has no bits; any other is whole bytes inside the bounds.
+function validFilterBits(bits: unknown, saturated: boolean): boolean {
+  if (!isCount(bits) || bits % 8 !== 0 || bits > MAX_FILTER_BYTES * 8) return false;
+  return saturated || bits >= MIN_FILTER_BITS;
+}
+
 function validFilter(value: unknown): boolean {
   return (
     isPlain(value) &&
     typeof value.saturated === "boolean" &&
     isCount(value.distinctKeyCount) &&
-    isCount(value.bits) &&
-    value.bits % 8 === 0 &&
-    value.bits <= MAX_FILTER_BYTES * 8 &&
-    (value.saturated || value.bits >= MIN_FILTER_BITS) &&
+    validFilterBits(value.bits, value.saturated) &&
     isCount(value.hashes) &&
     value.hashes <= 16 &&
     typeof value.data === "string"

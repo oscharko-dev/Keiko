@@ -16,7 +16,6 @@ import {
 import {
   formatRegisteredServerLogLine,
   serverLogProcessIdentity,
-  type ServerLogEvent,
 } from "@oscharko-dev/keiko-server/observability/server-log";
 
 export interface FixtureProcess {
@@ -75,7 +74,7 @@ export function fixtureLine(
     registration,
   );
   process.seq += 1;
-  const line = formatRegisteredServerLogLine(event as ServerLogEvent, new Date(atMs), {
+  const line = formatRegisteredServerLogLine(event, new Date(atMs), {
     ...serverLogProcessIdentity(),
     pid: process.pid,
     instanceId: process.instanceId,

@@ -204,7 +204,9 @@ afterAll(() => {
 });
 
 describe("support query over a long history (#3531)", () => {
-  it("answers within the peak-memory budget over a history far larger than the budget", () => {
+  it("answers within the peak-memory budget over a history far larger than the budget", async ({
+    annotate,
+  }) => {
     expect(historyBytes).toBeGreaterThan(2 * RSS_GROWTH_BUDGET_MB * 1024 * 1024);
     const emptyStateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-long-history-empty-"));
     const baseline = runBuiltQuery(emptyStateDir);
@@ -228,7 +230,7 @@ describe("support query over a long history (#3531)", () => {
     // The warm query opens only the segments its manifests cannot exclude.
     expect(warm.result.segments.opened).toBeLessThanOrEqual(4);
     expect(warm.elapsedMs).toBeLessThan(cold.elapsedMs);
-    console.info(
+    await annotate(
       `[#3531 long-history] history=${(historyBytes / 1048576).toFixed(1)} MiB in ${String(
         SEGMENT_COUNT,
       )} segments, heap cap ${String(HEAP_BUDGET_MB)} MiB; baseline ${String(baseline.elapsedMs)} ms / ` +
@@ -247,7 +249,7 @@ describe("support query over a long history (#3531)", () => {
     });
     const opened: string[] = [];
     const scanner = new ActivityLogScanner(stateDir, {
-      openFile: (file, root) => {
+      openFile: (file, root): number => {
         opened.push(file.name);
         return openSafeArtifactFile(file.path, {
           artifactClass: "activity-log",

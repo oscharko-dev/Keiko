@@ -9,7 +9,6 @@
 import { randomUUID } from "node:crypto";
 import {
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
-  DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   activityLogOperationSchema,
   isActivityLogCorrelationId,
   isActivityLogErrorKind,
@@ -364,13 +363,11 @@ export async function resolveSupportSelection(
   }
   if (selector.defectFingerprint !== undefined) {
     const server = await loadIncidentServer();
+    // The record parser admits only DEFECT_FINGERPRINT_ALGORITHM_VERSION, so equal fingerprints
+    // are always of the same algorithm version and never compared across versions.
     const records = server
       .listSupportIncidents(stateDir)
-      .filter(
-        (record) =>
-          record.fingerprint.algorithm === DEFECT_FINGERPRINT_ALGORITHM_VERSION &&
-          record.fingerprint.defectFingerprint === selector.defectFingerprint,
-      );
+      .filter((record) => record.fingerprint.defectFingerprint === selector.defectFingerprint);
     return incidentSelection(
       "defect-fingerprint",
       records.map((record) => incidentPart(server, stateDir, record)),
@@ -601,25 +598,15 @@ function manifestPass(
   }).stats;
 }
 
-export async function runSupportManifestCli(
+function runManifestPassOrFail(
   args: SupportManifestArgs,
-  io: CliIo,
-  env: EnvSource,
-  deps: SupportQueryCliDeps = {},
-): Promise<number> {
-  const stateDir = resolveStateDir(deps.cwd ?? process.cwd(), env, args.stateDir);
-  const context: EvidenceContext = {
-    server: await (deps.run?.loadServer ?? loadServer)(),
-    stateDir,
-    correlationId: randomUUID(),
-    io,
-    command: "manifest",
-  };
-  let stats: SegmentManifestPassStats;
+  context: EvidenceContext,
+  scanner: ActivityLogScannerDeps | undefined,
+): SegmentManifestPassStats | undefined {
   try {
-    stats = manifestPass(stateDir, args.action, deps.run?.scanner);
+    return manifestPass(context.stateDir, args.action, scanner);
   } catch (error) {
-    io.err(
+    context.io.err(
       `keiko support manifest: the Activity Log could not be listed (${describeErrorKind(error)})\n`,
     );
     recordSupportQueryFailure(context, {
@@ -628,21 +615,53 @@ export async function runSupportManifestCli(
       stage: "manifest",
       error,
     });
-    return 1;
+    return undefined;
   }
+}
+
+function recordManifestEvidence(
+  context: EvidenceContext,
+  stats: SegmentManifestPassStats,
+): boolean {
   try {
     withActivityLog(context, (sink) => {
       emitSupportManifestEvidence(sink, context.correlationId, stats);
     });
+    return true;
   } catch (error) {
     reportActivityLogUnavailable(context, error);
-    return 1;
+    return false;
   }
+}
+
+// Rebuild fails only on unreadable segments or refused writes; verify also on a differing manifest.
+function manifestExitCode(
+  action: SupportManifestArgs["action"],
+  stats: SegmentManifestPassStats,
+): number {
+  const clean = stats.unreadableCount === 0 && stats.writeFailedCount === 0;
+  return clean && (action === "rebuild" || stats.mismatchCount === 0) ? 0 : 1;
+}
+
+export async function runSupportManifestCli(
+  args: SupportManifestArgs,
+  io: CliIo,
+  env: EnvSource,
+  deps: SupportQueryCliDeps = {},
+): Promise<number> {
+  const context: EvidenceContext = {
+    server: await (deps.run?.loadServer ?? loadServer)(),
+    stateDir: resolveStateDir(deps.cwd ?? process.cwd(), env, args.stateDir),
+    correlationId: randomUUID(),
+    io,
+    command: "manifest",
+  };
+  const stats = runManifestPassOrFail(args, context, deps.run?.scanner);
+  if (stats === undefined || !recordManifestEvidence(context, stats)) return 1;
   io.out(
     args.json
       ? `${JSON.stringify({ kind: "keiko.support.manifest", schemaVersion: 1, ...stats })}\n`
       : renderManifestStats(stats),
   );
-  const clean = stats.unreadableCount === 0 && stats.writeFailedCount === 0;
-  return clean && (args.action === "rebuild" || stats.mismatchCount === 0) ? 0 : 1;
+  return manifestExitCode(args.action, stats);
 }

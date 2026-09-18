@@ -155,7 +155,9 @@ export class ActivityLogScanner {
 
   /** Streams `file` to its end without retaining anything but its derived manifest. */
   public drain(file: ActivityLogStoreFile): SegmentManifest | undefined {
-    for (const line of this.scan(file)) void line;
+    const lines = this.scan(file);
+    let next = lines.next();
+    while (next.done !== true) next = lines.next();
     return this.manifestOf(file);
   }
 }

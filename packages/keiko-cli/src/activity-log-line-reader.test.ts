@@ -75,12 +75,13 @@ describe("readActivityLogFileLines (#3531)", () => {
     const text = "one\ntwo\n";
     const path = writeText(text);
     const chunks: Buffer[] = [];
-    for (const line of readActivityLogFileLines(() => openSync(path, "r"), {
-      chunkBytes: 3,
-      onChunk: (chunk) => chunks.push(Buffer.from(chunk)),
-    })) {
-      void line;
-    }
+    const lines = [
+      ...readActivityLogFileLines(() => openSync(path, "r"), {
+        chunkBytes: 3,
+        onChunk: (chunk) => chunks.push(Buffer.from(chunk)),
+      }),
+    ];
+    expect(lines).toHaveLength(2);
     expect(Buffer.concat(chunks).toString("utf8")).toBe(text);
   });
 
@@ -88,14 +89,15 @@ describe("readActivityLogFileLines (#3531)", () => {
     const missing = join(directory, "missing.jsonl");
     const open = (): Generator<ActivityLogReadLine> =>
       readActivityLogFileLines(() => openSync(missing, "r"));
-    expect(() => [...open()]).toThrow(ActivityLogReadError);
+    let failure: unknown;
     try {
-      [...open()];
+      expect([...open()]).toEqual([]);
     } catch (error) {
-      expect(error).toBeInstanceOf(ActivityLogReadError);
-      expect((error as ActivityLogReadError).causeKind).toBe("ENOENT");
-      expect((error as Error).message).not.toContain(missing);
+      failure = error;
     }
+    expect(failure).toBeInstanceOf(ActivityLogReadError);
+    expect((failure as ActivityLogReadError).causeKind).toBe("ENOENT");
+    expect((failure as Error).message).not.toContain(missing);
     expect(() => [...readActivityLogFileLines(() => openSync(directory, "r"))]).toThrow(
       ActivityLogReadError,
     );

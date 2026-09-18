@@ -498,7 +498,7 @@ function collectClosureEvents(
     const parent = accepted.parsed.view.parentCorrelationId;
     if (role !== "closure" || !knownCorrelation(id)) continue;
     observed.add(id);
-    if (knownCorrelation(parent) && members.has(parent)) edges.add(`${parent} ${id}`);
+    if (knownCorrelation(parent) && members.has(parent)) edges.add(`${parent}\u0000${id}`);
   }
   return { collector, observed, edges };
 }
@@ -592,27 +592,36 @@ function hasCount(counts: SegmentManifest["ops"], name: string): boolean {
   return counts.some((entry) => entry.name === name);
 }
 
-function manifestMatchesFilter(loaded: LoadedSegmentManifest, filter: SupportEventFilter): boolean {
-  const { manifest } = loaded;
-  if (filter.op !== undefined && !hasCount(manifest.ops, filter.op)) return false;
-  if (filter.errorKind !== undefined && !hasCount(manifest.errorKinds, filter.errorKind)) {
-    return false;
-  }
-  if (
-    filter.failureClass !== undefined &&
-    !hasCount(manifest.failureClasses, filter.failureClass)
-  ) {
-    return false;
-  }
-  if (filter.fromMs !== undefined || filter.toMs !== undefined) {
-    const from = filter.fromMs ?? Number.NEGATIVE_INFINITY;
-    const to = filter.toMs ?? Number.POSITIVE_INFINITY;
-    if (!manifestTimeOverlaps(manifest, from, to)) return false;
-  }
+// An absent filter member admits every segment; a present one must be listed by the manifest.
+function listedOrUnfiltered(counts: SegmentManifest["ops"], wanted: string | undefined): boolean {
+  return wanted === undefined || hasCount(counts, wanted);
+}
+
+function manifestMatchesTime(manifest: SegmentManifest, filter: SupportEventFilter): boolean {
+  if (filter.fromMs === undefined && filter.toMs === undefined) return true;
+  return manifestTimeOverlaps(
+    manifest,
+    filter.fromMs ?? Number.NEGATIVE_INFINITY,
+    filter.toMs ?? Number.POSITIVE_INFINITY,
+  );
+}
+
+function manifestMatchesParent(loaded: LoadedSegmentManifest, filter: SupportEventFilter): boolean {
   if (filter.parentCorrelationId === undefined) return true;
   return manifestMayContainAnyKey(loaded, [
     filterKeyHashes(parentCorrelationKey(filter.parentCorrelationId)),
   ]);
+}
+
+function manifestMatchesFilter(loaded: LoadedSegmentManifest, filter: SupportEventFilter): boolean {
+  const { manifest } = loaded;
+  return (
+    listedOrUnfiltered(manifest.ops, filter.op) &&
+    listedOrUnfiltered(manifest.errorKinds, filter.errorKind) &&
+    listedOrUnfiltered(manifest.failureClasses, filter.failureClass) &&
+    manifestMatchesTime(manifest, filter) &&
+    manifestMatchesParent(loaded, filter)
+  );
 }
 
 function lineMatchesTime(parsed: ParsedLine, filter: SupportEventFilter): boolean {
@@ -623,23 +632,24 @@ function lineMatchesTime(parsed: ParsedLine, filter: SupportEventFilter): boolea
   );
 }
 
+function equalOrUnfiltered(value: string | undefined, wanted: string | undefined): boolean {
+  return wanted === undefined || value === wanted;
+}
+
+function lineMatchesFailureClass(op: string, failureClass: string | undefined): boolean {
+  if (failureClass === undefined) return true;
+  return activityLogOperationSchema(op)?.failureClasses.includes(failureClass) ?? false;
+}
+
 function lineMatchesFilter(parsed: ParsedLine, filter: SupportEventFilter): boolean {
   const { view } = parsed;
-  if (filter.op !== undefined && view.op !== filter.op) return false;
-  if (filter.errorKind !== undefined && view.errorKind !== filter.errorKind) return false;
-  if (
-    filter.parentCorrelationId !== undefined &&
-    view.parentCorrelationId !== filter.parentCorrelationId
-  ) {
-    return false;
-  }
-  if (
-    filter.failureClass !== undefined &&
-    !(activityLogOperationSchema(view.op)?.failureClasses.includes(filter.failureClass) ?? false)
-  ) {
-    return false;
-  }
-  return lineMatchesTime(parsed, filter);
+  return (
+    equalOrUnfiltered(view.op, filter.op) &&
+    equalOrUnfiltered(view.errorKind, filter.errorKind) &&
+    equalOrUnfiltered(view.parentCorrelationId, filter.parentCorrelationId) &&
+    lineMatchesFailureClass(view.op, filter.failureClass) &&
+    lineMatchesTime(parsed, filter)
+  );
 }
 
 function collectMatches(state: EngineState, filter: SupportEventFilter): EventCollector {
@@ -700,12 +710,10 @@ function aggregateIntegrity(state: EngineState): IntegrityAggregate {
   for (const manifest of manifests) addCounts(counts, manifest);
   const anomalies = anomalyKinds(manifests);
   const classification = evidenceSummary(counts, anomalies).classification;
-  const anomalyCount = manifests.reduce(
-    (sum, manifest) =>
-      sum +
-      Object.values(manifest.evidence.sequenceAnomalies).reduce((total, count) => total + count, 0),
-    0,
-  );
+  const anomalyCount = manifests.reduce((sum, manifest) => {
+    const { gap, duplicate, decreasing, reset } = manifest.evidence.sequenceAnomalies;
+    return sum + gap + duplicate + decreasing + reset;
+  }, 0);
   return {
     summary: {
       classification,
@@ -826,7 +834,7 @@ function closureSummary(
   const count = (role: ClosureRole): number => roles.filter((entry) => entry === role).length;
   const observed = events?.observed ?? new Set<string>();
   const edges = [...(events?.edges ?? new Set<string>())].sort().map((edge) => {
-    const [parentCorrelationId = "", correlationId = ""] = edge.split(" ");
+    const [parentCorrelationId = "", correlationId = ""] = edge.split("\u0000");
     return { parentCorrelationId, correlationId };
   });
   return {
