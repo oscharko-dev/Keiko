@@ -731,7 +731,11 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   `keiko.support.analyze` for every timeline and `keiko.support.analyze-timeline` with
   `--correlation-id`, both at version 1. Every field the earlier output had is unchanged, so an
   existing reader such as `keiko investigate --from-timeline` keeps working; `--seed` already
-  carried `schemaVersion`, and `--clusters --json` still prints a bare array.
+  carried `schemaVersion`. `--clusters --json` still prints the same bare, unversioned array
+  byte-for-byte — no existing reader breaks — but it is deprecated: every use prints a one-line
+  stderr notice naming its versioned replacement, the `clusters` member `keiko.support.analyze`
+  (schema version 1) now carries under plain `--json`, which holds exactly the same data inside a
+  versioned envelope.
 - **Analyze streams too.** `keiko support analyze` reads its file through the same bounded line
   reader, including for `--seed` and `--emit-fixture`. A seed's `sourceArtifact.sha256` is the
   SHA-256 of the file's bytes, the value `shasum -a 256` and a report's `.sha256` file state.

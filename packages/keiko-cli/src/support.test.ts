@@ -2218,6 +2218,54 @@ describe("runSupportCli analyze", () => {
     expect(humanRun.out()).toContain("gateway.chat.completed");
   });
 
+  // Audit (#3531 Update Impact): --clusters --json predates the versioned machine profiles and
+  // carries no stated compatibility/deprecation path. It must stay byte-compatible (no existing
+  // reader breaks) while gaining an explicit path: a one-line stderr notice naming the versioned
+  // replacement, and proof that the replacement (keiko.support.analyze's own `clusters` member)
+  // really does carry the same data.
+  it("keeps --clusters --json byte-compatible and names its versioned replacement on stderr", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+
+    const bareRun = makeIo();
+    const bareCode = await runSupportCli(["analyze", filePath, "--clusters", "--json"], bareRun.io);
+    expect(bareCode).toBe(0);
+    const bareOut = bareRun.out();
+    const bareClusters = JSON.parse(bareOut) as unknown;
+    // Byte-compatible: still a bare array, not an object, not wrapped in kind/schemaVersion.
+    expect(Array.isArray(bareClusters)).toBe(true);
+    expect(bareOut.endsWith("\n")).toBe(true);
+    expect(bareOut.trimEnd().startsWith("[")).toBe(true);
+
+    // The one-line stderr deprecation notice, naming the versioned replacement.
+    const errLines = bareRun.err().split("\n").filter((line) => line.length > 0);
+    expect(errLines).toHaveLength(1);
+    expect(errLines[0]).toContain("--clusters --json");
+    expect(errLines[0]).toContain("deprecated");
+    expect(errLines[0]).toContain("keiko.support.analyze");
+    expect(errLines[0]).toContain("v1");
+
+    // The named replacement actually carries the same data: plain --json's own `clusters` member.
+    const fullRun = makeIo();
+    const fullCode = await runSupportCli(["analyze", filePath, "--json"], fullRun.io);
+    expect(fullCode).toBe(0);
+    const full = JSON.parse(fullRun.out()) as {
+      readonly kind: string;
+      readonly schemaVersion: number;
+      readonly clusters: unknown;
+    };
+    expect(full.kind).toBe("keiko.support.analyze");
+    expect(full.schemaVersion).toBe(1);
+    expect(full.clusters).toEqual(bareClusters);
+    // Plain --json (no --clusters) is not itself deprecated: no notice on stderr.
+    expect(fullRun.err()).toBe("");
+
+    // Human --clusters (no --json) is a text report, not the unversioned machine profile: no notice.
+    const humanRun = makeIo();
+    expect(await runSupportCli(["analyze", filePath, "--clusters"], humanRun.io)).toBe(0);
+    expect(humanRun.err()).toBe("");
+  });
+
   it("prints a ReproductionSeed via --seed", async () => {
     const filePath = join(dir, "server.log");
     writeGatewayLog(filePath);
