@@ -124,13 +124,16 @@ export async function collectSelectedLogContent(
   io: CliIo,
   server: LoadedServer,
 ): Promise<SelectedLogContent | number> {
-  const context = { server, stateDir, correlationId: randomUUID() };
+  const context = {
+    server,
+    stateDir,
+    correlationId: randomUUID(),
+    io,
+    command: "export" as const,
+  };
   const run = await runExportSelection(selector, maxBytes, io, context);
   if (typeof run === "number") return run;
-  if (!recordSupportQueryEvidence(context, "export", run)) {
-    io.err("keiko support export: Activity Log unavailable\n");
-    return 1;
-  }
+  if (!recordSupportQueryEvidence(context, "export", run)) return 1;
   const { result } = run;
   if (result.events.length === 0 || result.truncation.state === "budget-exceeded") {
     reportUnwritable(result, io);
@@ -149,6 +152,8 @@ interface ExportSelectionContext {
   readonly server: LoadedServer;
   readonly stateDir: string;
   readonly correlationId: string;
+  readonly io: CliIo;
+  readonly command: "export";
 }
 
 async function runExportSelection(
