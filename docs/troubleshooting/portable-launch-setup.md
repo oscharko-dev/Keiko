@@ -81,7 +81,7 @@ is not an accepted fallback.
 
 - Confirm that the installed release is the `linux-x64` artifact and that its GitHub artifact
   attestation is valid.
-- Inspect `<stateDir>/logs/server.log` for the correlation-linked, body-free
+- Inspect the Activity Log in `<stateDir>/logs/` for the correlation-linked, body-free
   `runtime.confinement.*` event and its stable reason code.
 - Ask the Linux or organization administrator whether unprivileged user/network namespaces and the
   distribution's `unshare` package are available to ordinary user processes.
@@ -218,7 +218,7 @@ replacement for the atomic promotion contract.
 
 - Confirm a `.keiko-previous-*` sibling exists next to the managed root (typically under
   `%LOCALAPPDATA%\Programs\`).
-- Check `<stateDir>/logs/server.log` for `security.fs.atomic-rename-retried` or
+- Check the Activity Log in `<stateDir>/logs/` for `security.fs.atomic-rename-retried` or
   `security.fs.atomic-rename-failed` (`extra.attempts` and `errorKind` only; no paths).
 - See also [Windows portable first-launch](./windows-portable-first-launch.md) when Defender
   quarantined extracted files rather than locking them during the swap.
@@ -255,7 +255,8 @@ Wrong/stale version, failed launch, persistence failure, and incomplete cleanup 
 Support operators should reconstruct the attempt from the canonical activity log:
 
 ```bash
-keiko support analyze <state-root>/logs/server.log
+keiko support export --state-dir <state-root> --out <bundle.jsonl>
+keiko support analyze <bundle.jsonl>
 ```
 
 Use explicit candidate/session and parent-correlation links to follow the attempt across relaunch.
