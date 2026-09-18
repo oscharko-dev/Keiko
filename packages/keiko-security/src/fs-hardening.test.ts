@@ -428,6 +428,23 @@ describe("chmod-failure swallow (mocked node:fs)", () => {
 });
 
 describe("openSafeArtifactFile", () => {
+  it("keeps group-readable non-writable directories valid for support artifacts", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const path = join(base, "support.json");
+    chmodSync(base, 0o750);
+
+    const descriptor = openSafeArtifactFile(path, {
+      artifactClass: "support-report",
+      mode: "exclusive-create",
+      trustedRoot: base,
+    });
+    closeSync(descriptor);
+
+    expect(existsSync(path)).toBe(true);
+    expect(statSync(path).mode & 0o777).toBe(FILE_MODE);
+  });
+
   it("rejects a writable POSIX ancestor before creating the target", (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const base = freshDir();
@@ -2549,7 +2566,7 @@ describe("bounded Activity Log mutations", () => {
     expect(existsSync(target)).toBe(false);
   });
 
-  it("rejects a group-readable trusted artifact directory before mutation", () => {
+  it("rejects a group-readable trusted artifact directory before archive or removal", () => {
     if (process.platform === "win32") return;
     const base = freshDir();
     const source = join(base, "server.log");
@@ -2565,6 +2582,13 @@ describe("bounded Activity Log mutations", () => {
     ).toThrow(expect.objectContaining({ kind: "unsafe-ancestor" }));
     expect(readFileSync(source, "utf8")).toBe("finished-day\n");
     expect(existsSync(archive)).toBe(false);
+    expect(() => {
+      removeSafeArtifactFile(source, {
+        artifactClass: "activity-log",
+        trustedRoot: base,
+      });
+    }).toThrow(expect.objectContaining({ kind: "unsafe-ancestor" }));
+    expect(readFileSync(source, "utf8")).toBe("finished-day\n");
   });
 });
 

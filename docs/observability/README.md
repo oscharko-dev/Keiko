@@ -334,8 +334,8 @@ their process activity is `not-applicable`. Missing or invalid observations rema
 `unknown`; file mtimes and guessed instance ids are never substituted.
 
 A line successfully parsed but missing the full `(pid, instanceId, seq)` triple is a **legacy
-line** — one written before this envelope shipped in the long-lived current file or a compatible
-legacy `server-YYYY-MM-DD.log` archive retained from the retired rotation implementation.
+line** — one written before this envelope shipped in the current file or a compatible legacy
+`server-YYYY-MM-DD.log` archive retained by the bounded daily-rotation implementation.
 It is never dropped or misordered; it is ordered by its own file position, counted in
 `legacyLineCount`, and named in exactly one `warnings[]` entry when that count is nonzero. Treat
 that warning as an instruction to read the file position ordering with less confidence for those

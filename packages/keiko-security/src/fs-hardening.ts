@@ -182,6 +182,7 @@ interface DirectoryGuard {
 }
 
 type GuardedDirectoryMutationResult = "success" | "target-exists" | "unsupported" | "failed";
+type DirectoryGuardAuthority = "owner-only-mutation" | "standard";
 
 export interface SafeArtifactDirectoryEntryOptions {
   readonly artifactClass: SafeArtifactClass;
@@ -242,14 +243,18 @@ function runGuardedDirectoryMutation(
   trustedRoot: string,
   artifactClass: SafeArtifactClass,
   targetPath?: string,
+  authority: DirectoryGuardAuthority = "standard",
 ): GuardedDirectoryMutationResult {
   const parent = dirname(resolve(path));
   if (targetPath !== undefined && dirname(resolve(targetPath)) !== parent) {
     throw safeFileError(artifactClass, "invalid-publication");
   }
-  const guards = captureDirectoryGuards(trustedRoot, path, artifactClass);
+  const guards = captureDirectoryGuards(trustedRoot, path, artifactClass, authority);
   try {
     const guard = guardedParent(guards, parent, artifactClass);
+    if (!directoryGuardsStillAuthorized(guards, trustedRoot, path, authority)) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
     const request = directoryMutationRequest(operation, guard, path, targetPath);
     // The child validates the OS-established cwd identity, then mutates only relative basenames.
     // Keep those names off argv and suppress child output so no path value reaches diagnostics.
@@ -260,7 +265,7 @@ function runGuardedDirectoryMutation(
       timeout: DIRECTORY_MUTATION_TIMEOUT_MS,
       windowsHide: true,
     });
-    if (!guards.every(directoryGuardStillMatches)) {
+    if (!directoryGuardsStillAuthorized(guards, trustedRoot, path, authority)) {
       throw safeFileError(artifactClass, "target-mutated");
     }
     if (child.error !== undefined || child.signal !== null) return "failed";
@@ -274,8 +279,16 @@ function unlinkGuardedPath(
   path: string,
   trustedRoot: string,
   artifactClass: SafeArtifactClass,
+  authority: DirectoryGuardAuthority = "standard",
 ): void {
-  const result = runGuardedDirectoryMutation("unlink", path, trustedRoot, artifactClass);
+  const result = runGuardedDirectoryMutation(
+    "unlink",
+    path,
+    trustedRoot,
+    artifactClass,
+    undefined,
+    authority,
+  );
   if (result === "success") return;
   throw safeFileError(artifactClass, "publish-failed");
 }
@@ -285,7 +298,12 @@ function archiveDescriptor(
   target: string,
   options: SafeArtifactDirectoryEntryOptions,
 ): number | undefined {
-  const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
+  const guards = captureDirectoryGuards(
+    options.trustedRoot,
+    path,
+    options.artifactClass,
+    "owner-only-mutation",
+  );
   let descriptor: number | undefined;
   try {
     const noFollow = noFollowFlag();
@@ -295,7 +313,7 @@ function archiveDescriptor(
     const pathname = lstatSync(path, { bigint: true });
     if (
       !archiveSourceIsSafe(descriptor, path, target, opened, pathname) ||
-      !guards.every(directoryGuardStillMatches)
+      !directoryGuardsStillAuthorized(guards, options.trustedRoot, path, "owner-only-mutation")
     ) {
       throw safeFileError(options.artifactClass, "unsafe-target");
     }
@@ -375,7 +393,7 @@ function finalizeLinkedArchive(
   if (!linkedArchiveMatches(descriptor, source, target)) {
     throw safeFileError(options.artifactClass, "target-mutated");
   }
-  unlinkGuardedPath(source, options.trustedRoot, options.artifactClass);
+  unlinkGuardedPath(source, options.trustedRoot, options.artifactClass, "owner-only-mutation");
   if (!movedArchiveMatches(descriptor, target)) {
     throw safeFileError(options.artifactClass, "target-mutated");
   }
@@ -396,6 +414,7 @@ export function archiveSafeArtifactFile(
       options.trustedRoot,
       options.artifactClass,
       target,
+      "owner-only-mutation",
     );
     if (linked === "success") {
       finalizeLinkedArchive(descriptor, source, target, options);
@@ -417,6 +436,7 @@ export function archiveSafeArtifactFile(
       options.trustedRoot,
       options.artifactClass,
       target,
+      "owner-only-mutation",
     );
     if (renamed !== "success" || !movedArchiveMatches(descriptor, target)) {
       throw safeFileError(options.artifactClass, "publish-failed");
@@ -438,7 +458,7 @@ export function removeSafeArtifactFile(
   });
   try {
     verifySafeArtifactFileDescriptor(descriptor, path, options);
-    unlinkGuardedPath(path, options.trustedRoot, options.artifactClass);
+    unlinkGuardedPath(path, options.trustedRoot, options.artifactClass, "owner-only-mutation");
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
     throw error;
@@ -479,11 +499,15 @@ function directoryAuthorityIsOwnerOnly(stat: BigIntStats): boolean {
   );
 }
 
-function isTrustedArtifactDirectory(path: string, trustedRoot: string): boolean {
-  const fromRoot = relative(resolve(trustedRoot), resolve(path));
+function isOwnerOnlyMutationDirectory(
+  path: string,
+  trustedRoot: string,
+  targetPath: string,
+): boolean {
+  const key = filesystemComparisonPath(path);
   return (
-    fromRoot === "" ||
-    (!fromRoot.startsWith(`..${sep}`) && fromRoot !== ".." && !isAbsolute(fromRoot))
+    key === filesystemComparisonPath(trustedRoot) ||
+    key === filesystemComparisonPath(dirname(resolve(targetPath)))
   );
 }
 
@@ -609,12 +633,14 @@ function captureDirectoryGuards(
   trustedRoot: string,
   targetPath: string,
   artifactClass: SafeArtifactClass,
+  authority: DirectoryGuardAuthority = "standard",
 ): readonly DirectoryGuard[] {
   const guards: DirectoryGuard[] = [];
   try {
     for (const path of containedDirectories(trustedRoot, targetPath, artifactClass)) {
       if (
-        isTrustedArtifactDirectory(path, trustedRoot) &&
+        authority === "owner-only-mutation" &&
+        isOwnerOnlyMutationDirectory(path, trustedRoot, targetPath) &&
         !directoryAuthorityIsOwnerOnly(lstatDirectory(path, artifactClass))
       ) {
         throw safeFileError(artifactClass, "unsafe-ancestor");
@@ -626,6 +652,28 @@ function captureDirectoryGuards(
     closeDirectoryGuardsIgnoringErrors(guards);
     throw error;
   }
+}
+
+function directoryGuardStillOwnerOnly(guard: DirectoryGuard): boolean {
+  try {
+    const stat = lstatSync(guard.path, { bigint: true });
+    return stat.isDirectory() && !stat.isSymbolicLink() && directoryAuthorityIsOwnerOnly(stat);
+  } catch {
+    return false;
+  }
+}
+
+function directoryGuardsStillAuthorized(
+  guards: readonly DirectoryGuard[],
+  trustedRoot: string,
+  targetPath: string,
+  authority: DirectoryGuardAuthority,
+): boolean {
+  if (!guards.every(directoryGuardStillMatches)) return false;
+  if (authority === "standard") return true;
+  return guards
+    .filter((guard) => isOwnerOnlyMutationDirectory(guard.path, trustedRoot, targetPath))
+    .every(directoryGuardStillOwnerOnly);
 }
 
 function directoryGuardStillMatches(guard: DirectoryGuard): boolean {
