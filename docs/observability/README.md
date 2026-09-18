@@ -368,7 +368,12 @@ class.
 **One command runs the whole gate.** `npm run check:activity-log` builds the packages and then
 runs `check:op-catalog`, the scenario matrix, `check:error-observability`, `arch:check`,
 `arch:check:negative` and `check:release-impact`. The catalog, proof and scenario checks cover the
-full registered inventory on every run. Required CI runs the gate on every pull request.
+full registered inventory on every run, and `check:error-observability` checks every `catch` in the
+whole tree, never only a diff. Failure paths older than that check are listed in
+`legacy-failure-path-register.json`, which may only shrink: a failure path outside it fails the
+gate wherever it is, and an entry whose path is gone fails it too until
+`node scripts/check-error-observability.mjs --prune-register` removes it. Required CI runs the gate
+on every pull request.
 
 ## Redaction scope, stated honestly
 

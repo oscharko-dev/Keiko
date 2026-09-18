@@ -429,7 +429,11 @@ system that exists, never beside it:
   closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
   `extra.causeChain`) and a correlation id on every failure line. A `catch` that logs nothing, or
   logs free text, loses the defect for good; `check:error-observability` pins the named sites and
-  every new failure path is held to the same shape.
+  checks every `catch` in the whole tree on every run. Failure paths that predate that full-tree
+  check are listed in a register that may only shrink
+  (`docs/observability/legacy-failure-path-register.json`): never add to it, and after fixing a
+  listed path run `node scripts/check-error-observability.mjs --prune-register` and commit the
+  smaller file.
 - **The persisted identity is complete or the write fails closed.** Every persisted v2 record is
   stamped at the central sink with schema/registry versions and digests, product/build/release and
   safe platform classes, compatibility and writer-capability states, plus

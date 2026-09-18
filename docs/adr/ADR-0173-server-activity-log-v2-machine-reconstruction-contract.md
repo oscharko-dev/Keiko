@@ -416,7 +416,10 @@ each rule: `check:op-catalog` (registry, exemptions, failure-class coverage, fai
 inventory, proof and scenario resolution), `test:activity-log-scenarios` (executes the curated
 scenario matrix the inventory resolves), `check:error-observability`, `arch:check` with
 `arch:check:negative`, and `check:release-impact`. Required CI runs that exact command. It takes no
-changed-file input, so diff awareness can never narrow what it proves. The exemption validator also
+changed-file input, so diff awareness can never narrow what it proves. That includes the catch
+rule of `check:error-observability`: it scans every production file on every run, and the failure
+paths that predate the full-tree rule sit in a committed register that may only shrink
+(`docs/observability/legacy-failure-path-register.json`); nothing adds to it. The exemption validator also
 requires the record's owner to be the operation's owning package and its expiry to lie at most 180
 days ahead, so no record is unowned or permanent.
 
