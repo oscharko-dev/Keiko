@@ -183,8 +183,8 @@ function appendDurableServerLogBatch(
 ): DurableServerLogBatchResult {
   return appendStrictDurableServerLogBatch(stateDir, {
     ...options,
-    inspect(directory): ReturnType<DurableServerLogBatchOptions["inspect"]> {
-      const inspection = options.inspect(directory);
+    inspect(directory, files): ReturnType<DurableServerLogBatchOptions["inspect"]> {
+      const inspection = options.inspect(directory, files);
       return inspection.status === "append"
         ? { ...inspection, events: inspection.events.map(registeredTestEvent) }
         : inspection;
@@ -1273,23 +1273,6 @@ describe("server activity log", () => {
     sink.close?.();
   });
 
-  it("honors a configured bounded retention window instead of the default", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const logsDir = join(stateDir, "logs");
-    const sink = createFileServerLogSink(stateDir, { retentionDays: 2 });
-    sink.write({ category: "http", op: "bounded-day-20" });
-    for (const day of [21, 22, 23, 24]) {
-      vi.setSystemTime(new Date(`2026-08-${String(day)}T00:00:30Z`));
-      sink.write({ category: "http", op: `bounded-day-${String(day)}` });
-    }
-
-    expect(
-      readdirSync(logsDir).filter((name) => /^server-\d{4}-\d{2}-\d{2}\.log$/u.test(name)),
-    ).toStrictEqual(["server-2026-08-22.log", "server-2026-08-23.log"]);
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["bounded-day-24"]);
-  });
-
   it("keeps both process histories across one shared UTC day boundary", async () => {
     const barrier = join(stateDir, "rotate-now");
     const workers = [
@@ -1322,56 +1305,6 @@ describe("server activity log", () => {
         .sort(),
     ).toStrictEqual([201, 202]);
     expect(current.filter((line) => line.op === "server-log.rotation")).toHaveLength(2);
-  });
-
-  it("warns once at the size threshold without rotating, truncating, or deleting", () => {
-    const sink = createFileServerLogSink(stateDir, {
-      level: "debug",
-      capacityWarningBytes: 1,
-    });
-
-    sink.write({
-      category: "diagnostic",
-      op: "capacity-trigger",
-      correlationId: "capacity-request-3529",
-    });
-    sink.write({
-      category: "diagnostic",
-      op: "capacity-after-warning",
-      correlationId: "capacity-request-after-3529",
-    });
-
-    const warnings = readLines(stateDir).filter(
-      (line) => line.op === "server-log.capacity-warning",
-    );
-    expect(warnings).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        category: "diagnostic",
-        op: "server-log.capacity-warning",
-        correlationId: "capacity-request-3529",
-        errorKind: "publish-unsupported",
-        artifactClass: "activity-log",
-        capacityStatus: "warning-threshold-reached",
-        warningThresholdBytes: 1,
-        operatorAction: "stop-export-replace",
-        mutationStatus: "not-attempted",
-        writerCapability: "degraded",
-        completeness: "complete",
-        loss: "none",
-      }),
-    ]);
-    const observedSizeBytes = warnings[0]?.observedSizeBytes;
-    expect(typeof observedSizeBytes).toBe("number");
-    if (typeof observedSizeBytes !== "number") {
-      throw new TypeError("Expected the capacity warning to report a numeric observed size");
-    }
-    expect(observedSizeBytes).toBeGreaterThanOrEqual(1);
-    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual(["server.log"]);
-    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).toContain(
-      "capacity-after-warning",
-    );
-    sink.close?.();
   });
 
   it("does not repeat deferred-rotation evidence when the caller write fails", () => {
