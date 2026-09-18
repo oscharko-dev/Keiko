@@ -2104,8 +2104,9 @@ function issueToPrJourneyWarning(journey: IssueToPrJourneyView | undefined): str
 // content, so this reads it directly, independent of `analyzeLogText`. Every candidate is
 // re-validated with the contract's own `isStoreFingerprint` guard (never trusted merely because it
 // parsed as JSON) — a raw server.log, which has no manifest line at all, always returns undefined.
-function extractManifestStoreFingerprints(text: string): readonly StoreFingerprint[] | undefined {
-  const [firstLine] = splitLines(text);
+function extractManifestStoreFingerprints(
+  firstLine: string | undefined,
+): readonly StoreFingerprint[] | undefined {
   if (firstLine === undefined) return undefined;
   const record = tryParseJsonObject(firstLine);
   if (record?.$section !== "manifest" || !Array.isArray(record.storeFingerprints)) {
@@ -2267,7 +2268,7 @@ interface SeedComputation extends SeedComputedFields {
 // of `buildReproductionSeed` purely to stay under the repository's per-function line/complexity
 // ceilings (AGENTS.md §6), no behavioural seam of its own.
 function computeSeedFields(
-  text: string,
+  source: ReproductionSeedSource,
   timeline: LogTimeline,
   options: SupportAnalyzeOptions,
 ): SeedComputation {
@@ -2275,16 +2276,25 @@ function computeSeedFields(
     line.toolCatalog === undefined ? [] : [line.toolCatalog],
   );
   return {
-    kind: detectSourceKind(splitLines(text)[0]),
+    kind: detectSourceKind(source.firstLine),
     gatewayScript: buildGatewayReplayScript(timeline.lines),
     httpRequest: buildHttpRequestSeed(timeline.lines),
     indexingJob: buildIndexingJobSeed(timeline.lines),
-    storeFingerprint: extractManifestStoreFingerprints(text),
+    storeFingerprint: extractManifestStoreFingerprints(source.firstLine),
     stackFrames: timeline.frames ?? [],
     causeChain: aggregateCauseChain(timeline.lines),
     toolCatalog,
     issueToPrJourney: buildIssueToPrJourneyView(timeline.lines, options.toolDiagnosticRedactor),
   };
+}
+
+// What a seed records about its source artifact. The CLI computes it while streaming the file
+// (#3531), so a seed never needs the artifact held whole: the line count, the SHA-256 of the
+// artifact's bytes, and its first line (a bundle's manifest line, for its store fingerprints).
+export interface ReproductionSeedSource {
+  readonly lineCount: number;
+  readonly sha256: string;
+  readonly firstLine: string | undefined;
 }
 
 // Assembles a full `ReproductionSeed` for one correlationId out of `text` (a raw server.log or a
@@ -2297,18 +2307,36 @@ export function buildReproductionSeed(
   generatedAt: Date,
   options: SupportAnalyzeOptions = {},
 ): ReproductionSeed | undefined {
-  const analysis = analyzeLogText(text, options);
+  const lines = splitLines(text);
+  return buildReproductionSeedFromAnalysis(
+    analyzeLogText(text, options),
+    { lineCount: lines.length, sha256: sha256Hex(text), firstLine: lines[0] },
+    correlationId,
+    generatedAt,
+    options,
+  );
+}
+
+// The same seed from an analysis the caller already streamed plus the facts of its source, so
+// `keiko support analyze --seed` and `--emit-fixture` never load the artifact whole (#3531).
+export function buildReproductionSeedFromAnalysis(
+  analysis: AnalyzeAllResult,
+  source: ReproductionSeedSource,
+  correlationId: string,
+  generatedAt: Date,
+  options: SupportAnalyzeOptions = {},
+): ReproductionSeed | undefined {
   const timeline = findTimeline(analysis, correlationId);
   if (timeline === undefined) return undefined;
-  const fields = computeSeedFields(text, timeline, options);
+  const fields = computeSeedFields(source, timeline, options);
 
   return {
     schemaVersion: REPRODUCTION_SEED_SCHEMA_VERSION,
     generatedAt: generatedAt.toISOString(),
     sourceArtifact: {
       kind: fields.kind,
-      lineCount: splitLines(text).length,
-      sha256: sha256Hex(text),
+      lineCount: source.lineCount,
+      sha256: source.sha256,
     },
     correlationId,
     timeline: timeline.lines,

@@ -1931,6 +1931,8 @@ describe("runSupportCli analyze", () => {
 
     expect(code).toBe(0);
     const parsed: Record<string, unknown> = JSON.parse(c.out()) as Record<string, unknown>;
+    // #3531: the machine form names itself and its version; every earlier field is unchanged.
+    expect(parsed).toMatchObject({ kind: "keiko.support.analyze-timeline", schemaVersion: 1 });
     expect(parsed.correlationId).toBe("req-1");
     expect(parsed.malformedLineCount).toBe(1);
     expect(Array.isArray(parsed.lines)).toBe(true);
@@ -1968,6 +1970,7 @@ describe("runSupportCli analyze", () => {
 
     expect(code).toBe(0);
     const parsed: Record<string, unknown> = JSON.parse(c.out()) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ kind: "keiko.support.analyze", schemaVersion: 1 });
     expect((parsed.timelines as { correlationId: string }[]).map((t) => t.correlationId)).toEqual([
       "req-1",
       "req-2",
@@ -2242,6 +2245,29 @@ describe("runSupportCli analyze", () => {
     expect(humanCode).toBe(0);
     expect(humanRun.out()).toContain("correlationId=req-1");
     expect(humanRun.out()).toContain("gatewayScript:");
+  });
+
+  // #3531: --seed streams the artifact instead of loading it whole, and its digest is taken from
+  // the same pass as its analysis: the SHA-256 of the file's exact bytes, which is what `shasum`
+  // and a report's .sha256 sidecar state. A whole-file read hashed the decoded text instead, a
+  // different value whenever the artifact held a byte sequence that is not UTF-8.
+  it("states the SHA-256 of the artifact's exact bytes and its line count in a --seed", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    appendFileSync(filePath, Buffer.from([0xff, 0xfe, 0x0a]));
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--seed", "--json"],
+      c.io,
+    );
+    expect(code).toBe(0);
+    const seed = JSON.parse(c.out()) as { readonly sourceArtifact: unknown };
+    expect(seed.sourceArtifact).toEqual({
+      kind: "raw-log",
+      lineCount: 3,
+      sha256: createHash("sha256").update(readFileSync(filePath)).digest("hex"),
+    });
   });
 
   it("exits 1 for --seed when the correlation id has no timeline", async () => {

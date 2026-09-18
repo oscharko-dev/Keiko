@@ -10,8 +10,8 @@
 // selection, manifest assembly, parsing, grouping, ordering, rendering — lives in
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
-import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -64,7 +64,7 @@ import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
 import {
   ACTIVITY_LOG_EVIDENCE_INTEGRITY,
   analyzeLogLines,
-  buildReproductionSeed,
+  buildReproductionSeedFromAnalysis,
   findTimeline,
   hasIssueToPrJourneyOps,
   renderGatewayReplayScriptFixture,
@@ -79,7 +79,9 @@ import {
   type SupportAnalyzeOptions,
   type LogTimeline,
   type OpCluster,
+  type ActivityLogTextLine,
   type ReproductionSeed,
+  type ReproductionSeedSource,
 } from "./support-analyze.js";
 import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
 import { runSupportIncidentCli } from "./support-incident.js";
@@ -653,7 +655,7 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
   };
 }
 
-// Content-free, same discipline as readAnalyzeSource: an fs error's message can quote the path it
+// Content-free, same discipline as streamAnalyzeSource: an fs error's message can quote the path it
 // was writing (AGENTS.md §7). Reports `describeErrorKind`'s result — the fs error's own `code`
 // (ENOENT/EACCES/EROFS) when it has one, since a Node fs error is always a plain `Error` and
 // `error.constructor.name` is therefore always just `"Error"`, telling an operator nothing the
@@ -1805,6 +1807,13 @@ function renderAnalysisContext(context: SupportAnalysisContext): string {
   return `${lines.join("\n")}\n\n`;
 }
 
+// The versioned machine forms of `analyze --json` (#3531). Each names itself and its version ahead of
+// the fields the unversioned output already had, which stay unchanged, so an earlier reader (such as
+// `keiko investigate --from-timeline`) keeps working.
+const SUPPORT_ANALYZE_KIND = "keiko.support.analyze";
+const SUPPORT_ANALYZE_TIMELINE_KIND = "keiko.support.analyze-timeline";
+const SUPPORT_ANALYZE_SCHEMA_VERSION = 1;
+
 function emitSingleTimeline(
   timeline: LogTimeline,
   result: AnalyzeAllResult,
@@ -1813,11 +1822,15 @@ function emitSingleTimeline(
   io: CliIo,
 ): number {
   if (json) {
-    const malformedLineCount = result.malformedLineCount;
-    const sufficiency = timelineSufficiency(result, timeline);
-    io.out(
-      `${JSON.stringify({ ...timeline, malformedLineCount, sufficiency, analysisContext: context })}\n`,
-    );
+    const payload = {
+      kind: SUPPORT_ANALYZE_TIMELINE_KIND,
+      schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION,
+      ...timeline,
+      malformedLineCount: result.malformedLineCount,
+      sufficiency: timelineSufficiency(result, timeline),
+      analysisContext: context,
+    };
+    io.out(`${JSON.stringify(payload)}\n`);
   } else {
     io.out(`${renderAnalysisContext(context)}${renderHumanTimeline(timeline)}`);
   }
@@ -1825,9 +1838,10 @@ function emitSingleTimeline(
 }
 
 function emitAllTimelines(result: SupportAnalysisReport, json: boolean, io: CliIo): number {
+  const payload = { kind: SUPPORT_ANALYZE_KIND, schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION };
   io.out(
     json
-      ? `${JSON.stringify(result)}\n`
+      ? `${JSON.stringify({ ...payload, ...result })}\n`
       : `${renderAnalysisContext(result.analysisContext)}${renderHumanAllTimelines(result)}`,
   );
   return 0;
@@ -1842,33 +1856,51 @@ function emitClusters(clusters: readonly OpCluster[], json: boolean, io: CliIo):
   return 0;
 }
 
-// Single return statement by design (sonarjs/function-return-type): both arms assign the same
-// declared `string | number` union before one trailing return, rather than returning from inside
-// each branch, so the function's return shape reads as one type instead of two.
-function readAnalyzeSource(filePath: string, io: CliIo): string | number {
-  let result: string | number;
-  try {
-    result = readFileSync(filePath, "utf8");
-  } catch (error) {
-    // Content-free: an fs error's message can quote the path it was reading (AGENTS.md §7).
-    const kind = error instanceof Error ? error.constructor.name : "Error";
-    io.err(`keiko support analyze: could not read ${filePath} — ${kind}\n`);
-    result = 1;
+// Records what a reproduction seed states about its source while the analysis streams it (#3531):
+// the SHA-256 of the artifact's exact bytes, its line count, and its first line (a bundle's
+// manifest line). Digest and analysis come from the same pass, so they describe one snapshot.
+class SeedSourceObserver {
+  private readonly hash = createHash("sha256");
+  private lineCount = 0;
+  private firstLine: string | undefined;
+
+  public readonly observeChunk = (chunk: Uint8Array): void => {
+    this.hash.update(chunk);
+  };
+
+  public *observeLines(lines: Iterable<ActivityLogTextLine>): Generator<ActivityLogTextLine> {
+    for (const line of lines) {
+      if (this.lineCount === 0) this.firstLine = line.text;
+      this.lineCount += 1;
+      yield line;
+    }
   }
-  return result;
+
+  public source(): ReproductionSeedSource {
+    return {
+      lineCount: this.lineCount,
+      sha256: this.hash.digest("hex"),
+      firstLine: this.firstLine,
+    };
+  }
 }
 
 // Streams FILE through the bounded line reader (#3531) instead of loading it whole. A failure to
-// open or read it is reported content-free, like `readAnalyzeSource`; any other error propagates.
+// open or read it is reported content-free: the closed cause kind, never an fs message, which can
+// quote the path (AGENTS.md §7). Any other error propagates.
 function streamAnalyzeSource(
   filePath: string,
   options: SupportAnalyzeOptions,
   io: CliIo,
+  observer?: SeedSourceObserver,
 ): AnalyzeAllResult | number {
   let result: AnalyzeAllResult | number;
   try {
+    const lines = readActivityLogFileLines(() => openSync(filePath, "r"), {
+      onChunk: observer?.observeChunk,
+    });
     result = analyzeLogLines(
-      readActivityLogFileLines(() => openSync(filePath, "r")),
+      observer === undefined ? lines : observer.observeLines(lines),
       options,
     );
   } catch (error) {
@@ -1971,12 +2003,11 @@ function emitSeedResult(
 // builds one `ReproductionSeed`, optionally writes the fixture derived from its `gatewayScript`,
 // then reports according to which of the two flags were actually requested.
 function runSeedAndFixture(
-  text: string,
-  args: AnalyzeArgs,
-  cwd: string,
-  io: CliIo,
-  options: SupportAnalyzeOptions,
+  analysis: AnalyzeAllResult,
+  source: ReproductionSeedSource,
+  context: AnalyzedSupportResultContext,
 ): number {
+  const { args, cwd, io, options } = context;
   const correlationId = args.correlationId;
   if (correlationId === undefined) {
     // Unreachable in practice: parseAnalyzeArgs rejects --seed/--emit-fixture without
@@ -1985,7 +2016,13 @@ function runSeedAndFixture(
     io.err(`keiko support analyze: --seed/--emit-fixture require --correlation-id.\n${USAGE}`);
     return 2;
   }
-  const seed = buildReproductionSeed(text, correlationId, new Date(), options);
+  const seed = buildReproductionSeedFromAnalysis(
+    analysis,
+    source,
+    correlationId,
+    new Date(),
+    options,
+  );
   if (seed === undefined) return reportMissingCorrelationId(correlationId, io);
 
   const fixtureOutcome = emitFixtureIfRequested(seed, args.emitFixture, correlationId, cwd, io);
@@ -2056,8 +2093,6 @@ async function persistSupportAnalysisEvidence(
 }
 
 interface AnalyzedSupportResultContext {
-  // Only --seed/--emit-fixture need the whole text; every other analysis streams (#3531).
-  readonly readText: () => string | number;
   readonly args: AnalyzeArgs;
   readonly cwd: string;
   readonly filePath: string;
@@ -2075,9 +2110,12 @@ async function emitAnalyzedSupportResult(
     return 1;
   if (context.args.clusters) return emitClusters(result.clusters, context.args.json, context.io);
   if (context.args.seed || context.args.emitFixture !== undefined) {
-    const text = context.readText();
-    if (typeof text === "number") return text;
-    return runSeedAndFixture(text, context.args, context.cwd, context.io, context.options);
+    // The seed states its source's digest and line count, so it streams the artifact once more
+    // and records both from the same pass as its analysis (#3531).
+    const observer = new SeedSourceObserver();
+    const analysis = streamAnalyzeSource(context.filePath, context.options, context.io, observer);
+    if (typeof analysis === "number") return analysis;
+    return runSeedAndFixture(analysis, observer.source(), context);
   }
   const report = buildAnalysisReport(result, context.filePath, context.deps);
   if (context.args.correlationId === undefined) {
@@ -2113,7 +2151,6 @@ async function runSupportAnalyze(
       : streamAnalyzeSource(filePath, options, io);
   if (typeof result === "number") return result;
   return emitAnalyzedSupportResult(result, {
-    readText: () => readAnalyzeSource(filePath, io),
     args,
     cwd,
     filePath,
