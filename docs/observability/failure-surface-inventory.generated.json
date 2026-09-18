@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0d7d4c953c47db459d3e7e5fefba9888e1ac38ea392ba53bed07ecdd55220b69"
+    "catalogDigest": "b4c6697153d853b3a4590d76ed950b232a26e89c9f5d62db1e408bfee93ade12"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -53,7 +53,7 @@
   "summary": {
     "operationCount": 420,
     "proofCount": 428,
-    "resolvedProofCount": 348,
+    "resolvedProofCount": 353,
     "failureClassCount": 308,
     "scenarioCount": 29,
     "resolvedScenarioCount": 1
@@ -1836,11 +1836,21 @@
     "support.export.publication.commit-last": [
       "packages/keiko-cli/src/support.activity-log-proof.test.ts"
     ],
-    "support.incident.created.emitted-line": [],
-    "support.incident.deduplicated.emitted-line": [],
-    "support.incident.dismissed.emitted-line": [],
-    "support.incident.expired.emitted-line": [],
-    "support.incident.rejected.emitted-line": [],
+    "support.incident.created.emitted-line": [
+      "packages/keiko-server/src/observability/support-incident.test.ts"
+    ],
+    "support.incident.deduplicated.emitted-line": [
+      "packages/keiko-server/src/observability/support-incident.test.ts"
+    ],
+    "support.incident.dismissed.emitted-line": [
+      "packages/keiko-server/src/observability/support-incident.test.ts"
+    ],
+    "support.incident.expired.emitted-line": [
+      "packages/keiko-server/src/observability/support-incident.test.ts"
+    ],
+    "support.incident.rejected.emitted-line": [
+      "packages/keiko-server/src/observability/support-incident.test.ts"
+    ],
     "task-workspace.identity.creation-time-probe.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"
     ],

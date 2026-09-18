@@ -41,7 +41,9 @@ import {
   SUPPORT_INCIDENT_WINDOW_AFTER_MS,
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   computeDefectFingerprint,
+  MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE,
   dismissSupportIncident,
+  drainSupportIncidentCandidates,
   listSupportIncidents,
   observeSupportIncidentTrigger,
   recordRegisteredFailureIncident,
@@ -341,7 +343,14 @@ describe("SupportIncident candidates", () => {
       expect(line).toMatchObject({
         incidentId: record.incidentId,
         incidentState: "candidate",
+        pinRelease: "released",
         openIncidentCount: 0,
+        correlationId: "dismiss-action-1",
+      });
+      // The pin is released at once, so the window returns to ordinary retention.
+      expect(JSON.parse(lines("activity-log.pin.expired")[0] ?? "{}")).toMatchObject({
+        pinId: record.pin.pinId,
+        expiryReason: "released",
         correlationId: "dismiss-action-1",
       });
     });
@@ -361,9 +370,14 @@ describe("SupportIncident candidates", () => {
   });
 
   describe("the file-sink hook", () => {
-    it("turns a persisted eligible failure line into a candidate", () => {
+    it("queues a persisted eligible failure and creates the candidate outside the write", async () => {
       setSupportIncidentTriggerForTests(true);
       createFileServerLogSink(stateDir).write(failureEvent());
+      // Nothing happens inside the sink's own write: no pin, no seal, no store write.
+      expect(lines("activity-log.pin.created")).toHaveLength(0);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const [incident] = listSupportIncidents(stateDir);
       expect(incident).toMatchObject({
         trigger: "registered-failure",
@@ -371,7 +385,6 @@ describe("SupportIncident candidates", () => {
         correlation: { rootCorrelationId: "failure-correlation-1", childCorrelationIds: [] },
         pin: { status: "pinned" },
       });
-      // The failure line comes first; the pin and the candidate follow in the same operation.
       const ops = readPersistedActivityLog(stateDir)
         .split("\n")
         .filter((text) => text.length > 0)
@@ -387,6 +400,7 @@ describe("SupportIncident candidates", () => {
       createFileServerLogSink(stateDir).write(failureEvent({ level: "warn" }));
       setSupportIncidentTriggerForTests(undefined);
       createFileServerLogSink(stateDir).write(failureEvent());
+      drainSupportIncidentCandidates();
       expect(listSupportIncidents(stateDir)).toEqual([]);
     });
 
@@ -394,8 +408,31 @@ describe("SupportIncident candidates", () => {
       setSupportIncidentTriggerForTests(true);
       const sink = createFileServerLogSink(stateDir);
       for (let index = 0; index < 5; index += 1) sink.write(failureEvent());
+      drainSupportIncidentCandidates();
       expect(listSupportIncidents(stateDir)).toHaveLength(1);
       expect(lines("support.incident.deduplicated")).toHaveLength(0);
+    });
+
+    it("caps evaluations across distinct defects per rolling minute", () => {
+      setSupportIncidentTriggerForTests(true);
+      const sink = createFileServerLogSink(stateDir);
+      for (let index = 0; index < MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE + 3; index += 1) {
+        sink.write(
+          failureEvent({
+            extra: {
+              phase: "endpoint",
+              frames: [`packages/keiko-server/dist/storm/m${String(index)}.js:1:1`],
+              causeChain: ["Error"],
+              completeness: "complete",
+              loss: "none",
+            },
+          }),
+        );
+      }
+      drainSupportIncidentCandidates();
+      expect(listSupportIncidents(stateDir)).toHaveLength(
+        MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE,
+      );
     });
 
     it("never throws into the sink when candidate creation fails", () => {
@@ -403,10 +440,11 @@ describe("SupportIncident candidates", () => {
       writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "occupied");
       expect(() => {
         observeSupportIncidentTrigger(stateDir, failureEvent());
+        drainSupportIncidentCandidates();
       }).not.toThrow();
-      expect(lines(FAILURE_OP)).toHaveLength(0);
       expect(JSON.parse(lines("support.incident.rejected")[0] ?? "{}")).toMatchObject({
         rejectionReason: "store-unavailable",
+        correlationId: "failure-correlation-1",
       });
     });
   });

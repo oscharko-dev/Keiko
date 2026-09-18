@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0d7d4c953c47db459d3e7e5fefba9888e1ac38ea392ba53bed07ecdd55220b69" as const;
+  "b4c6697153d853b3a4590d76ed950b232a26e89c9f5d62db1e408bfee93ade12" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -227,7 +227,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["expired", "invalid-record"],
+        values: ["expired", "invalid-record", "released"],
       },
       removalStatus: {
         type: "string",
@@ -3954,14 +3954,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: false,
+        required: true,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: false,
+        required: true,
         maxLength: 128,
         maxItems: 5,
       },
@@ -4012,14 +4012,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       frames: {
         type: "string-array",
         dataClass: "opaque-id",
-        required: false,
+        required: true,
         maxLength: 512,
         maxItems: 8,
       },
       causeChain: {
         type: "string-array",
         dataClass: "error-kind",
-        required: false,
+        required: true,
         maxLength: 128,
         maxItems: 5,
       },
@@ -22846,6 +22846,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["candidate", "acknowledged", "reported"],
       },
+      pinRelease: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["released", "not-pinned", "rejected"],
+      },
       openIncidentCount: {
         type: "integer",
         dataClass: "count",
@@ -30183,13 +30189,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: false,
+              required: true,
             },
             {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: false,
+              required: true,
             },
             {
               name: "phase",
@@ -49299,7 +49305,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
-              required: false,
+              required: true,
             },
             {
               name: "childRunId",
@@ -49311,7 +49317,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
-              required: false,
+              required: true,
             },
             {
               name: "reasonCode",
@@ -51845,6 +51851,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "openIncidentCount",
               type: "integer",
               dataClass: "count",
+              required: true,
+            },
+            {
+              name: "pinRelease",
+              type: "string",
+              dataClass: "closed-enum",
               required: true,
             },
             {
