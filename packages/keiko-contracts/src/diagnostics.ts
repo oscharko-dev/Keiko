@@ -219,7 +219,12 @@ export const CLIENT_ERROR_CLASSES: ReadonlySet<string> = new Set([
  * any other Error, and `typeof` for a thrown non-Error. Never the message, never the stack.
  */
 export function clientErrorClass(error: unknown): string {
-  if (error instanceof Error) return CLIENT_ERROR_CLASSES.has(error.name) ? error.name : "Error";
+  if (
+    error instanceof Error ||
+    (typeof DOMException !== "undefined" && error instanceof DOMException)
+  ) {
+    return CLIENT_ERROR_CLASSES.has(error.name) ? error.name : "Error";
+  }
   return typeof error;
 }
 

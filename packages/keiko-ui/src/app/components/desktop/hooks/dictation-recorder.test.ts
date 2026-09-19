@@ -4,6 +4,7 @@
 // permission-denied / no-microphone / unsupported / generic error classification.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import {
   createBrowserDictationRecorder,
   DictationRecorderError,
@@ -46,6 +47,10 @@ class FakeMediaRecorder {
       data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }),
     });
     this.emit("stop", {});
+  }
+
+  fail(error: unknown): void {
+    this.emit("error", { error });
   }
 
   private emit(type: string, event: unknown): void {
@@ -205,6 +210,50 @@ describe("createBrowserDictationRecorder", () => {
     }
   });
 
+  it.each(["initial", "renewal", "stop"] as const)(
+    "retains asynchronous native error evidence during %s",
+    async (phase) => {
+      const track = { stop: vi.fn() };
+      stubMedia(async () => fakeStream(track));
+      const recorder = createBrowserDictationRecorder();
+      const session = phase === "initial" ? undefined : await recorder.start();
+      const cause = new DOMException("private device detail", "NotReadableError");
+      Object.defineProperty(cause, "stack", {
+        value: `NotReadableError: private device detail\n    at start (${location.origin}/_next/static/chunks/1wntg-7ptuw73.js:21:456)`,
+      });
+      const spy = vi
+        .spyOn(FakeMediaRecorder.prototype, phase === "stop" ? "stop" : "start")
+        .mockImplementationOnce(function (this: FakeMediaRecorder): void {
+          queueMicrotask(() => this.fail(cause));
+        });
+      try {
+        const attempt =
+          phase === "initial"
+            ? recorder.start()
+            : phase === "renewal"
+              ? session?.renewSilence?.(() => true)
+              : session?.stop();
+        const error: unknown = await Promise.resolve(attempt).catch((error: unknown) => error);
+        expect(error).toMatchObject({
+          name: "DictationRecorderError",
+          captureError: "not-readable",
+        });
+        if (phase === "renewal")
+          expect(error).toMatchObject({ captureReason: "replacement-start-failed" });
+        const evidence = clientErrorEvidence(error);
+        expect(evidence.causeChain).toContain("NotReadableError");
+        expect(evidence.frames).toContain(
+          "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:21:456",
+        );
+        expect(JSON.stringify(evidence)).not.toContain("private device detail");
+      } finally {
+        spy.mockRestore();
+        session?.cancel();
+      }
+      expect(track.stop).toHaveBeenCalledOnce();
+    },
+  );
+
   it("captures audio and returns base64 + mime + duration, releasing the track", async () => {
     const track = { stop: vi.fn() };
     stubMedia(async () => fakeStream(track), track);
@@ -256,6 +305,15 @@ describe("createBrowserDictationRecorder", () => {
     const session = await recorder.start();
     session.cancel();
     expect(track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a native permission-denied DOMException", async () => {
+    const cause = new DOMException("private permission detail", "NotAllowedError");
+    stubMedia(() => Promise.reject(cause));
+    await expect(createBrowserDictationRecorder().start()).rejects.toMatchObject({
+      reason: "permission-denied",
+      cause,
+    });
   });
 
   it("classifies a denied permission", async () => {

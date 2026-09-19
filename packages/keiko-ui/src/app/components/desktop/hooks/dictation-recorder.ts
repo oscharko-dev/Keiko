@@ -122,7 +122,7 @@ function selectMimeType(): string {
 }
 
 function classifyGetUserMediaError(error: unknown): DictationStartFailure {
-  const name = error instanceof Error ? error.name : "";
+  const name = error instanceof Error || error instanceof DOMException ? error.name : "";
   if (name === "NotAllowedError" || name === "SecurityError") {
     return "permission-denied";
   }
@@ -187,25 +187,32 @@ async function acquireDictationMicrophone(): Promise<MediaStream> {
   }
 }
 
+function recorderEventFailure(event: Event): DictationRecorderError {
+  const cause: unknown = "error" in event ? event.error : undefined;
+  return new DictationRecorderError(
+    "capture-failed",
+    "Audio capture failed.",
+    undefined,
+    captureErrorClass(cause),
+    cause,
+  );
+}
+
 function waitForStop(recorder: MediaRecorder): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     recorder.addEventListener("stop", () => resolve(), { once: true });
-    recorder.addEventListener(
-      "error",
-      () => reject(new DictationRecorderError("capture-failed", "Audio capture failed.")),
-      { once: true },
-    );
+    recorder.addEventListener("error", (event) => reject(recorderEventFailure(event)), {
+      once: true,
+    });
   });
 }
 
 function waitForStart(recorder: MediaRecorder): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     recorder.addEventListener("start", () => resolve(), { once: true });
-    recorder.addEventListener(
-      "error",
-      () => reject(new DictationRecorderError("capture-failed", "Audio capture failed.")),
-      { once: true },
-    );
+    recorder.addEventListener("error", (event) => reject(recorderEventFailure(event)), {
+      once: true,
+    });
   });
 }
 
@@ -314,6 +321,12 @@ async function beginRecordingBuffer(
 }
 
 function captureErrorClass(error: unknown): ClientVoiceCaptureError {
+  return error instanceof DictationRecorderError && error.captureError !== undefined
+    ? error.captureError
+    : nativeCaptureErrorClass(error);
+}
+
+function nativeCaptureErrorClass(error: unknown): ClientVoiceCaptureError {
   if (!(error instanceof Error) && !(error instanceof DOMException)) return "other";
   switch (error.name) {
     case "TypeError":
@@ -485,6 +498,9 @@ export function createBrowserDictationRecorder(): DictationRecorder {
         throw new DictationRecorderError(
           classifyGetUserMediaError(error),
           "Microphone access is unavailable.",
+          undefined,
+          captureErrorClass(error),
+          error,
         );
       }
       try {
@@ -495,6 +511,9 @@ export function createBrowserDictationRecorder(): DictationRecorder {
         throw new DictationRecorderError(
           "capture-failed",
           error instanceof Error ? error.message : "Audio capture could not start.",
+          undefined,
+          captureErrorClass(error),
+          error,
         );
       }
     },

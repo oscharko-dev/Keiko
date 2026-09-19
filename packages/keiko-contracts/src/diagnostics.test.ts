@@ -394,3 +394,9 @@ describe("client error evidence trust boundary", () => {
     expect(isClientDiagnosticIngestRequest({ ...base, errorEvidence })).toBe(false);
   });
 });
+
+it("preserves the closed native DOMException class for browser error events", () => {
+  expect(clientErrorClass(new DOMException("private device detail", "NotReadableError"))).toBe(
+    "NotReadableError",
+  );
+});
