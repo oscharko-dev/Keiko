@@ -1217,6 +1217,40 @@ test("voice dialogue @smoke — batch interrupt stops playback and retains the n
   await expect(mode).toHaveAttribute("aria-checked", "false");
 });
 
+test("voice dialogue @smoke — long silent playback keeps interruption capture armed", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.addInitScript(`${BATCH_AUDIO_INIT} window.__holdBatchSpeech = true;`);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  let transcriptions = 0;
+  await page.route("**/api/voice/transcribe", (route) => {
+    transcriptions += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript: "A long test answer please" }),
+    });
+  });
+  await captureSynthesizedTexts(page);
+  await openComposer(page);
+  const mode = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await mode.click();
+  await page.getByRole("button", { name: "Finish speaking" }).click();
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
+  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
+  await expect(interrupt).toBeVisible();
+  for (let interval = 0; interval < 3; interval += 1) {
+    await page.clock.fastForward(61_000);
+    await page.clock.runFor(600);
+  }
+  expect(transcriptions).toBe(1);
+  await expect(interrupt).toBeVisible();
+  await interrupt.click();
+  await expect(page.getByRole("button", { name: "Finish speaking" })).toBeVisible();
+  await mode.click();
+  await expect(mode).toHaveAttribute("aria-checked", "false");
+});
+
 async function startFailedBatchTurn(page: Page): Promise<void> {
   await page.addInitScript(BATCH_AUDIO_INIT);
   await stubCapability(page, BATCH_VOICE_CAPABILITY);

@@ -25,6 +25,7 @@ import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import * as readiness from "./gateway-readiness.js";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -906,10 +907,14 @@ describe("handleGroundedAsk", () => {
       const runtime = unreadyRuntimeGatewayConfig(config);
       const sharedDeps = deps(model, {}, { config, gatewayConfig: runtime });
 
+      const probe = vi.spyOn(readiness, "ensureOnDemandConversationReadiness");
+      const correlationId = "grounded-admission-request";
       const result = await handleGroundedAsk(
-        ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
+        { ...ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })), correlationId },
         sharedDeps,
       );
+      expect(probe).toHaveBeenCalledWith(sharedDeps, CHAT_MODEL, correlationId);
+      probe.mockRestore();
 
       expect(result).toEqual({
         status: 400,

@@ -822,6 +822,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The file tunes voice retry settings this form cannot carry — saving applies the standard retry behavior.",
   "gatewaySetup.badge.setup": "Model gateway setup",
   "gatewaySetup.badge.update": "Credential update",
+  "gatewaySetup.voice.locality.azureFoundry": "Microsoft Foundry",
+  "gatewaySetup.voice.locality.customerHosted": "Customer-hosted",
+  "gatewaySetup.voice.locality.localOnly": "Local-only",
+  "gatewaySetup.voice.locality.gatewayManaged": "Gateway-managed (location undisclosed)",
   "gatewaySetup.voice.title": "Audio & Digital Twin",
   "gatewaySetup.voice.description":
     "Optional models for dictation, live conversation, and spoken answers.",

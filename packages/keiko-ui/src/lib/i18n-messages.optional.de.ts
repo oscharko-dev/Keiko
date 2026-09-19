@@ -856,6 +856,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Datei stimmt Sprach-Wiederholversuche ab, die dieses Formular nicht übernehmen kann — beim Speichern gilt das Standard-Wiederholverhalten.",
   "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
   "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
+  "gatewaySetup.voice.locality.azureFoundry": "Microsoft Foundry",
+  "gatewaySetup.voice.locality.customerHosted": "Vom Kunden betrieben",
+  "gatewaySetup.voice.locality.localOnly": "Nur lokal",
+  "gatewaySetup.voice.locality.gatewayManaged": "Vom Gateway verwaltet (Standort unbekannt)",
   "gatewaySetup.voice.title": "Audio & Digital Twin",
   "gatewaySetup.voice.description":
     "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",

@@ -79,6 +79,9 @@ export const CLIENT_VOICE_DIALOGUE_STAGES = [
   "queue-unavailable",
   "answer-ready",
   "delivery-failed",
+  "delivery-cancelled",
+  "delivery-rejected",
+  "capture-renewed",
   "playback-settled",
   "playback-fallback",
   "interrupted",
@@ -225,6 +228,20 @@ const ISO_INSTANT_MAX_LENGTH = 40;
 // server re-validates with `isValidCorrelationId` before trusting the value for anything.
 const ISO_INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/;
 
+export interface ClientMarkdownLayout {
+  readonly listStart: number;
+  readonly listIndex: number;
+  readonly depth: number;
+}
+
+export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownLayout {
+  if (!isRecord(value)) return false;
+  return [value.listStart, value.listIndex, value.depth].every(
+    (item) =>
+      typeof item === "number" && Number.isSafeInteger(item) && item >= 0 && item <= 999_999_999,
+  );
+}
+
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
   readonly clientTs: string;
@@ -233,6 +250,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
+  readonly markdownLayout?: ClientMarkdownLayout | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -387,6 +405,7 @@ function isClientDiagnosticLossCounts(value: unknown): value is ClientDiagnostic
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
   const { gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } = value;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
+  if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
   return isOptional(loss, isClientDiagnosticLossCounts);

@@ -73,6 +73,7 @@ export type AssistantCodeBlockApply = (
 
 export interface SafeMarkdownProps {
   readonly source: string;
+  readonly diagnosticCorrelationId?: string | undefined;
   readonly applyScopeId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
@@ -856,20 +857,45 @@ function renderMarkdownTree(
 // prop compare below).
 const EMPTY_ROOTS: readonly RepositoryReferenceRoot[] = Object.freeze([]);
 
-// A settled continuation records its layout decision without any response content.
-function useMarkdownListEvidence(tree: readonly SafeMarkdownNode[], streaming: boolean): void {
+// Emit layout coordinates only; the stable message identity joins re-renders to their message.
+function reportListStarts(
+  tree: readonly SafeMarkdownNode[],
+  correlationId: string | undefined,
+  cursor = { index: 0 },
+  depth = 0,
+): void {
+  for (const node of tree) {
+    if (node.kind === "ol") {
+      const listIndex = cursor.index++;
+      if (node.start !== undefined && node.start !== 1) {
+        reportClientDiagnostic("markdown:ordered-list-source-start", {
+          kind: "markdown-layout",
+          correlationId,
+          markdownLayout: { listStart: node.start, listIndex, depth },
+        });
+      }
+    }
+    if (node.children !== undefined)
+      reportListStarts(node.children, correlationId, cursor, depth + 1);
+  }
+}
+
+function useMarkdownListEvidence(
+  tree: readonly SafeMarkdownNode[],
+  streaming: boolean,
+  correlationId: string | undefined,
+): void {
   const lastReported = useRef<readonly SafeMarkdownNode[] | undefined>(undefined);
   useEffect(() => {
     if (streaming || lastReported.current === tree) return;
-    if (!tree.some((node) => node.kind === "ol" && node.start !== undefined && node.start !== 1))
-      return;
     lastReported.current = tree;
-    reportClientDiagnostic("markdown:ordered-list-source-start", { kind: "markdown-layout" });
-  }, [tree, streaming]);
+    reportListStarts(tree, correlationId);
+  }, [tree, streaming, correlationId]);
 }
 
 function SafeMarkdownImpl({
   source,
+  diagnosticCorrelationId,
   applyScopeId,
   repositoryRoots = EMPTY_ROOTS,
   openRepositoryReference,
@@ -879,7 +905,7 @@ function SafeMarkdownImpl({
   trailing,
 }: SafeMarkdownProps): ReactNode {
   const tree = useMemo(() => parseSafeMarkdown(source), [source]);
-  useMarkdownListEvidence(tree, streaming);
+  useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId);
   const options = useMemo<RenderOptions>(
     () => ({
       applyScopeId,
@@ -918,6 +944,7 @@ export const SafeMarkdown = memo(SafeMarkdownImpl);
 
 export interface SafeMarkdownBoundaryProps {
   readonly source: string;
+  readonly diagnosticCorrelationId?: string | undefined;
   readonly applyScopeId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
@@ -953,6 +980,7 @@ export class SafeMarkdownBoundary extends Component<
     return (
       <SafeMarkdown
         source={this.props.source}
+        diagnosticCorrelationId={this.props.diagnosticCorrelationId}
         applyScopeId={this.props.applyScopeId}
         repositoryRoots={this.props.repositoryRoots}
         openRepositoryReference={this.props.openRepositoryReference}

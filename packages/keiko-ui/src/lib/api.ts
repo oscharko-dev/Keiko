@@ -704,6 +704,11 @@ export async function streamAssistantSpeech(
     },
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),
+  }).catch((cause: unknown) => {
+    if (isRecordValue(cause) && cause["name"] === "AbortError") throw cause;
+    const failure = new ApiError("NETWORK_ERROR", "Speech streaming could not be reached.", 0);
+    failure.correlationId = correlationId;
+    throw failure;
   });
   if (!res.ok) {
     const error = await bffFailure(res);

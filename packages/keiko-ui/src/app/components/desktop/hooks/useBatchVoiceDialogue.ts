@@ -98,7 +98,11 @@ function settleDelivery(
     reportBatchStage("answer-ready", correlationId, flags.sessionCorrelationId);
     return;
   }
-  reportBatchStage("delivery-failed", correlationId, flags.sessionCorrelationId);
+  reportBatchStage(
+    outcome.status === "cancelled" ? "delivery-cancelled" : "delivery-failed",
+    correlationId,
+    flags.sessionCorrelationId,
+  );
   setters.setWaiting(false);
   setters.setFailedTranscript(transcript);
   setters.setError(
@@ -137,7 +141,7 @@ function observeBatchDelivery(
     (outcome) => settleDelivery(outcome, flags, generation, text, correlationId, setters),
     () => {
       if (!deliveryIsCurrent(flags, generation)) return;
-      reportBatchStage("delivery-failed", correlationId, flags.sessionCorrelationId);
+      reportBatchStage("delivery-rejected", correlationId, flags.sessionCorrelationId);
       setters.setWaiting(false);
       setters.setFailedTranscript(text);
       setters.setError("The spoken turn failed. You can retry or continue in text.");
@@ -443,6 +447,8 @@ export function useBatchVoiceDialogue(options: BatchVoiceDialogueOptions): Batch
     onInsert: acceptTranscript,
     captureOwner: options.captureOwner,
     captureLease: options.captureLease,
+    onSilenceRenewed: () =>
+      reportBatchStage("capture-renewed", flagsRef.current.sessionCorrelationId),
     vad,
   });
   const { start: startDictation, cancel, retry: retryDictation } = dictation;

@@ -8,11 +8,43 @@ understandable, interruptible, accessible, and stable enough for the Issue #1563
 > **Current authority:** this specification preserves the superseded STT+TTS dialogue design. ADR-0154
 > now requires input-only Realtime transcription, canonical chat, and independent TTS. In particular,
 > STT+TTS without WebRTC again offers the dialogue switch through ADR-0154's canonical chat path. The historical headphone walkthrough is not
-> the renewed Oliver live-microphone acceptance test; that current test remains deferred.
+> the renewed live-microphone checks recorded below for PR #3559.
 
 The evaluation is **verification, not new product behavior**. It adds no runtime dependency, deploys no
 model, and changes no production code path. It reuses the shipped dialogue runtime (#1557–#1562) and the
 existing test infrastructure.
+
+## PR #3559 verification and conversational quality (2026-09-19)
+
+The renewed local checks use the canonical chat path, the configured Azure deployments, and a
+separate loopback LiteLLM container. They do not claim acceptance for every customer deployment.
+
+| Check                                      | Observed evidence                                                                                                                                                                     | Limit                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Actual microphone and speaker conversation | The user confirmed that spoken interruption stops playback and feels responsive after the barge-in repair. The Activity Log records interruption followed by the next canonical turn. | Subjective acceptance; no measured acoustic latency or room/device matrix.              |
+| Actual browser controls                    | The existing conversation displays consecutive list numbers; voice mode shows one contextual icon beside the Keiko switch. The microphone was explicitly released after testing.      | Local in-app browser.                                                                   |
+| Automated voice journeys                   | Chromium and WebKit each passed all 23 dialogue/dictation cases, including canonical private memory scope, interruption and the separate workbench dictation path.                    | Synthetic media and provider seams; not an acoustic benchmark.                          |
+| Firefox                                    | 22 cases passed initially; the reduced-motion return-to-text case passed in isolation after its initial timeout.                                                                      | The initial full run was not green.                                                     |
+| LiteLLM with actual Azure upstream         | WAV, MP3, raw PCM, Ogg/Opus, FLAC and AAC speech requests returned successful audio; a synthetic WAV round trip transcribed the expected test phrase.                                 | Existing Azure TTS and `gpt-4o-mini-transcribe`; not the customer's Whisper deployment. |
+| LiteLLM Whisper alias                      | A real proxy container discovered and routed an `audio_transcription` alias for Whisper with a deterministic test upstream.                                                           | Confirms metadata/routing compatibility, not real Whisper inference.                    |
+
+Natural dialogue requires separate checks for turn timing, interruptions, pauses, recovery and
+context continuity. [Full-Duplex-Bench](https://arxiv.org/abs/2503.04721) evaluates these as distinct
+interaction abilities. [Moshi](https://arxiv.org/abs/2410.00037) demonstrates a different, jointly
+trained speech architecture; its latency numbers must not be attributed to this cascaded pipeline.
+The practical priorities for Keiko are uninterrupted local barge-in detection, retaining the first
+words of the new turn, intelligible complete playback, concise spoken wording and canonical private
+memory retrieval. Automatic interruption never broadens memory scope or action authority.
+
+The cascaded path deliberately retains canonical chat and its existing memory/governance semantics.
+It can provide conversational turn taking, but text mediation does not preserve every prosodic cue
+of an end-to-end speech model. Do not describe it as equivalent to one or claim unmeasured latency.
+Long silent listening must renew bounded local capture without submitting silence to STT; the VAD
+and microphone remain live, and overlap protects speech that begins during buffer replacement.
+
+Official integration references: [LiteLLM transcription](https://docs.litellm.ai/docs/audio_transcription/),
+[LiteLLM speech output](https://docs.litellm.ai/docs/text_to_speech/) and
+[LiteLLM model management](https://docs.litellm.ai/docs/proxy/model_management).
 
 ## Reuse-first design
 
@@ -74,8 +106,7 @@ deployment are present.
 The Issue #1563 column records the historical scorer and browser-smoke oracle, including the former
 STT+TTS fallback. It must not be read as current product acceptance. The ADR-0154 column records the
 current architecture: Twin accepts Realtime WebRTC input or turn-based STT capture, then uses canonical
-chat and independent explicit TTS with a mapped persona. The renewed Oliver live-microphone acceptance
-remains deferred.
+chat and independent explicit TTS with a mapped persona. Current live-microphone evidence is recorded below; it does not replace the historical scorer.
 
 ## Latency / interruption (AC2)
 
@@ -95,7 +126,7 @@ production budgets:
 The client-controlled legs (arming capture, stopping playback on barge-in) are proven deterministically.
 The provider-dependent legs (STT transcribe, TTS synthesis) were budgeted; their wall-clock value depended
 on the deployed speech provider and the historical headphone walkthrough recorded in the verification
-report. That walkthrough does not close the current ADR-0154 live-microphone acceptance. The deterministic
+report. Current live checks are recorded separately below and do not establish a measured provider latency budget. The deterministic
 suite proves only the measurement-and-recording path and that an over-budget fixture is caught.
 
 ## Long-session cleanup (AC3)

@@ -4655,6 +4655,27 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
 });
 
 describe("streamAssistantSpeech correlation", () => {
+  it("retains the transmitted request identity when fetch rejects before headers", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new TypeError("private network detail"));
+    vi.stubGlobal("fetch", fetchMock);
+    const error = await streamAssistantSpeech({ text: "Synthetic test" }).catch(
+      (cause: unknown) => cause,
+    );
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(error).toMatchObject({
+      correlationId: new Headers(request?.headers).get("X-Keiko-Correlation-Id"),
+    });
+    expect(String(error)).not.toContain("private network detail");
+  });
+
+  it("preserves cancellation so interruption does not trigger a fallback", async () => {
+    const abort = new DOMException("Aborted", "AbortError");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockRejectedValue(abort));
+    await expect(streamAssistantSpeech({ text: "Synthetic test" })).rejects.toBe(abort);
+  });
+
   it("preserves the server correlation on a failed streaming synthesis request", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

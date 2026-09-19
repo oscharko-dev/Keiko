@@ -300,23 +300,24 @@ function voiceEndpointStyleSections(
   ];
 }
 
-const VOICE_PROVIDER_LOCALITY_SECTIONS = [
+function voiceProviderLocalitySections(
+  t: GatewaySetupTranslate,
+): readonly [
   {
-    options: [
-      { value: "azure-foundry", label: "Microsoft Foundry" },
-      { value: "customer-hosted", label: "Customer-hosted" },
-      { value: "local-only", label: "Local-only" },
-      { value: "gateway-managed", label: "Gateway-managed (location undisclosed)" },
-    ],
+    readonly options: readonly { readonly value: VoiceProviderLocality; readonly label: string }[];
   },
-] satisfies readonly [
-  {
-    readonly options: readonly {
-      readonly value: VoiceProviderLocality;
-      readonly label: string;
-    }[];
-  },
-];
+] {
+  return [
+    {
+      options: [
+        { value: "azure-foundry", label: t("gatewaySetup.voice.locality.azureFoundry") },
+        { value: "customer-hosted", label: t("gatewaySetup.voice.locality.customerHosted") },
+        { value: "local-only", label: t("gatewaySetup.voice.locality.localOnly") },
+        { value: "gateway-managed", label: t("gatewaySetup.voice.locality.gatewayManaged") },
+      ],
+    },
+  ];
+}
 
 function isVoiceProviderLocality(value: string): value is VoiceProviderLocality {
   return VOICE_PROVIDER_LOCALITIES.has(value as VoiceProviderLocality);
@@ -1740,6 +1741,7 @@ function VoiceOutputVoiceField({
 }
 
 interface VoiceProviderLocalityFieldProps {
+  readonly t: GatewaySetupTranslate;
   readonly labelId: string;
   readonly value: VoiceProviderLocality;
   readonly disabled: boolean;
@@ -1747,6 +1749,7 @@ interface VoiceProviderLocalityFieldProps {
 }
 
 function VoiceProviderLocalityField({
+  t,
   labelId,
   value,
   disabled,
@@ -1760,7 +1763,7 @@ function VoiceProviderLocalityField({
       <KeikoSelect
         ariaLabelledBy={labelId}
         menuTitle="Provider locality"
-        sections={VOICE_PROVIDER_LOCALITY_SECTIONS}
+        sections={voiceProviderLocalitySections(t)}
         showMenuHeader={false}
         triggerClassName="gw-input gw-provider-locality-select"
         menuClassName="gw-provider-locality-menu"
@@ -2113,6 +2116,7 @@ function VoiceAdvancedDeploymentFields(
         onChange={props.setVoiceSupportsSemanticTurnDetection}
       />
       <VoiceProviderLocalityField
+        t={props.t}
         labelId={props.voiceProviderLocalityLabelId}
         value={props.voiceProviderLocality}
         disabled={props.disabled}

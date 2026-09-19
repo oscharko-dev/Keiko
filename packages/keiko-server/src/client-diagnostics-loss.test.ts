@@ -71,6 +71,8 @@ describe("client diagnostics loss evidence", () => {
         JSON.stringify({
           message: "private model response must not be logged",
           kind: "markdown-layout",
+          correlationId: "message-1234",
+          markdownLayout: { listStart: 7, listIndex: 1, depth: 2 },
           clientTs: CLIENT_TS,
           loss: { postsThrottled: 2 },
         }),
@@ -81,9 +83,12 @@ describe("client diagnostics loss evidence", () => {
     expect(persisted).toHaveLength(1);
     const line = expectActivityLogProof("client.markdown.layout.line", persisted[0] ?? "");
     expect(line).toMatchObject({
-      correlationId: CORRELATION_ID,
+      correlationId: "message-1234",
       level: "info",
       listNumbering: "source-start",
+      listStart: 7,
+      listIndex: 1,
+      depth: 2,
       clientPostsThrottled: 2,
     });
     expect(line).not.toHaveProperty("errorKind");

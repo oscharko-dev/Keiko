@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e56a1a66eb08a3dcb36805f6759cf03215d06ba0ca7d0ef0f03dfeaf338ee28a" as const;
+  "f4af05f5a4eb5df936ac55f344ebee48cfddfda865a74cd43a7975baacf73de7" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1739,8 +1739,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "queue-unavailable",
           "answer-ready",
           "delivery-failed",
+          "delivery-cancelled",
+          "delivery-rejected",
           "playback-settled",
           "playback-fallback",
+          "capture-renewed",
           "interrupted",
           "stopped",
         ],
@@ -1929,6 +1932,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["source-start"],
+      },
+      listStart: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      listIndex: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      depth: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       clientBufferEvicted: {
         type: "integer",
@@ -25185,6 +25203,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "answer-ready",
           "playback-settled",
           "playback-fallback",
+          "capture-renewed",
           "interrupted",
           "stopped",
         ],
@@ -28030,10 +28049,28 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "depth",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "listIndex",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "listNumbering",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "listStart",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],

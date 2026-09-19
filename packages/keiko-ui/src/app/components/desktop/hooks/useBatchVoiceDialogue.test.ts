@@ -73,18 +73,23 @@ describe("turn-based Digital Twin", () => {
   it.each([
     {
       label: "a cancelled canonical delivery",
+      stage: "delivery-cancelled",
       firstDelivery: (): Promise<SendMessageOutcome> =>
         Promise.resolve({ status: "cancelled", userPersisted: true }),
     },
     {
       label: "a failed canonical delivery",
+      stage: "delivery-failed",
       firstDelivery: (): Promise<SendMessageOutcome> => Promise.resolve({ status: "failed" }),
     },
     {
       label: "a rejected canonical delivery",
+      stage: "delivery-rejected",
       firstDelivery: (): Promise<SendMessageOutcome> => Promise.reject(new Error("network")),
     },
-  ])("recovers from $label and re-arms capture on retry", async ({ firstDelivery }) => {
+  ])("recovers from $label and re-arms capture on retry", async ({ firstDelivery, stage }) => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
     const lease = Symbol("dialogue");
     expect(claimVoiceCapture("chat-a", lease)).toBe(true);
     const { recorder } = fakeRecorder();
@@ -111,6 +116,10 @@ describe("turn-based Digital Twin", () => {
     await waitFor(() => expect(result.current.failedTranscript).toBe("retry these words"));
     expect(result.current.waitingForAnswer).toBe(false);
     expect(result.current.error).toMatch(/retry or continue in text/u);
+    expect(writer).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ voiceDialogueStage: stage }),
+    );
     act(() => result.current.retry());
     await waitFor(() => expect(result.current.dictation.phase).toBe("recording"));
     expect(result.current.failedTranscript).toBeUndefined();

@@ -44,6 +44,9 @@ export interface DictationSession {
   // it; the production recorder always sets it.
   readonly stream?: MediaStream;
   requestData?(): void;
+  // Replace silent encoded audio while keeping the same microphone and VAD stream live.
+  // Returns the new buffer's age, or undefined if speech/cancellation retained the old buffer.
+  renewSilence?(stillSilent: () => boolean): Promise<number | undefined>;
   stop(): Promise<DictationCapture>;
   cancel(): void;
 }
@@ -260,11 +263,17 @@ function createAudioLevelMonitor(
   };
 }
 
-async function beginSession(
+interface RecordingBuffer {
+  readonly recorder: MediaRecorder;
+  readonly chunks: Blob[];
+  readonly startedAt: number;
+}
+
+async function beginRecordingBuffer(
   stream: MediaStream,
-  options: DictationRecorderStartOptions = {},
-): Promise<DictationSession> {
-  const mimeType = selectMimeType();
+  mimeType: string,
+  options: DictationRecorderStartOptions,
+): Promise<RecordingBuffer> {
   const recorder =
     mimeType === "" ? new MediaRecorder(stream) : new MediaRecorder(stream, { mimeType });
   const chunks: Blob[] = [];
@@ -275,9 +284,18 @@ async function beginSession(
     }
   });
   const started = waitForStart(recorder);
+  const startedAt = Date.now();
   recorder.start(options.timesliceMs ?? DEFAULT_TIMESLICE_MS);
   await started;
-  const startedAt = Date.now();
+  return { recorder, chunks, startedAt };
+}
+
+async function beginSession(
+  stream: MediaStream,
+  options: DictationRecorderStartOptions = {},
+): Promise<DictationSession> {
+  const mimeType = selectMimeType();
+  let capture = await beginRecordingBuffer(stream, mimeType, options);
   // Ready = start event seen (above) AND the analyser has produced its first sample (below), so the
   // caller only invites the user to speak once capture is verifiably live. Fired at most once.
   let readyFired = false;
@@ -303,12 +321,27 @@ async function beginSession(
 
   return {
     stream,
+    async renewSilence(stillSilent): Promise<number | undefined> {
+      if (settled || !stillSilent()) return undefined;
+      const replacement = await beginRecordingBuffer(stream, mimeType, options);
+      // Overlap exceeds the VAD onset debounce: speech during replacement retains the old prefix.
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      if (settled || !stillSilent()) {
+        if (replacement.recorder.state !== "inactive") replacement.recorder.stop();
+        return undefined;
+      }
+      const previous = capture;
+      capture = replacement;
+      previous.recorder.stop();
+      previous.chunks.length = 0;
+      return Math.max(0, Date.now() - capture.startedAt);
+    },
     requestData(): void {
-      if (settled || recorder.state !== "recording") {
+      if (settled || capture.recorder.state !== "recording") {
         return;
       }
       try {
-        recorder.requestData();
+        capture.recorder.requestData();
       } catch {
         // A best-effort flush failure should not prevent the final stop from collecting audio.
       }
@@ -318,28 +351,29 @@ async function beginSession(
         throw new DictationRecorderError("capture-failed", "The recording is no longer active.");
       }
       settled = true;
-      const stopped = waitForStop(recorder);
+      const stopped = waitForStop(capture.recorder);
       try {
-        if (recorder.state === "recording") {
-          recorder.requestData();
+        if (capture.recorder.state === "recording") {
+          capture.recorder.requestData();
         }
       } catch {
         // Ignore; the final stop event still provides the authoritative flush.
       }
-      recorder.stop();
+      capture.recorder.stop();
       try {
         await stopped;
       } finally {
         levelMonitor?.stop();
         stopTracks(stream);
       }
-      const effectiveType = recorder.mimeType !== "" ? recorder.mimeType : mimeType || "audio/webm";
-      const blob = new Blob(chunks, { type: effectiveType });
+      const effectiveType =
+        capture.recorder.mimeType !== "" ? capture.recorder.mimeType : mimeType || "audio/webm";
+      const blob = new Blob(capture.chunks, { type: effectiveType });
       const audioBase64 = await blobToBase64(blob);
       return {
         audioBase64,
         mimeType: effectiveType,
-        durationMs: Math.max(1, Date.now() - startedAt),
+        durationMs: Math.max(1, Date.now() - capture.startedAt),
       };
     },
     cancel(): void {
@@ -347,8 +381,8 @@ async function beginSession(
         return;
       }
       settled = true;
-      if (recorder.state !== "inactive") {
-        recorder.stop();
+      if (capture.recorder.state !== "inactive") {
+        capture.recorder.stop();
       }
       levelMonitor?.stop();
       stopTracks(stream);

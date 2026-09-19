@@ -589,6 +589,46 @@ describe("useDictation — unmount safety (no dispatch / no mic left open)", () 
 });
 
 describe("useDictation — capture bounds", () => {
+  it("renews silent dialogue capture without transcribing or releasing the microphone", async () => {
+    vi.useFakeTimers();
+    const vad = makeFakeVad();
+    const base = makeStreamingRecorder();
+    const renewSilence = vi.fn(async () => 0);
+    const recorder: DictationRecorder = {
+      start: async (options) => ({
+        ...(await base.recorder.start(options)),
+        renewSilence,
+      }),
+    };
+    const transcribe = vi.fn(async () => ({ transcript: "hello" }));
+    const { result, unmount } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: () => recorder,
+        transcribe,
+        vad: vad.vad,
+        postRollMs: 0,
+      }),
+    );
+    act(() => result.current.start());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+    expect(result.current.phase).toBe("recording");
+    expect(renewSilence).toHaveBeenCalledTimes(3);
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(base.stop).not.toHaveBeenCalled();
+    act(() => vad.fire("speech-onset"));
+    act(() => vad.fire("end-of-turn"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(transcribe).toHaveBeenCalledOnce();
+    unmount();
+  });
   it("auto-stops recording at the dictation limit", async () => {
     vi.useFakeTimers();
     const recorder = makeRecorder({});

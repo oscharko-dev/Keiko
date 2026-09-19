@@ -35,6 +35,7 @@ import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
   type ClientDiagnosticGitChangeDescription,
+  type ClientMarkdownLayout,
   type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
   type ClientDiagnosticLossCounts,
@@ -47,6 +48,7 @@ export interface ClientDiagnosticMeta {
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
+  readonly markdownLayout?: ClientMarkdownLayout | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }

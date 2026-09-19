@@ -658,6 +658,7 @@ function ChatBubbleContentArea({
         // degrades this one bubble to plain text instead of crashing the view.
         <SafeMarkdownBoundary
           source={message.content}
+          diagnosticCorrelationId={message.id}
           applyScopeId={`${message.chatId}:${message.id}`}
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}

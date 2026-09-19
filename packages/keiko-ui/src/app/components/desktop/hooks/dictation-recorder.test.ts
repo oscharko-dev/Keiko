@@ -72,6 +72,7 @@ function fakeStream(track: { stop: () => void }): MediaStream {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   FakeMediaRecorder.instances = [];
   FakeMediaRecorder.isTypeSupported.mockClear();
@@ -96,6 +97,47 @@ describe("dictationCaptureSupported", () => {
 });
 
 describe("createBrowserDictationRecorder", () => {
+  it("renews silent audio with overlapping encoders on the same live microphone", async () => {
+    vi.useFakeTimers();
+    const track = { stop: vi.fn() };
+    stubMedia(async () => fakeStream(track), track);
+    const session = await createBrowserDictationRecorder().start();
+    const renewal = session.renewSilence?.(() => true);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await renewal).toBe(500);
+    expect(FakeMediaRecorder.instances.map((recorder) => recorder.state)).toEqual([
+      "inactive",
+      "recording",
+    ]);
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledOnce();
+    session.cancel();
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it.each(["speech", "cancel"])(
+    "retains the prefix or cancels both encoders when %s arrives during renewal",
+    async (action) => {
+      vi.useFakeTimers();
+      const track = { stop: vi.fn() };
+      stubMedia(async () => fakeStream(track), track);
+      const session = await createBrowserDictationRecorder().start();
+      let silent = true;
+      const renewal = session.renewSilence?.(() => silent);
+      await vi.advanceTimersByTimeAsync(100);
+      if (action === "cancel") session.cancel();
+      else silent = false;
+      await vi.advanceTimersByTimeAsync(400);
+      expect(await renewal).toBeUndefined();
+      expect(FakeMediaRecorder.instances[1]?.state).toBe("inactive");
+      expect(FakeMediaRecorder.instances[0]?.state).toBe(
+        action === "cancel" ? "inactive" : "recording",
+      );
+      session.cancel();
+      expect(track.stop).toHaveBeenCalledOnce();
+    },
+  );
+
   it("captures audio and returns base64 + mime + duration, releasing the track", async () => {
     const track = { stop: vi.fn() };
     stubMedia(async () => fakeStream(track), track);

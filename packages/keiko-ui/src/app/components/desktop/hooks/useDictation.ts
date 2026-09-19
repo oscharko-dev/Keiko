@@ -202,6 +202,7 @@ export interface UseDictationOptions {
       }
     | undefined;
   readonly postRollMs?: number | undefined;
+  readonly onSilenceRenewed?: (() => void) | undefined;
   // Optional content-free latency sink (Plan §1). Receives only mark enum literals and millisecond
   // deltas across the capture round trip — never audio or transcript text.
   readonly latencySink?: VoiceLatencyObserverSink | undefined;
@@ -296,6 +297,42 @@ function batchOperationIsCurrent(
   return mounted && !cancelled && generation === currentGeneration;
 }
 
+function armBatchCaptureLimit(input: {
+  readonly session: DictationSession;
+  readonly timer: { current: ReturnType<typeof setTimeout> | undefined };
+  readonly stillSilent: () => boolean;
+  readonly current: () => boolean;
+  readonly stop: () => void;
+  readonly renewed: () => void;
+  readonly failed: (error: unknown) => void;
+  readonly renewable: boolean;
+}): void {
+  let deadline = Date.now() + DICTATION_AUTO_STOP_MS;
+  const schedule = (): void => {
+    input.timer.current = setTimeout(
+      () => {
+        if (!input.current()) return;
+        if (!input.renewable || !input.stillSilent() || input.session.renewSilence === undefined) {
+          const remaining = deadline - Date.now();
+          if (remaining > 0) input.timer.current = setTimeout(input.stop, remaining);
+          else input.stop();
+          return;
+        }
+        void input.session.renewSilence(input.stillSilent).then((age) => {
+          if (!input.current()) return;
+          if (age !== undefined) {
+            deadline = Date.now() + DICTATION_AUTO_STOP_MS - age;
+            input.renewed();
+          }
+          schedule();
+        }, input.failed);
+      },
+      Math.min(60_000, Math.max(0, deadline - Date.now())),
+    );
+  };
+  schedule();
+}
+
 export function useDictation(options: UseDictationOptions): DictationController {
   const { onInsert, language } = options;
   const internalCaptureOwner = useId();
@@ -351,6 +388,9 @@ export function useDictation(options: UseDictationOptions): DictationController 
     | undefined
   >(undefined);
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const batchSpeechObservedRef = useRef(false);
+  const onSilenceRenewedRef = useRef(options.onSilenceRenewed);
+  onSilenceRenewedRef.current = options.onSilenceRenewed;
   const realtimeDisconnectGraceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const stoppingRef = useRef(false);
   // The live voice-activity monitor for the current recording (dialogue mode only). Released whenever
@@ -694,6 +734,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
     cancelledRef.current = false;
     latency.reset();
     latency.mark("mic_click");
+    batchSpeechObservedRef.current = false;
     dispatch({ type: "requesting", mode: "batch" });
     const recorder = (recorderRef.current ??= recorderFactory());
     void recorder
@@ -729,13 +770,32 @@ export function useDictation(options: UseDictationOptions): DictationController 
           sessionRef.current = session;
           latency.mark("media_recorder_start");
           dispatch({ type: "recording" });
-          autoStopRef.current = setTimeout(() => stopBatch(), DICTATION_AUTO_STOP_MS);
+          armBatchCaptureLimit({
+            session,
+            timer: autoStopRef,
+            stillSilent: () =>
+              !batchSpeechObservedRef.current && batchCurrent(generation) && !stoppingRef.current,
+            current: () => batchCurrent(generation) && !stoppingRef.current,
+            stop: stopBatch,
+            renewable: vad !== undefined,
+            renewed: () => onSilenceRenewedRef.current?.(),
+            failed: (error) => {
+              if (!batchCurrent(generation)) return;
+              clearAutoStop();
+              detachVad();
+              session.cancel();
+              sessionRef.current = undefined;
+              releaseCapture();
+              dispatch({ type: "error", ...classifyError(error) });
+            },
+          });
           // Dialogue mode: monitor the live capture stream so a trailing silence after speech ends the
           // turn automatically (hands-free). end-of-turn drives the same stop() as a manual mic tap.
           if (vad !== undefined && session.stream !== undefined) {
             vadMonitorRef.current = vad.start(session.stream, (event) => {
               if (!batchCurrent(generation)) return;
               if (event === "speech-onset") {
+                batchSpeechObservedRef.current = true;
                 dispatch({ type: "speechDetected" });
                 return;
               }
@@ -752,7 +812,16 @@ export function useDictation(options: UseDictationOptions): DictationController 
           dispatch({ type: "error", ...classifyError(error) });
         },
       );
-  }, [batchCurrent, latency, recorderFactory, releaseCapture, stopBatch, vad]);
+  }, [
+    batchCurrent,
+    clearAutoStop,
+    detachVad,
+    latency,
+    recorderFactory,
+    releaseCapture,
+    stopBatch,
+    vad,
+  ]);
 
   const startRealtime = useCallback((): void => {
     if (

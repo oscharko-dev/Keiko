@@ -146,6 +146,7 @@ const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
         "answer-ready",
         "playback-settled",
         "playback-fallback",
+        "capture-renewed",
         "interrupted",
         "stopped",
       ],
@@ -180,6 +181,9 @@ const CLIENT_MARKDOWN_LAYOUT_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["source-start"],
     },
+    listStart: { type: "integer", dataClass: "count", required: false },
+    listIndex: { type: "integer", dataClass: "count", required: false },
+    depth: { type: "integer", dataClass: "count", required: false },
     clientBufferEvicted: { type: "integer", dataClass: "count", required: false },
     clientPostsThrottled: { type: "integer", dataClass: "count", required: false },
     clientPostsFailed: { type: "integer", dataClass: "count", required: false },
@@ -232,8 +236,11 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "queue-unavailable",
         "answer-ready",
         "delivery-failed",
+        "delivery-cancelled",
+        "delivery-rejected",
         "playback-settled",
         "playback-fallback",
+        "capture-renewed",
         "interrupted",
         "stopped",
       ],
@@ -486,6 +493,8 @@ const VOICE_FAILURE_STAGES = new Set([
   "preparation-failed",
   "queue-unavailable",
   "delivery-failed",
+  "delivery-cancelled",
+  "delivery-rejected",
 ]);
 
 function clientDiagnosticCorrelation(
@@ -530,6 +539,13 @@ function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId
   if (request.kind !== "markdown-layout") return false;
   const extra: Record<string, unknown> = {
     listNumbering: "source-start",
+    ...(request.markdownLayout === undefined
+      ? {}
+      : {
+          listStart: request.markdownLayout.listStart,
+          listIndex: request.markdownLayout.listIndex,
+          depth: request.markdownLayout.depth,
+        }),
     completeness: "complete",
     loss: "none",
   };
@@ -546,6 +562,12 @@ function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId
 
 // Projects the validated request onto the activity log. `message` is admitted only as a digest;
 // `readyState`/`kind` ride along as bounded, closed-shape fields.
+function requestDiagnosticErrorKind(request: ClientDiagnosticIngestRequest): ActivityLogErrorKind {
+  if (request.voiceDialogueStage === "delivery-cancelled") return "cancelled";
+  if (request.voiceDialogueStage === "delivery-rejected") return "unavailable";
+  return clientDiagnosticErrorKind(request.kind);
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -584,7 +606,7 @@ function logClientDiagnostic(
       CLIENT_DIAGNOSTIC_OPERATION,
       {
         ...clientDiagnosticCorrelation(request, correlationId),
-        errorKind: clientDiagnosticErrorKind(request.kind),
+        errorKind: requestDiagnosticErrorKind(request),
       },
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),

@@ -129,6 +129,45 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it.each([
+    ["delivery-cancelled", "cancelled"],
+    ["delivery-rejected", "unavailable"],
+    ["delivery-failed", "internal"],
+  ])("distinguishes %s as %s", async (stage, errorKind) => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "bounded delivery outcome",
+          clientTs: CLIENT_TS,
+          kind: "voice-dialogue",
+          voiceDialogueStage: stage,
+        }),
+      ),
+    );
+    expect(clientDiagnosticEvents(sink)[0]?.errorKind).toBe(errorKind);
+    expect(clientDiagnosticEvents(sink)[0]?.extra).toMatchObject({ voiceDialogueStage: stage });
+  });
+
+  it.each([-1, 1.5, 1_000_000_000, "7"])(
+    "rejects malformed layout coordinates %s",
+    async (listStart) => {
+      const sink = captureServerLog();
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "layout",
+            clientTs: CLIENT_TS,
+            kind: "markdown-layout",
+            markdownLayout: { listStart, listIndex: 0, depth: 0 },
+          }),
+        ),
+      );
+      expect(result.status).toBe(400);
+      expect(sink.events.filter((event) => event.op === "client.markdown.layout")).toHaveLength(0);
+    },
+  );
+
   it("joins a body-free voice dialogue stage to the originating chat request", async () => {
     const sink = captureServerLog();
     const correlationId = "original-voice-chat-request-id";

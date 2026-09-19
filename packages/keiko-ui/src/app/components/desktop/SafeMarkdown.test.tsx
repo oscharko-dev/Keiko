@@ -857,9 +857,27 @@ describe("SafeMarkdown — ordered list continuation", () => {
     rerender(<SafeMarkdown source={source} />);
     expect(writer).toHaveBeenCalledExactlyOnceWith("markdown:ordered-list-source-start", {
       kind: "markdown-layout",
+      correlationId: undefined,
+      markdownLayout: { listStart: 2, listIndex: 0, depth: 0 },
     });
     rerender(<SafeMarkdown source={source} />);
     expect(writer).toHaveBeenCalledOnce();
+  });
+  it("records nested continuation coordinates under the rendered message identity", () => {
+    const writer = vi.fn();
+    resetClientDiagnosticWriter();
+    setClientDiagnosticWriter(writer);
+    render(
+      <SafeMarkdown
+        source={"1. Parent\n  7. Private child"}
+        diagnosticCorrelationId="message-1234"
+      />,
+    );
+    expect(writer).toHaveBeenCalledWith("markdown:ordered-list-source-start", {
+      kind: "markdown-layout",
+      correlationId: "message-1234",
+      markdownLayout: { listStart: 7, listIndex: 1, depth: 2 },
+    });
   });
   it("preserves list numbering across explanatory paragraphs", () => {
     render(
