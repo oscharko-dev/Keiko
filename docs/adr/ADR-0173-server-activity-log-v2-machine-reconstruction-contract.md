@@ -917,7 +917,8 @@ request":
     client-minted correlation id per mount joins both phases, and the duration is monotonic and
     bounded to the contract's ceiling;
   - a restored window's binding: `client.binding.resolved` at `info`,
-    `client.binding.candidates-offered` at `info`, or `client.binding.target-missing` at `warn`
+    `client.binding.candidates-offered`, `client.binding.choice-kept` and
+    `client.binding.choice-withdrawn` at `info`, or `client.binding.target-missing` at `warn`
     with `errorKind: unavailable`. It carries the
     persisted reference's closed shape (`uuid`, `opaque`, `redacted`, `fingerprint`,
     `user-selected`) and whether the card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
@@ -935,13 +936,20 @@ request":
     without a fingerprint, which identifies nothing: no listed chat can be proven to be the one it
     named, so that window is never rebound on its own. It reports its chat missing and offers the
     chats it may have shown: the listed chats whose ids persistence redacts, the most recently
-    active first, each named by its title and when it was last active, so two chats with one
-    title stay apart. The offer is `client.binding.candidates-offered` with `candidateCount`,
-    zero included, under the list loads that decided it. Only the person's choice binds the
-    window, recorded as reference shape `user-selected` under the list load that offered the
-    chat. A binding found again after redaction (`fingerprint`, `user-selected`) names the chat
-    it bound to by its fingerprint (`targetFingerprint`, the form the window persists), never by
-    its id, so two choices from one list answer stay apart. While the project catalog loads, the
+    active first, each named by its title and when it was last active, to the second. Two offers
+    that would still read alike (one title, one second) also show the shortest start of their
+    chat's fingerprint, six hex digits or more, that tells them apart, so no two offers ever read
+    alike. The offer is `client.binding.candidates-offered` with `candidateCount` and
+    `disambiguatedCount` (how many offers show such a reference), zero included, under the list
+    loads that decided it. Only the person's choice binds the window, recorded as reference shape
+    `user-selected` under the list load that offered the chat. Nothing proves that choice right,
+    so it stays a choice, across reloads (the closed `chatIdChosen` marker), until the person
+    keeps it: the window shows the conversation, so the person can check it, and offers to keep
+    it (`client.binding.choice-kept`) or to withdraw it and choose again
+    (`client.binding.choice-withdrawn`, which returns the window to the chats it may have shown).
+    A binding found again after redaction (`fingerprint`, `user-selected`) and each decision
+    name the chat by its fingerprint (`targetFingerprint`, the form the window persists), never
+    by its id, so two choices from one list answer stay apart. While the project catalog loads, the
     window waits; when the catalog failed, or it lacks the window's project, the window shows that
     the way it does for any chat, and the lookup runs as soon as the catalog changes. A list that
     cannot be read decides nothing: the fingerprint lookup, the candidate scan, and the legacy scan
@@ -985,8 +993,10 @@ browser saw. Everything on these lines is a count, a closed label, a template, o
 is really gone. The line's correlation id, and `relatedCorrelationIds`, name the list loads the
 verdict came from; a `partial` line says how many it could not name. A window restored from a
 snapshot without a fingerprint also logs `client.binding.candidates-offered`: `candidateCount`
-says how many chats it offered, and a later `client.binding.resolved` with `referenceShape:
-user-selected` names the chat the person chose by its `targetFingerprint`. **For a conversation
+says how many chats it offered and `disambiguatedCount` how many of those showed a fingerprint
+reference. A later `client.binding.resolved` with `referenceShape: user-selected` names the chat
+the person chose by its `targetFingerprint`, and `client.binding.choice-kept` or
+`client.binding.choice-withdrawn` says whether they kept it. **For a conversation
 refused as not ready**, read `readinessObservation` on the rejection. `unobserved` means no check
 ran in that process. `not-ready` means a check ran and failed. Then read that check's lines: the
 on-demand probe a conversation entry point runs logs `gateway.readiness.automatic.started` /
