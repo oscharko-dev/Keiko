@@ -56,6 +56,7 @@ export async function readSnapshotGit(
     maxBytes,
     timeoutMs: reader.timeoutMs,
     abortSignal: reader.signal,
+    ...(allowTruncation ? { expectedTruncation: true } : {}),
   });
   requireProcess(result);
   if (result.truncated && !allowTruncation) throw new GitSnapshotReadError("metadata-truncated");

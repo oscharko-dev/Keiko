@@ -132,6 +132,33 @@ describe("immutable Git change snapshot production", () => {
     service.close();
   });
 
+  it("logs no git failure for the bounded binary-check reads of files larger than the prefix", async () => {
+    // The binary check reads only the first 8,000 bytes of each changed blob, on purpose. A dev
+    // Activity Log showed 359 `git.process.failed` lines in 10 s for exactly these reads, although
+    // every one succeeded. A capture of an ordinary change to a large file must log none.
+    const workspace = await repository();
+    const root = workspace.root;
+    git(root, "checkout", "main");
+    await writeFile(join(root, "large.txt"), "base line\n".repeat(2_000));
+    git(root, "add", ".");
+    git(root, "commit", "-m", "large base");
+    git(root, "checkout", "feature");
+    git(root, "reset", "--hard", "main");
+    await writeFile(join(root, "large.txt"), "changed line\n".repeat(2_000));
+    await writeFile(join(root, "source.txt"), "reviewed change\n");
+    git(root, "commit", "-am", "change a large file");
+    const events: ServerLogEvent[] = [];
+    const service = createGitChangeSnapshotService({
+      logSink: { write: (event) => events.push(event) },
+    });
+
+    const captured = await service.capture(inputFor(workspace));
+
+    expect(isGitChangeSnapshot(captured.snapshot)).toBe(true);
+    expect(events.filter((event) => event.op === "git.process.failed")).toEqual([]);
+    service.close();
+  });
+
   it("keeps canonical digests across clones and refuses lazy fetching missing objects", async () => {
     const workspace = await repository();
     const cloneRoot = await mkdtemp(join(tmpdir(), "keiko-gcs-clone-"));

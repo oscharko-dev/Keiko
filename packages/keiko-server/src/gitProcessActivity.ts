@@ -320,14 +320,32 @@ function gitOutcomeFields(subcommand: string, result: GitProcessResult): GitOutc
 //     failures would put a `warn` line under every healthy untracked-file diff and make the log
 //     contradict the response it exists to explain. Only the call site knows this, so it says so
 //     through `expectedExitCodes` rather than the observer guessing.
+//
+// A call site that reads a bounded prefix on purpose says so through `expectedTruncation`: for it,
+// hitting the byte cap is the success. A timeout or an abort also sets `truncated` and stays a
+// failure there too.
 function isSuccessfulGitOutcome(
   result: GitProcessResult,
-  expectedExitCodes: readonly number[] | undefined,
+  expectations: GitOutcomeExpectations,
 ): boolean {
-  if (result.truncated) return false;
+  if (result.truncated) {
+    return (
+      expectations.expectedTruncation === true &&
+      result.timedOut !== true &&
+      result.aborted !== true
+    );
+  }
   if (result.exitCode === 0) return true;
-  return result.exitCode !== null && (expectedExitCodes?.includes(result.exitCode) ?? false);
+  return (
+    result.exitCode !== null && (expectations.expectedExitCodes?.includes(result.exitCode) ?? false)
+  );
 }
+
+/** What only the call site knows about its own outcomes; see `GitProcessOptions`. */
+export type GitOutcomeExpectations = Pick<
+  GitProcessOptions,
+  "expectedExitCodes" | "expectedTruncation" | "classifyFailure"
+>;
 
 /**
  * Writes at most one body-free line for one finished git invocation. A successful run emits
@@ -341,15 +359,14 @@ export function logGitProcessOutcome(
   args: readonly string[],
   result: GitProcessResult,
   durationMs: number,
-  expectedExitCodes?: readonly number[],
-  classifyFailure?: (result: GitProcessResult) => string | undefined,
+  expectations: GitOutcomeExpectations = {},
 ): void {
-  if (isSuccessfulGitOutcome(result, expectedExitCodes)) return;
+  if (isSuccessfulGitOutcome(result, expectations)) return;
   const id = correlationIdOrUnknown(correlationId);
   const subcommand = gitSubcommand(args) ?? UNNAMED_SUBCOMMAND;
   const fields = gitOutcomeFields(subcommand, result);
   const failureKind = boundedGitFailureKind(
-    gitFailureErrorKind(result, subcommand, classifyFailure),
+    gitFailureErrorKind(result, subcommand, expectations.classifyFailure),
   );
   if (result.refusal !== undefined) {
     writeGitRefusal(log, id, durationMs, fields, failureKind, result.refusal);
@@ -437,15 +454,7 @@ export function observedGitRunner(
     // very reconstruction evidence this line exists to provide.
     const elapsed = startLogTimer();
     const result = await runner(args, options);
-    logGitProcessOutcome(
-      log,
-      correlationId,
-      args,
-      result,
-      elapsed(),
-      options.expectedExitCodes,
-      options.classifyFailure,
-    );
+    logGitProcessOutcome(log, correlationId, args, result, elapsed(), options);
     return result;
   };
 }

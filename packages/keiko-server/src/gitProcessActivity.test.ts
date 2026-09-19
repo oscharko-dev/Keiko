@@ -238,7 +238,9 @@ describe("logGitProcessOutcome", () => {
     const log = captureActivityLog();
     const differs = result({ exitCode: 1, stdout: "diff --git a/x b/x" });
 
-    logGitProcessOutcome(log.sink, "corr-expected-00001", ["--no-pager", "diff"], differs, 3, [1]);
+    logGitProcessOutcome(log.sink, "corr-expected-00001", ["--no-pager", "diff"], differs, 3, {
+      expectedExitCodes: [1],
+    });
     expect(log.events).toEqual([]);
 
     // The declaration is narrow: a different non-zero code is still a failure, and a truncated run
@@ -249,7 +251,7 @@ describe("logGitProcessOutcome", () => {
       ["--no-pager", "diff"],
       result({ exitCode: 2 }),
       3,
-      [1],
+      { expectedExitCodes: [1] },
     );
     logGitProcessOutcome(
       log.sink,
@@ -257,10 +259,66 @@ describe("logGitProcessOutcome", () => {
       ["--no-pager", "diff"],
       result({ exitCode: 1, truncated: true }),
       3,
-      [1],
+      { expectedExitCodes: [1] },
     );
     expect(log.events.map((event) => event.extra?.failureKind)).toEqual([
       "git-error",
+      "output-truncated",
+    ]);
+  });
+
+  it("stays silent for a byte-capped read the call site declared bounded, and only for that", () => {
+    // `git cat-file blob` capped at git's 8,000-byte binary-sniff prefix: reaching the cap is that
+    // read's success. It closes with exit 0, or with the runner's SIGTERM when git was still writing.
+    const log = captureActivityLog();
+    const catFile = ["cat-file", "blob", "deadbeef"];
+    const bounded = { expectedTruncation: true };
+
+    logGitProcessOutcome(
+      log.sink,
+      "corr-prefix-000001",
+      catFile,
+      result({ exitCode: 0, truncated: true }),
+      2,
+      bounded,
+    );
+    logGitProcessOutcome(
+      log.sink,
+      "corr-prefix-000002",
+      catFile,
+      result({ exitCode: null, signal: "SIGTERM", truncated: true }),
+      2,
+      bounded,
+    );
+    expect(log.events).toEqual([]);
+
+    // A timeout or an abort during the same read is still a failure, and so is an undeclared cap.
+    logGitProcessOutcome(
+      log.sink,
+      "corr-prefix-000003",
+      catFile,
+      result({ exitCode: null, signal: "SIGTERM", truncated: true, timedOut: true }),
+      2,
+      bounded,
+    );
+    logGitProcessOutcome(
+      log.sink,
+      "corr-prefix-000004",
+      catFile,
+      result({ exitCode: null, signal: "SIGTERM", truncated: true, aborted: true }),
+      2,
+      bounded,
+    );
+    logGitProcessOutcome(
+      log.sink,
+      "corr-prefix-000005",
+      catFile,
+      result({ exitCode: 0, truncated: true }),
+      2,
+    );
+    expect(log.events.map((event) => event.extra?.failureKind)).toEqual([
+      "timeout",
+      "git-cancelled",
       "output-truncated",
     ]);
   });
