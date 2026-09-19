@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7d6dd0407be6c999249602713a99dfbc331c0241b8b84d527511354d491bfdde" as const;
+  "7beaaf28c83548f54b208ac2c3102e9a009b6a4348736a43f823668cc78aa260" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1768,7 +1768,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["uuid", "opaque", "redacted"],
       },
-      heuristicExempt: {
+      heuristicFlagged: {
         type: "boolean",
         dataClass: "closed-enum",
         required: true,
@@ -1789,7 +1789,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "opaque-id",
         required: false,
         maxLength: 128,
-        maxItems: 15,
+        maxItems: 63,
       },
     },
     causal: "correlation",
@@ -1829,7 +1829,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["uuid", "opaque", "redacted"],
       },
-      heuristicExempt: {
+      heuristicFlagged: {
         type: "boolean",
         dataClass: "closed-enum",
         required: true,
@@ -1850,7 +1850,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "opaque-id",
         required: false,
         maxLength: 128,
-        maxItems: 15,
+        maxItems: 63,
       },
     },
     causal: "correlation",
@@ -2086,6 +2086,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["replay-failed", "replay-skipped", "repair-failed"],
       },
+      stream: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["run-events", "shared-event-source"],
+      },
       repairCorrelationId: {
         type: "string",
         dataClass: "opaque-id",
@@ -2117,6 +2123,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "loss-state",
         required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["replayed", "stream-repaired"],
+      },
+      stream: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["run-events", "shared-event-source"],
       },
       repairCorrelationId: {
         type: "string",
@@ -28252,7 +28270,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
-              name: "heuristicExempt",
+              name: "heuristicFlagged",
               type: "boolean",
               dataClass: "closed-enum",
               required: true,
@@ -28313,7 +28331,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
-              name: "heuristicExempt",
+              name: "heuristicFlagged",
               type: "boolean",
               dataClass: "closed-enum",
               required: true,
@@ -28677,6 +28695,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "opaque-id",
               required: false,
             },
+            {
+              name: "stream",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
           frameCauseEvidence: {
@@ -28696,13 +28720,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "repairCorrelationId",
               type: "string",
               dataClass: "opaque-id",
               required: false,
             },
+            {
+              name: "stream",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
-          evidenceClasses: ["completeness-state", "loss-state", "opaque-id"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
