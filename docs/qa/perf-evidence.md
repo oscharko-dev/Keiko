@@ -283,6 +283,15 @@ incompatible and must not be substituted, even if they are faster. As with the D
 reserve the host for one measurement: stop other benchmark containers and wait for builds, tests,
 coverage and analyzers to finish before starting. Keep that quiet window through both runs.
 
+An approved OpenCode upgrade changes the measured payload itself. For that explicit migration,
+`npm run perf:evidence:coding-runtime -- --recalibrate-runtime` permits only the runtime version
+and payload digest to differ from the previous calibration. The host, toolchain and secure-read
+helper must still match exactly, and both runtime fields must change. Production discovery still
+verifies the approved payload during every sample. This mode uses the same shrink-only budget
+ratchet as `--recalibrate`; it cannot widen a previously reviewed ceiling. Follow it with a
+separate ordinary candidate measurement and the full freshness check. Ordinary recalibration
+continues to reject runtime changes.
+
 From a clean checkout on that reference:
 
 ```sh

@@ -6,6 +6,16 @@ live coding exercises target the owner's disposable `oscharko/Wegwerf-Repo-Final
 
 ## Runtime and upstream boundary
 
+The current PR analysis reports 86.16% new-code coverage and zero new SonarCloud violations
+at commit `ebc23d7d1`. This clears the requested 85% floor, but does not imply that the other
+required CI checks or the open review findings are complete.
+
+The follow-up CI run exposed two measurement provenance problems: editor bundle evidence had
+been compressed with Node 26 rather than CI's Node 24.18.0, and the native performance calibration
+still described OpenCode V1. The bundle mismatch reproduces on the same static export by using
+Node 24.18.0. Runtime migration measurement now has an explicit path that retains the previous
+performance ceilings and rejects a simultaneous reference-machine or toolchain change.
+
 The approved runtime is OpenCode 2.0.10 (`scripts/portable-runtime-approvals.mjs` and
 `packages/keiko-tool-catalog/src/dialect.ts`). The runtime, server protocol, plugin registration,
 question forms, portable staging, and approval fixtures now use V2. V1 archives and adapter
@@ -109,6 +119,17 @@ the build failed after that edit. A proposed follow-up inserted a helper and a n
 wrong test body, so it was rejected and the run was stopped. This isolates repair quality and scope
 preservation as remaining limitations; it does not establish a gateway-output loss or successful
 end-to-end test generation.
+
+A further browser continuation diagnosed `TS2554` in the test's two-argument `expect` call.
+The first patch was refused as `INVALID_EDITS`; after rereading the file, the model proposed a
+valid two-line correction, which was reviewed and applied. The existing keyboard assertions and
+bounded traversal remained intact. The activity log records the initial failed build and both
+subsequent test/build executions as passed, and the Workbench reached Succeeded without staging
+or delivery. However, the final model response incorrectly interpreted `commitProof: unavailable`
+with `candidate-not-staged` as refusal to run the verifiers. This is an observed reporting defect:
+the successful tool response includes commit-proof eligibility but does not explicitly expose the
+passed verifier result. Clarifying that existing result contract is the next optimization target;
+the successful checks must not be converted into an unsolicited stage/commit workflow.
 
 The real-binary qualification runner now reports the pinned runtime version from the adapter's
 production owner instead of retaining a V1 literal. Geometry expectations derive from the actual

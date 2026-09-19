@@ -132,19 +132,36 @@ function buildMeasuredDocument(input, mode, root) {
   return document;
 }
 
-function readRecalibrationState(root, environment) {
+export function assertCodingPerformanceReference(previous, current, mode) {
+  let expected = previous;
+  if (mode === "recalibrate-runtime") {
+    if (
+      current.runtimeVersion === previous.runtimeVersion ||
+      current.payloadSha256 === previous.payloadSha256
+    )
+      throw new Error("runtime-transition-required");
+    expected = {
+      ...previous,
+      runtimeVersion: current.runtimeVersion,
+      payloadSha256: current.payloadSha256,
+    };
+  }
+  if (!isDeepStrictEqual(current, expected))
+    throw new Error("recalibration-reference-environment-differs");
+}
+
+function readRecalibrationState(root, environment, mode) {
   const calibration = readDocument(root, CODING_PERFORMANCE_FILES.calibration);
   const budget = readDocument(root, CODING_PERFORMANCE_FILES.budget);
   const defects = codingPerformanceBudgetDefects(calibration, budget);
   if (defects.length > 0) throw new Error(`invalid-previous-budget:${defects.join(",")}`);
-  if (!isDeepStrictEqual(environment, calibration.environment))
-    throw new Error("recalibration-reference-environment-differs");
+  assertCodingPerformanceReference(calibration.environment, environment, mode);
   return { budget };
 }
 
 function writeCalibration(root, document, mode, previous) {
   const budget =
-    mode === "recalibrate"
+    mode === "recalibrate" || mode === "recalibrate-runtime"
       ? ratchetCodingPerformanceBudgets(document, previous.budget)
       : calibrationBudgets(document);
   writeDocument(root, CODING_PERFORMANCE_FILES.calibration, document);
@@ -191,11 +208,14 @@ export async function produceCodingPerformanceEvidence({ mode = "measurement" } 
   const root = ROOT;
   let stage = "inputs";
   try {
-    if (!new Set(["measurement", "calibrate", "recalibrate"]).has(mode))
+    if (!new Set(["measurement", "calibrate", "recalibrate", "recalibrate-runtime"]).has(mode))
       throw new Error("invalid-performance-evidence-mode");
     assertOutputOwnership(root, mode);
     const inputs = measurementInputs(root);
-    const previous = mode === "recalibrate" ? readRecalibrationState(root, inputs.environment) : {};
+    const previous =
+      mode === "recalibrate" || mode === "recalibrate-runtime"
+        ? readRecalibrationState(root, inputs.environment, mode)
+        : {};
     stage = "compilation";
     compileMeasurementRuntime(root);
     stage = "samples";
@@ -230,10 +250,11 @@ if (isMainModule(import.meta.url)) {
   const flag = args[0];
   if (
     args.length > 1 ||
-    (args.length === 1 && flag !== "--calibrate" && flag !== "--recalibrate")
+    (args.length === 1 &&
+      !new Set(["--calibrate", "--recalibrate", "--recalibrate-runtime"]).has(flag))
   ) {
     process.stderr.write(
-      "usage: coding-runtime-performance-producer.mjs [--calibrate | --recalibrate]\n",
+      "usage: coding-runtime-performance-producer.mjs [--calibrate | --recalibrate | --recalibrate-runtime]\n",
     );
     process.exitCode = 2;
   } else {
@@ -241,6 +262,7 @@ if (isMainModule(import.meta.url)) {
       let mode = "measurement";
       if (flag === "--calibrate") mode = "calibrate";
       if (flag === "--recalibrate") mode = "recalibrate";
+      if (flag === "--recalibrate-runtime") mode = "recalibrate-runtime";
       await produceCodingPerformanceEvidence({ mode });
       process.stdout.write("coding-runtime performance evidence: WRITTEN\n");
     } catch (error) {

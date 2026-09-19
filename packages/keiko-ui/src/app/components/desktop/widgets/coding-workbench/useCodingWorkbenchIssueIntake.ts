@@ -13,7 +13,7 @@ import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/run
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { CodingWorkbenchIssueStartIntent } from "@/lib/coding-workbench-runtime-actions";
 
-export type IssueIntakeFailure =
+type IssueIntakeFailure =
   | CodingWorkbenchIssueBindingFailure
   | "unknown"
   | "read-transient-failure"
