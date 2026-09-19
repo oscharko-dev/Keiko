@@ -1935,52 +1935,15 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(flaggedId);
   });
 
-  // #3557 review (P0), the real-CI pin relocated to the layer that now owns it: a chat whose server
-  // id the shared heuristic reads as a card number must reopen after a reload. Persistence redacts
-  // the id, and the window finds its conversation again through the id's fingerprint.
-  it("reopens a chat whose id persistence redacts, through the id's fingerprint", async (): Promise<void> => {
-    const flaggedId = "1404206d-9ab6-4bca-8853-813867352087";
-    const repo: ProjectWithAvailability = {
-      path: "/repo",
-      name: "Repo",
-      favorite: false,
-      createdAt: 1,
-      lastOpenedAt: 1,
-      available: true,
-    };
-    const live = chatFixture(flaggedId, "Deploy status", 3);
-    const window: AppWindow = {
-      id: "chat-1",
-      type: "chat",
-      x: 0,
-      y: 0,
-      w: 320,
-      h: 240,
-      z: 1,
-      max: false,
-      cfg: {
-        chatId: flaggedId,
-        chatIdFingerprint: await chatReferenceFingerprint(flaggedId),
-        projectPath: "/repo",
-      },
-    };
+  // Plays the workspace for a restored window: persists `window` the way the product does, then
+  // renders it so that a window's cfg update reaches the next render, as it does in the product.
+  function restoreChatWindow(window: AppWindow): {
+    readonly restoredCfg: Record<string, unknown>;
+    readonly ctx: WindowRenderContext;
+  } {
     const restored = parsePersistedWindows(JSON.stringify(sanitizePersistedWindows([window])));
     const restoredCfg = restored?.[0]?.cfg ?? {};
-    // The id itself never reaches storage; its one-way fingerprint does.
-    expect(restoredCfg).toMatchObject({
-      chatId: "[REDACTED]",
-      chatIdFingerprint: window.cfg["chatIdFingerprint"],
-    });
-    expect(JSON.stringify(restored)).not.toContain(flaggedId);
-    chatSessionState.activeProject = repo;
-    chatSessionState.projects = [repo];
-    chatSessionState.activeChat = live;
-    chatSessionState.chats = [live];
-    chatSessionState.loading = false;
-    fetchChatsMock.mockResolvedValue({ chats: [live] });
     const ctx = context();
-
-    // Plays the workspace: a window's cfg update reaches the next render, as it does in the product.
     function RestoredWindow(): ReactNode {
       const [cfg, setCfg] = useState<Record<string, unknown>>(restoredCfg);
       const updateCfg = useCallback((patch: AppWindow["cfg"]): void => {
@@ -1994,25 +1957,119 @@ describe("ChatWindowSessionHost target missing", () => {
         <RestoredWindow />
       </I18nProvider>,
     );
+    return { restoredCfg, ctx };
+  }
 
-    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: flaggedId }));
-    await waitFor((): void =>
-      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
-        "[keiko] chat window binding resolved (reference=fingerprint, heuristic-flagged)",
-        expect.objectContaining({
-          bindingReport: expect.objectContaining({
-            outcome: "resolved",
-            referenceShape: "fingerprint",
-            heuristicFlagged: true,
-          }) as unknown,
-        }),
-      ),
-    );
+  function flaggedChatWindow(cfg: AppWindow["cfg"]): AppWindow {
+    return { id: "chat-1", type: "chat", x: 0, y: 0, w: 320, h: 240, z: 1, max: false, cfg };
+  }
+
+  function listFlaggedChat(flaggedId: string): string {
+    const repo: ProjectWithAvailability = {
+      path: "/repo",
+      name: "Repo",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const live = chatFixture(flaggedId, "Deploy status", 3);
+    chatSessionState.activeProject = repo;
+    chatSessionState.projects = [repo];
+    chatSessionState.activeChat = live;
+    chatSessionState.chats = [live];
+    chatSessionState.loading = false;
+    fetchChatsMock.mockResolvedValue({ chats: [live] });
+    // The active project's own list load since the lookup: the evidence must never borrow its id.
+    chatListCorrelationIdMock.mockReturnValue("ui_list-active-0002");
+    return flaggedId;
+  }
+
+  function lookupLoadId(): string | undefined {
+    return fetchChatsMock.mock.calls.find(([path]) => path === "/repo")?.[1];
+  }
+
+  function expectNoMissingReport(): void {
     expect(screen.queryByText("Chat not found")).toBeNull();
     const missing = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
       String(message).includes("restore target not found"),
     );
     expect(missing).toEqual([]);
+  }
+
+  // #3557 review (P0), the real-CI pin relocated to the layer that now owns it: a chat whose server
+  // id the shared heuristic reads as a card number must reopen after a reload. Persistence redacts
+  // the id, and the window finds its conversation again through the id's fingerprint. The binding
+  // names the chat list load that decided it, never the active project's later one.
+  it("reopens a chat whose id persistence redacts, through the id's fingerprint", async (): Promise<void> => {
+    const flaggedId = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const window = flaggedChatWindow({
+      chatId: flaggedId,
+      chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+      projectPath: "/repo",
+    });
+
+    const { restoredCfg, ctx } = restoreChatWindow(window);
+
+    // The id itself never reaches storage; its one-way fingerprint does.
+    expect(restoredCfg).toMatchObject({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: window.cfg["chatIdFingerprint"],
+    });
+    expect(JSON.stringify(restoredCfg)).not.toContain(flaggedId);
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: flaggedId }));
+    expect(lookupLoadId()).toEqual(expect.any(String));
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=fingerprint, heuristic-flagged)",
+        {
+          correlationId: lookupLoadId(),
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "resolved",
+            referenceShape: "fingerprint",
+            heuristicFlagged: true,
+            windowRef: "window-1",
+            decidingLoadCount: 1,
+          },
+        },
+      ),
+    );
+    expectNoMissingReport();
+  });
+
+  // #3557 review (P0): the snapshot an older build actually wrote holds only the redaction marker,
+  // with no fingerprint. Its chat still exists, and the window must reopen it: a redacted reference
+  // can only have named a chat whose id persistence redacts, and the project lists exactly one.
+  it("reopens a chat from a snapshot an older build wrote, without the id's fingerprint", async (): Promise<void> => {
+    const flaggedId = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const window = flaggedChatWindow({ chatId: flaggedId, projectPath: "/repo" });
+
+    const { restoredCfg, ctx } = restoreChatWindow(window);
+
+    expect(restoredCfg).toEqual({ chatId: "[REDACTED]", projectPath: "/repo" });
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: flaggedId }));
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=sole-candidate, heuristic-flagged)",
+        {
+          correlationId: lookupLoadId(),
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "resolved",
+            referenceShape: "sole-candidate",
+            heuristicFlagged: true,
+            windowRef: "window-1",
+            decidingLoadCount: 1,
+          },
+        },
+      ),
+    );
+    // From now on the window keeps its binding through the fingerprint it records.
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+    });
+    expectNoMissingReport();
   });
 
   it("reports a redacted binding whose fingerprint matches no chat as missing", async (): Promise<void> => {
@@ -2041,7 +2098,7 @@ describe("ChatWindowSessionHost target missing", () => {
     );
   });
 
-  it("records the fingerprint of a bound chat whose id the heuristic flags", async (): Promise<void> => {
+  it("records the fingerprint of a chat whose id the heuristic flags", (): void => {
     const flaggedId = "1404206d-9ab6-4bca-8853-813867352087";
     const live = chatFixture(flaggedId, "Deploy status", 3);
     chatSessionState.activeChat = live;
@@ -2055,10 +2112,10 @@ describe("ChatWindowSessionHost target missing", () => {
       </I18nProvider>,
     );
 
-    const fingerprint = await chatReferenceFingerprint(flaggedId);
-    await waitFor((): void =>
-      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatIdFingerprint: fingerprint }),
-    );
+    // #3557 review: in the commit that shows the id, before any flush could store it alone.
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+    });
   });
 
   it("reports a binding lost to redaction once, as a redacted reference", async (): Promise<void> => {
