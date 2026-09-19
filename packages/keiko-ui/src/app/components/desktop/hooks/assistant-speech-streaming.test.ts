@@ -421,6 +421,7 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
             controller.close();
           },
         }),
+        { headers: { "content-type": "audio/pcm" } },
       ),
     );
     const handlers = { onStart: vi.fn(), onEnded: vi.fn(), onError: vi.fn() };
@@ -454,6 +455,34 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
       sink?.stop();
       resume.resolve();
       await playback;
+    }
+  });
+
+  it("hands an Ogg response to buffered playback without decoding it as PCM", async () => {
+    const { nodes } = stubDeferredAudioResume(Promise.resolve());
+    const cancelBody = vi.fn();
+    vi.mocked(streamAssistantSpeech).mockResolvedValue(
+      new Response(new ReadableStream<Uint8Array>({ cancel: cancelBody }), {
+        headers: { "content-type": "audio/ogg" },
+      }),
+    );
+    const handlers = { onStart: vi.fn(), onEnded: vi.fn(), onError: vi.fn() };
+    const sink = createBrowserAssistantSpeechStreamingSink();
+    const controller = new AbortController();
+    try {
+      await expect(sink?.play({ text: "Long answer" }, controller.signal, handlers)).resolves.toBe(
+        false,
+      );
+      expect(cancelBody).toHaveBeenCalledOnce();
+      expect(nodes[0]?.port.postMessage.mock.calls).toEqual([
+        [{ type: "config", primeFrames: 2_400 }],
+      ]);
+      expect(handlers.onStart).not.toHaveBeenCalled();
+      expect(handlers.onEnded).not.toHaveBeenCalled();
+      expect(handlers.onError).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      sink?.stop();
     }
   });
 

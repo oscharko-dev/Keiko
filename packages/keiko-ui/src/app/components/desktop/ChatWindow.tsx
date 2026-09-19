@@ -228,6 +228,12 @@ interface PendingVoiceAnswer {
   readonly dialogGeneration: number;
 }
 
+interface CanonicalVoiceTurnInput {
+  readonly turnId: string;
+  readonly text: string;
+  readonly correlationId?: string;
+}
+
 interface CanonicalVoiceTurnOutcomeContext {
   readonly activeChatId: string | undefined;
   readonly admittedTurnIds: Set<string>;
@@ -243,8 +249,14 @@ async function deliverCanonicalVoiceTurn(
   sendMessage: ChatSessionApi["sendMessage"],
   text: string,
   clientTurnId: string,
+  correlationId?: string,
 ): Promise<SendMessageOutcome> {
-  return sendMessage({ text, clientTurnId, reportOutcome: true });
+  return sendMessage({
+    text,
+    clientTurnId,
+    reportOutcome: true,
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
 }
 
 function rememberAdmittedCanonicalVoiceTurn(ids: Set<string>, deliveryKey: string): void {
@@ -2712,6 +2724,119 @@ function isVoiceInterruptReachable(
   return voiceDialogActive && controller.phase === "connected";
 }
 
+function composerVoiceInterruptAction(
+  batchActive: boolean,
+  voiceDialogActive: boolean,
+  controller: RealtimeVoiceController,
+): (() => void) | undefined {
+  if (batchActive || !isVoiceInterruptReachable(voiceDialogActive, controller)) return undefined;
+  return controller.interrupt;
+}
+
+function batchVoicePhase(dialogue: BatchVoiceDialogue, active: boolean): RealtimeVoicePhase {
+  if (dialogue.error !== undefined || dialogue.dictation.phase === "error") return "error";
+  if (dialogue.preparing || dialogue.dictation.phase === "requesting") return "requesting";
+  return active ? "connected" : "idle";
+}
+
+function batchVoiceTurnState(
+  dialogue: BatchVoiceDialogue,
+  playbackTurnState: VoiceTurnState,
+): VoiceTurnState {
+  if (playbackTurnState !== "idle") return playbackTurnState;
+  if (
+    dialogue.waitingForAnswer ||
+    dialogue.dictation.phase === "transcribing" ||
+    dialogue.dictation.phase === "finalizing"
+  )
+    return "thinking";
+  return dialogue.dictation.phase === "recording" ? "listening" : "idle";
+}
+
+function composerVoiceTurnState(
+  batchActive: boolean,
+  batchTurnState: VoiceTurnState,
+  playbackTurnState: VoiceTurnState,
+  realtimeTurnState: VoiceTurnState,
+): VoiceTurnState {
+  if (batchActive) return batchTurnState;
+  return playbackTurnState === "idle" ? realtimeTurnState : playbackTurnState;
+}
+
+interface ComposerVoiceAuraInputs {
+  readonly active: boolean;
+  readonly available: boolean;
+  readonly batchActive: boolean;
+  readonly batchDialogue: BatchVoiceDialogue;
+  readonly chatHasError: boolean;
+  readonly playback: ReturnType<typeof useAssistantSpeech>;
+  readonly realtimeVoice: ReturnType<typeof useRealtimeVoice>;
+  readonly retrieving: boolean;
+  readonly sending: boolean;
+  readonly sendStatus: string;
+  readonly state: Parameters<typeof deriveVoiceAuraState>[0]["voiceDialogState"];
+}
+
+function composerVoiceAura(inputs: ComposerVoiceAuraInputs): VoiceAuraStateSnapshot {
+  const batchError =
+    inputs.batchDialogue.error !== undefined || inputs.batchDialogue.dictation.error !== undefined;
+  const listening = inputs.batchActive
+    ? inputs.batchDialogue.dictation.phase === "recording" &&
+      inputs.batchDialogue.dictation.micReady
+    : inputs.realtimeVoice.listening && !inputs.playback.snapshot.active;
+  return deriveVoiceAuraState({
+    voiceDialogActive: inputs.active,
+    voiceDialogAvailable: inputs.available,
+    voiceDialogState: inputs.state,
+    listening,
+    speaking: inputs.playback.snapshot.speaking,
+    sending: inputs.sending,
+    sendStatus: inputs.sendStatus,
+    hasSessionError:
+      inputs.chatHasError ||
+      (inputs.batchActive ? batchError : inputs.realtimeVoice.error !== undefined),
+    reconnecting: !inputs.batchActive && inputs.realtimeVoice.turnSnapshot.recovering,
+    retrieving: inputs.batchActive ? inputs.retrieving : inputs.realtimeVoice.retrieving,
+  });
+}
+
+function BatchVoiceStatus({
+  dialogue,
+  onUseFailedTranscript,
+}: {
+  readonly dialogue: BatchVoiceDialogue;
+  readonly onUseFailedTranscript: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  const error = dialogue.error ?? dialogue.dictation.error?.message;
+  return (
+    <>
+      <p className={styles.batchModeLabel}>{t("chat.voice.batchMode")}</p>
+      {error !== undefined ? (
+        <div role="alert" className="cmp-voice-memory-error">
+          {error}
+          <button type="button" onClick={dialogue.retry}>
+            {t("chat.voice.batchRetry")}
+          </button>
+          {dialogue.failedTranscript !== undefined ? (
+            <>
+              <p className={styles.batchFailedTranscript}>{dialogue.failedTranscript}</p>
+              <button type="button" onClick={onUseFailedTranscript}>
+                {t("chat.voice.batchUseText")}
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      {dialogue.dictation.phase === "recording" ? (
+        <button type="button" className="cmp-voice-btn" onClick={dialogue.dictation.stop}>
+          {t("chat.voice.batchFinish")}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 function ComposerVoiceOverlay({
   voiceAuraActive,
   announcedVoiceHeadline,
@@ -2753,10 +2878,6 @@ function ComposerVoiceOverlay({
   readonly pendingAttachments: readonly PendingAttachment[];
   readonly onRemoveAttachment: (id: string) => void;
 }): ReactNode {
-  const t = useTranslate();
-  const interruptReachable =
-    !batchActive && isVoiceInterruptReachable(voiceDialogActive, realtimeVoiceController);
-  const batchError = batchDialogue.error ?? batchDialogue.dictation.error?.message;
   return (
     <>
       {voiceAuraActive ? (
@@ -2773,37 +2894,15 @@ function ComposerVoiceOverlay({
         >
           <div className={styles["cmp-voice-content"]}>
             {batchActive ? (
-              <p className="cmp-batch-mode-label">{t("chat.voice.batchMode")}</p>
+              <BatchVoiceStatus
+                dialogue={batchDialogue}
+                onUseFailedTranscript={onUseFailedTranscript}
+              />
             ) : null}
             {voiceDialogActive && partialUserTranscript !== undefined ? (
               <p className={styles["cmp-partial-transcript"]} aria-live="off">
                 {partialUserTranscript}
               </p>
-            ) : null}
-            {batchActive && batchError !== undefined ? (
-              <div role="alert" className="cmp-voice-memory-error">
-                {batchError}
-                <button type="button" onClick={batchDialogue.retry}>
-                  {t("chat.voice.batchRetry")}
-                </button>
-                {batchDialogue.failedTranscript !== undefined ? (
-                  <>
-                    <p className="cmp-batch-failed-transcript">{batchDialogue.failedTranscript}</p>
-                    <button type="button" onClick={onUseFailedTranscript}>
-                      {t("chat.voice.batchUseText")}
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-            {batchActive && batchDialogue.dictation.phase === "recording" ? (
-              <button
-                type="button"
-                className="cmp-voice-btn"
-                onClick={batchDialogue.dictation.stop}
-              >
-                {t("chat.voice.batchFinish")}
-              </button>
             ) : null}
             {!batchActive && voiceDialogActive && realtimeVoiceController.phase === "error" ? (
               <VoiceRealtimeStatusFromController
@@ -2824,7 +2923,11 @@ function ComposerVoiceOverlay({
               voiceDialogActive={voiceDialogActive}
               onToggleVoiceDialog={onToggleVoiceDialog}
               canInterrupt={realtimeVoiceController.canInterrupt}
-              onInterrupt={interruptReachable ? realtimeVoiceController.interrupt : undefined}
+              onInterrupt={composerVoiceInterruptAction(
+                batchActive,
+                voiceDialogActive,
+                realtimeVoiceController,
+              )}
               micMuteAvailable={!batchActive}
               voiceDialogButtonRef={voiceDialogButtonRef}
               compact={compact}
@@ -3014,13 +3117,7 @@ function ComposerCoreImpl({
   });
   const primeAudioOutput = playback.primeAudioOutput;
   const commitCanonicalVoiceTurn = useCallback(
-    ({
-      turnId,
-      text,
-    }: {
-      readonly turnId: string;
-      readonly text: string;
-    }): boolean | "accepted-stop" => {
+    ({ turnId, text, correlationId }: CanonicalVoiceTurnInput): boolean | "accepted-stop" => {
       if (activeChat === undefined || canonicalVoiceTargetModelId === undefined) return false;
       const chatId = activeChat.id;
       const dialogGeneration = voiceDialogGenerationRef.current;
@@ -3036,12 +3133,14 @@ function ComposerCoreImpl({
       const queued = enqueueCanonicalVoiceTurn?.({
         text,
         clientTurnId: turnId,
+        ...(correlationId === undefined ? {} : { correlationId }),
         target: { chat: activeChat, modelId: canonicalVoiceTargetModelId },
         allowReservedCapacity: true,
       });
       if (enqueueCanonicalVoiceTurn !== undefined && queued === undefined) return false;
-      const pauseCapture = queuedVoiceCaptureMustPause(queued, canonicalVoiceCaptureMustPause);
-      const delivery = (queued ?? deliverCanonicalVoiceTurn(sendMessage, text, turnId))
+      const delivery = (
+        queued ?? deliverCanonicalVoiceTurn(sendMessage, text, turnId, correlationId)
+      )
         .then((outcome): SendMessageOutcome =>
           applyCanonicalVoiceTurnOutcome(outcome, {
             activeChatId: activeChatIdRef.current,
@@ -3058,7 +3157,9 @@ function ComposerCoreImpl({
           canonicalVoiceTurnDeliveriesRef.current.delete(deliveryKey);
         });
       canonicalVoiceTurnDeliveriesRef.current.set(deliveryKey, delivery);
-      return pauseCapture ? "accepted-stop" : true;
+      return queuedVoiceCaptureMustPause(queued, canonicalVoiceCaptureMustPause)
+        ? "accepted-stop"
+        : true;
     },
     [
       activeChat,
@@ -3069,11 +3170,11 @@ function ComposerCoreImpl({
     ],
   );
   const submitBatchVoiceTurn = useCallback(
-    (text: string): Promise<SendMessageOutcome> | undefined => {
+    (text: string, correlationId: string): Promise<SendMessageOutcome> | undefined => {
       const chatId = activeChat?.id;
       if (chatId === undefined) return undefined;
       const turnId = crypto.randomUUID();
-      if (commitCanonicalVoiceTurn({ turnId, text }) === false) return undefined;
+      if (commitCanonicalVoiceTurn({ turnId, text, correlationId }) === false) return undefined;
       return canonicalVoiceTurnDeliveriesRef.current.get(`${chatId}:${turnId}`);
     },
     [activeChat?.id, commitCanonicalVoiceTurn],
@@ -3118,53 +3219,31 @@ function ComposerCoreImpl({
   const voiceDialogAvailable =
     voiceDialog.available && activeChat !== undefined && canonicalVoiceModelReady;
   const playbackTurnState = playbackPhaseToTurnState(playback.snapshot.phase);
-  const batchPhase: RealtimeVoicePhase =
-    batchDialogue.error !== undefined || batchDialogue.dictation.phase === "error"
-      ? "error"
-      : batchDialogue.preparing || batchDialogue.dictation.phase === "requesting"
-        ? "requesting"
-        : batchActive
-          ? "connected"
-          : "idle";
-  const batchTurnState: VoiceTurnState =
-    playbackTurnState !== "idle"
-      ? playbackTurnState
-      : batchDialogue.waitingForAnswer ||
-          batchDialogue.dictation.phase === "transcribing" ||
-          batchDialogue.dictation.phase === "finalizing"
-        ? "thinking"
-        : batchDialogue.dictation.phase === "recording"
-          ? "listening"
-          : "idle";
-  const effectiveVoicePhase = batchActive ? batchPhase : realtimeVoice.phase;
+  const effectiveVoicePhase = batchActive
+    ? batchVoicePhase(batchDialogue, batchActive)
+    : realtimeVoice.phase;
   const voiceDialogState = deriveVoiceDialogState({
     realtimePhase: effectiveVoicePhase,
-    turnState: batchActive
-      ? batchTurnState
-      : playbackTurnState === "idle"
-        ? realtimeVoice.turnSnapshot.state
-        : playbackTurnState,
+    turnState: composerVoiceTurnState(
+      batchActive,
+      batchVoiceTurnState(batchDialogue, playbackTurnState),
+      playbackTurnState,
+      realtimeVoice.turnSnapshot.state,
+    ),
     muted: !batchActive && realtimeVoice.muted,
   });
-  const voiceAura = deriveVoiceAuraState({
-    voiceDialogActive,
-    voiceDialogAvailable,
-    voiceDialogState,
-    listening: batchActive
-      ? batchDialogue.dictation.phase === "recording" && batchDialogue.dictation.micReady
-      : realtimeVoice.listening && !playback.snapshot.active,
-    speaking: playback.snapshot.speaking,
+  const voiceAura = composerVoiceAura({
+    active: voiceDialogActive,
+    available: voiceDialogAvailable,
+    state: voiceDialogState,
+    batchActive,
+    batchDialogue,
+    playback,
+    realtimeVoice,
+    chatHasError: error !== undefined,
     sending,
     sendStatus,
-    hasSessionError:
-      error !== undefined ||
-      (batchActive
-        ? batchDialogue.error !== undefined || batchDialogue.dictation.error !== undefined
-        : realtimeVoice.error !== undefined),
-    // A recovering transport (turn manager) → 'reconnecting'; an in-flight grounded retrieval →
-    // 'checking-sources'. Both give the user a specific reason for the wait instead of dead air.
-    reconnecting: !batchActive && realtimeVoice.turnSnapshot.recovering,
-    retrieving: batchActive ? canonicalVoiceRetrieving : realtimeVoice.retrieving,
+    retrieving: canonicalVoiceRetrieving,
   });
   // Throttle the spoken-dialogue live region: a fast turn exchange can flip listening→thinking→speaking
   // within a second, and an unthrottled aria-live would read every transition aloud. Debouncing to the

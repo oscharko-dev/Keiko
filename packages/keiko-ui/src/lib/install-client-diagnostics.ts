@@ -124,6 +124,7 @@ function clientDiagnosticPostBody(
     message: bounded,
     clientTs: new Date().toISOString(),
     correlationId: validCorrelationId(meta?.correlationId),
+    voiceDialogueStage: meta?.voiceDialogueStage,
     gitChangeDescription: meta?.gitChangeDescription,
     workspaceTrustBinding: meta?.workspaceTrustBinding,
     loss,

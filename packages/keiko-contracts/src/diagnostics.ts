@@ -65,9 +65,22 @@ export const CLIENT_DIAGNOSTIC_KINDS = [
   "unhandled-rejection",
   "window-error",
   "sse-error",
+  "voice-dialogue",
   "other",
 ] as const;
 export type ClientDiagnosticKind = (typeof CLIENT_DIAGNOSTIC_KINDS)[number];
+
+export const CLIENT_VOICE_DIALOGUE_STAGES = [
+  "started",
+  "preparation-failed",
+  "turn-submitted",
+  "queue-unavailable",
+  "answer-ready",
+  "delivery-failed",
+  "playback-settled",
+  "stopped",
+] as const;
+export type ClientVoiceDialogueStage = (typeof CLIENT_VOICE_DIALOGUE_STAGES)[number];
 
 // Browser-side delivery loss the page counted since its previous accepted report (#3532). Each
 // value is a bounded non-negative count, never content: the pre-transport buffer evicting its
@@ -214,6 +227,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly readyState?: ClientDiagnosticReadyState | undefined;
   readonly correlationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -270,6 +284,11 @@ function isClientDiagnosticReadyState(value: unknown): value is ClientDiagnostic
 }
 
 const CLIENT_DIAGNOSTIC_KIND_SET: ReadonlySet<string> = new Set(CLIENT_DIAGNOSTIC_KINDS);
+const CLIENT_VOICE_DIALOGUE_STAGE_SET: ReadonlySet<string> = new Set(CLIENT_VOICE_DIALOGUE_STAGES);
+
+function isClientVoiceDialogueStage(value: unknown): value is ClientVoiceDialogueStage {
+  return typeof value === "string" && CLIENT_VOICE_DIALOGUE_STAGE_SET.has(value);
+}
 const LINUX_GATEWAY_DIAGNOSTIC_KIND_SET: ReadonlySet<string> = new Set(
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
 );
@@ -371,12 +390,14 @@ export function isClientDiagnosticIngestRequest(
   value: unknown,
 ): value is ClientDiagnosticIngestRequest {
   if (!isRecord(value)) return false;
-  const { message, clientTs, readyState, correlationId, kind } = value;
+  const { message, clientTs, readyState, correlationId, kind, voiceDialogueStage } = value;
   if (!isBoundedString(message, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)) return false;
   if (!isIsoInstant(clientTs)) return false;
   if (!isOptional(readyState, isClientDiagnosticReadyState)) return false;
   if (!isOptional(correlationId, isCorrelationIdShape)) return false;
   if (!isOptional(kind, isClientDiagnosticKind)) return false;
+  if (!isOptional(voiceDialogueStage, isClientVoiceDialogueStage)) return false;
+  if ((kind === "voice-dialogue") !== (voiceDialogueStage !== undefined)) return false;
   return hasValidClientDiagnosticContext(value);
 }
 

@@ -1223,7 +1223,7 @@ function modelsEndpoint(baseUrl: string): string {
 
 function modelInfoEndpointCandidates(baseUrl: string): readonly string[] {
   const normalized = normalizeBaseUrl(baseUrl);
-  return [`${normalized}/model/info`];
+  return [`${normalized}/model/info`, `${normalized}/model_group/info`];
 }
 
 function apiKeyHeaders(apiKey: string, apiKeyHeaderName: string): Record<string, string> {
@@ -1245,7 +1245,14 @@ function isUsableModelId(id: string): boolean {
 }
 
 function modelIdFromKnownFields(item: Record<string, unknown>): string | undefined {
-  for (const field of ["id", "model_name", "model", "deployment_name", "deploymentName"]) {
+  for (const field of [
+    "id",
+    "model_name",
+    "model_group",
+    "model",
+    "deployment_name",
+    "deploymentName",
+  ]) {
     const value = item[field];
     if (typeof value === "string") {
       const id = value.trim();
@@ -2270,6 +2277,8 @@ interface SetupVoiceProvider {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;
+  /** Setup-only provenance: rebase this connection onto the verified primary URL candidate. */
+  readonly followsSetupGateway?: boolean | undefined;
   readonly apiKeyHeaderName: string;
   readonly timeoutMs: number | undefined;
   readonly maxRetries: number;
@@ -3497,6 +3506,7 @@ function voiceProviderConnection(
   return {
     baseUrl,
     apiKey: submittedOrTemplateString(raw, "voiceApiKey", template?.apiKey, defaults.apiKey),
+    ...sharedGatewayProvenance(defaults.followsSetupGateway === true),
     apiKeyHeaderName: submittedOrTemplateValue(
       raw.voiceApiKeyHeaderName,
       template?.apiKeyHeaderName,
@@ -3522,6 +3532,12 @@ function voiceProviderConnection(
     // breaker policy on any unrelated voice/setup save.
     ...voiceConnectionCircuitBreakerFragment(template, defaults),
   };
+}
+
+function sharedGatewayProvenance(
+  followsSetupGateway: boolean,
+): Pick<SetupVoiceProvider, "followsSetupGateway"> | Record<string, never> {
+  return followsSetupGateway ? { followsSetupGateway: true } : {};
 }
 
 function voiceConnectionCircuitBreakerFragment(
@@ -3978,28 +3994,35 @@ function setupVoiceProviderDefaults(
   gateway: SetupGatewayCredentials,
   sharedGateway: boolean,
 ): SetupVoiceProviderDefaults {
+  return {
+    ...connection,
+    ...sharedGatewayProvenance(sharedGateway),
+    apiKeyHeaderName,
+    timeoutMs: timeoutMs ?? existing?.timeoutMs,
+    maxRetries: existing?.maxRetries ?? 1,
+    retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
+    ...inheritedVoiceEndpoint(connection.baseUrl, existing, gateway, sharedGateway),
+    providerLocality,
+    ...inheritedCircuitBreakerFragment(existing),
+  };
+}
+
+function inheritedVoiceEndpoint(
+  baseUrl: string,
+  existing: ModelProviderConfig | undefined,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
+): VoiceProviderEndpointOptions {
   // The inherited provider's endpoint protocol (style, api version, realtime auth mode) is bound
   // to ITS base URL: it may seed the connection defaults only under the same URL-identity rule
   // the per-role template branch enforces. Without the guard, a preserve-mode move to a new host
   // (e.g. Azure -> LiteLLM) stamped the OLD provider's Azure protocol onto every role that had no
   // per-role template (LiteLLM production audit). Submitted endpoint fields still override these
   // defaults downstream (#3037).
-  const inheritedEndpoint =
-    existing !== undefined && sameBaseUrlIdentity(connection.baseUrl, existing.baseUrl)
-      ? voiceProviderTemplateEndpoint(existing, {})
-      : sharedGateway
-        ? sharedGatewayVoiceEndpoint(gateway)
-        : {};
-  return {
-    ...connection,
-    apiKeyHeaderName,
-    timeoutMs: timeoutMs ?? existing?.timeoutMs,
-    maxRetries: existing?.maxRetries ?? 1,
-    retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
-    ...inheritedEndpoint,
-    providerLocality,
-    ...inheritedCircuitBreakerFragment(existing),
-  };
+  if (existing !== undefined && sameBaseUrlIdentity(baseUrl, existing.baseUrl)) {
+    return voiceProviderTemplateEndpoint(existing, {});
+  }
+  return sharedGateway ? sharedGatewayVoiceEndpoint(gateway) : {};
 }
 
 function sharedGatewayVoiceEndpoint(
@@ -4038,6 +4061,18 @@ interface VoiceSetupOptions {
   readonly submittedEndpoint: VoiceProviderEndpointOptions | undefined;
 }
 
+function defaultVoiceProviderLocality(
+  submittedEndpoint: SetupParseResult<VoiceProviderEndpointOptions | undefined>,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
+): VoiceProviderLocality {
+  const declaredStyle = submittedEndpoint.ok ? submittedEndpoint.value?.endpointStyle : undefined;
+  return declaredStyle === "azure-openai-deployment" ||
+    (sharedGateway && gateway.endpointStyle === "azure-openai-deployment")
+    ? "azure-foundry"
+    : "gateway-managed";
+}
+
 function parsedVoiceSetupOptions(
   raw: Record<string, unknown>,
   existing: ModelProviderConfig | undefined,
@@ -4054,19 +4089,17 @@ function parsedVoiceSetupOptions(
     sharedGateway ? gateway.apiKeyHeaderName : undefined,
   );
   const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
+  const submittedEndpoint = submittedVoiceEndpointOptions(raw);
   const providerLocality = setupVoiceProviderLocality(
     raw,
     existingCapability,
-    sharedGateway && gateway.endpointStyle === "azure-openai-deployment"
-      ? "azure-foundry"
-      : "gateway-managed",
+    defaultVoiceProviderLocality(submittedEndpoint, gateway, sharedGateway),
   );
   const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
   const speechSynthesisInstructions = optionalSetupBoolean(
     raw.voiceSupportsSpeechSynthesisInstructions,
     "voiceSupportsSpeechSynthesisInstructions",
   );
-  const submittedEndpoint = submittedVoiceEndpointOptions(raw);
   if (!apiKeyHeaderName.ok) return apiKeyHeaderName.routeError;
   if (!timeoutMs.ok) return timeoutMs.routeError;
   if (!providerLocality.ok) return providerLocality.routeError;
@@ -5823,7 +5856,9 @@ async function trySetupCandidate(
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,
-    voiceProviders: request.voiceProviders,
+    voiceProviders: request.voiceProviders.map((provider) =>
+      provider.followsSetupGateway === true ? { ...provider, baseUrl } : provider,
+    ),
     tester: seams.tester,
     discovery: seams.discovery,
     env: deps.env,

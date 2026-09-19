@@ -14,6 +14,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  isCompleteRealtimeVoiceCapability,
   selectRealtimeVoiceCapability,
   selectSpeechOutputCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
@@ -1488,6 +1489,7 @@ interface VoiceGuidanceNoteProps {
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
   readonly voiceSpeechOutputModelId: string;
+  readonly voiceOutputVoiceId: string;
 }
 
 function VoiceGuidanceNote({
@@ -1497,6 +1499,7 @@ function VoiceGuidanceNote({
   voiceModelId,
   voiceRealtimeModelId,
   voiceSpeechOutputModelId,
+  voiceOutputVoiceId,
 }: VoiceGuidanceNoteProps): ReactNode {
   const speechInput = voiceCapabilitySelected(
     voiceModelId,
@@ -1516,16 +1519,25 @@ function VoiceGuidanceNote({
     storedModels,
     "supportsRealtimeVoice",
   );
+  const selectedOutput = voiceSpeechOutputModelId.trim();
+  const storedOutputVoice =
+    preserveExisting &&
+    storedModels.some(
+      (model) =>
+        model.kind === "voice" &&
+        model.supportsSpeechOutput === true &&
+        (model.supportedVoicePersonas?.length ?? 0) > 0 &&
+        (selectedOutput === "" || model.id === selectedOutput),
+    );
+  const readAloud = speechOutput && (voiceOutputVoiceId.trim() !== "" || storedOutputVoice);
   return (
     <div className="gw-note gw-span-2">
       {t("gatewaySetup.voice.guidance")}
       <br />
       {t("gatewaySetup.voice.selectedCapabilities", {
         dictate: t(speechInput ? "common.on" : "common.off"),
-        digitalVoice: t(
-          nativeRealtime || (speechInput && speechOutput) ? "common.on" : "common.off",
-        ),
-        readAloud: t(speechOutput ? "common.on" : "common.off"),
+        digitalVoice: t(readAloud && (nativeRealtime || speechInput) ? "common.on" : "common.off"),
+        readAloud: t(readAloud ? "common.on" : "common.off"),
       })}
     </div>
   );
@@ -1964,28 +1976,11 @@ interface VoiceDeploymentFieldsProps {
   readonly voiceModelId: string;
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
-  readonly setVoiceRealtimeModelId: Dispatch<SetStateAction<string>>;
-  readonly commitVoiceRealtimeModelId: () => void;
-  readonly voiceRealtimeTranscriptionModelId: string;
-  readonly setVoiceRealtimeTranscriptionModelId: Dispatch<SetStateAction<string>>;
-  readonly voiceSupportsSemanticTurnDetection: boolean;
-  readonly setVoiceSupportsSemanticTurnDetection: (enabled: boolean) => void;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
   readonly commitVoiceSpeechOutputModelId: () => void;
   readonly voiceOutputVoiceId: string;
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
-  readonly voiceProviderLocalityLabelId: string;
-  readonly voiceEndpointStyleLabelId: string;
-  readonly voiceRealtimeAuthModeLabelId: string;
-  readonly voiceRealtimeAuthMode: string;
-  readonly setVoiceRealtimeAuthMode: (next: string) => void;
-  readonly voiceEndpointStyle: string;
-  readonly setVoiceEndpointStyle: (next: string) => void;
-  readonly voiceApiVersion: string;
-  readonly setVoiceApiVersion: Dispatch<SetStateAction<string>>;
-  readonly voiceProviderLocality: VoiceProviderLocality;
-  readonly setVoiceProviderLocality: Dispatch<SetStateAction<VoiceProviderLocality>>;
   readonly disabled: boolean;
 }
 
@@ -2031,6 +2026,7 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         voiceModelId={props.voiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
+        voiceOutputVoiceId={props.voiceOutputVoiceId}
       />
       <VoiceDictateDeploymentField
         t={props.t}
@@ -2055,7 +2051,9 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
   );
 }
 
-function VoiceAdvancedDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
+function VoiceAdvancedDeploymentFields(
+  props: VoiceFieldsSectionProps & { readonly disabled: boolean },
+): ReactNode {
   return (
     <>
       <VoiceRealtimeDeploymentField
@@ -2205,37 +2203,6 @@ interface VoiceFieldsSectionProps {
 // The endpoint-protocol and locality props travel as one group: they describe the same thing (how
 // this audio connection speaks), and forwarding them individually pushed VoiceFieldsSection past
 // the 50-line bar the keiko-ui suppression register only lets shrink.
-function voiceEndpointProtocolProps(
-  props: VoiceFieldsSectionProps,
-): Pick<
-  VoiceDeploymentFieldsProps,
-  | "voiceProviderLocalityLabelId"
-  | "voiceEndpointStyleLabelId"
-  | "voiceRealtimeAuthModeLabelId"
-  | "voiceRealtimeAuthMode"
-  | "setVoiceRealtimeAuthMode"
-  | "voiceEndpointStyle"
-  | "setVoiceEndpointStyle"
-  | "voiceApiVersion"
-  | "setVoiceApiVersion"
-  | "voiceProviderLocality"
-  | "setVoiceProviderLocality"
-> {
-  return {
-    voiceProviderLocalityLabelId: props.voiceProviderLocalityLabelId,
-    voiceEndpointStyleLabelId: props.voiceEndpointStyleLabelId,
-    voiceRealtimeAuthModeLabelId: props.voiceRealtimeAuthModeLabelId,
-    voiceRealtimeAuthMode: props.voiceRealtimeAuthMode,
-    setVoiceRealtimeAuthMode: props.setVoiceRealtimeAuthMode,
-    voiceEndpointStyle: props.voiceEndpointStyle,
-    setVoiceEndpointStyle: props.setVoiceEndpointStyle,
-    voiceApiVersion: props.voiceApiVersion,
-    setVoiceApiVersion: props.setVoiceApiVersion,
-    voiceProviderLocality: props.voiceProviderLocality,
-    setVoiceProviderLocality: props.setVoiceProviderLocality,
-  };
-}
-
 function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
   const disabled = props.busy || props.success !== undefined;
   return (
@@ -2247,18 +2214,11 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
         voiceModelId={props.voiceModelId}
         setVoiceModelId={props.setVoiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
-        setVoiceRealtimeModelId={props.setVoiceRealtimeModelId}
-        commitVoiceRealtimeModelId={props.commitVoiceRealtimeModelId}
-        voiceRealtimeTranscriptionModelId={props.voiceRealtimeTranscriptionModelId}
-        setVoiceRealtimeTranscriptionModelId={props.setVoiceRealtimeTranscriptionModelId}
-        voiceSupportsSemanticTurnDetection={props.voiceSupportsSemanticTurnDetection}
-        setVoiceSupportsSemanticTurnDetection={props.setVoiceSupportsSemanticTurnDetection}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
         setVoiceSpeechOutputModelId={props.setVoiceSpeechOutputModelId}
         commitVoiceSpeechOutputModelId={props.commitVoiceSpeechOutputModelId}
         voiceOutputVoiceId={props.voiceOutputVoiceId}
         setVoiceOutputVoiceId={props.setVoiceOutputVoiceId}
-        {...voiceEndpointProtocolProps(props)}
         disabled={disabled}
       />
       <details className="gw-replace gw-span-2" data-testid="voice-advanced-settings">
@@ -2339,7 +2299,7 @@ function storedModelsNeedVoiceSetup(models: readonly ModelCapability[]): boolean
     (model) =>
       model.kind === "voice" &&
       ((model.supportsSpeechOutput === true && (model.supportedVoicePersonas?.length ?? 0) === 0) ||
-        (model.supportsRealtimeVoice === true && !model.realtimeTranscriptionModel?.trim())),
+        (model.supportsRealtimeVoice === true && !isCompleteRealtimeVoiceCapability(model))),
   );
 }
 

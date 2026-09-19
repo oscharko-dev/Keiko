@@ -299,6 +299,40 @@ describe("requestTextToSpeech", () => {
   });
 
   it.each([
+    [
+      "LiteLLM WAV",
+      [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45],
+      "audio/wav",
+      "wav",
+    ],
+    ["FLAC", [0x66, 0x4c, 0x61, 0x43], "audio/flac", "flac"],
+    ["MP3 ID3", [0x49, 0x44, 0x33], "audio/mpeg", "mp3"],
+    ["MP3 frame", [0xff, 0xfb, 0x90, 0x64], "audio/mpeg", "mp3"],
+  ] as const)("corrects a %s container mislabeled as PCM", async (_label, bytes, mime, kind) => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeech({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      responseFormat: "pcm",
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      fetchImpl: mockFetch(() => audioResponse(new Uint8Array(bytes), "audio/pcm")),
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.value.mimeType).toBe(mime);
+    expect(events[0]).toMatchObject({
+      op: "speech.tts.mime.corrected",
+      extra: { declaredMimeClass: "pcm", resolvedMimeClass: kind },
+    });
+  });
+
+  it.each([
     ["an exact four-byte capture pattern", [0x4f, 0x67, 0x67, 0x53]],
     ["a one-byte prefix", [0x4f]],
     ["a two-byte prefix", [0x4f, 0x67]],
@@ -543,6 +577,35 @@ describe("requestTextToSpeechStream", () => {
         correlationId: "corr-tts-stream-mime",
       }),
     );
+  });
+
+  it("corrects a LiteLLM WAV stream mislabeled as PCM without losing bytes", async () => {
+    const chunks = [
+      new Uint8Array([0x52, 0x49, 0x46]),
+      new Uint8Array([0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 1, 2]),
+    ];
+    const expected = new Uint8Array(chunks.flatMap((chunk) => [...chunk]));
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "customer-speech",
+      input: ANSWER,
+      voice: "configured-voice",
+      responseFormat: "pcm",
+      fetchImpl: mockFetch(
+        () => new Response(stream, { headers: { "content-type": "audio/pcm" } }),
+      ),
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.mimeType).toBe("audio/wav");
+    expect(await collect(outcome.value.body)).toEqual(expected);
   });
 
   it("logs a correlated body-free failure when the response prefix cannot be read", async () => {

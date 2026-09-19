@@ -2,6 +2,20 @@
   min-width: 0;
 }
 
+.batchModeLabel {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.batchFailedTranscript {
+  max-height: 7rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .pendingVoiceTurnNotice,
 .sessionNotice {
   display: flex;

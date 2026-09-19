@@ -315,8 +315,13 @@ const voiceCap = (overrides: Partial<ModelCapability> = {}): ModelCapability =>
   });
 
 describe("VOICE_PROVIDER_LOCALITIES", () => {
-  it("enumerates the three provider localities", () => {
-    expect(VOICE_PROVIDER_LOCALITIES).toEqual(["azure-foundry", "customer-hosted", "local-only"]);
+  it("enumerates direct and gateway-managed provider localities", () => {
+    expect(VOICE_PROVIDER_LOCALITIES).toEqual([
+      "azure-foundry",
+      "customer-hosted",
+      "local-only",
+      "gateway-managed",
+    ]);
   });
 });
 

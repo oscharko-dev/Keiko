@@ -2354,6 +2354,10 @@ describe("handleGatewaySetup", () => {
     );
     expect(voiceProvider?.endpointStyle).toBe("azure-openai-deployment");
     expect(voiceProvider?.apiVersion).toBe("2025-03-01-preview");
+    expect(
+      saved.capabilities?.find((capability) => capability.id === "transcribe-model")
+        ?.voiceProviderLocality,
+    ).toBe("azure-foundry");
     deps.store.close();
   });
 
@@ -6408,6 +6412,45 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("rebases a shared voice deployment onto the verified /v1 gateway candidate", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-v1-shared-voice-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-v1-shared-voice-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (config, modelIds) =>
+        config.providers
+          .find((provider) => provider.modelId === "example-chat-model")
+          ?.baseUrl.endsWith("/v1")
+          ? Promise.resolve([...modelIds])
+          : Promise.reject(new Error("not found")),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com",
+          apiKey: "example-secret-token",
+          voiceRealtimeModelId: "realtime-model",
+          voiceRealtimeTranscriptionModelId: "realtime-transcription-model",
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const config = requiredGatewayConfig(deps);
+      expect(requiredProvider(config, "example-chat-model").baseUrl).toBe(
+        "https://llm-gateway.example.com/v1",
+      );
+      expect(requiredProvider(config, "realtime-model").baseUrl).toBe(
+        "https://llm-gateway.example.com/v1",
+      );
+    } finally {
+      deps.store.close();
+    }
+  });
+
   it("does not store credentials when the smoke test fails", async () => {
     const uiDir = await tempDir("keiko-gw-ui-fail-");
     const evidenceDir = await tempDir("keiko-gw-ev-fail-");
@@ -7720,6 +7763,61 @@ describe("handleGatewaySetup", () => {
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "openai-compatible-chat",
       ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  it("uses LiteLLM model group metadata when detailed model info is restricted", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-litellm-group-");
+    const evidenceDir = await tempDir("keiko-gw-ev-litellm-group-");
+    const originalFetch = globalThis.fetch;
+    const seenUrls: string[] = [];
+    globalThis.fetch = (url): Promise<Response> => {
+      const href = fetchInputUrl(url);
+      seenUrls.push(href);
+      if (href.endsWith("/model/info")) return Promise.resolve(new Response(null, { status: 403 }));
+      if (href.endsWith("/model_group/info")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              data: [
+                { model_group: "customer-chat", mode: "chat" },
+                { model_group: "customer-whisper", mode: "audio_transcription" },
+              ],
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 3, completion_tokens: 1 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model_group/info");
+      expect(seenUrls).not.toContain("https://llm-gateway.example.com/v1/models");
+      const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+      expect(saved).toContain('"modelId": "customer-whisper"');
+      expect(saved).not.toContain('"modelId": "customer-whisper", "kind": "chat"');
     } finally {
       globalThis.fetch = originalFetch;
       deps.store.close();
@@ -9169,11 +9267,13 @@ describe("normalizeDiscoveryPayload", () => {
         { model_name: "customer-chat", model_info: { mode: "chat" } },
         { model_name: "customer-whisper", model_info: { mode: "audio_transcription" } },
         { model_name: "customer-speech", model_info: { mode: "audio_speech" } },
+        { model_name: "customer-realtime", model_info: { mode: "realtime" } },
       ],
     });
     expect(discovered.chatModelIds).toEqual(["customer-chat"]);
     expect(discovered.voiceSpeechInputModelIds).toEqual(["customer-whisper"]);
     expect(discovered.voiceSpeechOutputModelIds).toEqual(["customer-speech"]);
+    expect(discovered.voiceRealtimeModelIds).toEqual(["customer-realtime"]);
     expect(discovered.unsupportedModels).toBeUndefined();
   });
 

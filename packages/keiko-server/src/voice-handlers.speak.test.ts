@@ -587,6 +587,7 @@ describe("POST /api/voice/speak/stream", () => {
     expect(res.ended).toBe(true);
     // The streaming path requests raw pcm (fastest to first audio).
     expect(seen[0]?.responseFormat).toBe("pcm");
+    expect(seen[0]?.maxAudioBytes).toBe(20_000_000);
     expect(seen[0]?.signal).toBeDefined();
     expect(context.req.listenerCount("aborted")).toBe(0);
     expect(res.listenerCount("close")).toBe(0);

@@ -1320,12 +1320,14 @@ export type SendDesktopChatInput = DesktopChatSendRequestWire;
 export async function sendDesktopChat(
   input: SendDesktopChatInput,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<DesktopChatSendResponse> {
-  return fetchJson("/api/desktop/chat", {
-    method: "POST",
-    body: JSON.stringify(input),
-    signal: signal ?? null,
-  });
+  return fetchJson(
+    "/api/desktop/chat",
+    { method: "POST", body: JSON.stringify(input), signal: signal ?? null },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function uploadConversationAttachment(
@@ -2733,14 +2735,16 @@ export async function fetchEditorAgentAudit(sessionId: string): Promise<EditorAg
 export async function askGrounded(
   req: GroundedAskRequest,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GroundedAnswer> {
   // RequestInit.signal is `AbortSignal | null`. Under exactOptionalPropertyTypes we cannot
   // pass `undefined`, so convert here.
-  return fetchJson("/api/chats/messages/grounded", {
-    method: "POST",
-    body: JSON.stringify(req),
-    signal: signal ?? null,
-  });
+  return fetchJson(
+    "/api/chats/messages/grounded",
+    { method: "POST", body: JSON.stringify(req), signal: signal ?? null },
+    undefined,
+    correlationId,
+  );
 }
 
 // ---------------------------------------------------------------------------

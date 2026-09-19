@@ -101,8 +101,9 @@ existing fail-closed posture: a capability that names no configured provider can
 ### D2 — Four provider profiles; STT-only dictation is distinct from full realtime conversation (AC2)
 
 > **Current amendment:** the profile ladder remains, but `full-realtime` no longer grants a provider
-> assistant-response path. ADR-0154 requires Realtime WebRTC input plus an independent explicit TTS
-> provider; the settled transcript enters canonical chat and only that canonical answer may be spoken.
+> assistant-response path. ADR-0154 accepts either Realtime WebRTC input or turn-based STT capture,
+> plus an independent explicit TTS provider; the settled transcript enters canonical chat and only
+> that canonical answer may be spoken.
 > The original speech-to-speech description below is historical rationale.
 
 The architecture defines four mutually ordered provider profiles, gated by advertised capability:

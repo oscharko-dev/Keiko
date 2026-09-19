@@ -1,0 +1,5 @@
+.voiceSetupBadge {
+  color: var(--text-primary);
+  background: color-mix(in oklab, var(--warn) 14%, transparent);
+  border-color: color-mix(in oklab, var(--warn) 30%, transparent);
+}

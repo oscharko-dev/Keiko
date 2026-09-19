@@ -38,12 +38,14 @@ import {
   type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
   type ClientDiagnosticLossCounts,
+  type ClientVoiceDialogueStage,
   type ClientDiagnosticWorkspaceTrustBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }

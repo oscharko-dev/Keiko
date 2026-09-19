@@ -142,7 +142,29 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["boundary", "unhandled-rejection", "window-error", "sse-error", "other"],
+      values: [
+        "boundary",
+        "unhandled-rejection",
+        "window-error",
+        "sse-error",
+        "voice-dialogue",
+        "other",
+      ],
+    },
+    voiceDialogueStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "started",
+        "preparation-failed",
+        "turn-submitted",
+        "queue-unavailable",
+        "answer-ready",
+        "delivery-failed",
+        "playback-settled",
+        "stopped",
+      ],
     },
     action: {
       type: "string",
@@ -349,6 +371,7 @@ const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
   "unhandled-rejection": "internal",
   "window-error": "internal",
   "sse-error": "unavailable",
+  "voice-dialogue": "internal",
   other: "unknown",
 } as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
 
@@ -396,6 +419,9 @@ function logClientDiagnostic(
   };
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
+  if (request.voiceDialogueStage !== undefined) {
+    extra.voiceDialogueStage = request.voiceDialogueStage;
+  }
   if (request.gitChangeDescription !== undefined) {
     extra.action = request.gitChangeDescription.action;
     extra.disposition = request.gitChangeDescription.disposition;

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   StreamingUnavailableError,
+  askGrounded,
   applyRun,
   cancelRun,
   createChat,
@@ -77,6 +78,27 @@ function streamResponse(text: string): Response {
 describe("API BFF boundary helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("keeps a caller-supplied voice turn correlation on both chat transports", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(okBody())));
+    vi.stubGlobal("fetch", fetchMock);
+    const correlationId = "voice-chat-request-0001";
+
+    await sendDesktopChat(
+      { chatId: "chat-1", projectPath: "/repo", content: "spoken", modelId: "model-a" },
+      undefined,
+      correlationId,
+    );
+    await askGrounded(
+      { chatId: "chat-1", content: "spoken", modelId: "model-a" },
+      undefined,
+      correlationId,
+    );
+
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init.headers).toMatchObject({ "X-Keiko-Correlation-Id": correlationId });
+    }
   });
 
   it("preserves project trust warnings with their support id", async () => {

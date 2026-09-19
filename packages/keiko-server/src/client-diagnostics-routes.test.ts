@@ -107,10 +107,16 @@ describe("POST /api/diagnostics/client", () => {
     ["boundary", "internal"],
     ["unhandled-rejection", "internal"],
     ["sse-error", "unavailable"],
+    ["voice-dialogue", "internal"],
     ["other", "unknown"],
   ] as const)("maps the closed %s client kind to %s", async (kind, errorKind) => {
     const sink = captureServerLog();
-    const body = JSON.stringify({ message: "bounded client failure", clientTs: CLIENT_TS, kind });
+    const body = JSON.stringify({
+      message: "bounded client failure",
+      clientTs: CLIENT_TS,
+      kind,
+      ...(kind === "voice-dialogue" ? { voiceDialogueStage: "delivery-failed" } : {}),
+    });
 
     await expect(handleClientDiagnosticIngest(context(body))).resolves.toEqual({
       status: 204,
@@ -121,6 +127,31 @@ describe("POST /api/diagnostics/client", () => {
       errorKind,
       extra: { clientKind: kind },
     });
+  });
+
+  it("joins a body-free voice dialogue stage to the originating chat request", async () => {
+    const sink = captureServerLog();
+    const correlationId = "original-voice-chat-request-id";
+    const body = JSON.stringify({
+      message: "[keiko] batch voice dialogue (stage=delivery-failed)",
+      clientTs: CLIENT_TS,
+      correlationId,
+      kind: "voice-dialogue",
+      voiceDialogueStage: "delivery-failed",
+    });
+
+    await expect(handleClientDiagnosticIngest(context(body))).resolves.toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)[0]).toMatchObject({
+      correlationId,
+      errorKind: "internal",
+      extra: { clientKind: "voice-dialogue", voiceDialogueStage: "delivery-failed" },
+    });
+    const line = clientDiagnosticLine(sink);
+    expect(line).toMatchObject({ correlationId, voiceDialogueStage: "delivery-failed" });
+    expect(JSON.stringify(line)).not.toContain("batch voice dialogue");
   });
 
   it("projects the hostile message only as a digest", async () => {

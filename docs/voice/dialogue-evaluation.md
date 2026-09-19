@@ -7,7 +7,7 @@ understandable, interruptible, accessible, and stable enough for the Issue #1563
 
 > **Current authority:** this specification preserves the superseded STT+TTS dialogue design. ADR-0154
 > now requires input-only Realtime transcription, canonical chat, and independent TTS. In particular,
-> STT+TTS without WebRTC no longer offers the dialogue switch. The historical headphone walkthrough is not
+> STT+TTS without WebRTC again offers the dialogue switch through ADR-0154's canonical chat path. The historical headphone walkthrough is not
 > the renewed Oliver live-microphone acceptance test; that current test remains deferred.
 
 The evaluation is **verification, not new product behavior**. It adds no runtime dependency, deploys no
@@ -59,22 +59,23 @@ controls were offered only when the deployment could both capture user speech an
 full STT+TTS conjunction, ADR-0096 D2). That historical oracle was compared against the then-production
 gate; a gate that offered dialogue for a partial or no-voice deployment flipped the verdict to `NO-GO`.
 
-This was the Issue #1563 oracle. Under ADR-0154, the `stt-tts` row below resolves no productive dialogue
-transport and its current expected answer is **no**; Realtime WebRTC plus independent TTS and a persona is
-required.
+This was the Issue #1563 oracle. Under ADR-0154, the `stt-tts` row below now uses turn-based capture,
+canonical chat, and independent TTS. Native Realtime remains available when WebRTC and a suitable
+deployment are present.
 
 | Profile                      | `available` / `profile`   | WebRTC media | Issue #1563 historical dialogue? | ADR-0154 current Twin?             |
 | ---------------------------- | ------------------------- | ------------ | -------------------------------- | ---------------------------------- |
 | `no-voice`                   | `false` / `none`          | no           | **no**                           | **no**                             |
 | `stt-only`                   | `true` / `speech-to-text` | no           | **no**                           | **no**                             |
 | `speech-output-only`         | `true` / `speech-output`  | no           | **no**                           | **no**                             |
-| `stt-tts` (STT+TTS fallback) | `true` / `full-realtime`  | no           | **yes**                          | **no**                             |
+| `stt-tts` (STT+TTS fallback) | `true` / `full-realtime`  | no           | **yes**                          | **yes**, through canonical chat    |
 | `realtime-capable`           | `true` / `full-realtime`  | yes          | **yes**                          | **yes**, with explicit TTS/persona |
 
 The Issue #1563 column records the historical scorer and browser-smoke oracle, including the former
 STT+TTS fallback. It must not be read as current product acceptance. The ADR-0154 column records the
-current architecture: Twin requires Realtime WebRTC input plus independent explicit TTS and a mapped
-persona, and the renewed Oliver live-microphone acceptance remains deferred.
+current architecture: Twin accepts Realtime WebRTC input or turn-based STT capture, then uses canonical
+chat and independent explicit TTS with a mapped persona. The renewed Oliver live-microphone acceptance
+remains deferred.
 
 ## Latency / interruption (AC2)
 

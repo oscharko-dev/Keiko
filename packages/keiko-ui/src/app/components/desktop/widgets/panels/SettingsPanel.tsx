@@ -9,7 +9,10 @@ import {
   gatewayVerificationFromProbeOutcome,
   UNVERIFIED_GATEWAY,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
-import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isCompleteRealtimeVoiceCapability,
+  VOICE_PERSONAS,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   applyGatewayVerifiedCapabilities,
   fetchConfig,
@@ -51,6 +54,7 @@ import {
   isConversationEligibleModel,
 } from "@/lib/types";
 import { Icons } from "../../Icons";
+import styles from "./SettingsPanel.module.css";
 
 import KeikoSelect from "../../KeikoSelect";
 import { personaLabel } from "../../VoiceDialogMode";
@@ -182,7 +186,7 @@ function voiceSetupIssue(model: ModelCapability): SettingsMessageKey | undefined
   if (model.supportsSpeechOutput === true && (model.supportedVoicePersonas?.length ?? 0) === 0) {
     return "settings.models.voiceNeedsOutputVoice";
   }
-  if (model.supportsRealtimeVoice === true && !model.realtimeTranscriptionModel?.trim()) {
+  if (model.supportsRealtimeVoice === true && !isCompleteRealtimeVoiceCapability(model)) {
     return "settings.models.voiceNeedsRealtimeTranscription";
   }
   return undefined;
@@ -284,7 +288,11 @@ function VoiceEligibilityBadge({
   if (issue !== undefined) {
     const issueLabel = t(issue);
     return (
-      <output className="ml-elig ml-elig-setup" data-testid="voice-elig-setup" title={issueLabel}>
+      <output
+        className={`ml-elig ${styles.voiceSetupBadge}`}
+        data-testid="voice-elig-setup"
+        title={issueLabel}
+      >
         {issueLabel}
       </output>
     );

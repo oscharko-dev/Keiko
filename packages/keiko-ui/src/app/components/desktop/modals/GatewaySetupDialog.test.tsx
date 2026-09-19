@@ -704,10 +704,22 @@ describe("GatewaySetupDialog", () => {
     const realtimeDeployment = screen.getByLabelText(/^Native Realtime · deployment/i);
     await userEvent.type(realtimeDeployment, "replacement-realtime");
     expect(
-      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin on.*Read aloud off/iu),
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin off.*Read aloud off/iu),
+    ).toBeInTheDocument();
+
+    const speechOutputDeployment = screen.getByLabelText(/Read aloud.*speech-output deployment/i);
+    await userEvent.type(speechOutputDeployment, "replacement-tts");
+    await userEvent.type(screen.getByLabelText(/Output voice/i), "alloy");
+    expect(
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin on.*Read aloud on/iu),
     ).toBeInTheDocument();
 
     await userEvent.clear(realtimeDeployment);
+    expect(
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin on.*Read aloud on/iu),
+    ).toBeInTheDocument();
+
+    await userEvent.clear(speechOutputDeployment);
     expect(
       screen.getByText(/Selected capabilities: Dictate on.*Digital Twin off.*Read aloud off/iu),
     ).toBeInTheDocument();
@@ -785,6 +797,22 @@ describe("GatewaySetupDialog", () => {
     );
     expect(advanced).toHaveAttribute("open");
     expect(screen.getByRole("textbox", { name: /audio endpoint url/i })).toBeInTheDocument();
+  });
+
+  it("keeps Digital Twin off until native Realtime has a speech-output model and voice", async () => {
+    const user = userEvent.setup();
+    render(<GatewaySetupDialog />);
+    await user.click(screen.getByText(/Advanced: native Realtime or separate audio connection/i));
+    await user.type(screen.getByLabelText(/^native realtime · deployment/i), "realtime");
+    await user.type(
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
+      "transcription",
+    );
+    expect(screen.getByText(/Digital Twin off · Read aloud off/iu)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/read aloud.*speech-output deployment/i), "tts");
+    expect(screen.getByText(/Digital Twin off · Read aloud off/iu)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/output voice/i), "neutral-voice");
+    expect(screen.getByText(/Digital Twin on · Read aloud on/iu)).toBeInTheDocument();
   });
 
   it("does not inherit stored Semantic VAD when configuring a new gateway", () => {
@@ -912,7 +940,9 @@ describe("GatewaySetupDialog", () => {
 
     expect(screen.getByLabelText(/dictate.*speech-to-text deployment/i)).toHaveValue("");
     expect(screen.getByLabelText(/^native realtime · deployment/i)).toHaveValue("");
-    expect(screen.getByLabelText(/native realtime.*live transcription deployment/i)).toHaveValue("");
+    expect(screen.getByLabelText(/native realtime.*live transcription deployment/i)).toHaveValue(
+      "",
+    );
     expect(semanticTurnDetection).not.toBeChecked();
     expect(screen.getByLabelText(/read aloud.*speech-output deployment/i)).toHaveValue("");
     expect(screen.getByLabelText(/output voice/i)).toHaveValue("");
@@ -931,10 +961,7 @@ describe("GatewaySetupDialog", () => {
     await userEvent.click(semanticTurnDetection);
     await userEvent.type(outputVoice, "first-provider-neutral");
 
-    await userEvent.type(
-      screen.getByLabelText(/^native realtime · deployment/i),
-      "first-realtime",
-    );
+    await userEvent.type(screen.getByLabelText(/^native realtime · deployment/i), "first-realtime");
     await userEvent.type(
       screen.getByLabelText(/read aloud.*speech-output deployment/i),
       "first-tts",

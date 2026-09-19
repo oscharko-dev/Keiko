@@ -2,6 +2,7 @@
 // and assistant playback own media, answer generation, and speech. This hook advances the floor.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ClientVoiceDialogueStage } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { SendMessageOutcome } from "./useChatSession";
 import { useDictation, type DictationController, type UseDictationOptions } from "./useDictation";
@@ -14,7 +15,7 @@ import {
 export interface BatchVoiceDialogueOptions {
   readonly captureOwner: string;
   readonly captureLease: symbol;
-  readonly submit: (text: string) => Promise<SendMessageOutcome> | undefined;
+  readonly submit: (text: string, correlationId: string) => Promise<SendMessageOutcome> | undefined;
   readonly dictation?:
     Pick<UseDictationOptions, "createRecorder" | "transcribe" | "vad"> | undefined;
   readonly prepareCanonicalVoiceHasher?: (() => Promise<void>) | undefined;
@@ -36,6 +37,22 @@ interface DeliveryFlags {
   active: boolean;
   generation: number;
   expectedAnswerId: string | undefined;
+  expectedAnswerCorrelationId: string | undefined;
+  sessionCorrelationId: string | undefined;
+}
+
+interface BatchDeliverySetters {
+  readonly setWaiting: (value: boolean) => void;
+  readonly setError: (value: string) => void;
+  readonly setFailedTranscript: (value: string | undefined) => void;
+}
+
+function reportBatchStage(stage: ClientVoiceDialogueStage, correlationId?: string): void {
+  reportClientDiagnostic(`[keiko] batch voice dialogue (stage=${stage})`, {
+    kind: "voice-dialogue",
+    voiceDialogueStage: stage,
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
 }
 
 interface BatchTurnDelivery {
@@ -58,21 +75,21 @@ function settleDelivery(
   outcome: SendMessageOutcome,
   flags: DeliveryFlags,
   generation: number,
-  setWaiting: (value: boolean) => void,
-  setError: (value: string) => void,
-  setFailedTranscript: (value: string | undefined) => void,
   transcript: string,
+  correlationId: string,
+  setters: BatchDeliverySetters,
 ): void {
   if (!deliveryIsCurrent(flags, generation)) return;
   if (outcome.status === "completed") {
     flags.expectedAnswerId = outcome.assistantMessageId;
-    reportClientDiagnostic("[keiko] batch voice dialogue (stage=answer-ready)");
+    flags.expectedAnswerCorrelationId = correlationId;
+    reportBatchStage("answer-ready", correlationId);
     return;
   }
-  reportClientDiagnostic("[keiko] batch voice dialogue (stage=delivery-failed)");
-  setWaiting(false);
-  setFailedTranscript(transcript);
-  setError(
+  reportBatchStage("delivery-failed", correlationId);
+  setters.setWaiting(false);
+  setters.setFailedTranscript(transcript);
+  setters.setError(
     outcome.status === "cancelled"
       ? "The spoken turn was cancelled. You can retry or continue in text."
       : "The spoken turn could not be completed. You can retry or continue in text.",
@@ -89,6 +106,8 @@ function changeDeliveryActivity(
   flags.generation += 1;
   flags.active = active;
   flags.expectedAnswerId = undefined;
+  flags.expectedAnswerCorrelationId = undefined;
+  flags.sessionCorrelationId = active ? crypto.randomUUID() : undefined;
   setWaiting(false);
   setError(undefined);
   setFailedTranscript(undefined);
@@ -99,19 +118,17 @@ function observeBatchDelivery(
   flags: DeliveryFlags,
   generation: number,
   text: string,
-  setWaiting: (value: boolean) => void,
-  setError: (value: string) => void,
-  setFailedTranscript: (value: string | undefined) => void,
+  correlationId: string,
+  setters: BatchDeliverySetters,
 ): void {
   void delivery.then(
-    (outcome) =>
-      settleDelivery(outcome, flags, generation, setWaiting, setError, setFailedTranscript, text),
+    (outcome) => settleDelivery(outcome, flags, generation, text, correlationId, setters),
     () => {
       if (!deliveryIsCurrent(flags, generation)) return;
-      reportClientDiagnostic("[keiko] batch voice dialogue (stage=delivery-failed)");
-      setWaiting(false);
-      setFailedTranscript(text);
-      setError("The spoken turn failed. You can retry or continue in text.");
+      reportBatchStage("delivery-failed", correlationId);
+      setters.setWaiting(false);
+      setters.setFailedTranscript(text);
+      setters.setError("The spoken turn failed. You can retry or continue in text.");
     },
   );
 }
@@ -127,25 +144,22 @@ function useBatchTurnAdmission(
     (text: string): void => {
       const flags = flagsRef.current;
       if (!flags.active) return;
-      const delivery = submitRef.current(text);
+      const correlationId = crypto.randomUUID();
+      const delivery = submitRef.current(text, correlationId);
       if (delivery === undefined) {
-        reportClientDiagnostic("[keiko] batch voice dialogue (stage=queue-unavailable)");
+        reportBatchStage("queue-unavailable", correlationId);
         setFailedTranscript(text);
         setError("The spoken turn could not be queued. You can retry or continue in text.");
         return;
       }
-      reportClientDiagnostic("[keiko] batch voice dialogue (stage=turn-submitted)");
+      reportBatchStage("turn-submitted", correlationId);
       setWaiting(true);
       const generation = flags.generation;
-      observeBatchDelivery(
-        delivery,
-        flags,
-        generation,
-        text,
+      observeBatchDelivery(delivery, flags, generation, text, correlationId, {
         setWaiting,
         setError,
         setFailedTranscript,
-      );
+      });
     },
     [submitRef, flagsRef, setWaiting, setError, setFailedTranscript],
   );
@@ -173,7 +187,8 @@ function useBatchDeliveryLifecycle(
       if (!flags.active || flags.expectedAnswerId !== id) return false;
       flags.expectedAnswerId = undefined;
       setWaiting(false);
-      reportClientDiagnostic("[keiko] batch voice dialogue (stage=playback-settled)");
+      reportBatchStage("playback-settled", flags.expectedAnswerCorrelationId);
+      flags.expectedAnswerCorrelationId = undefined;
       return true;
     },
     [flagsRef, setWaiting],
@@ -188,6 +203,8 @@ function useBatchTurnDelivery(submit: BatchVoiceDialogueOptions["submit"]): Batc
     active: false,
     generation: 0,
     expectedAnswerId: undefined,
+    expectedAnswerCorrelationId: undefined,
+    sessionCorrelationId: undefined,
   });
   const [waitingForAnswer, setWaitingForAnswer] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -259,7 +276,7 @@ async function prepareBatchCapture(input: {
     if (!deliveryIsCurrent(input.flagsRef.current, input.generation)) return;
     input.setPreparing(false);
     input.setStartupError("Voice could not be prepared. Try again.");
-    reportClientDiagnostic("[keiko] batch voice dialogue (stage=preparation-failed)");
+    reportBatchStage("preparation-failed", input.flagsRef.current.sessionCorrelationId);
   }
 }
 
@@ -286,7 +303,7 @@ function useBatchCapturePreparation(
   const [startupError, setStartupError] = useState<string | undefined>();
   const start = useCallback((): void => {
     activate();
-    reportClientDiagnostic("[keiko] batch voice dialogue (stage=started)");
+    reportBatchStage("started", flagsRef.current.sessionCorrelationId);
     setStartupError(undefined);
     if (preparedRef.current) {
       startDictation();
@@ -345,7 +362,7 @@ export function useBatchVoiceDialogue(options: BatchVoiceDialogueOptions): Batch
   );
   const stop = useCallback((): void => {
     if (flagsRef.current.active) {
-      reportClientDiagnostic("[keiko] batch voice dialogue (stage=stopped)");
+      reportBatchStage("stopped", flagsRef.current.sessionCorrelationId);
     }
     deactivate();
     reset();

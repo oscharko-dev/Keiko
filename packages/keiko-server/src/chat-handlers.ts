@@ -3797,6 +3797,12 @@ export async function handleRegenerateDesktopChat(
     const prepared = await parseDesktopChatRegenerate(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(prepared)) return prepared;
+    await ensureOnDemandConversationReadiness(
+      deps,
+      prepared.request.modelId ?? prepared.chat.selectedModel,
+      ctx.correlationId,
+    );
+    if (requestSignalAborted(cancellation.signal)) return requestCancelledResult();
     const result = await runSerializedChatTurn(
       deps,
       prepared.request.chatId,

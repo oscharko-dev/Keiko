@@ -316,14 +316,30 @@ function logAutomaticReadinessCompleted(
   correlationId: string,
   report: GatewayReadinessReport,
 ): void {
+  logAutomaticReadinessOutcome(
+    deps,
+    correlationId,
+    report.modelId,
+    report.overallStatus,
+    report.probes.length,
+  );
+}
+
+function logAutomaticReadinessOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  modelId: string,
+  overallStatus: GatewayReadinessReport["overallStatus"],
+  probeCount: number,
+): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
       { correlationId },
       {
-        modelId: boundedReadinessModelId(report.modelId),
-        overallStatus: report.overallStatus,
-        probeCount: report.probes.length,
+        modelId: boundedReadinessModelId(modelId),
+        overallStatus,
+        probeCount,
       },
     ),
   );
@@ -1509,6 +1525,7 @@ function withinNotReadyCooldown(
 export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
+  correlationId?: string,
 ): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
@@ -1522,7 +1539,7 @@ export async function ensureOnDemandConversationReadiness(
     await inFlight;
     return;
   }
-  const probe = runOnDemandReadinessProbe(deps, holder, modelId).finally(() => {
+  const probe = runOnDemandReadinessProbe(deps, holder, modelId, correlationId).finally(() => {
     onDemandReadinessProbes.delete(key);
   });
   onDemandReadinessProbes.set(key, probe);
@@ -1533,17 +1550,26 @@ async function runOnDemandReadinessProbe(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
+  correlationId?: string,
 ): Promise<void> {
   const generation = holder.generation();
+  const probeCorrelationId = correlationId ?? newCorrelationId();
+  let overallStatus: GatewayReadinessReport["overallStatus"] = "failed";
+  logAutomaticReadinessStarted(deps, probeCorrelationId, modelId, 1);
   try {
-    await runGatewayReadiness({ modelId, options: { probes: [] } }, deps);
+    const report = await runGatewayReadiness(
+      { modelId, options: { probes: [] } },
+      deps,
+      probeCorrelationId,
+    );
+    if (!("status" in report)) overallStatus = report.overallStatus;
   } catch (error) {
     // The route still answers with the honest unready result — but never silently: the
     // underlying failure lands as a redacted operator diagnostic with a correlation id.
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId: newCorrelationId(),
+        correlationId: probeCorrelationId,
         operation: "gateway.readiness",
         source: "gateway-readiness.on-demand",
         error,
@@ -1551,6 +1577,8 @@ async function runOnDemandReadinessProbe(
         redact: (message): string => String(deps.redactor(message)),
       }),
     );
+  } finally {
+    logAutomaticReadinessOutcome(deps, probeCorrelationId, modelId, overallStatus, 1);
   }
   // A failed report CLEARS the capability entry; without a current-generation observation
   // every subsequent chat attempt would probe the provider again. Persist an explicit

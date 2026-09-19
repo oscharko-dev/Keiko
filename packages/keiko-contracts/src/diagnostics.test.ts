@@ -9,6 +9,7 @@ import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_DIAGNOSTIC_READY_STATES,
+  CLIENT_VOICE_DIALOGUE_STAGES,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
   isActivityLogReadinessSnapshot,
   isClientDiagnosticIngestRequest,
@@ -51,10 +52,40 @@ describe("isClientDiagnosticIngestRequest", () => {
             readyState,
             correlationId: "abcdefgh",
             kind,
+            ...(kind === "voice-dialogue" ? { voiceDialogueStage: "started" } : {}),
           }),
         ).toBe(true);
       }
     }
+  });
+
+  it("requires a closed stage for voice dialogue and rejects unrelated stage injection", () => {
+    for (const voiceDialogueStage of CLIENT_VOICE_DIALOGUE_STAGES) {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          kind: "voice-dialogue",
+          voiceDialogueStage,
+        }),
+      ).toBe(true);
+    }
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), kind: "voice-dialogue" })).toBe(
+      false,
+    );
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        kind: "voice-dialogue",
+        voiceDialogueStage: "private user text",
+      }),
+    ).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        kind: "other",
+        voiceDialogueStage: "turn-submitted",
+      }),
+    ).toBe(false);
   });
 
   it("rejects a non-object value", () => {

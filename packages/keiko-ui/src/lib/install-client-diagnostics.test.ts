@@ -290,6 +290,24 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
 // `clientDiagnosticPostBody`'s shape validation (exercised only through the public
 // `fanOutClientDiagnostic` entry point, matching every other case in this file).
 describe("fanOutClientDiagnostic correlationId handling", () => {
+  it("preserves the closed voice stage and originating chat correlation on the wire", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic("[keiko] batch voice dialogue (stage=delivery-failed)", {
+      correlationId: "voice-chat-request-0001",
+      kind: "voice-dialogue",
+      voiceDialogueStage: "delivery-failed",
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "voice-chat-request-0001",
+      kind: "voice-dialogue",
+      voiceDialogueStage: "delivery-failed",
+    });
+  });
+
   it("puts a shape-valid correlationId on the wire body when the caller supplies one", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);

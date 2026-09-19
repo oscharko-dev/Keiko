@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "ffb11569ae53d7c09c5ccef231103d0abb36e08e13a252111d027653040cd360" as const;
+  "1ded022456f4bbebe4d75b605ef1dbc9861c2ab82eb85b9aa2d859495b3eb40c" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1717,7 +1717,29 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["boundary", "unhandled-rejection", "window-error", "sse-error", "other"],
+        values: [
+          "boundary",
+          "unhandled-rejection",
+          "window-error",
+          "sse-error",
+          "voice-dialogue",
+          "other",
+        ],
+      },
+      voiceDialogueStage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "started",
+          "preparation-failed",
+          "turn-submitted",
+          "queue-unavailable",
+          "answer-ready",
+          "delivery-failed",
+          "playback-settled",
+          "stopped",
+        ],
       },
       action: {
         type: "string",
@@ -22214,7 +22236,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["opus"],
+        values: ["opus", "wav", "flac", "mp3"],
       },
     },
     causal: "none",
@@ -27804,6 +27826,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "snapshotDigest",
               type: "string",
               dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "voiceDialogueStage",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {

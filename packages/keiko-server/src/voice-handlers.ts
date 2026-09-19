@@ -762,6 +762,10 @@ function resolveSpeechTarget(
 // MIME stays inside the server ALLOWED_SPEECH_MIME allowlist (audio/ogg).
 const INTERACTIVE_SPEECH_FORMAT = "opus" as const;
 const INTERACTIVE_MAX_SPEECH_AUDIO_BYTES = 1_500_000;
+// Raw 24 kHz PCM needs 48 KB per second. The buffered Opus cap above holds minutes of speech, but
+// reusing it for the PCM stream cut off a normal long answer after roughly 31 seconds. Streaming
+// holds no whole clip in memory; this bounded ceiling covers the longest accepted answer.
+const STREAM_MAX_SPEECH_AUDIO_BYTES = 20_000_000;
 const KEIKO_SPEECH_INSTRUCTIONS =
   "Speak in the same language as the input. Sound like a thoughtful colleague: warm, calm, " +
   "engaged, and emotionally aware without overacting. Use natural pacing, subtle emphasis, varied " +
@@ -903,6 +907,7 @@ function buildStreamTtsRequest(
       correlationId,
     ),
     responseFormat: STREAM_SPEECH_FORMAT,
+    maxAudioBytes: STREAM_MAX_SPEECH_AUDIO_BYTES,
   };
 }
 
