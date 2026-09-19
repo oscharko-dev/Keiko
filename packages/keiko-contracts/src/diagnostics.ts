@@ -81,6 +81,7 @@ export const CLIENT_VOICE_DIALOGUE_STAGES = [
   "delivery-failed",
   "delivery-cancelled",
   "delivery-rejected",
+  "capture-bound-reached",
   "capture-renewed",
   "capture-renewal-failed",
   "playback-settled",
@@ -229,6 +230,34 @@ const ISO_INSTANT_MAX_LENGTH = 40;
 // server re-validates with `isValidCorrelationId` before trusting the value for anything.
 const ISO_INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/;
 
+export const CLIENT_VOICE_CAPTURE_REASONS = [
+  "vad-unavailable",
+  "speech-observed",
+  "renewal-unsupported",
+  "replacement-start-failed",
+  "previous-stop-failed",
+  "replacement-stop-failed",
+  "unknown-failure",
+] as const;
+export type ClientVoiceCaptureReason = (typeof CLIENT_VOICE_CAPTURE_REASONS)[number];
+const VOICE_CAPTURE_REASON_SET: ReadonlySet<unknown> = new Set(CLIENT_VOICE_CAPTURE_REASONS);
+function isClientVoiceCaptureReason(value: unknown): value is ClientVoiceCaptureReason {
+  return VOICE_CAPTURE_REASON_SET.has(value);
+}
+
+export const CLIENT_VOICE_CAPTURE_ERRORS = [
+  "invalid-state",
+  "not-supported",
+  "security",
+  "not-readable",
+  "other",
+] as const;
+export type ClientVoiceCaptureError = (typeof CLIENT_VOICE_CAPTURE_ERRORS)[number];
+const VOICE_CAPTURE_ERROR_SET: ReadonlySet<unknown> = new Set(CLIENT_VOICE_CAPTURE_ERRORS);
+function isClientVoiceCaptureError(value: unknown): value is ClientVoiceCaptureError {
+  return VOICE_CAPTURE_ERROR_SET.has(value);
+}
+
 export interface ClientMarkdownLayout {
   readonly listStart: number;
   readonly listIndex: number;
@@ -251,6 +280,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
+  readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
+  readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
@@ -407,6 +438,8 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   const { gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } = value;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
+  if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
+  if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
   return isOptional(loss, isClientDiagnosticLossCounts);

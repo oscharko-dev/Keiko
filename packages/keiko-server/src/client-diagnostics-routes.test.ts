@@ -231,6 +231,72 @@ describe("POST /api/diagnostics/client", () => {
     },
   );
 
+  it.each([
+    ["capture-bound-reached", "vad-unavailable", undefined],
+    ["capture-bound-reached", "speech-observed", undefined],
+    ["capture-bound-reached", "renewal-unsupported", undefined],
+    ["capture-renewal-failed", "replacement-start-failed", "invalid-state"],
+    ["capture-renewal-failed", "previous-stop-failed", "not-supported"],
+    ["capture-renewal-failed", "replacement-stop-failed", "other"],
+  ] as const)(
+    "persists capture decision %s / %s",
+    async (voiceDialogueStage, voiceCaptureReason, voiceCaptureError) => {
+      const sink = captureServerLog();
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private microphone detail",
+            clientTs: CLIENT_TS,
+            kind: "voice-dialogue",
+            correlationId: "dialogue-session",
+            voiceDialogueStage,
+            voiceCaptureReason,
+            voiceCaptureError,
+          }),
+        ),
+      );
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          correlationId: "dialogue-session",
+          extra: expect.objectContaining({ voiceDialogueStage, voiceCaptureReason }) as unknown,
+        }),
+      );
+      const lines: unknown[] = sink.lines().map((line): unknown => JSON.parse(line));
+      expect(lines).toContainEqual(
+        expect.objectContaining({
+          correlationId: "dialogue-session",
+          voiceDialogueStage,
+          voiceCaptureReason,
+          ...(voiceCaptureError === undefined ? {} : { voiceCaptureError }),
+        }),
+      );
+      expect(sink.lines().join("")).not.toContain("private microphone detail");
+    },
+  );
+
+  it("retains the coding run parent on markdown layout evidence", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "layout",
+          clientTs: CLIENT_TS,
+          kind: "markdown-layout",
+          correlationId: "message-1",
+          parentCorrelationId: "coding-run-1",
+          markdownLayout: { listStart: 5, listIndex: 0, depth: 0 },
+        }),
+      ),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "client.markdown.layout",
+        correlationId: "message-1",
+        parentCorrelationId: "coding-run-1",
+      }),
+    );
+  });
+
   it("projects the hostile message only as a digest", async () => {
     const sink = captureServerLog();
     const message = "boundary caught TypeError";

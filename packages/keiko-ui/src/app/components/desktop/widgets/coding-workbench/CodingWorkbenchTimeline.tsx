@@ -63,6 +63,7 @@ type TimelineItem =
       readonly occurredAt: string;
       readonly order: number;
       readonly message: CodingSafeActivityMessage;
+      readonly runId: string;
     }
   | {
       readonly kind: "tool";
@@ -142,6 +143,7 @@ function timelineItems(
   }));
   let order = events.length;
   for (const turn of feed?.turns ?? []) {
+    if (feed === null) break;
     for (const message of turn.messages) {
       if (!hasVisibleMessageContent(message)) continue;
       items.push({
@@ -150,6 +152,7 @@ function timelineItems(
         occurredAt: message.occurredAt,
         order,
         message,
+        runId: feed.runId,
       });
       order += 1;
     }
@@ -571,7 +574,7 @@ function MessageRow({
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
         </p>
         <div className={styles.messageText}>
-          <MessageContent message={item.message} t={t} />
+          <MessageContent message={item.message} runId={item.runId} t={t} />
         </div>
       </article>
     </li>
@@ -580,16 +583,20 @@ function MessageRow({
 
 function MessageContent({
   message,
+  runId,
   t,
 }: {
   readonly message: CodingSafeActivityMessage;
   readonly t: CodingWorkbenchTranslate;
+  readonly runId: string;
 }): ReactNode {
   if (message.role === "assistant") {
     return (
       <SafeMarkdownBoundary
         source={message.segments.map((segment) => segment.text).join("")}
         applyScopeId={`coding-workbench:${message.messageId}`}
+        diagnosticCorrelationId={message.messageId}
+        diagnosticParentCorrelationId={runId}
         trailing={truncationFor(message, t)}
       />
     );

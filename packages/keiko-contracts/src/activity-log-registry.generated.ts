@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "d90a36fd052fc18d4f0de41fb3569ae7f3da2c00b4ec1e6de2f105181b039e8c" as const;
+  "f9e787c7ecbb0e4c897cb53cfa1bc5b0c1309c6c278c554b4d7c5ef726f02529" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1754,6 +1754,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "other",
         ],
       },
+      voiceCaptureError: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["invalid-state", "not-supported", "security", "not-readable", "other"],
+      },
+      voiceCaptureReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "vad-unavailable",
+          "speech-observed",
+          "renewal-unsupported",
+          "replacement-start-failed",
+          "previous-stop-failed",
+          "replacement-stop-failed",
+          "unknown-failure",
+        ],
+      },
       voiceDialogueStage: {
         type: "string",
         dataClass: "closed-enum",
@@ -1770,6 +1790,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "capture-renewal-failed",
           "playback-settled",
           "playback-fallback",
+          "capture-bound-reached",
           "capture-renewed",
           "interrupted",
           "stopped",
@@ -25220,6 +25241,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      voiceCaptureError: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["invalid-state", "not-supported", "security", "not-readable", "other"],
+      },
+      voiceCaptureReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "vad-unavailable",
+          "speech-observed",
+          "renewal-unsupported",
+          "replacement-start-failed",
+          "previous-stop-failed",
+          "replacement-stop-failed",
+          "unknown-failure",
+        ],
+      },
       voiceDialogueStage: {
         type: "string",
         dataClass: "closed-enum",
@@ -25230,6 +25271,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "answer-ready",
           "playback-settled",
           "playback-fallback",
+          "capture-bound-reached",
           "capture-renewed",
           "interrupted",
           "stopped",
@@ -28030,6 +28072,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "voiceCaptureError",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "voiceCaptureReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "voiceDialogueStage",
               type: "string",
               dataClass: "closed-enum",
@@ -28166,6 +28220,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "clientRejectionsSuppressed",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "voiceCaptureError",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "voiceCaptureReason",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {

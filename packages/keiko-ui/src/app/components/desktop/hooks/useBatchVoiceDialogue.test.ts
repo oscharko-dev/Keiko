@@ -71,10 +71,50 @@ describe("turn-based Digital Twin", () => {
       expect.objectContaining({
         kind: "voice-dialogue",
         voiceDialogueStage: "capture-renewal-failed",
+        voiceCaptureReason: "unknown-failure",
         correlationId: started?.[1]?.correlationId,
       }),
     );
     expect(JSON.stringify(writer.mock.calls)).not.toContain("private recorder detail");
+    unmount();
+  });
+
+  it("logs the automatic capture bound with the unavailable detector reason", async () => {
+    vi.useFakeTimers();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const recorder = fakeRecorder().recorder;
+    const { result, unmount } = renderHook(() =>
+      useBatchVoiceDialogue({
+        captureOwner: "unavailable-vad",
+        captureLease: Symbol("unavailable-vad"),
+        submit: vi.fn(),
+        prepareCanonicalVoiceHasher: async () => {},
+        dictation: {
+          vad: silentVad,
+          transcribe: async () => ({ transcript: "" }),
+          createRecorder: () => ({
+            start: async (options): Promise<DictationSession> => ({
+              ...(await recorder.start(options)),
+              stream: {} as MediaStream,
+            }),
+          }),
+        },
+      }),
+    );
+    act(() => result.current.start());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    const started = writer.mock.calls.find(([, meta]) => meta?.voiceDialogueStage === "started");
+    expect(writer).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        voiceDialogueStage: "capture-bound-reached",
+        voiceCaptureReason: "vad-unavailable",
+        correlationId: started?.[1]?.correlationId,
+      }),
+    );
     unmount();
   });
 

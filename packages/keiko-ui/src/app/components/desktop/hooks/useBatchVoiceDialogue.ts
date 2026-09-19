@@ -2,7 +2,12 @@
 // and assistant playback own media, answer generation, and speech. This hook advances the floor.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ClientVoiceDialogueStage } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  ClientVoiceDialogueStage,
+  ClientVoiceCaptureReason,
+  ClientVoiceCaptureError,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { DictationRecorderError } from "./dictation-recorder";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { SendMessageOutcome } from "./useChatSession";
 import { useDictation, type DictationController, type UseDictationOptions } from "./useDictation";
@@ -58,13 +63,28 @@ function reportBatchStage(
   stage: ClientVoiceDialogueStage,
   correlationId?: string,
   parentCorrelationId?: string,
+  voiceCaptureReason?: ClientVoiceCaptureReason,
+  voiceCaptureError?: ClientVoiceCaptureError,
 ): void {
   reportClientDiagnostic(`[keiko] batch voice dialogue (stage=${stage})`, {
     kind: "voice-dialogue",
     voiceDialogueStage: stage,
+    ...(voiceCaptureReason === undefined ? {} : { voiceCaptureReason }),
+    ...(voiceCaptureError === undefined ? {} : { voiceCaptureError }),
     ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
     ...(correlationId === undefined ? {} : { correlationId }),
   });
+}
+
+function reportCaptureFailure(error: unknown, correlationId: string | undefined): void {
+  const failure = error instanceof DictationRecorderError ? error : undefined;
+  reportBatchStage(
+    "capture-renewal-failed",
+    correlationId,
+    undefined,
+    failure?.captureReason ?? "unknown-failure",
+    failure?.captureError ?? "other",
+  );
 }
 
 interface BatchTurnDelivery {
@@ -439,6 +459,27 @@ function useBatchStop(
   }, [deactivate, reset, cancel, flagsRef]);
 }
 
+function captureDiagnostics(flagsRef: {
+  readonly current: DeliveryFlags;
+}): Pick<
+  UseDictationOptions,
+  "onSilenceRenewalFailed" | "onCaptureBoundReached" | "onSilenceRenewed"
+> {
+  return {
+    onSilenceRenewalFailed: (error) =>
+      reportCaptureFailure(error, flagsRef.current.sessionCorrelationId),
+    onCaptureBoundReached: (reason) =>
+      reportBatchStage(
+        "capture-bound-reached",
+        flagsRef.current.sessionCorrelationId,
+        undefined,
+        reason,
+      ),
+    onSilenceRenewed: () =>
+      reportBatchStage("capture-renewed", flagsRef.current.sessionCorrelationId),
+  };
+}
+
 export function useBatchVoiceDialogue(options: BatchVoiceDialogueOptions): BatchVoiceDialogue {
   const delivery = useBatchTurnDelivery(options.submit);
   const { flagsRef, acceptTranscript, activate, deactivate, clearError, takeSettledAnswer } =
@@ -450,10 +491,7 @@ export function useBatchVoiceDialogue(options: BatchVoiceDialogueOptions): Batch
     onInsert: acceptTranscript,
     captureOwner: options.captureOwner,
     captureLease: options.captureLease,
-    onSilenceRenewalFailed: () =>
-      reportBatchStage("capture-renewal-failed", flagsRef.current.sessionCorrelationId),
-    onSilenceRenewed: () =>
-      reportBatchStage("capture-renewed", flagsRef.current.sessionCorrelationId),
+    ...captureDiagnostics(flagsRef),
     vad,
   });
   const { start: startDictation, cancel, retry: retryDictation } = dictation;

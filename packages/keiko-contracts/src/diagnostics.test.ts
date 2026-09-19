@@ -332,3 +332,17 @@ describe("clientErrorClass", () => {
     for (const name of CLIENT_ERROR_CLASSES) expect(name).toMatch(/^\w{1,64}$/u);
   });
 });
+
+describe("capture diagnostic vocabulary", () => {
+  it.each(["voiceCaptureReason", "voiceCaptureError"])("rejects hostile %s", (field) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        message: "capture",
+        clientTs: "2026-09-19T00:00:00.000Z",
+        kind: "voice-dialogue",
+        voiceDialogueStage: "capture-renewal-failed",
+        [field]: "private arbitrary error text",
+      }),
+    ).toBe(false);
+  });
+});

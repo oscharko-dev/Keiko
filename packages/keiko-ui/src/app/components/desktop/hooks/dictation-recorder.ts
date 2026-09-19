@@ -10,6 +10,11 @@
 // A finished capture: base64 audio (no `data:` prefix), the chosen container MIME type, and the
 // measured clip length. The shape matches `VoiceTranscriptionRequest` so the caller can post it
 // directly to the BFF speech-to-text route.
+import type {
+  ClientVoiceCaptureReason,
+  ClientVoiceCaptureError,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
 export interface DictationCapture {
   readonly audioBase64: string;
   readonly mimeType: string;
@@ -29,6 +34,8 @@ export class DictationRecorderError extends Error {
   constructor(
     public readonly reason: DictationStartFailure,
     message: string,
+    public readonly captureReason?: ClientVoiceCaptureReason,
+    public readonly captureError?: ClientVoiceCaptureError,
   ) {
     super(message);
     this.name = "DictationRecorderError";
@@ -290,6 +297,52 @@ async function beginRecordingBuffer(
   return { recorder, chunks, startedAt };
 }
 
+function captureErrorClass(error: unknown): ClientVoiceCaptureError {
+  if (!(error instanceof Error) && !(error instanceof DOMException)) return "other";
+  switch (error.name) {
+    case "InvalidStateError":
+      return "invalid-state";
+    case "NotSupportedError":
+      return "not-supported";
+    case "SecurityError":
+      return "security";
+    case "NotReadableError":
+      return "not-readable";
+    default:
+      return "other";
+  }
+}
+
+function stopRenewalRecorder(recorder: MediaRecorder, reason: ClientVoiceCaptureReason): void {
+  try {
+    recorder.stop();
+  } catch (error) {
+    throw new DictationRecorderError(
+      "capture-failed",
+      "Audio capture renewal failed.",
+      reason,
+      captureErrorClass(error),
+    );
+  }
+}
+
+async function beginRenewalBuffer(
+  stream: MediaStream,
+  mimeType: string,
+  options: DictationRecorderStartOptions,
+): Promise<RecordingBuffer> {
+  try {
+    return await beginRecordingBuffer(stream, mimeType, options);
+  } catch (error) {
+    throw new DictationRecorderError(
+      "capture-failed",
+      "Audio capture renewal failed.",
+      "replacement-start-failed",
+      captureErrorClass(error),
+    );
+  }
+}
+
 async function beginSession(
   stream: MediaStream,
   options: DictationRecorderStartOptions = {},
@@ -323,16 +376,17 @@ async function beginSession(
     stream,
     async renewSilence(stillSilent): Promise<number | undefined> {
       if (settled || !stillSilent()) return undefined;
-      const replacement = await beginRecordingBuffer(stream, mimeType, options);
+      const replacement = await beginRenewalBuffer(stream, mimeType, options);
       // Overlap exceeds the VAD onset debounce: speech during replacement retains the old prefix.
       await new Promise<void>((resolve) => setTimeout(resolve, 500));
       if (settled || !stillSilent()) {
-        if (replacement.recorder.state !== "inactive") replacement.recorder.stop();
+        if (replacement.recorder.state !== "inactive")
+          stopRenewalRecorder(replacement.recorder, "replacement-stop-failed");
         return undefined;
       }
       const previous = capture;
       capture = replacement;
-      previous.recorder.stop();
+      stopRenewalRecorder(previous.recorder, "previous-stop-failed");
       previous.chunks.length = 0;
       return Math.max(0, Date.now() - capture.startedAt);
     },

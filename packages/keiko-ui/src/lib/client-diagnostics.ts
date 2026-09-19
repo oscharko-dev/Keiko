@@ -40,6 +40,8 @@ import {
   type ClientDiagnosticLossCountKey,
   type ClientDiagnosticLossCounts,
   type ClientVoiceDialogueStage,
+  type ClientVoiceCaptureReason,
+  type ClientVoiceCaptureError,
   type ClientDiagnosticWorkspaceTrustBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
@@ -48,6 +50,8 @@ export interface ClientDiagnosticMeta {
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
+  readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
+  readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;

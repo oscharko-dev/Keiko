@@ -173,6 +173,8 @@ function dictationReducer(state: DictationState, action: DictationAction): Dicta
   }
 }
 
+import type { ClientVoiceCaptureReason } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
 export interface UseDictationOptions {
   // Appends the reviewed transcript into the composer draft. The hook never sends — insertion is the
   // terminal action, after which the user sends through the normal composer flow.
@@ -203,7 +205,8 @@ export interface UseDictationOptions {
     | undefined;
   readonly postRollMs?: number | undefined;
   readonly onSilenceRenewed?: (() => void) | undefined;
-  readonly onSilenceRenewalFailed?: (() => void) | undefined;
+  readonly onSilenceRenewalFailed?: ((error: unknown) => void) | undefined;
+  readonly onCaptureBoundReached?: ((reason: ClientVoiceCaptureReason) => void) | undefined;
   // Optional content-free latency sink (Plan §1). Receives only mark enum literals and millisecond
   // deltas across the capture round trip — never audio or transcript text.
   readonly latencySink?: VoiceLatencyObserverSink | undefined;
@@ -298,6 +301,14 @@ function batchOperationIsCurrent(
   return mounted && !cancelled && generation === currentGeneration;
 }
 
+function captureBoundReason(
+  renewable: boolean,
+  session: DictationSession,
+): ClientVoiceCaptureReason {
+  if (!renewable) return "vad-unavailable";
+  return session.renewSilence === undefined ? "renewal-unsupported" : "speech-observed";
+}
+
 function armBatchCaptureLimit(input: {
   readonly session: DictationSession;
   readonly timer: { current: ReturnType<typeof setTimeout> | undefined };
@@ -307,6 +318,7 @@ function armBatchCaptureLimit(input: {
   readonly renewed: () => void;
   readonly failed: (error: unknown) => void;
   readonly renewable: () => boolean;
+  readonly boundReached: (reason: ClientVoiceCaptureReason) => void;
 }): void {
   let deadline = Date.now() + DICTATION_AUTO_STOP_MS;
   const schedule = (): void => {
@@ -319,8 +331,13 @@ function armBatchCaptureLimit(input: {
           input.session.renewSilence === undefined
         ) {
           const remaining = deadline - Date.now();
-          if (remaining > 0) input.timer.current = setTimeout(input.stop, remaining);
-          else input.stop();
+          const stopAtBound = (): void => {
+            if (!input.current()) return;
+            input.boundReached(captureBoundReason(input.renewable(), input.session));
+            input.stop();
+          };
+          if (remaining > 0) input.timer.current = setTimeout(stopAtBound, remaining);
+          else stopAtBound();
           return;
         }
         void input.session.renewSilence(input.stillSilent).then((age) => {
@@ -394,6 +411,8 @@ export function useDictation(options: UseDictationOptions): DictationController 
   >(undefined);
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const batchSpeechObservedRef = useRef(false);
+  const onCaptureBoundReachedRef = useRef(options.onCaptureBoundReached);
+  onCaptureBoundReachedRef.current = options.onCaptureBoundReached;
   const onSilenceRenewalFailedRef = useRef(options.onSilenceRenewalFailed);
   onSilenceRenewalFailedRef.current = options.onSilenceRenewalFailed;
   const onSilenceRenewedRef = useRef(options.onSilenceRenewed);
@@ -760,7 +779,6 @@ export function useDictation(options: UseDictationOptions): DictationController 
           }
           dispatch({ type: "audioLevel", level });
           if (level >= HEARD_SPEECH_LEVEL) {
-            batchSpeechObservedRef.current = true;
             dispatch({ type: "speechDetected" });
           }
         },
@@ -790,9 +808,10 @@ export function useDictation(options: UseDictationOptions): DictationController 
             stop: stopBatch,
             renewable: () => vadMonitorRef.current?.available === true,
             renewed: () => onSilenceRenewedRef.current?.(),
+            boundReached: (reason) => onCaptureBoundReachedRef.current?.(reason),
             failed: (error) => {
               if (!batchCurrent(generation) || stoppingRef.current) return;
-              onSilenceRenewalFailedRef.current?.();
+              onSilenceRenewalFailedRef.current?.(error);
               clearAutoStop();
               detachVad();
               session.cancel();

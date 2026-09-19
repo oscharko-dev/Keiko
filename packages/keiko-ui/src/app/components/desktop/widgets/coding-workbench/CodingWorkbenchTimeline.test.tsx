@@ -8,6 +8,7 @@ import type {
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { Timeline } from "./CodingWorkbenchTimeline";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -427,4 +428,36 @@ describe("CodingWorkbenchTimeline", () => {
       ),
     ).toEqual([]);
   });
+});
+
+it("joins continued-list evidence to its message and coding run", () => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  try {
+    const feed = feedWithPlan(0);
+    const turns = feed.turns.map((turn) => ({
+      ...turn,
+      messages: turn.messages.map((message) => ({
+        ...message,
+        segments: [{ kind: "text" as const, text: "5. Continued item", truncated: false }],
+      })),
+    }));
+    render(
+      <Timeline
+        events={[]}
+        activity={activityLike({ ...feed, turns })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(writer).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        kind: "markdown-layout",
+        correlationId: "message-1",
+        parentCorrelationId: "run-1",
+      }),
+    );
+  } finally {
+    resetClientDiagnosticWriter();
+  }
 });

@@ -138,6 +138,38 @@ describe("createBrowserDictationRecorder", () => {
     },
   );
 
+  it.each(["replacement-start-failed", "previous-stop-failed", "replacement-stop-failed"] as const)(
+    "classifies %s without retaining the browser error text",
+    async (reason) => {
+      vi.useFakeTimers();
+      stubMedia(async () => fakeStream({ stop: vi.fn() }));
+      const session = await createBrowserDictationRecorder().start();
+      let silent = true;
+      const fail = (): never => {
+        throw new DOMException("private device detail", "InvalidStateError");
+      };
+      const spy =
+        reason === "replacement-start-failed"
+          ? vi.spyOn(FakeMediaRecorder.prototype, "start").mockImplementationOnce(fail)
+          : vi.spyOn(FakeMediaRecorder.prototype, "stop").mockImplementationOnce(fail);
+      try {
+        const renewal = session.renewSilence?.(() => silent)?.catch((error: unknown) => error);
+        const expected = {
+          name: "DictationRecorderError",
+          captureReason: reason,
+          captureError: "invalid-state",
+          message: "Audio capture renewal failed.",
+        };
+        if (reason === "replacement-stop-failed") silent = false;
+        await vi.advanceTimersByTimeAsync(500);
+        expect(await renewal).toMatchObject(expected);
+      } finally {
+        spy.mockRestore();
+        session.cancel();
+      }
+    },
+  );
+
   it("captures audio and returns base64 + mime + duration, releasing the track", async () => {
     const track = { stop: vi.fn() };
     stubMedia(async () => fakeStream(track), track);

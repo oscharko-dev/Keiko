@@ -590,16 +590,16 @@ describe("useDictation — unmount safety (no dispatch / no mic left open)", () 
 });
 
 describe("useDictation — capture bounds", () => {
-  it("renews silent dialogue capture without transcribing or releasing the microphone", async () => {
+  it("renews silent dialogue capture after a brief level spike without VAD speech", async () => {
     vi.useFakeTimers();
     const vad = makeFakeVad();
     const base = makeStreamingRecorder();
     const renewSilence = vi.fn(async () => 0);
     const recorder: DictationRecorder = {
-      start: async (options): Promise<DictationSession> => ({
-        ...(await base.recorder.start(options)),
-        renewSilence,
-      }),
+      start: async (options): Promise<DictationSession> => {
+        options?.onAudioLevel?.(0.12);
+        return { ...(await base.recorder.start(options)), renewSilence };
+      },
     };
     const transcribe = vi.fn(async () => ({ transcript: "hello" }));
     const { result, unmount } = renderHook(() =>

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d90a36fd052fc18d4f0de41fb3569ae7f3da2c00b4ec1e6de2f105181b039e8c",
+    "catalogDigest": "f9e787c7ecbb0e4c897cb53cfa1bc5b0c1309c6c278c554b4d7c5ef726f02529",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1850,6 +1850,26 @@
               "other"
             ]
           },
+          "voiceCaptureError": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["invalid-state", "not-supported", "security", "not-readable", "other"]
+          },
+          "voiceCaptureReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "vad-unavailable",
+              "speech-observed",
+              "renewal-unsupported",
+              "replacement-start-failed",
+              "previous-stop-failed",
+              "replacement-stop-failed",
+              "unknown-failure"
+            ]
+          },
           "voiceDialogueStage": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -1866,6 +1886,7 @@
               "capture-renewal-failed",
               "playback-settled",
               "playback-fallback",
+              "capture-bound-reached",
               "capture-renewed",
               "interrupted",
               "stopped"
@@ -1951,8 +1972,8 @@
         "failureClasses": ["client-diagnostic"],
         "proofIds": ["client.diagnostic.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:203",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:607"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:224",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:658"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1991,7 +2012,7 @@
         "proofIds": ["client.diagnostic.rate-limited.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:73",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:374"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:416"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2039,7 +2060,7 @@
         ],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:99",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:402"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:444"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2112,8 +2133,8 @@
         "failureClasses": ["client-diagnostic"],
         "proofIds": ["client.markdown.layout.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:170",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:556"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:191",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:604"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26417,6 +26438,26 @@
             "dataClass": "loss-state",
             "required": true
           },
+          "voiceCaptureError": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["invalid-state", "not-supported", "security", "not-readable", "other"]
+          },
+          "voiceCaptureReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "vad-unavailable",
+              "speech-observed",
+              "renewal-unsupported",
+              "replacement-start-failed",
+              "previous-stop-failed",
+              "replacement-stop-failed",
+              "unknown-failure"
+            ]
+          },
           "voiceDialogueStage": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -26427,6 +26468,7 @@
               "answer-ready",
               "playback-settled",
               "playback-fallback",
+              "capture-bound-reached",
               "capture-renewed",
               "interrupted",
               "stopped"
@@ -26465,7 +26507,7 @@
         "proofIds": ["voice.dialogue.stage.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:131",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:531"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:579"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37662,6 +37704,18 @@
                   "required": false
                 },
                 {
+                  "name": "voiceCaptureError",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "voiceCaptureReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "voiceDialogueStage",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -37798,6 +37852,18 @@
                   "name": "clientRejectionsSuppressed",
                   "type": "integer",
                   "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "voiceCaptureError",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "voiceCaptureReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -68912,7 +68978,7 @@
     {
       "op": "client.diagnostic",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:206",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:227",
       "package": "keiko-server"
     },
     {
@@ -68930,7 +68996,7 @@
     {
       "op": "client.markdown.layout",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:173",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:194",
       "package": "keiko-server"
     },
     {

@@ -126,6 +126,8 @@ function clientDiagnosticPostBody(
     correlationId: validCorrelationId(meta.correlationId),
     parentCorrelationId: validCorrelationId(meta.parentCorrelationId),
     voiceDialogueStage: meta.voiceDialogueStage,
+    voiceCaptureReason: meta.voiceCaptureReason,
+    voiceCaptureError: meta.voiceCaptureError,
     markdownLayout: meta.markdownLayout,
     gitChangeDescription: meta.gitChangeDescription,
     workspaceTrustBinding: meta.workspaceTrustBinding,

@@ -136,6 +136,26 @@ const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logVoiceDialogueStage",
   fields: {
+    voiceCaptureError: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["invalid-state", "not-supported", "security", "not-readable", "other"],
+    },
+    voiceCaptureReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "vad-unavailable",
+        "speech-observed",
+        "renewal-unsupported",
+        "replacement-start-failed",
+        "previous-stop-failed",
+        "replacement-stop-failed",
+        "unknown-failure",
+      ],
+    },
     voiceDialogueStage: {
       type: "string",
       dataClass: "closed-enum",
@@ -146,6 +166,7 @@ const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
         "answer-ready",
         "playback-settled",
         "playback-fallback",
+        "capture-bound-reached",
         "capture-renewed",
         "interrupted",
         "stopped",
@@ -225,6 +246,26 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "other",
       ],
     },
+    voiceCaptureError: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["invalid-state", "not-supported", "security", "not-readable", "other"],
+    },
+    voiceCaptureReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "vad-unavailable",
+        "speech-observed",
+        "renewal-unsupported",
+        "replacement-start-failed",
+        "previous-stop-failed",
+        "replacement-stop-failed",
+        "unknown-failure",
+      ],
+    },
     voiceDialogueStage: {
       type: "string",
       dataClass: "closed-enum",
@@ -241,6 +282,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "capture-renewal-failed",
         "playback-settled",
         "playback-fallback",
+        "capture-bound-reached",
         "capture-renewed",
         "interrupted",
         "stopped",
@@ -523,6 +565,12 @@ function logVoiceDialogueStage(
   if (stage === undefined || VOICE_FAILURE_STAGES.has(stage)) return false;
   const extra: Record<string, unknown> = {
     voiceDialogueStage: stage,
+    ...(request.voiceCaptureError === undefined
+      ? {}
+      : { voiceCaptureError: request.voiceCaptureError }),
+    ...(request.voiceCaptureReason === undefined
+      ? {}
+      : { voiceCaptureReason: request.voiceCaptureReason }),
     completeness: "complete",
     loss: "none",
   };
@@ -555,7 +603,7 @@ function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId
   getServerLogger().info(
     activityLogEvent(
       CLIENT_MARKDOWN_LAYOUT_OPERATION,
-      { correlationId },
+      clientDiagnosticCorrelation(request, correlationId),
       extra as ActivityLogFields<typeof CLIENT_MARKDOWN_LAYOUT_OPERATION>,
     ),
   );
@@ -568,6 +616,15 @@ function requestDiagnosticErrorKind(request: ClientDiagnosticIngestRequest): Act
   if (request.voiceDialogueStage === "delivery-cancelled") return "cancelled";
   if (request.voiceDialogueStage === "delivery-rejected") return "unavailable";
   return clientDiagnosticErrorKind(request.kind);
+}
+
+function projectVoiceCapture(
+  request: ClientDiagnosticIngestRequest,
+  extra: Record<string, unknown>,
+): void {
+  if (request.voiceCaptureError !== undefined) extra.voiceCaptureError = request.voiceCaptureError;
+  if (request.voiceCaptureReason !== undefined)
+    extra.voiceCaptureReason = request.voiceCaptureReason;
 }
 
 function logClientDiagnostic(
@@ -583,6 +640,7 @@ function logClientDiagnostic(
   const extra: Record<string, unknown> = {
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
   };
+  projectVoiceCapture(request, extra);
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
   if (request.voiceDialogueStage !== undefined) {
