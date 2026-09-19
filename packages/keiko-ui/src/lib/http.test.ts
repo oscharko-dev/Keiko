@@ -15,7 +15,7 @@ import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client
 const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
 
 vi.mock("./coding-app-session-client", () => ({
-  ensureLocalCodingAppSession: ensureLocalSession,
+  repairLocalCodingAppSession: ensureLocalSession,
 }));
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -335,6 +335,50 @@ describe("bffFetchJson — session-denied 403 self-heal (ADR-0141 D5)", () => {
       code: "PATH_ESCAPE",
       status: 403,
     });
+    expect(ensureLocalSession).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  // A DENIED is also a genuine refusal (an EACCES file, a denied sensitive path) that the client
+  // cannot tell apart from a stale session, and a write may have started before it was refused, so a
+  // write is never replayed. The repair still runs, so the user's next attempt carries a session.
+  it.each(["POST", "PUT", "PATCH", "DELETE"])(
+    "repairs the session but never replays a denied %s",
+    async (method) => {
+      ensureLocalSession.mockResolvedValueOnce(true);
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(deniedResponse()));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(bffFetchJson("/api/x", { method, body: "{}" })).rejects.toMatchObject({
+        code: "DENIED",
+        status: 403,
+      });
+      expect(ensureLocalSession).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("replays a denied HEAD like a GET, both being safe reads", async () => {
+    ensureLocalSession.mockResolvedValueOnce(true);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(deniedResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson("/api/x", { method: "head" })).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // The app-session requests themselves opt out: a repair that ran through the repair would join
+  // its own attempt in flight and never settle.
+  it("never starts a repair for a request that opts out of it", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(deniedResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      bffFetchJson("/api/x", { method: "POST" }, { repairSession: false }),
+    ).rejects.toMatchObject({ code: "DENIED", status: 403 });
     expect(ensureLocalSession).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledOnce();
   });

@@ -26,17 +26,15 @@
  *    quality-intelligence, figma — is a safe-forward improvement).
  *  - On 2xx with a body: `res.json()`, optionally routed through `opts.validator` so Git routes keep
  *    contract-validating (throwing `ApiError('CONTRACT_VALIDATION_FAILED', …, 502)`).
- *  - On a session-denied 403 (`ApiError.code === "DENIED"`, e.g. `resolveRequestRoot`'s
- *    `FilesError(403, "DENIED", …)` in keiko-server/src/files.ts): a restarted BFF invalidates its
- *    in-memory app session (ADR-0141 D5), so a managed-task-workspace read was previously denied
- *    forever — the client never re-paired. The request is repaired and retried exactly once via
- *    `ensureLocalCodingAppSession()` (a no-op on an already-valid cookie); a second denial, or a
- *    failed repair, surfaces the original error unchanged — this never loops. Mirrors the one
- *    existing consumer of that primitive, `fetchWorkspaceManifestAccess` (./workspace-manifest-api.ts).
+ *  - On a 403 `DENIED`: a restarted BFF invalidates its in-memory app session (ADR-0141 D5), so a
+ *    managed-task-workspace read was denied forever — the client never re-paired. The shared
+ *    `repairLocalCodingAppSession()` runs once per denial burst, and a safe read (GET/HEAD) is
+ *    replayed exactly once; a write is never replayed. `opts.repairSession: false` opts a request
+ *    out (the app-session requests themselves).
  *
  * `ApiError` is imported FROM ./api (one-way): api.ts owns the canonical error class and MUST NOT
- * import this module (that would be a cycle). `ensureLocalCodingAppSession` is loaded with a dynamic
- * `import()` inside the retry path below, for the same reason: `./coding-app-session-client` imports
+ * import this module (that would be a cycle). `repairLocalCodingAppSession` is loaded with a dynamic
+ * `import()` inside the repair path below, for the same reason: `./coding-app-session-client` imports
  * `bffFetchJson` FROM this module, so a static import back here would be a cycle.
  */
 
@@ -78,6 +76,11 @@ export interface BffFetchOptions<T> {
    * — e.g. task-workspace-api copies `error.failureClass` off the envelope onto the ApiError.
    */
   readonly enrichError?: (error: ApiError, envelope: BffErrorEnvelope | undefined) => void;
+  /**
+   * `false` for the app-session requests themselves (pair, local session): their denial is final,
+   * and a repair started from inside the repair would join its own attempt and never settle.
+   */
+  readonly repairSession?: boolean;
 }
 
 function defaultParseFailureMessage(status: number): string {
@@ -192,25 +195,27 @@ async function performBffFetch<T>(
   }
 }
 
-// The one class of 403 a stale local app session can cause (ADR-0141 D5): `resolveRequestRoot`
-// throws exactly `FilesError(403, "DENIED", …)` when a restarted BFF's in-memory session is gone
-// (packages/keiko-server/src/files.ts, workspace-root-denial-log.ts
-// `managed-root-session-authority-missing`). Every OTHER 403 (e.g. `PATH_ESCAPE`,
-// `HOT_EXIT_REF_MISMATCH`) names a real, non-session-related refusal that a repair cannot fix and
-// must not mask behind an extra round trip.
-function isSessionDeniedError(error: unknown): error is ApiError {
+// A stale app session after a BFF restart answers 403 `DENIED` (ADR-0141 D5; `resolveRequestRoot`'s
+// `managed-root-session-authority-missing`), but so does a genuine refusal: an EACCES/EPERM file, a
+// denied sensitive path, an unclaimed managed root. The client cannot tell them apart. Every other
+// 403 code (`PATH_ESCAPE`, `HOT_EXIT_REF_MISMATCH`, …) is a refusal a session cannot change.
+function isDeniedError(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 403 && error.code === "DENIED";
 }
 
+// Only a safe read may run twice. A denied write may have started before it was refused (a
+// multi-file write hitting EACCES), so replaying it could apply part of it again.
+function isReplayableRead(init: RequestInit | undefined): boolean {
+  const method = (init?.method ?? "GET").toUpperCase();
+  return method === "GET" || method === "HEAD";
+}
+
 /**
- * `performBffFetch`, with exactly one self-heal retry on a session-denied 403: a restarted BFF
- * invalidates its in-memory app session (ADR-0141 D5) and every managed-task-workspace read was
- * previously denied forever, because nothing ever re-established one (the live Activity Log showed
- * `workspace.root.denied` / `managed-root-session-authority-missing` on every reconnect attempt).
- * `ensureLocalCodingAppSession()` mirrors the one existing consumer of that primitive
- * (`fetchWorkspaceManifestAccess`, ./workspace-manifest-api.ts): a no-op on an already-valid cookie,
- * and a fresh session for a launcher-started BFF otherwise. Never loops — the retry's own result
- * (success or a second denial) is returned as-is, and a failed repair returns the original error.
+ * `performBffFetch`, self-healing a stale app session: on a 403 `DENIED` it runs the shared
+ * `repairLocalCodingAppSession()` (one local-session request per denial burst, a no-op on a valid
+ * cookie) and replays a safe read exactly once. A write is never replayed; the repair still runs, so
+ * the user's next attempt carries the session. The replay's own result is returned as-is and a failed
+ * repair returns the original error, so this never loops. A genuine denial costs one repeated read.
  */
 export async function bffFetchJson<T>(
   path: string,
@@ -220,9 +225,10 @@ export async function bffFetchJson<T>(
   try {
     return await performBffFetch(path, init, opts);
   } catch (error) {
-    if (!isSessionDeniedError(error)) throw error;
-    const { ensureLocalCodingAppSession } = await import("./coding-app-session-client");
-    if (!(await ensureLocalCodingAppSession())) throw error;
+    if (!isDeniedError(error) || opts?.repairSession === false) throw error;
+    const { repairLocalCodingAppSession } = await import("./coding-app-session-client");
+    const repaired = await repairLocalCodingAppSession();
+    if (!repaired || !isReplayableRead(init)) throw error;
     return performBffFetch(path, init, opts);
   }
 }

@@ -25,6 +25,8 @@ import { bffFetchJson } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
 const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
+// The pairing requests are the repair: their denial is final and never starts another repair.
+const WITHOUT_SESSION_REPAIR = { repairSession: false } as const;
 
 /** Injectable browser seams so the redeem flow is unit-testable without a real window. */
 export interface CodingAppSessionPairingSeams {
@@ -42,16 +44,17 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     },
     postPairing: (attestation: CodingAppSessionPairingAttestation): Promise<unknown> =>
-      bffFetchJson(PAIR_PATH, {
-        method: "POST",
-        cache: "no-store",
-        body: JSON.stringify(attestation),
-      }),
+      bffFetchJson(
+        PAIR_PATH,
+        { method: "POST", cache: "no-store", body: JSON.stringify(attestation) },
+        WITHOUT_SESSION_REPAIR,
+      ),
     postLocalSession: (): Promise<unknown> =>
-      bffFetchJson(LOCAL_SESSION_PATH, {
-        method: "POST",
-        cache: "no-store",
-      }),
+      bffFetchJson(
+        LOCAL_SESSION_PATH,
+        { method: "POST", cache: "no-store" },
+        WITHOUT_SESSION_REPAIR,
+      ),
   };
 }
 
@@ -94,6 +97,20 @@ export async function ensureLocalCodingAppSession(
   } catch {
     return false;
   }
+}
+
+let localSessionRepair: Promise<boolean> | undefined;
+
+/**
+ * Re-establishes the local app session a restarted BFF dropped (ADR-0141 D5). A restart denies every
+ * open surface at once; they all join the one attempt in flight instead of each posting its own, and
+ * the next denial after it settled starts a fresh one.
+ */
+export function repairLocalCodingAppSession(): Promise<boolean> {
+  localSessionRepair ??= ensureLocalCodingAppSession().finally(() => {
+    localSessionRepair = undefined;
+  });
+  return localSessionRepair;
 }
 
 async function bootCodingAppSession(): Promise<boolean> {

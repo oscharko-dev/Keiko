@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
@@ -13,6 +13,7 @@ import {
   redeemCodingAppSessionPairingFragment,
   redeemCodingAppSessionPairingNavigation,
   redeemCodingAppSessionPairingOnBoot,
+  repairLocalCodingAppSession,
   useCodingAppSessionRedemptions,
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
@@ -242,5 +243,63 @@ describe("pairing redeemed without a page load (F65)", () => {
     });
 
     expect(view.result.current).toBe(before);
+  });
+});
+
+describe("repairLocalCodingAppSession (ADR-0141 D5)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // A restarted BFF denies every open surface at once; each of them asking for its own session
+  // would post one local-session request per surface.
+  it("shares one local-session request among concurrent repairs", async () => {
+    let acknowledge: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = repairLocalCodingAppSession();
+    const second = repairLocalCodingAppSession();
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+    acknowledge(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 }));
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("never lets a denied local-session request re-enter the repair it is running", async () => {
+    // The BFF answers the ensure request itself with the same 403 DENIED as a stale-session read.
+    // Routed through the self-heal, the repair would join its own attempt in flight and never
+    // settle; it must instead fail closed after exactly one request.
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: { code: "DENIED", message: "no" } }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(repairLocalCodingAppSession()).resolves.toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("starts a fresh repair once the previous one settled", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(repairLocalCodingAppSession()).resolves.toBe(true);
+    await expect(repairLocalCodingAppSession()).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

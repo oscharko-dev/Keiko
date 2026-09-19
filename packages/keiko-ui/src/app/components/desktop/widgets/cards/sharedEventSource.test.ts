@@ -12,7 +12,7 @@ import {
 const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
 
 vi.mock("../../../../../lib/coding-app-session-client", () => ({
-  ensureLocalCodingAppSession: ensureLocalSession,
+  repairLocalCodingAppSession: ensureLocalSession,
 }));
 
 class FakeEventSource {

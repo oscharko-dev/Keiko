@@ -10,7 +10,7 @@ import {
   reportClientDiagnostic,
   sseStreamErrorDiagnostic,
 } from "../../../../../lib/client-diagnostics";
-import { ensureLocalCodingAppSession } from "../../../../../lib/coding-app-session-client";
+import { repairLocalCodingAppSession } from "../../../../../lib/coding-app-session-client";
 
 type SharedEventListener = (event: MessageEvent<string>) => void;
 
@@ -139,7 +139,7 @@ function scheduleReconnect(entry: SharedEventSourceEntry): void {
 function repairSessionOnce(entry: SharedEventSourceEntry): void {
   if (entry.sessionRepairAttempted) return;
   entry.sessionRepairAttempted = true;
-  void ensureLocalCodingAppSession();
+  void repairLocalCodingAppSession();
 }
 
 function openEntrySource(entry: SharedEventSourceEntry): void {

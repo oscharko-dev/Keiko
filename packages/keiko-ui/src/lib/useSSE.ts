@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
-import { ensureLocalCodingAppSession } from "./coding-app-session-client";
+import { repairLocalCodingAppSession } from "./coding-app-session-client";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -197,7 +197,7 @@ function runEventsUrl(): string {
 function repairSessionOnce(): void {
   if (sessionRepairAttempted) return;
   sessionRepairAttempted = true;
-  void ensureLocalCodingAppSession();
+  void repairLocalCodingAppSession();
 }
 
 function openSharedEventSource(): void {
