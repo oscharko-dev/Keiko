@@ -3,6 +3,7 @@
 // that it does — and that it does nothing else — lives where a reviewer looks for it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clientErrorEvidence } from "./client-error-evidence";
 import {
   clientDiagnosticPostFailureCount,
   clientDiagnosticPostThrottledCount,
@@ -249,6 +250,40 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
     expect(takeClientDiagnosticLoss()).toEqual({ bufferEvicted: 2, postsFailed: 1 });
   });
 
+  it("preserves a voice turn parent and rejects an unsafe parent identity", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("voice lifecycle", {
+      kind: "voice-dialogue",
+      voiceDialogueStage: "turn-submitted",
+      correlationId: "turn-0001",
+      parentCorrelationId: "session-0001",
+    });
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "turn-0001",
+      parentCorrelationId: "session-0001",
+    });
+    fanOutClientDiagnostic("voice lifecycle", { parentCorrelationId: "private unsafe parent" });
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("parentCorrelationId");
+  });
+
+  it.each([
+    ["", false],
+    ["a".repeat(7), false],
+    ["a".repeat(8), true],
+    ["a".repeat(128), true],
+    ["a".repeat(129), false],
+  ])("bounds parent correlation %s", (parentCorrelationId, accepted) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("voice lifecycle", { parentCorrelationId });
+    const posted = lastPostedBody(fetchMock);
+    if (accepted) expect(posted).toHaveProperty("parentCorrelationId", parentCorrelationId);
+    else expect(posted).not.toHaveProperty("parentCorrelationId");
+  });
+
   it("puts the caller's closed kind on the wire", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -290,6 +325,24 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
 // `clientDiagnosticPostBody`'s shape validation (exercised only through the public
 // `fanOutClientDiagnostic` entry point, matching every other case in this file).
 describe("fanOutClientDiagnostic correlationId handling", () => {
+  it("preserves the closed voice stage and originating chat correlation on the wire", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic("[keiko] batch voice dialogue (stage=delivery-failed)", {
+      correlationId: "voice-chat-request-0001",
+      kind: "voice-dialogue",
+      voiceDialogueStage: "delivery-failed",
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "voice-chat-request-0001",
+      kind: "voice-dialogue",
+      voiceDialogueStage: "delivery-failed",
+    });
+  });
+
   it("puts a shape-valid correlationId on the wire body when the caller supplies one", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -394,4 +447,28 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
     expect(body["readyState"]).toBe(0);
     expect(body["kind"]).toBe("sse-error");
   });
+});
+
+it("posts reduced production frames and closed causes through the existing transport", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const cause = new TypeError("private browser detail");
+  cause.stack = `TypeError: private browser detail\n    at start (${location.origin}/_next/static/chunks/1wntg-7ptuw73.js:12:345)`;
+  fanOutClientDiagnostic("recorder:failure", {
+    correlationId: "capture-session",
+    kind: "voice-dialogue",
+    errorEvidence: clientErrorEvidence(new Error("private wrapper", { cause })),
+  });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "capture-session",
+    errorEvidence: {
+      errorClass: "Error",
+      causeChain: ["TypeError"],
+      frames: ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"],
+    },
+  });
+  expect(JSON.stringify(fetchMock.mock.calls)).not.toMatch(
+    /private browser detail|private wrapper|https?:/,
+  );
 });

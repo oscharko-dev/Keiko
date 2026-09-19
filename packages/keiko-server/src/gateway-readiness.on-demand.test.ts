@@ -6,7 +6,12 @@ import {
   ensureOnDemandConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 import type { UiHandlerDeps } from "./deps.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // The cooldown maths compare an observation's checkedAt against the real clock inside the
 // production module, so these tests freeze Date.now to a fixed epoch instead of deriving
@@ -247,5 +252,114 @@ describe("ensureAnyConversationReadyChatModel budget", () => {
     // The requested model and the FIRST walk candidate were probed; the budget expired while
     // that candidate hung, so the walk never reached the third model.
     expect(probed).toEqual(["m1", "m2"]);
+  });
+});
+
+describe("on-demand readiness correlation", () => {
+  it.each(["ready", "failed"] as const)(
+    "links every concurrent waiter to the single shared %s probe",
+    async (status) => {
+      const { deps } = probeableDeps("invalid");
+      const events: ServerLogEvent[] = [];
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      const fetch = vi.fn(() => pending);
+      const shared = {
+        ...deps,
+        activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+        gatewayReadinessFetch: fetch,
+      };
+      const calls = ["create-request", "send-request", "regenerate-request"].map((correlationId) =>
+        ensureOnDemandConversationReadiness(shared, "chat-model", correlationId),
+      );
+      release(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: status === "ready" ? "OK" : "" } }] }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+      await Promise.all(calls);
+      expect(fetch).toHaveBeenCalledOnce();
+      const joined = events.filter((event) => event.op === "gateway.readiness.automatic.joined");
+      expect(joined.map((event) => event.correlationId)).toEqual([
+        "send-request",
+        "regenerate-request",
+      ]);
+      for (const event of joined) {
+        expect(
+          expectActivityLogProof(
+            "gateway.readiness.automatic.joined.line",
+            formatActivityLogProofLine(event),
+          ),
+        ).toMatchObject({ parentCorrelationId: "create-request", modelId: "chat-model" });
+      }
+      expect(
+        events.find((event) => event.op === "gateway.readiness.automatic.completed"),
+      ).toMatchObject({ correlationId: "create-request", extra: { overallStatus: status } });
+    },
+  );
+
+  it("keeps the request identity through a default-model walk", async () => {
+    const { deps } = probeableDeps("invalid");
+    const events: ServerLogEvent[] = [];
+    await ensureAnyConversationReadyChatModel(
+      {
+        ...deps,
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      },
+      "chat-model",
+      "create-chat-0001",
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "gateway.readiness.automatic.started",
+          correlationId: "create-chat-0001",
+        }),
+        expect.objectContaining({
+          op: "gateway.readiness.automatic.completed",
+          correlationId: "create-chat-0001",
+        }),
+      ]),
+    );
+  });
+
+  it("records a failed probe outcome against the admitting request", async () => {
+    const { deps } = probeableDeps("invalid");
+    const events: ServerLogEvent[] = [];
+    await ensureOnDemandConversationReadiness(
+      {
+        ...deps,
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        gatewayReadinessFetch: () => Promise.reject(new Error("synthetic transport failure")),
+      },
+      "chat-model",
+      "send-chat-0001",
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "gateway.readiness.automatic.started",
+          correlationId: "send-chat-0001",
+        }),
+        expect.objectContaining({
+          op: "gateway.readiness.automatic.completed",
+          correlationId: "send-chat-0001",
+        }),
+      ]),
+    );
+    expect(
+      events.find((event) => event.op === "gateway.readiness.automatic.completed")?.extra,
+    ).toMatchObject({ overallStatus: "failed" });
   });
 });

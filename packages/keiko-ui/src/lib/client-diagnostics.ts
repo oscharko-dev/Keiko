@@ -35,15 +35,27 @@ import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
   type ClientDiagnosticGitChangeDescription,
+  type ClientMarkdownLayout,
+  type ClientErrorEvidence,
   type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
   type ClientDiagnosticLossCounts,
+  type ClientVoiceDialogueStage,
+  type ClientVoiceCaptureReason,
+  type ClientVoiceCaptureError,
   type ClientDiagnosticWorkspaceTrustBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
+  readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
+  readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
+  readonly markdownLayout?: ClientMarkdownLayout | undefined;
+  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }

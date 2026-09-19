@@ -3,13 +3,15 @@
 // Keeping this module small avoids a second, misleading dialogue-session layer.
 
 import type { VoiceCapabilityResolution } from "@/lib/types";
-import { supportsRealtimeVoice, supportsSpeechOutput } from "./useVoiceCapability";
+import {
+  supportsDictation,
+  supportsRealtimeVoice,
+  supportsSpeechOutput,
+} from "./useVoiceCapability";
 
-// ─── Fallback matrix (D2) ────────────────────────────────────────────────────────
-// The capture strategy the offered session uses. `"none"` is the fail-closed default for every
-// not-offered case; `"webrtc"` is the only Voice Dialogue path. STT dictation stays a separate
-// composer feature and must never be treated as spoken dialogue.
-type VoiceDialogueCapture = "none" | "webrtc";
+// Capture strategy for one spoken conversation. `"none"` is the fail-closed default. The existing
+// composer dictation flow stays separate; batch dialogue owns turn delivery and spoken replies.
+export type VoiceDialogueCapture = "none" | "webrtc" | "batch";
 
 // The total description the matrix returns for a resolution. `offered` gates the dialogue switch; the
 // remaining fields describe what an offered session can do. Every field is deterministically derived,
@@ -28,21 +30,34 @@ const DIALOGUE_DORMANT: VoiceDialogueMode = {
   canInterrupt: false,
 };
 
-// Dialogue is offered IFF the deployment advertises Realtime capture plus independent speech output,
-// the media posture includes WebRTC, the browser exposes realtime media APIs, and at least one TTS
-// persona is advertised. Batch STT remains Composer dictation, not a Twin Dialogue fallback.
+// Prefer native Realtime when its media posture and browser support allow it. Otherwise the
+// browser can capture one short STT turn at a time and receive a spoken canonical chat answer.
 export function voiceDialogueModeForResolution(
   resolution: VoiceCapabilityResolution | undefined,
   browserRealtimeSupported: boolean,
+  browserBatchSupported = false,
 ): VoiceDialogueMode {
   const personaCount = resolution?.availableVoicePersonas?.length ?? 0;
-  const offered =
+  const nativeOffered =
     supportsRealtimeVoice(resolution) &&
     supportsSpeechOutput(resolution) &&
     browserRealtimeSupported &&
     personaCount > 0;
-  if (!offered) {
-    return DIALOGUE_DORMANT;
-  }
-  return { offered: true, capture: "webrtc", speaks: true, canInterrupt: true };
+  if (nativeOffered) return { offered: true, capture: "webrtc", speaks: true, canInterrupt: true };
+  return batchDialogueMode(resolution, browserBatchSupported, personaCount);
+}
+
+function batchDialogueMode(
+  resolution: VoiceCapabilityResolution | undefined,
+  browserBatchSupported: boolean,
+  personaCount: number,
+): VoiceDialogueMode {
+  const offered =
+    supportsDictation(resolution) &&
+    supportsSpeechOutput(resolution) &&
+    browserBatchSupported &&
+    personaCount > 0;
+  return offered
+    ? { offered: true, capture: "batch", speaks: true, canInterrupt: false }
+    : DIALOGUE_DORMANT;
 }

@@ -1,7 +1,7 @@
 /**
- * Lazy contract validators + BFF fetchers for three Coding Workbench route groups: GitHub issue
+ * Lazy contract validators + BFF fetchers for Coding Workbench route groups: GitHub issue
  * preview (#3385), governed draft-delivery journey refresh (#3389), and governed PR-description
- * application (#3399, ADR-0086).
+ * application (#3399, ADR-0086), and governed Git fetch/pull (#1573).
  *
  * `./api.ts` is first-load-reachable from the desktop shell (imported synchronously for unrelated
  * routes such as `fetchConfig`/`fetchModels`), so a top-level import of these routes' contract
@@ -22,7 +22,18 @@
  * response validators that route through it.
  */
 
-import type { GitRepositoryValidation } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitHistoryResponse,
+  GitSyncOperation,
+  GitSyncPreview,
+  GitSyncExecuteResponse,
+  GitRepositoryValidation,
+} from "@oscharko-dev/keiko-contracts";
+import { validateGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
+import {
+  validateGitSyncPreview,
+  validateGitSyncExecuteResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
   CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
@@ -48,6 +59,8 @@ import {
   SHA256_HEX,
 } from "./api-shared-primitives";
 import type {
+  GitDeliverySyncInput,
+  GitDeliverySyncApproveResponse,
   CodingWorkbenchIssuePreviewRequest,
   CodingWorkbenchJourneyRefreshResult,
   GitDeliveryPrDescriptionApproveResponse,
@@ -440,4 +453,78 @@ export async function fetchGitDeliveryPrDescriptionStatus(
     },
     validatePrDescriptionApplicationResultWire,
   );
+}
+
+// Governed Git fetch/pull keeps request construction and validation behind the same lazy boundary.
+
+function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ...(input.remote === undefined ? {} : { remote: input.remote }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+    ...(input.userInitiated === true ? { userInitiated: true } : {}),
+  });
+}
+
+function gitDeliverySyncPath(
+  operation: GitSyncOperation,
+  phase: "preview" | "approve" | "execute",
+): string {
+  return `/api/git-delivery/${operation}/${phase}`;
+}
+
+export async function fetchGitSyncPreview(
+  fetchJson: ApiFetchJson,
+  input: GitDeliverySyncInput,
+  signal?: AbortSignal,
+): Promise<GitSyncPreview> {
+  return fetchJson(
+    gitDeliverySyncPath(input.operation, "preview"),
+    {
+      method: "POST",
+      body: gitDeliverySyncBody(input),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitSyncPreview,
+  );
+}
+
+export async function fetchGitSyncExecute(
+  fetchJson: ApiFetchJson,
+  input: GitDeliverySyncInput,
+  signal?: AbortSignal,
+): Promise<GitSyncExecuteResponse> {
+  return fetchJson(
+    gitDeliverySyncPath(input.operation, "execute"),
+    {
+      method: "POST",
+      body: gitDeliverySyncBody(input),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitSyncExecuteResponse,
+  );
+}
+
+export async function fetchGitSyncApprove(
+  fetchJson: ApiFetchJson,
+  input: Omit<GitDeliverySyncInput, "approval" | "userInitiated">,
+  signal?: AbortSignal,
+): Promise<GitDeliverySyncApproveResponse> {
+  return fetchJson(gitDeliverySyncPath(input.operation, "approve"), {
+    method: "POST",
+    body: gitDeliverySyncBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitHistory(
+  fetchJson: ApiFetchJson,
+  input: Parameters<typeof import("./api").fetchGitHistory>[0],
+): Promise<GitHistoryResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  if (input.limit !== undefined) params.set("limit", input.limit.toString());
+  if (input.skip !== undefined) params.set("skip", input.skip.toString());
+  return fetchJson(`/api/git/history?${params.toString()}`, undefined, validateGitHistoryResponse);
 }

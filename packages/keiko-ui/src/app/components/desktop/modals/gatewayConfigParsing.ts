@@ -93,6 +93,7 @@ const VOICE_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
   "azure-foundry",
   "customer-hosted",
   "local-only",
+  "gateway-managed",
 ]);
 /**
  * The setup route rebuilds the circuit breaker with exactly these values and the form has no

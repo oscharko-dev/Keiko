@@ -8,6 +8,11 @@ import type {
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  fanOutClientDiagnostic,
+  resetClientDiagnosticPostStateForTests,
+} from "@/lib/install-client-diagnostics";
 import { Timeline } from "./CodingWorkbenchTimeline";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -427,4 +432,41 @@ describe("CodingWorkbenchTimeline", () => {
       ),
     ).toEqual([]);
   });
+});
+
+it("joins short provider message IDs through the real diagnostic transport", () => {
+  const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetchMock);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  setClientDiagnosticWriter(fanOutClientDiagnostic);
+  try {
+    const feed = feedWithPlan(0);
+    const turns = feed.turns.map((turn) => ({
+      ...turn,
+      messages: turn.messages.map((message) => ({
+        ...message,
+        messageId: "msg_1",
+        segments: [{ kind: "text" as const, text: "5. Continued item", truncated: false }],
+      })),
+    }));
+    render(
+      <Timeline
+        events={[]}
+        activity={activityLike({ ...feed, runId: "coding-run-1", turns })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const call = fetchMock.mock.calls.find(([url]) => url === "/api/diagnostics/client");
+    const body: unknown = JSON.parse((call?.[1] as RequestInit).body as string);
+    expect(body).toMatchObject({
+      kind: "markdown-layout",
+      correlationId: "coding-run-1",
+      markdownLayout: { messageId: "msg_1", listStart: 5 },
+    });
+  } finally {
+    resetClientDiagnosticWriter();
+    resetClientDiagnosticPostStateForTests();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  }
 });

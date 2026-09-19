@@ -542,6 +542,10 @@ export interface GatewayDiscoveredModels {
   readonly modelIds: readonly string[];
   readonly chatModelIds: readonly string[];
   readonly embeddingModelIds: readonly string[];
+  /** Voice roles declared by the gateway; excluded from chat and embedding probes. */
+  readonly voiceSpeechInputModelIds?: readonly string[];
+  readonly voiceSpeechOutputModelIds?: readonly string[];
+  readonly voiceRealtimeModelIds?: readonly string[];
   readonly imageInputModelIds?: readonly string[];
   readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
   // KEIKO-0325: true when the raw discovery payload contained more distinct model ids

@@ -17,6 +17,7 @@ import {
   type ServerLogEvent,
 } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
+import { redactLogFields } from "./observability/log-redaction.js";
 
 const CORRELATION_ID = "diagnostics-route-test";
 const CLIENT_TS = "2026-08-21T10:00:00.000Z";
@@ -107,10 +108,16 @@ describe("POST /api/diagnostics/client", () => {
     ["boundary", "internal"],
     ["unhandled-rejection", "internal"],
     ["sse-error", "unavailable"],
+    ["voice-dialogue", "internal"],
     ["other", "unknown"],
   ] as const)("maps the closed %s client kind to %s", async (kind, errorKind) => {
     const sink = captureServerLog();
-    const body = JSON.stringify({ message: "bounded client failure", clientTs: CLIENT_TS, kind });
+    const body = JSON.stringify({
+      message: "bounded client failure",
+      clientTs: CLIENT_TS,
+      kind,
+      ...(kind === "voice-dialogue" ? { voiceDialogueStage: "delivery-failed" } : {}),
+    });
 
     await expect(handleClientDiagnosticIngest(context(body))).resolves.toEqual({
       status: 204,
@@ -121,6 +128,298 @@ describe("POST /api/diagnostics/client", () => {
       errorKind,
       extra: { clientKind: kind },
     });
+  });
+
+  it.each([
+    ["delivery-cancelled", "cancelled"],
+    ["delivery-rejected", "unavailable"],
+    ["delivery-failed", "internal"],
+    ["capture-renewal-failed", "internal"],
+  ])("distinguishes %s as %s", async (stage, errorKind) => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "bounded delivery outcome",
+          clientTs: CLIENT_TS,
+          kind: "voice-dialogue",
+          voiceDialogueStage: stage,
+        }),
+      ),
+    );
+    expect(clientDiagnosticEvents(sink)[0]?.errorKind).toBe(errorKind);
+    expect(clientDiagnosticEvents(sink)[0]?.extra).toMatchObject({ voiceDialogueStage: stage });
+  });
+
+  it.each([-1, 1.5, 1_000_000_000, "7"])(
+    "rejects malformed layout coordinates %s",
+    async (listStart) => {
+      const sink = captureServerLog();
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "layout",
+            clientTs: CLIENT_TS,
+            kind: "markdown-layout",
+            markdownLayout: { listStart, listIndex: 0, depth: 0 },
+          }),
+        ),
+      );
+      expect(result.status).toBe(400);
+      expect(sink.events.filter((event) => event.op === "client.markdown.layout")).toHaveLength(0);
+    },
+  );
+
+  it("joins a body-free voice dialogue stage to the originating chat request", async () => {
+    const sink = captureServerLog();
+    const correlationId = "original-voice-chat-request-id";
+    const body = JSON.stringify({
+      message: "[keiko] batch voice dialogue (stage=delivery-failed)",
+      clientTs: CLIENT_TS,
+      correlationId,
+      kind: "voice-dialogue",
+      voiceDialogueStage: "delivery-failed",
+    });
+
+    await expect(handleClientDiagnosticIngest(context(body))).resolves.toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)[0]).toMatchObject({
+      correlationId,
+      errorKind: "internal",
+      extra: { clientKind: "voice-dialogue", voiceDialogueStage: "delivery-failed" },
+    });
+    const line = clientDiagnosticLine(sink);
+    expect(line).toMatchObject({ correlationId, voiceDialogueStage: "delivery-failed" });
+    expect(JSON.stringify(line)).not.toContain("batch voice dialogue");
+  });
+
+  it.each([
+    "started",
+    "turn-submitted",
+    "answer-ready",
+    "playback-settled",
+    "interrupted",
+    "stopped",
+  ] as const)(
+    "records successful voice stage %s as timeline evidence without a failure",
+    async (voiceDialogueStage) => {
+      const sink = captureServerLog();
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private content must never be retained",
+            clientTs: CLIENT_TS,
+            kind: "voice-dialogue",
+            correlationId: "voice-turn-correlation",
+            voiceDialogueStage,
+          }),
+        ),
+      );
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          level: "info",
+          op: "voice.dialogue.stage",
+          correlationId: "voice-turn-correlation",
+        }),
+      );
+      const event = sink.events.find((entry) => entry.op === "voice.dialogue.stage");
+      expect(event?.extra).toMatchObject({ voiceDialogueStage });
+      expect(event?.errorKind).toBeUndefined();
+      expect(sink.lines().join("\n")).not.toContain("private content");
+    },
+  );
+
+  it.each([
+    ["capture-bound-reached", "vad-unavailable", undefined],
+    ["capture-bound-reached", "speech-observed", undefined],
+    ["capture-bound-reached", "renewal-unsupported", undefined],
+    ["capture-renewal-failed", "replacement-create-failed", "type-error"],
+    ["capture-renewal-failed", "replacement-start-failed", "invalid-state"],
+    ["capture-renewal-failed", "replacement-start-failed", "type-error"],
+    ["capture-renewal-failed", "replacement-start-failed", "range-error"],
+    ["capture-renewal-failed", "previous-stop-failed", "not-supported"],
+    ["capture-renewal-failed", "replacement-stop-failed", "other"],
+  ] as const)(
+    "persists capture decision %s / %s",
+    async (voiceDialogueStage, voiceCaptureReason, voiceCaptureError) => {
+      const sink = captureServerLog();
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private microphone detail",
+            clientTs: CLIENT_TS,
+            kind: "voice-dialogue",
+            correlationId: "dialogue-session",
+            voiceDialogueStage,
+            voiceCaptureReason,
+            voiceCaptureError,
+          }),
+        ),
+      );
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          correlationId: "dialogue-session",
+          extra: expect.objectContaining({ voiceDialogueStage, voiceCaptureReason }) as unknown,
+        }),
+      );
+      const lines: unknown[] = sink.lines().map((line): unknown => JSON.parse(line));
+      expect(lines).toContainEqual(
+        expect.objectContaining({
+          correlationId: "dialogue-session",
+          voiceDialogueStage,
+          voiceCaptureReason,
+          ...(voiceCaptureError === undefined ? {} : { voiceCaptureError }),
+        }),
+      );
+      expect(sink.lines().join("")).not.toContain("private microphone detail");
+    },
+  );
+
+  it("retains the coding run parent on markdown layout evidence", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "layout",
+          clientTs: CLIENT_TS,
+          kind: "markdown-layout",
+          correlationId: "message-1",
+          parentCorrelationId: "coding-run-1",
+          markdownLayout: { listStart: 5, listIndex: 0, depth: 0 },
+        }),
+      ),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "client.markdown.layout",
+        correlationId: "message-1",
+        parentCorrelationId: "coding-run-1",
+      }),
+    );
+  });
+
+  it("persists a short message identity on the coding run timeline", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "layout",
+          clientTs: CLIENT_TS,
+          kind: "markdown-layout",
+          correlationId: "coding-run-1",
+          markdownLayout: { messageId: "msg_1", listStart: 5, listIndex: 0, depth: 0 },
+        }),
+      ),
+    );
+    const lines: unknown[] = sink.lines().map((line): unknown => JSON.parse(line));
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        op: "client.markdown.layout",
+        correlationId: "coding-run-1",
+        messageId: "msg_1",
+      }),
+    );
+  });
+
+  it("persists a closed module load failure without leaking the failing URL", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private chunk URL",
+          clientTs: CLIENT_TS,
+          kind: "other",
+          correlationId: "git-sync-load-1",
+          moduleLoadFailure: "git-sync",
+        }),
+      ),
+    );
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      correlationId: "git-sync-load-1",
+      moduleLoadFailure: "git-sync",
+    });
+    expect(sink.lines().join("")).not.toContain("private chunk URL");
+  });
+
+  it.each(["ChunkLoadError", "TypeError"])(
+    "persists module failure class %s and safe causes/frames",
+    async (errorClass) => {
+      const sink = captureServerLog();
+      const frames = ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"];
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private URL",
+            clientTs: CLIENT_TS,
+            kind: "other",
+            correlationId: "chunk-failure-id",
+            moduleLoadFailure: "git-sync",
+            errorEvidence: { errorClass, frames, causeChain: ["TypeError"] },
+          }),
+        ),
+      );
+      expect(clientDiagnosticLine(sink)).toMatchObject({
+        correlationId: "chunk-failure-id",
+        errorClass,
+        frames: redactLogFields({ frames })?.frames,
+        causeChain: ["TypeError"],
+        errorKind: errorClass === "ChunkLoadError" ? "unavailable" : "internal",
+      });
+      expect(sink.lines().join("")).not.toContain("private URL");
+    },
+  );
+
+  it("persists a recorder failure with its original cause location", async () => {
+    const sink = captureServerLog();
+    const frames = ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:30:567"];
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private device",
+          clientTs: CLIENT_TS,
+          kind: "voice-dialogue",
+          correlationId: "recorder-session",
+          voiceDialogueStage: "capture-renewal-failed",
+          voiceCaptureReason: "replacement-create-failed",
+          voiceCaptureError: "type-error",
+          errorEvidence: {
+            errorClass: "DictationRecorderError",
+            frames,
+            causeChain: ["TypeError"],
+          },
+        }),
+      ),
+    );
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      correlationId: "recorder-session",
+      voiceCaptureReason: "replacement-create-failed",
+      frames: redactLogFields({ frames })?.frames,
+      causeChain: ["TypeError"],
+    });
+    expect(sink.lines().join("")).not.toContain("private device");
+  });
+
+  it("does not persist a secret disguised as a production chunk basename", async () => {
+    const sink = captureServerLog();
+    const basename = ["customer", "apikey", "1234"].join("");
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "browser failure",
+          clientTs: CLIENT_TS,
+          errorEvidence: {
+            errorClass: "TypeError",
+            frames: [`dist/ui/static/_next/static/chunks/${basename}.js:1:2`],
+            causeChain: [],
+          },
+        }),
+      ),
+    );
+    expect(clientDiagnosticLine(sink)).toHaveProperty("frames");
+    expect(sink.lines().join("")).not.toContain(basename);
   });
 
   it("projects the hostile message only as a digest", async () => {

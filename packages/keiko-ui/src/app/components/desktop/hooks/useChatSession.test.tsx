@@ -1838,6 +1838,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
       outcome = await result.current.sendMessage({
         text: "ground this voice turn",
         clientTurnId: "grounded-voice-1",
+        correlationId: "voice-grounded-correlation",
         reportOutcome: true,
       });
     });
@@ -1852,6 +1853,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
         expectedGroundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
       }),
       expect.any(AbortSignal),
+      "voice-grounded-correlation",
     );
   });
 

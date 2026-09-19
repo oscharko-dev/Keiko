@@ -242,12 +242,16 @@ limit above applies; the command never guesses at a writable evidence location.
 Stack frames and cause chains are added to `extra` as `frames?: readonly string[]` and
 `causeChain?: readonly string[]` (Wave 2, landed:
 `packages/keiko-server/src/observability/stack-frames.ts`). Each frame entry is a single joined
-string in one of two shapes: a workspace-package frame,
+string in one of the following shapes: a workspace-package frame,
 `"packages/keiko-<pkg>/(dist|src)/relative/path.(js|ts):LINE:COL"`, or, for the root `keiko` bin's
 own entrypoint — which lives outside every `packages/*` directory —
 `"(dist|src)/cli/relative/path.(js|ts):LINE:COL"`. Both shapes are pinned together by one pattern,
 `FRAME_SHAPE_PATTERN` (`stack-frames.ts`), which `log-redaction.ts` re-validates structurally at the
-redaction boundary rather than trusting the producer (D4).
+redaction boundary rather than trusting the producer (D4). Production browser failures additionally
+admit only `dist/ui/static/_next/static/chunks/<chunk>.js:LINE:COL`, validated by the shared
+`isClientDiagnosticFrame` guard; the same existing frame reducer revalidates that narrow shape.
+Chunk IDs and minified line/column coordinates identify the shipped artifact without transmitting
+URL origins, arbitrary paths or enabling source maps.
 
 **No runtime source maps are enabled**, and that is a considered decision, not an oversight. Every
 workspace package builds with `sourceMap: false` (only `declarationMap: true`); the root CLI
@@ -865,6 +869,29 @@ request":
   structured payload, prose and an unknown path each become their marker, and only a value none of
   those checks flags survives as sent (an empty note, or a short code-like one), so the browser can
   never widen what the log admits.
+  Shared on-demand readiness work retains each waiting request's causality. The first caller owns
+  the probe's start and completion; every concurrent caller emits `gateway.readiness.automatic.joined`
+  with its request correlation and the probe correlation as its parent (omitted for an identical
+  correlation). Model and configuration-generation fields identify the shared work without making
+  another provider call. Both successful and failed probes remain traceable from create, send and
+  regeneration requests. Assistant-response links accept only validated correlation identities;
+  malformed response bodies and invalid identities produce no fabricated link.
+  Known browser prerequisite failures use closed structured fields: a Git-sync validator chunk
+  failure records `moduleLoadFailure: git-sync` before any Git request, with a fresh correlation ID
+  shared by the UI error and diagnostic. Markdown layout evidence may carry a separately validated,
+  bounded opaque `messageId`; Coding Workbench uses its run ID as the diagnostic correlation so
+  provider message IDs shorter than the correlation minimum remain joinable. Native recorder
+  errors retain their cause in memory; browser failure reports may also carry a closed error class,
+  up to five closed cause classes and up to eight production chunk coordinates. The browser reduces
+  same-origin stack locations to `dist/ui/static/_next/static/chunks/<chunk>.js:LINE:COL`; the shared
+  wire guard and existing frame redaction boundary independently revalidate the bounded shape.
+  Shape validation does not prove a client-supplied basename belongs to the build. At the central
+  persistence boundary, the asset path before `:LINE:COL` is therefore reduced with SHA-256 over
+  `keiko-client-diagnostic-chunk-v1\0<asset path>`. Only the resulting `sha256-<digest>.js`
+  identity and bounded coordinates reach the log. An operator can compute that identity for the
+  exact shipped assets; a forged basename never survives verbatim.
+  Function names, origins, query strings, source paths and raw messages/stacks remain excluded.
+  Development frames without a production chunk anchor are omitted, never invented.
   A valid original request correlation takes precedence. Reports without one, including reports
   whose supplied id fails validation, use the validated ingest request correlation; internal
   callers without either use `UNKNOWN_CORRELATION_ID`. Rate-limit notices use the ingest request

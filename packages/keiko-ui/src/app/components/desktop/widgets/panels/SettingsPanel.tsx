@@ -9,7 +9,10 @@ import {
   gatewayVerificationFromProbeOutcome,
   UNVERIFIED_GATEWAY,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
-import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isCompleteRealtimeVoiceCapability,
+  VOICE_PERSONAS,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   applyGatewayVerifiedCapabilities,
   fetchConfig,
@@ -25,7 +28,11 @@ import {
   useSetLocale,
   useTranslate as useGlobalTranslate,
 } from "@/lib/i18n";
-import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
+import {
+  useSettingsTranslate as useTranslate,
+  type I18nTranslate,
+  type SettingsMessageKey,
+} from "./settings-i18n";
 import { DynamicChunkLoadFailure } from "../../DynamicChunkLoadFailure";
 import { DebuggingSettings } from "./DebuggingSettings";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
@@ -47,6 +54,7 @@ import {
   isConversationEligibleModel,
 } from "@/lib/types";
 import { Icons } from "../../Icons";
+import styles from "./SettingsPanel.module.css";
 
 import KeikoSelect from "../../KeikoSelect";
 import { personaLabel } from "../../VoiceDialogMode";
@@ -64,6 +72,7 @@ import {
   consumePendingGatewaySetup,
   notifyGatewayConfigUpdated,
   notifyGatewayModelReadinessUpdated,
+  requestGatewaySetup,
 } from "../shared/gatewaySetupBus";
 import {
   WALLPAPER_ENABLED_EVENT,
@@ -173,6 +182,16 @@ function voiceProviderShortLabel(model: ModelCapability, t: I18nTranslate): stri
   return t("settings.models.voiceCapabilityVoice");
 }
 
+function voiceSetupIssue(model: ModelCapability): SettingsMessageKey | undefined {
+  if (model.supportsSpeechOutput === true && (model.supportedVoicePersonas?.length ?? 0) === 0) {
+    return "settings.models.voiceNeedsOutputVoice";
+  }
+  if (model.supportsRealtimeVoice === true && !isCompleteRealtimeVoiceCapability(model)) {
+    return "settings.models.voiceNeedsRealtimeTranscription";
+  }
+  return undefined;
+}
+
 function voicePersonasFromModels(models: readonly ModelCapability[]): readonly VoicePersona[] {
   const present = new Set<VoicePersona>();
   for (const model of models) {
@@ -265,6 +284,19 @@ function VoiceEligibilityBadge({
   readonly model: ModelCapability;
   readonly t: I18nTranslate;
 }): ReactNode {
+  const issue = voiceSetupIssue(model);
+  if (issue !== undefined) {
+    const issueLabel = t(issue);
+    return (
+      <output
+        className={`ml-elig ${styles.cmpVoiceSetupBadge}`}
+        data-testid="voice-elig-setup"
+        title={issueLabel}
+      >
+        {issueLabel}
+      </output>
+    );
+  }
   const label = voiceProviderAvailabilityLabel(model, t);
   return (
     <output
@@ -809,6 +841,8 @@ function modelStatusTitle(
   }
   if (conversationEligible) return t("settings.models.statusNotVerified");
   if (embeddingReady) return t("settings.models.statusEmbedding");
+  const voiceIssue = voiceSetupIssue(model);
+  if (voiceReady && voiceIssue !== undefined) return t(voiceIssue);
   if (voiceReady) return voiceProviderAvailabilityLabel(model, t);
   return t("settings.models.statusNotSelectable");
 }
@@ -826,6 +860,7 @@ function modelStatusClass(
     return "connected";
   }
   if (conversationEligible) return "untested";
+  if (voiceReady && voiceSetupIssue(model) !== undefined) return "ineligible";
   return embeddingReady || voiceReady ? "connected" : "ineligible";
 }
 
@@ -887,6 +922,11 @@ function ModelCapabilityRow({
           observedGeneration={observedGeneration}
           onCapabilityApplied={onCapabilityApplied}
         />
+        {voiceSetupIssue(model) !== undefined ? (
+          <button type="button" className="ml-check" onClick={requestGatewaySetup}>
+            {t("settings.models.configureAudio")}
+          </button>
+        ) : null}
       </div>
       {conversationEligible ? (
         <div className="ml-actions">

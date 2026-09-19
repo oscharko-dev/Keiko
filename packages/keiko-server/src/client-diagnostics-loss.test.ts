@@ -65,6 +65,36 @@ describe("client diagnostics loss evidence", () => {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
   }
 
+  it("persists body-free Markdown layout evidence with counted loss", async () => {
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private model response must not be logged",
+          kind: "markdown-layout",
+          correlationId: "message-1234",
+          markdownLayout: { listStart: 7, listIndex: 1, depth: 2 },
+          clientTs: CLIENT_TS,
+          loss: { postsThrottled: 2 },
+        }),
+      ),
+    );
+    expect(result.status).toBe(204);
+    const persisted = lines("client.markdown.layout");
+    expect(persisted).toHaveLength(1);
+    const line = expectActivityLogProof("client.markdown.layout.line", persisted[0] ?? "");
+    expect(line).toMatchObject({
+      correlationId: "message-1234",
+      level: "info",
+      listNumbering: "source-start",
+      listStart: 7,
+      listIndex: 1,
+      depth: 2,
+      clientPostsThrottled: 2,
+    });
+    expect(line).not.toHaveProperty("errorKind");
+    expect(persisted[0]).not.toContain("private model response");
+  });
+
   it("persists one throttled rejection line per refusal reason and counts every refusal", async () => {
     expect((await handleClientDiagnosticIngest(context("{not json"))).status).toBe(400);
     expect((await handleClientDiagnosticIngest(context("{still not json"))).status).toBe(400);
@@ -118,6 +148,30 @@ describe("client diagnostics loss evidence", () => {
     // A second flush has nothing left to write.
     flushClientDiagnosticsIngestCounts();
     expect(lines("client.diagnostic.rate-limited")).toHaveLength(2);
+  });
+
+  it("persists a correlated voice lifecycle stage and accounts for client loss", async () => {
+    const body = JSON.stringify({
+      message: "bounded voice event",
+      clientTs: CLIENT_TS,
+      kind: "voice-dialogue",
+      voiceDialogueStage: "interrupted",
+      correlationId: "voice-turn-correlation",
+      parentCorrelationId: "voice-session-correlation",
+      loss: { postsFailed: 1 },
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const [line] = lines("voice.dialogue.stage");
+    const proof = expectActivityLogProof("voice.dialogue.stage.line", line ?? "");
+    expect(proof).toMatchObject({
+      level: "info",
+      correlationId: "voice-turn-correlation",
+      parentCorrelationId: "voice-session-correlation",
+      voiceDialogueStage: "interrupted",
+      clientPostsFailed: 1,
+    });
+    expect(proof).not.toHaveProperty("errorKind");
+    expect(activityLogLossCounters()["client-post-failed"]).toBe(1);
   });
 
   it("persists and counts the browser's own delivery loss on the next accepted report", async () => {

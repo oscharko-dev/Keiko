@@ -21,6 +21,7 @@ import {
   MODEL_REASONING_EFFORTS,
   isLikelyEmbeddingModelId,
   isVoiceCapability,
+  isCompleteRealtimeVoiceCapability,
   listConfiguredCapabilities,
   loadConfigFromFile,
   modelSupportsRealtimeVoice,
@@ -162,6 +163,29 @@ const GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION = defineActivityLogOperation({
   failureClasses: ["gateway-tool-calling-capability"],
   proofIds: ["gateway.tool-calling.verification.line"],
   releaseImpact: "patch",
+});
+const GATEWAY_VOICE_SETUP_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.voice.setup.resolved",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-setup.logVoiceSetupResolution",
+  fields: {
+    speechInputModels: { type: "integer", dataClass: "count", required: true },
+    usableSpeechOutputModels: { type: "integer", dataClass: "count", required: true },
+    incompleteSpeechOutputModels: { type: "integer", dataClass: "count", required: true },
+    usableRealtimeModels: { type: "integer", dataClass: "count", required: true },
+    incompleteRealtimeModels: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["gateway-voice-configuration"],
+  proofIds: ["gateway.voice.setup.resolved.line"],
+  releaseImpact: "minor",
 });
 const FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS = 15_000;
 const FIGMA_CREDENTIAL_SMOKE_RESPONSE_BYTES = 64_000;
@@ -1199,7 +1223,7 @@ function modelsEndpoint(baseUrl: string): string {
 
 function modelInfoEndpointCandidates(baseUrl: string): readonly string[] {
   const normalized = normalizeBaseUrl(baseUrl);
-  return [`${normalized}/model/info`];
+  return [`${normalized}/model/info`, `${normalized}/model_group/info`];
 }
 
 function apiKeyHeaders(apiKey: string, apiKeyHeaderName: string): Record<string, string> {
@@ -1221,7 +1245,14 @@ function isUsableModelId(id: string): boolean {
 }
 
 function modelIdFromKnownFields(item: Record<string, unknown>): string | undefined {
-  for (const field of ["id", "model_name", "model", "deployment_name", "deploymentName"]) {
+  for (const field of [
+    "id",
+    "model_name",
+    "model_group",
+    "model",
+    "deployment_name",
+    "deploymentName",
+  ]) {
     const value = item[field];
     if (typeof value === "string") {
       const id = value.trim();
@@ -1267,11 +1298,13 @@ export function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean
 
 // "unsupported" is a DISCOVERY outcome, never a configured capability: the model is recognised
 // and reported to the operator, but it gets no provider entry and no slot in any selection list.
-type DiscoveryModelKind = "chat" | "embedding" | "unsupported";
+type DiscoveryModelKind = "chat" | "embedding" | "voice" | "unsupported";
+type DiscoveryVoiceRole = "speech-input" | "speech-output" | "realtime";
 
 interface ClassifiedDiscoveryModel {
   readonly id: string;
   readonly kind: DiscoveryModelKind;
+  readonly voiceRole?: DiscoveryVoiceRole;
   readonly supportsImageInput: boolean;
   readonly metadata: GatewayDiscoveredModelMetadata;
   /** Why the model is unsupported. Always present on an "unsupported" entry, absent otherwise. */
@@ -1322,6 +1355,10 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
   const metadata = metadataFromDiscoveryItem(item);
   const declaredMode = modelModeFromDiscoveryItem(item);
   if (declaredMode !== undefined) {
+    const voiceRole = voiceRoleForDeclaredMode(declaredMode);
+    if (voiceRole !== undefined) {
+      return { id, kind: "voice", voiceRole, supportsImageInput: false, metadata };
+    }
     const role = modelKindForDeclaredMode(declaredMode);
     if (role === "unsupported") {
       // The reason is drawn from a CLOSED vocabulary. A declared mode is gateway-controlled text of
@@ -1357,6 +1394,13 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
   return classifyUndeclaredDiscoveryItem(item, id, metadata);
 }
 
+function voiceRoleForDeclaredMode(mode: string): DiscoveryVoiceRole | undefined {
+  if (mode === "audio_transcription") return "speech-input";
+  if (mode === "audio_speech") return "speech-output";
+  if (mode === "realtime") return "realtime";
+  return undefined;
+}
+
 // Issue #144: exported as part of the discovery-normalization seam. Gateway setup now returns
 // embedding-capable records so setup can persist them for Local Knowledge while keeping them out of
 // chat.
@@ -1364,7 +1408,11 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
 // callers can drop the entry silently and keep healthy peers.
 export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
   const classified = classifyDiscoveryItem(item);
-  return classified === undefined || classified.kind === "unsupported" ? undefined : classified.id;
+  return classified === undefined ||
+    classified.kind === "unsupported" ||
+    classified.kind === "voice"
+    ? undefined
+    : classified.id;
 }
 
 // Issue #144: exported as part of the discovery-normalization seam. Throws on schema-level
@@ -1390,6 +1438,9 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
     }
   }
   const entries: ClassifiedDiscoveryModel[] = [...byId.values()];
+  // LiteLLM declares audio roles in /model/info. Preserve the existing chat/embedding discovery
+  // contract while routing these declarations to Voice setup; a Whisper alias is never a chat model.
+  const voiceEntries = entries.filter((entry) => entry.kind === "voice");
   // KEIKO-0325: raise a truncation flag alongside the limited slice so callers can
   // surface "N of M models discovered; add the rest by deployment name" instead of the
   // pre-fix silent drop. Kept optional-and-off-by-default so a fitting-within-cap
@@ -1399,15 +1450,37 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
   // They are partitioned BEFORE the cap — a gateway listing 60 audio endpoints ahead of its chat
   // aliases must not push the chat models past MAX_DISCOVERED_MODELS.
   const unsupported = entries.filter(isUnsupportedEntry);
-  const usableEntries = entries.filter((entry) => entry.kind !== "unsupported");
-  const wasTruncated = usableEntries.length > MAX_DISCOVERED_MODELS;
+  const usableEntries = entries.filter(
+    (entry) => entry.kind === "chat" || entry.kind === "embedding",
+  );
+  const wasTruncated =
+    usableEntries.length > MAX_DISCOVERED_MODELS || voiceEntries.length > MAX_DISCOVERED_MODELS;
   const usable = usableEntries.slice(0, MAX_DISCOVERED_MODELS);
-  assertDiscoveryYieldedUsableModels(usable, unsupported);
+  const boundedVoice = voiceEntries.slice(0, MAX_DISCOVERED_MODELS);
+  assertDiscoveryYieldedUsableModels([...usable, ...boundedVoice], unsupported);
+  return discoveredModelLists(usable, boundedVoice, unsupported, wasTruncated);
+}
+
+function discoveredModelLists(
+  usable: readonly ClassifiedDiscoveryModel[],
+  boundedVoice: readonly ClassifiedDiscoveryModel[],
+  unsupported: readonly UnsupportedDiscoveryModel[],
+  wasTruncated: boolean,
+): GatewayDiscoveredModels {
   return {
     modelIds: usable.map((entry) => entry.id),
     chatModelIds: usable.filter((entry) => entry.kind === "chat").map((entry) => entry.id),
     embeddingModelIds: usable
       .filter((entry) => entry.kind === "embedding")
+      .map((entry) => entry.id),
+    voiceSpeechInputModelIds: boundedVoice
+      .filter((entry) => entry.voiceRole === "speech-input")
+      .map((entry) => entry.id),
+    voiceSpeechOutputModelIds: boundedVoice
+      .filter((entry) => entry.voiceRole === "speech-output")
+      .map((entry) => entry.id),
+    voiceRealtimeModelIds: boundedVoice
+      .filter((entry) => entry.voiceRole === "realtime")
       .map((entry) => entry.id),
     imageInputModelIds: usable
       .filter((entry) => entry.kind === "chat" && entry.supportsImageInput)
@@ -2204,6 +2277,8 @@ interface SetupVoiceProvider {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;
+  /** Setup-only provenance: rebase this connection onto the verified primary URL candidate. */
+  readonly followsSetupGateway?: boolean | undefined;
   readonly apiKeyHeaderName: string;
   readonly timeoutMs: number | undefined;
   readonly maxRetries: number;
@@ -2829,7 +2904,11 @@ function setupVoiceConnection(
   raw: Record<string, unknown>,
   existing: ModelProviderConfig | undefined,
   preserveExisting: boolean,
+  gateway: SetupGatewayCredentials,
 ): { readonly baseUrl: string; readonly apiKey: string } | RouteResult {
+  if (sharesPrimaryGatewayForVoice(raw, existing)) {
+    return { baseUrl: gateway.baseUrl, apiKey: gateway.apiKey };
+  }
   const baseUrl = submittedOrInheritedString(
     raw,
     "voiceBaseUrl",
@@ -2849,23 +2928,38 @@ function setupVoiceConnection(
   return { baseUrl, apiKey };
 }
 
+function sharesPrimaryGatewayForVoice(
+  raw: Record<string, unknown>,
+  existing: ModelProviderConfig | undefined,
+): boolean {
+  return (
+    existing === undefined &&
+    !hasNonBlankStringField(raw, "voiceBaseUrl") &&
+    !hasNonBlankStringField(raw, "voiceApiKey")
+  );
+}
+
 function setupVoiceApiKeyHeaderName(
   raw: Record<string, unknown>,
   existing: ModelProviderConfig | undefined,
   preserveExisting: boolean,
+  sharedGatewayHeader: string | undefined,
 ): SetupParseResult<string> {
   return normalizeSetupApiKeyHeaderName(
-    setupVoiceApiKeyHeaderSource(raw, existing, preserveExisting),
+    raw.voiceApiKeyHeaderName ??
+      sharedGatewayHeader ??
+      setupVoiceApiKeyHeaderSource(raw, existing, preserveExisting),
   );
 }
 
 function setupVoiceProviderLocality(
   raw: Record<string, unknown>,
   existingCapability: ModelCapability | undefined,
+  defaultLocality: VoiceProviderLocality,
 ): SetupParseResult<VoiceProviderLocality> {
   return parseVoiceProviderLocality(
     raw.voiceProviderLocality,
-    existingCapability?.voiceProviderLocality ?? "azure-foundry",
+    existingCapability?.voiceProviderLocality ?? defaultLocality,
   );
 }
 
@@ -3412,6 +3506,7 @@ function voiceProviderConnection(
   return {
     baseUrl,
     apiKey: submittedOrTemplateString(raw, "voiceApiKey", template?.apiKey, defaults.apiKey),
+    ...sharedGatewayProvenance(defaults.followsSetupGateway === true),
     apiKeyHeaderName: submittedOrTemplateValue(
       raw.voiceApiKeyHeaderName,
       template?.apiKeyHeaderName,
@@ -3437,6 +3532,12 @@ function voiceProviderConnection(
     // breaker policy on any unrelated voice/setup save.
     ...voiceConnectionCircuitBreakerFragment(template, defaults),
   };
+}
+
+function sharedGatewayProvenance(
+  followsSetupGateway: boolean,
+): Pick<SetupVoiceProvider, "followsSetupGateway"> | Record<string, never> {
+  return followsSetupGateway ? { followsSetupGateway: true } : {};
 }
 
 function voiceConnectionCircuitBreakerFragment(
@@ -3890,26 +3991,47 @@ function setupVoiceProviderDefaults(
   timeoutMs: number | undefined,
   providerLocality: VoiceProviderLocality,
   existing: ModelProviderConfig | undefined,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
 ): SetupVoiceProviderDefaults {
+  return {
+    ...connection,
+    ...sharedGatewayProvenance(sharedGateway),
+    apiKeyHeaderName,
+    timeoutMs: timeoutMs ?? existing?.timeoutMs,
+    maxRetries: existing?.maxRetries ?? 1,
+    retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
+    ...inheritedVoiceEndpoint(connection.baseUrl, existing, gateway, sharedGateway),
+    providerLocality,
+    ...inheritedCircuitBreakerFragment(existing),
+  };
+}
+
+function inheritedVoiceEndpoint(
+  baseUrl: string,
+  existing: ModelProviderConfig | undefined,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
+): VoiceProviderEndpointOptions {
   // The inherited provider's endpoint protocol (style, api version, realtime auth mode) is bound
   // to ITS base URL: it may seed the connection defaults only under the same URL-identity rule
   // the per-role template branch enforces. Without the guard, a preserve-mode move to a new host
   // (e.g. Azure -> LiteLLM) stamped the OLD provider's Azure protocol onto every role that had no
   // per-role template (LiteLLM production audit). Submitted endpoint fields still override these
   // defaults downstream (#3037).
-  const inheritedEndpoint =
-    existing !== undefined && sameBaseUrlIdentity(connection.baseUrl, existing.baseUrl)
-      ? voiceProviderTemplateEndpoint(existing, {})
-      : {};
+  if (existing !== undefined && sameBaseUrlIdentity(baseUrl, existing.baseUrl)) {
+    return voiceProviderTemplateEndpoint(existing, {});
+  }
+  return sharedGateway ? sharedGatewayVoiceEndpoint(gateway) : {};
+}
+
+function sharedGatewayVoiceEndpoint(
+  gateway: SetupGatewayCredentials,
+): VoiceProviderEndpointOptions {
+  const endpointStyle = PROVIDER_ENDPOINT_STYLES.find((style) => style === gateway.endpointStyle);
   return {
-    ...connection,
-    apiKeyHeaderName,
-    timeoutMs: timeoutMs ?? existing?.timeoutMs,
-    maxRetries: existing?.maxRetries ?? 1,
-    retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
-    ...inheritedEndpoint,
-    providerLocality,
-    ...inheritedCircuitBreakerFragment(existing),
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(gateway.apiVersion === undefined ? {} : { apiVersion: gateway.apiVersion }),
   };
 }
 
@@ -3939,22 +4061,45 @@ interface VoiceSetupOptions {
   readonly submittedEndpoint: VoiceProviderEndpointOptions | undefined;
 }
 
+function defaultVoiceProviderLocality(
+  submittedEndpoint: SetupParseResult<VoiceProviderEndpointOptions | undefined>,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
+): VoiceProviderLocality {
+  const declaredStyle = submittedEndpoint.ok ? submittedEndpoint.value?.endpointStyle : undefined;
+  return declaredStyle === "azure-openai-deployment" ||
+    (sharedGateway && gateway.endpointStyle === "azure-openai-deployment")
+    ? "azure-foundry"
+    : "gateway-managed";
+}
+
 function parsedVoiceSetupOptions(
   raw: Record<string, unknown>,
   existing: ModelProviderConfig | undefined,
   existingCapability: ModelCapability | undefined,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
+  gateway: SetupGatewayCredentials,
+  sharedGateway: boolean,
 ): VoiceSetupOptions | RouteResult {
-  const apiKeyHeaderName = setupVoiceApiKeyHeaderName(raw, existing, preserveExisting);
+  const apiKeyHeaderName = setupVoiceApiKeyHeaderName(
+    raw,
+    existing,
+    preserveExisting,
+    sharedGateway ? gateway.apiKeyHeaderName : undefined,
+  );
   const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
-  const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
+  const submittedEndpoint = submittedVoiceEndpointOptions(raw);
+  const providerLocality = setupVoiceProviderLocality(
+    raw,
+    existingCapability,
+    defaultVoiceProviderLocality(submittedEndpoint, gateway, sharedGateway),
+  );
   const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
   const speechSynthesisInstructions = optionalSetupBoolean(
     raw.voiceSupportsSpeechSynthesisInstructions,
     "voiceSupportsSpeechSynthesisInstructions",
   );
-  const submittedEndpoint = submittedVoiceEndpointOptions(raw);
   if (!apiKeyHeaderName.ok) return apiKeyHeaderName.routeError;
   if (!timeoutMs.ok) return timeoutMs.routeError;
   if (!providerLocality.ok) return providerLocality.routeError;
@@ -3977,21 +4122,25 @@ function readSetupVoiceProviders(
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
   correlationId: string | undefined,
+  gateway: SetupGatewayCredentials,
 ): readonly SetupVoiceProvider[] | RouteResult {
   const inputFieldError = validateVoiceInputFields(raw, correlationId);
   if (inputFieldError !== undefined) return inputFieldError;
   if (!hasVoiceProviderInput(raw)) return [];
   const existingVoiceProviders = preserveExisting ? setupVoiceProvidersFromCurrent(current) : [];
   const existing = inheritedVoiceProvider(current, preserveExisting);
+  const sharedGateway = sharesPrimaryGatewayForVoice(raw, existing);
   const existingCapability = currentVoiceCapability(current, existing?.modelId);
   const roleIds = voiceRoleModelIds(raw, current, preserveExisting, correlationId);
-  const connection = setupVoiceConnection(raw, existing, preserveExisting);
+  const connection = setupVoiceConnection(raw, existing, preserveExisting, gateway);
   const options = parsedVoiceSetupOptions(
     raw,
     existing,
     existingCapability,
     current,
     preserveExisting,
+    gateway,
+    sharedGateway,
   );
   if (isRouteResult(options)) return options;
   const routeError = firstRouteResult([
@@ -4003,22 +4152,56 @@ function readSetupVoiceProviders(
   if (routeError !== undefined) {
     return routeError;
   }
-  const defaults = setupVoiceProviderDefaults(
-    connection as { readonly baseUrl: string; readonly apiKey: string },
-    options.apiKeyHeaderName,
-    options.timeoutMs,
-    options.providerLocality,
-    existing,
-  );
-  const generatedProviders = providersForVoiceRoles(
-    roleIds as VoiceRoleModelIds,
-    defaults,
-    raw,
+  return assembleVoiceProvidersForSetup({
+    connection: connection as { readonly baseUrl: string; readonly apiKey: string },
     options,
+    existing,
+    gateway,
+    sharedGateway,
+    roleIds: roleIds as VoiceRoleModelIds,
+    raw,
     existingVoiceProviders,
+    env,
+  });
+}
+
+interface VoiceProviderAssembly {
+  readonly connection: { readonly baseUrl: string; readonly apiKey: string };
+  readonly options: VoiceSetupOptions;
+  readonly existing: ModelProviderConfig | undefined;
+  readonly gateway: SetupGatewayCredentials;
+  readonly sharedGateway: boolean;
+  readonly roleIds: VoiceRoleModelIds;
+  readonly raw: Record<string, unknown>;
+  readonly existingVoiceProviders: readonly SetupVoiceProvider[];
+  readonly env: EnvSource;
+}
+
+function assembleVoiceProvidersForSetup(
+  input: VoiceProviderAssembly,
+): readonly SetupVoiceProvider[] | RouteResult {
+  const defaults = setupVoiceProviderDefaults(
+    input.connection,
+    input.options.apiKeyHeaderName,
+    input.options.timeoutMs,
+    input.options.providerLocality,
+    input.existing,
+    input.gateway,
+    input.sharedGateway,
   );
-  const providers = mergeUntouchedVoiceProviders(generatedProviders, existingVoiceProviders, raw);
-  return validatedVoiceProviders(providers, env);
+  const generated = providersForVoiceRoles(
+    input.roleIds,
+    defaults,
+    input.raw,
+    input.options,
+    input.existingVoiceProviders,
+  );
+  const providers = mergeUntouchedVoiceProviders(
+    generated,
+    input.existingVoiceProviders,
+    input.raw,
+  );
+  return validatedVoiceProviders(providers, input.env);
 }
 
 interface ResolvedSetupModelLists {
@@ -4234,10 +4417,9 @@ function readSetupRequest(
     current,
     preserveExisting,
     correlationId,
+    credentials,
   );
-  if (isRouteResult(voiceProviders)) {
-    return voiceProviders;
-  }
+  if (isRouteResult(voiceProviders)) return voiceProviders;
   return assembleSetupRequest({
     raw,
     current,
@@ -4346,6 +4528,9 @@ interface SetupCandidateModels {
   readonly modelIds: readonly string[];
   readonly chatModelIds: readonly string[];
   readonly embeddingModelIds: readonly string[];
+  readonly voiceSpeechInputModelIds?: readonly string[];
+  readonly voiceSpeechOutputModelIds?: readonly string[];
+  readonly voiceRealtimeModelIds?: readonly string[];
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
   readonly imageInputModelIds: readonly string[];
   readonly modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
@@ -4447,6 +4632,9 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
       modelIds: result.modelIds,
       chatModelIds: result.chatModelIds,
       embeddingModelIds: result.embeddingModelIds,
+      voiceSpeechInputModelIds: result.voiceSpeechInputModelIds ?? [],
+      voiceSpeechOutputModelIds: result.voiceSpeechOutputModelIds ?? [],
+      voiceRealtimeModelIds: result.voiceRealtimeModelIds ?? [],
       imageInputModelIds: result.imageInputModelIds ?? [],
       modelMetadata: result.modelMetadata ?? {},
       // KEIKO-0325: propagate the discovery-truncation flag from parseModelDiscovery
@@ -4520,6 +4708,7 @@ function finalRawConfigForSetup(
   imageInputModelIds: readonly string[],
   responseFormatModelIds: readonly string[],
   modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>,
+  discoveredVoiceModels: SetupCandidateModels,
 ): Record<string, unknown> {
   const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
@@ -4551,13 +4740,9 @@ function finalRawConfigForSetup(
   // Verbatim restoration reads the DURABLE stored view: restored values are what the FILE
   // holds, so a transient per-model env override neither hides a sharing relationship nor gets
   // baked into the rebuilt persisted config (review finding on #3037).
+  const voiceProviders = discoveredVoiceProvidersForSetup(input, discoveredVoiceModels);
   return applyStoredDedicatedProviders(
-    applyVoiceProviders(
-      rawConfigWithOptionalBlocks,
-      input.voiceProviders.length > 0
-        ? input.voiceProviders
-        : setupVoiceProvidersFromCurrent(input.stored),
-    ),
+    applyVoiceProviders(rawConfigWithOptionalBlocks, voiceProviders),
     input.stored,
     [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
     {
@@ -4568,6 +4753,72 @@ function finalRawConfigForSetup(
       apiVersion: input.apiVersion,
     },
   );
+}
+
+function discoveredVoiceProvidersForSetup(
+  input: SetupVerificationInput,
+  discovered: SetupCandidateModels,
+): readonly SetupVoiceProvider[] {
+  const configured =
+    input.voiceProviders.length > 0
+      ? input.voiceProviders
+      : setupVoiceProvidersFromCurrent(input.stored);
+  const voiceProviders = configured.map((provider) => rebaseSharedVoiceProvider(provider, input));
+  const presentIds = new Set(configured.map((provider) => provider.modelId));
+  const roles: readonly (readonly [VoiceDeploymentRole, readonly string[]])[] = [
+    ["speechInput", discovered.voiceSpeechInputModelIds ?? []],
+    ["speechOutput", discovered.voiceSpeechOutputModelIds ?? []],
+    ["realtime", discovered.voiceRealtimeModelIds ?? []],
+  ];
+  for (const [role, modelIds] of roles) {
+    for (const modelId of modelIds) {
+      if (presentIds.has(modelId)) continue;
+      presentIds.add(modelId);
+      voiceProviders.push(discoveredVoiceProvider(input, modelId, role));
+    }
+  }
+  return voiceProviders;
+}
+
+function rebaseSharedVoiceProvider(
+  provider: SetupVoiceProvider,
+  gateway: SetupVerificationInput,
+): SetupVoiceProvider {
+  const storedPrimary = storedPrimaryGatewayProvider(gateway.stored);
+  if (!sharesStoredGatewayConnection(provider, storedPrimary)) return provider;
+  const followsProtocol = spokeStoredGatewayProtocol(provider, storedPrimary);
+  const endpointStyle = PROVIDER_ENDPOINT_STYLES.find((style) => style === gateway.endpointStyle);
+  return {
+    ...provider,
+    baseUrl: gateway.baseUrl,
+    apiKey: gateway.apiKey,
+    apiKeyHeaderName: gateway.apiKeyHeaderName,
+    endpointStyle: followsProtocol ? endpointStyle : provider.endpointStyle,
+    apiVersion: followsProtocol ? gateway.apiVersion : provider.apiVersion,
+  };
+}
+
+function discoveredVoiceProvider(
+  input: SetupVerificationInput,
+  modelId: string,
+  role: VoiceDeploymentRole,
+): SetupVoiceProvider {
+  const endpointStyle = PROVIDER_ENDPOINT_STYLES.find((style) => style === input.endpointStyle);
+  return {
+    modelId,
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    apiKeyHeaderName: input.apiKeyHeaderName,
+    timeoutMs: input.timeoutMs,
+    maxRetries: 1,
+    retryBaseDelayMs: 500,
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(input.apiVersion === undefined ? {} : { apiVersion: input.apiVersion }),
+    // LiteLLM describes the role but not its upstream residency. A gateway-managed locality
+    // states that limitation honestly instead of guessing from the gateway URL.
+    providerLocality: "gateway-managed",
+    capabilities: voiceRoleCapability(role),
+  };
 }
 
 // The gateway connection a restored provider may follow: endpoint, credential, header AND the
@@ -4590,7 +4841,7 @@ interface SetupGatewayConnection {
 // must never travel to a connection they were not tested against (review findings on #3031, same
 // rule as the endpoint-change token guard).
 function sharesStoredGatewayConnection(
-  provider: ModelProviderConfig,
+  provider: Pick<ModelProviderConfig, "baseUrl" | "apiKey" | "apiKeyHeaderName">,
   storedPrimary: ModelProviderConfig | undefined,
 ): boolean {
   return (
@@ -4606,7 +4857,7 @@ function sharesStoredGatewayConnection(
 // deliberately used a different valid protocol over the same connection keeps its own: the new
 // request shape was never verified for it (review finding on #3046).
 function spokeStoredGatewayProtocol(
-  provider: ModelProviderConfig,
+  provider: Pick<ModelProviderConfig, "endpointStyle" | "apiVersion">,
   storedPrimary: ModelProviderConfig | undefined,
 ): boolean {
   return (
@@ -4736,6 +4987,7 @@ function finalRawConfigForTestedSetup(
     imageInputModelIds,
     testResult.responseFormatModelIds,
     candidateModels.modelMetadata,
+    candidateModels,
   );
 }
 
@@ -5550,6 +5802,7 @@ function finalizeVerifiedCandidate(
     request.correlationId,
   );
   gatewayConfig.set(verified.config, true);
+  logVoiceSetupResolution(verified.config, request.correlationId);
   recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
   return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds, {
     ...(verified.unsupportedModels !== undefined
@@ -5603,7 +5856,9 @@ async function trySetupCandidate(
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,
-    voiceProviders: request.voiceProviders,
+    voiceProviders: request.voiceProviders.map((provider) =>
+      provider.followsSetupGateway === true ? { ...provider, baseUrl } : provider,
+    ),
     tester: seams.tester,
     discovery: seams.discovery,
     env: deps.env,
@@ -5901,6 +6156,7 @@ function saveExistingConfigUpdate(
   );
   persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps, request.correlationId);
   gatewayConfig.set(config, true);
+  logVoiceSetupResolution(config, request.correlationId);
   recordGatewaySetupAudit(deps, request, config, "existing-config-updated");
   return setupSuccessResult(
     config,
@@ -6456,6 +6712,33 @@ function logToolCallingVerification(
       {
         verificationStatus: status,
         ...(fingerprint === undefined ? {} : { configurationFingerprint: fingerprint }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function logVoiceSetupResolution(config: GatewayConfig, correlationId: string | undefined): void {
+  const models = listConfiguredCapabilities(config).filter(isVoiceCapability);
+  const speechOutput = models.filter(modelSupportsSpeechOutput);
+  const realtime = models.filter(modelSupportsRealtimeVoice);
+  processServerLogSink().write(
+    activityLogEvent(
+      GATEWAY_VOICE_SETUP_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), status: 200 },
+      {
+        speechInputModels: models.filter(modelSupportsSpeechInput).length,
+        usableSpeechOutputModels: speechOutput.filter(
+          (model) => (model.supportedVoicePersonas?.length ?? 0) > 0,
+        ).length,
+        incompleteSpeechOutputModels: speechOutput.filter(
+          (model) => (model.supportedVoicePersonas?.length ?? 0) === 0,
+        ).length,
+        usableRealtimeModels: realtime.filter(isCompleteRealtimeVoiceCapability).length,
+        incompleteRealtimeModels: realtime.filter(
+          (model) => !isCompleteRealtimeVoiceCapability(model),
+        ).length,
         completeness: "complete",
         loss: "none",
       },

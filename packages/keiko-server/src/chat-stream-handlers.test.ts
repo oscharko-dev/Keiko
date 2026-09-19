@@ -38,6 +38,7 @@ import {
   resetServerLogger,
   setServerLogger,
 } from "./observability/index.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 import type { RuntimeGatewayConfig } from "./deps.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -1398,7 +1399,12 @@ describe("desktop chat SSE streaming handler", () => {
     const assistant = store.listMessages(chatId).at(-1);
     if (assistant === undefined) throw new Error("missing assistant fixture");
     const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
-    holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
+    holder.recordVerifiedCapability(
+      CHAT_MODEL,
+      { conversationReady: false },
+      new Date().toISOString(),
+      holder.generation(),
+    );
     const outcome = await handleRegenerateDesktopChat(
       {
         ...routeContext(
@@ -1419,6 +1425,60 @@ describe("desktop chat SSE streaming handler", () => {
       }),
     );
     expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
+  });
+
+  it("verifies an unknown chat model before regenerating without exposing the original turn", async () => {
+    const chatId = seedChat();
+    seedMessage(chatId, "user", "private regeneration question");
+    seedMessage(chatId, "assistant", "private regeneration answer");
+    const assistant = store.listMessages(chatId).at(-1);
+    if (assistant === undefined) throw new Error("missing assistant fixture");
+    const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
+    holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] }),
+        {
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    ) as typeof fetch;
+    const activityEvents: ServerLogEvent[] = [];
+    const outcome = await handleRegenerateDesktopChat(
+      {
+        ...routeContext(
+          makeReq({ chatId, projectPath: projectDir, assistantMessageId: assistant.id }),
+          captureRes().res,
+        ),
+        correlationId: "corr-regeneration-on-demand-ready",
+      },
+      deps(streamingModel("replacement answer").model, {
+        gatewayConfig: holder,
+        gatewayReadinessFetch: fetchImpl,
+        activityLog: { write: (event): void => void activityEvents.push(event) },
+      }),
+    );
+
+    expect(outcome.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(holder.verifiedCapability(CHAT_MODEL)?.fields.conversationReady).toBe(true);
+    const started = activityEvents.find(
+      (event) => event.op === "gateway.readiness.automatic.started",
+    );
+    const completed = activityEvents.find(
+      (event) => event.op === "gateway.readiness.automatic.completed",
+    );
+    expect(started).toMatchObject({
+      correlationId: "corr-regeneration-on-demand-ready",
+      extra: { modelId: CHAT_MODEL, probeCount: 1 },
+    });
+    expect(completed).toMatchObject({
+      correlationId: "corr-regeneration-on-demand-ready",
+      extra: { modelId: CHAT_MODEL, overallStatus: "ready", probeCount: 1 },
+    });
+    expect(JSON.stringify(vi.mocked(fetchImpl).mock.calls)).not.toContain(
+      "private regeneration question",
+    );
   });
 
   it("rejects a buffered turn when the gateway generation changes during memory retrieval", async () => {
@@ -2989,6 +3049,47 @@ describe("desktop chat SSE streaming handler", () => {
   // ADR-0173 D5: the streaming call site (streamAndPersist) must stamp the request's correlation id
   // into GatewayCallRequest.logContext, mirroring the buffered path, so a gateway retry line for a
   // streamed turn joins the same trail as the rest of the request.
+  it.each(["buffered", "streamed", "regenerated"])(
+    "joins %s assistant rendering to its request",
+    async (mode) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "original question");
+      seedMessage(chatId, "assistant", "original answer");
+      const original = store.listMessages(chatId).at(-1);
+      const model = streamingModel("continued list");
+      const ctx: RouteContext = {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "hello",
+            assistantMessageId: original?.id,
+          }),
+          captureRes().res,
+        ),
+        correlationId: "request-list-render-bridge",
+      };
+      const handlers = {
+        buffered: handleSendDesktopChat,
+        streamed: handleSendDesktopChatStream,
+        regenerated: handleRegenerateDesktopChat,
+      };
+      const handler = handlers[mode as keyof typeof handlers];
+      await handler(ctx, deps(model.model));
+      const assistant = store.listMessages(chatId).at(-1);
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          op: "chat.response.message",
+          correlationId: assistant?.id,
+          parentCorrelationId: ctx.correlationId,
+        }),
+      );
+    },
+  );
+
   it("threads the request correlation id into the streaming model gateway call's logContext", async () => {
     const chatId = seedChat();
     const streaming = streamingModel("hi");

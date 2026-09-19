@@ -16,6 +16,7 @@ import {
   Fragment,
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -23,6 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import type { EditorAgentConflictCode } from "@oscharko-dev/keiko-contracts";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
@@ -71,6 +73,8 @@ export type AssistantCodeBlockApply = (
 
 export interface SafeMarkdownProps {
   readonly source: string;
+  readonly diagnosticCorrelationId?: string | undefined;
+  readonly diagnosticMessageId?: string | undefined;
   readonly applyScopeId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
@@ -328,7 +332,10 @@ function HighlightedCodeBlock({
       >
         <code className={codeClass}>
           {lines.map((tokens, lineIndex) => (
-            <span key={lineIndex} className="sm-code-line">
+            <span
+              key={`${lineIndex}:${tokens.map((token) => token[1]).join("")}`}
+              className="sm-code-line"
+            >
               <span className="sm-code-line-no" aria-hidden="true">
                 {lineIndex + 1}
               </span>
@@ -549,7 +556,7 @@ function renderListNode(
 
     case "ol":
       return (
-        <ol key={key} className="sm-ol">
+        <ol key={key} className="sm-ol" start={node.start}>
           {renderChildren(node, key, options, trailing)}
         </ol>
       );
@@ -854,8 +861,47 @@ function renderMarkdownTree(
 // prop compare below).
 const EMPTY_ROOTS: readonly RepositoryReferenceRoot[] = Object.freeze([]);
 
+// Emit layout coordinates only; the stable message identity joins re-renders to their message.
+function reportListStarts(
+  tree: readonly SafeMarkdownNode[],
+  correlationId: string | undefined,
+  cursor: { index: number; messageId?: string | undefined },
+  depth = 0,
+): void {
+  for (const node of tree) {
+    if (node.kind === "ol") {
+      const listIndex = cursor.index++;
+      if (node.start !== undefined && node.start !== 1) {
+        reportClientDiagnostic("markdown:ordered-list-source-start", {
+          kind: "markdown-layout",
+          correlationId,
+          markdownLayout: { listStart: node.start, listIndex, depth, messageId: cursor.messageId },
+        });
+      }
+    }
+    if (node.children !== undefined)
+      reportListStarts(node.children, correlationId, cursor, depth + 1);
+  }
+}
+
+function useMarkdownListEvidence(
+  tree: readonly SafeMarkdownNode[],
+  streaming: boolean,
+  correlationId: string | undefined,
+  messageId: string | undefined,
+): void {
+  const lastReported = useRef<readonly SafeMarkdownNode[] | undefined>(undefined);
+  useEffect(() => {
+    if (streaming || lastReported.current === tree) return;
+    lastReported.current = tree;
+    reportListStarts(tree, correlationId, { index: 0, messageId });
+  }, [tree, streaming, correlationId, messageId]);
+}
+
 function SafeMarkdownImpl({
   source,
+  diagnosticCorrelationId,
+  diagnosticMessageId,
   applyScopeId,
   repositoryRoots = EMPTY_ROOTS,
   openRepositoryReference,
@@ -865,6 +911,7 @@ function SafeMarkdownImpl({
   trailing,
 }: SafeMarkdownProps): ReactNode {
   const tree = useMemo(() => parseSafeMarkdown(source), [source]);
+  useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
   const options = useMemo<RenderOptions>(
     () => ({
       applyScopeId,
@@ -903,6 +950,8 @@ export const SafeMarkdown = memo(SafeMarkdownImpl);
 
 export interface SafeMarkdownBoundaryProps {
   readonly source: string;
+  readonly diagnosticCorrelationId?: string | undefined;
+  readonly diagnosticMessageId?: string | undefined;
   readonly applyScopeId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
@@ -938,6 +987,8 @@ export class SafeMarkdownBoundary extends Component<
     return (
       <SafeMarkdown
         source={this.props.source}
+        diagnosticCorrelationId={this.props.diagnosticCorrelationId}
+        diagnosticMessageId={this.props.diagnosticMessageId}
         applyScopeId={this.props.applyScopeId}
         repositoryRoots={this.props.repositoryRoots}
         openRepositoryReference={this.props.openRepositoryReference}

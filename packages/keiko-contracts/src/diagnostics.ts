@@ -65,9 +65,31 @@ export const CLIENT_DIAGNOSTIC_KINDS = [
   "unhandled-rejection",
   "window-error",
   "sse-error",
+  "voice-dialogue",
+  "voice-playback",
+  "markdown-layout",
   "other",
 ] as const;
 export type ClientDiagnosticKind = (typeof CLIENT_DIAGNOSTIC_KINDS)[number];
+
+export const CLIENT_VOICE_DIALOGUE_STAGES = [
+  "started",
+  "preparation-failed",
+  "turn-submitted",
+  "queue-unavailable",
+  "answer-ready",
+  "delivery-failed",
+  "delivery-cancelled",
+  "delivery-rejected",
+  "capture-bound-reached",
+  "capture-renewed",
+  "capture-renewal-failed",
+  "playback-settled",
+  "playback-fallback",
+  "interrupted",
+  "stopped",
+] as const;
+export type ClientVoiceDialogueStage = (typeof CLIENT_VOICE_DIALOGUE_STAGES)[number];
 
 // Browser-side delivery loss the page counted since its previous accepted report (#3532). Each
 // value is a bounded non-negative count, never content: the pre-transport buffer evicting its
@@ -164,6 +186,7 @@ export const CLIENT_ERROR_CLASSES: ReadonlySet<string> = new Set([
   "QuotaExceededError",
   "SecurityError",
   "TimeoutError",
+  "ChunkLoadError",
   "ApiError",
   "ChatLookupFailure",
   "DebugRequestError",
@@ -196,7 +219,12 @@ export const CLIENT_ERROR_CLASSES: ReadonlySet<string> = new Set([
  * any other Error, and `typeof` for a thrown non-Error. Never the message, never the stack.
  */
 export function clientErrorClass(error: unknown): string {
-  if (error instanceof Error) return CLIENT_ERROR_CLASSES.has(error.name) ? error.name : "Error";
+  if (
+    error instanceof Error ||
+    (typeof DOMException !== "undefined" && error instanceof DOMException)
+  ) {
+    return CLIENT_ERROR_CLASSES.has(error.name) ? error.name : "Error";
+  }
   return typeof error;
 }
 
@@ -208,12 +236,103 @@ const ISO_INSTANT_MAX_LENGTH = 40;
 // server re-validates with `isValidCorrelationId` before trusting the value for anything.
 const ISO_INSTANT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?Z$/;
 
+export const CLIENT_VOICE_CAPTURE_REASONS = [
+  "vad-unavailable",
+  "speech-observed",
+  "renewal-unsupported",
+  "replacement-create-failed",
+  "replacement-start-failed",
+  "previous-stop-failed",
+  "replacement-stop-failed",
+  "unknown-failure",
+] as const;
+export type ClientVoiceCaptureReason = (typeof CLIENT_VOICE_CAPTURE_REASONS)[number];
+const VOICE_CAPTURE_REASON_SET: ReadonlySet<unknown> = new Set(CLIENT_VOICE_CAPTURE_REASONS);
+function isClientVoiceCaptureReason(value: unknown): value is ClientVoiceCaptureReason {
+  return VOICE_CAPTURE_REASON_SET.has(value);
+}
+
+export const CLIENT_VOICE_CAPTURE_ERRORS = [
+  "type-error",
+  "range-error",
+  "invalid-state",
+  "not-supported",
+  "security",
+  "not-readable",
+  "other",
+] as const;
+export type ClientVoiceCaptureError = (typeof CLIENT_VOICE_CAPTURE_ERRORS)[number];
+const VOICE_CAPTURE_ERROR_SET: ReadonlySet<unknown> = new Set(CLIENT_VOICE_CAPTURE_ERRORS);
+function isClientVoiceCaptureError(value: unknown): value is ClientVoiceCaptureError {
+  return VOICE_CAPTURE_ERROR_SET.has(value);
+}
+
+/** Production browser frames name only immutable shipped chunks, never an origin or source path. */
+export function isClientDiagnosticFrame(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^dist\/ui\/static\/_next\/static\/chunks\/[a-z0-9_-]{8,32}\.js:\d{1,8}:\d{1,8}$/u.test(value)
+  );
+}
+
+export interface ClientErrorEvidence {
+  readonly errorClass: string;
+  readonly frames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+
+function isClientErrorClass(value: unknown): value is string {
+  return typeof value === "string" && CLIENT_ERROR_CLASSES.has(value);
+}
+
+function isClientErrorEvidence(value: unknown): value is ClientErrorEvidence {
+  if (!isRecord(value) || !isClientErrorClass(value.errorClass)) return false;
+  if (
+    !Array.isArray(value.frames) ||
+    value.frames.length > 8 ||
+    !value.frames.every(isClientDiagnosticFrame)
+  )
+    return false;
+  return (
+    Array.isArray(value.causeChain) &&
+    value.causeChain.length <= 5 &&
+    value.causeChain.every(isClientErrorClass)
+  );
+}
+
+export interface ClientMarkdownLayout {
+  readonly messageId?: string | undefined;
+  readonly listStart: number;
+  readonly listIndex: number;
+  readonly depth: number;
+}
+
+function isClientMessageId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
+}
+
+export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownLayout {
+  if (!isRecord(value)) return false;
+  if (!isOptional(value.messageId, isClientMessageId)) return false;
+  return [value.listStart, value.listIndex, value.depth].every(
+    (item) =>
+      typeof item === "number" && Number.isSafeInteger(item) && item >= 0 && item <= 999_999_999,
+  );
+}
+
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
   readonly clientTs: string;
   readonly readyState?: ClientDiagnosticReadyState | undefined;
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
+  readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
+  readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
+  readonly markdownLayout?: ClientMarkdownLayout | undefined;
+  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -270,6 +389,11 @@ function isClientDiagnosticReadyState(value: unknown): value is ClientDiagnostic
 }
 
 const CLIENT_DIAGNOSTIC_KIND_SET: ReadonlySet<string> = new Set(CLIENT_DIAGNOSTIC_KINDS);
+const CLIENT_VOICE_DIALOGUE_STAGE_SET: ReadonlySet<string> = new Set(CLIENT_VOICE_DIALOGUE_STAGES);
+
+function isClientVoiceDialogueStage(value: unknown): value is ClientVoiceDialogueStage {
+  return typeof value === "string" && CLIENT_VOICE_DIALOGUE_STAGE_SET.has(value);
+}
 const LINUX_GATEWAY_DIAGNOSTIC_KIND_SET: ReadonlySet<string> = new Set(
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
 );
@@ -360,8 +484,17 @@ function isClientDiagnosticLossCounts(value: unknown): value is ClientDiagnostic
   );
 }
 
+function isClientModuleLoadFailure(value: unknown): boolean {
+  return value === "git-sync" || value === "git-history";
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { gitChangeDescription, workspaceTrustBinding, loss } = value;
+  const { gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } = value;
+  if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
+  if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
+  if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
+  if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
+  if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
   return isOptional(loss, isClientDiagnosticLossCounts);
@@ -371,12 +504,15 @@ export function isClientDiagnosticIngestRequest(
   value: unknown,
 ): value is ClientDiagnosticIngestRequest {
   if (!isRecord(value)) return false;
-  const { message, clientTs, readyState, correlationId, kind } = value;
+  if (!isOptional(value.errorEvidence, isClientErrorEvidence)) return false;
+  const { message, clientTs, readyState, correlationId, kind, voiceDialogueStage } = value;
   if (!isBoundedString(message, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)) return false;
   if (!isIsoInstant(clientTs)) return false;
   if (!isOptional(readyState, isClientDiagnosticReadyState)) return false;
   if (!isOptional(correlationId, isCorrelationIdShape)) return false;
   if (!isOptional(kind, isClientDiagnosticKind)) return false;
+  if (!isOptional(voiceDialogueStage, isClientVoiceDialogueStage)) return false;
+  if ((kind === "voice-dialogue") !== (voiceDialogueStage !== undefined)) return false;
   return hasValidClientDiagnosticContext(value);
 }
 

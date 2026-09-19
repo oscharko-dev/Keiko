@@ -23,7 +23,11 @@ import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 import { realtimeVoiceTransportSupported } from "./voice-rtc-transport";
-import { voiceDialogueModeForResolution } from "./voice-dialogue-session";
+import {
+  voiceDialogueModeForResolution,
+  type VoiceDialogueCapture,
+} from "./voice-dialogue-session";
+import { dictationCaptureSupported } from "./dictation-recorder";
 import {
   claimVoiceCapture,
   releaseVoiceCapture,
@@ -49,6 +53,8 @@ export interface UseVoiceDialogModeOptions {
 export interface VoiceDialogMode {
   // True only when the deployment can capture speech, speak answers, and offers at least one persona.
   readonly available: boolean;
+  readonly capture: VoiceDialogueCapture;
+  readonly captureLease: symbol;
   // The personas the deployment offers, in canonical VOICE_PERSONAS order. Empty when unavailable.
   readonly availablePersonas: readonly VoicePersona[];
   // The selected persona (always one of availablePersonas while available; the first otherwise).
@@ -117,13 +123,14 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
     [personaKey],
   );
 
-  // Voice Dialogue is the product conversation surface and must be true WebRTC realtime speech-to-
-  // speech. Requiring the native realtime transport here prevents the old STT -> Chat -> TTS fallback
-  // from being offered as a dialogue mode.
-  const deploymentAvailable = voiceDialogueModeForResolution(
+  // The product conversation surface prefers native WebRTC but can run a turn-based spoken session
+  // when STT, canonical chat and mapped TTS are available.
+  const mode = voiceDialogueModeForResolution(
     capability,
     realtimeVoiceTransportSupported(),
-  ).offered;
+    dictationCaptureSupported(),
+  );
+  const deploymentAvailable = mode.offered;
   const available = deploymentAvailable && captureAvailable;
 
   const [persona, setPersona] = useState<VoicePersona>(
@@ -210,6 +217,8 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
 
   return {
     available,
+    capture: available ? mode.capture : "none",
+    captureLease: leaseRef.current,
     availablePersonas,
     persona,
     selectPersona,

@@ -11,6 +11,9 @@
 
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import { streamAssistantSpeech } from "@/lib/api";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { CORRELATION_HEADER } from "@/lib/bff-correlation";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export interface AssistantSpeechStreamHandlers {
   // Fired when audible output actually begins (the worklet confirms it produced samples).
@@ -58,6 +61,30 @@ function streamingSupported(): boolean {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  if (response.body === null) return;
+  await response.body.cancel().catch(() => {
+    // A stale playback is already detached; cancellation remains best-effort.
+  });
+}
+
+async function pcmBodyOrFallback(
+  response: Response,
+): Promise<ReadableStream<Uint8Array> | undefined> {
+  // Azure-compatible gateways may return a compressed container despite a PCM request.
+  // Passing it to the raw PCM worklet would produce silence or noise.
+  if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "audio/pcm") {
+    await cancelResponseBody(response);
+    reportClientDiagnostic("[keiko] assistant speech switched to buffered playback", {
+      kind: "voice-dialogue",
+      voiceDialogueStage: "playback-fallback",
+      correlationId: response.headers.get(CORRELATION_HEADER) ?? undefined,
+    });
+    return undefined;
+  }
+  return response.body ?? undefined;
 }
 
 class AssistantSpeechSetupInvalidatedError extends Error {}
@@ -112,6 +139,21 @@ export function createBrowserAssistantSpeechStreamingSink():
   AssistantSpeechStreamingSink | undefined {
   if (!streamingSupported()) {
     return undefined;
+  }
+  async function requestSpeechResponse(
+    input: { readonly text: string; readonly persona?: VoicePersona },
+    signal: AbortSignal,
+  ): Promise<Response | "cancelled" | "fallback"> {
+    try {
+      return await streamAssistantSpeech(input, signal);
+    } catch (error) {
+      if (isAbortError(error)) return "cancelled";
+      reportClientDiagnostic("[keiko] assistant speech stream failed; using buffered playback", {
+        kind: "voice-playback",
+        correlationId: correlationIdOf(error),
+      });
+      return "fallback";
+    }
   }
   let context: AudioContext | undefined;
   let node: AudioWorkletNode | undefined;
@@ -221,13 +263,6 @@ export function createBrowserAssistantSpeechStreamingSink():
     );
   }
 
-  async function cancelResponseBody(response: Response): Promise<void> {
-    if (response.body === null) return;
-    await response.body.cancel().catch(() => {
-      // a stale playback is already detached; cancellation remains best-effort
-    });
-  }
-
   async function pump(
     workletNode: AudioWorkletNode,
     body: ReadableStream<Uint8Array>,
@@ -308,25 +343,20 @@ export function createBrowserAssistantSpeechStreamingSink():
         }
       };
 
-      let response: Response;
-      try {
-        response = await streamAssistantSpeech(input, signal);
-      } catch (error) {
-        if (isAbortError(error)) {
-          return true; // cancelled mid-flight — do not fall back
-        }
-        // Any up-front failure (provider error, network) before audio has started: fall back to the
-        // buffered path so a turn is never lost and a stubbed/working buffered route still plays.
-        return false;
-      }
+      const response = await requestSpeechResponse(input, signal);
+      if (response === "cancelled") return true;
+      if (response === "fallback") return false;
       if (!leaseIsCurrent(lease, signal)) {
         await cancelResponseBody(response);
         return true;
       }
-      if (response.body === null) {
-        return false;
+      const body = await pcmBodyOrFallback(response);
+      if (!leaseIsCurrent(lease, signal)) {
+        await cancelResponseBody(response);
+        return true;
       }
-      void pump(workletNode, response.body, signal, handlers);
+      if (body === undefined) return false;
+      void pump(workletNode, body, signal, handlers);
       return true;
     },
 

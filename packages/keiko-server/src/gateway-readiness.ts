@@ -130,6 +130,27 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
+const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.automatic.joined",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logAutomaticReadinessJoined",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    generation: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.automatic.joined.line"],
+  releaseImpact: "patch",
+});
+
 type ProbeStatus = GatewayReadinessProbeResult["status"];
 
 export type { GatewayToolCallingProbeStatus } from "./gateway-tool-calling-probe.js";
@@ -316,14 +337,56 @@ function logAutomaticReadinessCompleted(
   correlationId: string,
   report: GatewayReadinessReport,
 ): void {
+  logAutomaticReadinessOutcome(
+    deps,
+    correlationId,
+    report.modelId,
+    report.overallStatus,
+    report.probes.length,
+  );
+}
+
+function logAutomaticReadinessJoined(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+  probeCorrelationId: string,
+  generation: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION,
+      {
+        correlationId,
+        ...(correlationId === probeCorrelationId
+          ? {}
+          : { parentCorrelationId: probeCorrelationId }),
+      },
+      {
+        modelId: boundedReadinessModelId(modelId),
+        generation,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function logAutomaticReadinessOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  modelId: string,
+  overallStatus: GatewayReadinessReport["overallStatus"],
+  probeCount: number,
+): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
       { correlationId },
       {
-        modelId: boundedReadinessModelId(report.modelId),
-        overallStatus: report.overallStatus,
-        probeCount: report.probes.length,
+        modelId: boundedReadinessModelId(modelId),
+        overallStatus,
+        probeCount,
       },
     ),
   );
@@ -1479,7 +1542,10 @@ export async function runGatewayReadiness(
 // When a conversation guard finds no CURRENT-GENERATION observation for the model, verify on
 // demand with the minimal chat probe. The admission stays honest — the probe must actually
 // pass. Concurrent callers share one in-flight probe per model.
-const onDemandReadinessProbes = new Map<string, Promise<void>>();
+const onDemandReadinessProbes = new Map<
+  string,
+  { readonly promise: Promise<void>; readonly correlationId: string }
+>();
 
 // A failed probe must not pin the model for the whole configuration generation: a transient
 // gateway outage would brick every chat surface until a manual re-probe or restart (the
@@ -1509,6 +1575,7 @@ function withinNotReadyCooldown(
 export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
+  correlationId?: string,
 ): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
@@ -1519,13 +1586,21 @@ export async function ensureOnDemandConversationReadiness(
   const key = `${String(holder.generation())}:${modelId}`;
   const inFlight = onDemandReadinessProbes.get(key);
   if (inFlight !== undefined) {
-    await inFlight;
+    logAutomaticReadinessJoined(
+      deps,
+      modelId,
+      correlationId ?? newCorrelationId(),
+      inFlight.correlationId,
+      holder.generation(),
+    );
+    await inFlight.promise;
     return;
   }
-  const probe = runOnDemandReadinessProbe(deps, holder, modelId).finally(() => {
+  const probeCorrelationId = correlationId ?? newCorrelationId();
+  const probe = runOnDemandReadinessProbe(deps, holder, modelId, probeCorrelationId).finally(() => {
     onDemandReadinessProbes.delete(key);
   });
-  onDemandReadinessProbes.set(key, probe);
+  onDemandReadinessProbes.set(key, { promise: probe, correlationId: probeCorrelationId });
   await probe;
 }
 
@@ -1533,17 +1608,26 @@ async function runOnDemandReadinessProbe(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
+  correlationId?: string,
 ): Promise<void> {
   const generation = holder.generation();
+  const probeCorrelationId = correlationId ?? newCorrelationId();
+  let overallStatus: GatewayReadinessReport["overallStatus"] = "failed";
+  logAutomaticReadinessStarted(deps, probeCorrelationId, modelId, 1);
   try {
-    await runGatewayReadiness({ modelId, options: { probes: [] } }, deps);
+    const report = await runGatewayReadiness(
+      { modelId, options: { probes: [] } },
+      deps,
+      probeCorrelationId,
+    );
+    if (!("status" in report)) overallStatus = report.overallStatus;
   } catch (error) {
     // The route still answers with the honest unready result — but never silently: the
     // underlying failure lands as a redacted operator diagnostic with a correlation id.
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId: newCorrelationId(),
+        correlationId: probeCorrelationId,
         operation: "gateway.readiness",
         source: "gateway-readiness.on-demand",
         error,
@@ -1551,6 +1635,8 @@ async function runOnDemandReadinessProbe(
         redact: (message): string => String(deps.redactor(message)),
       }),
     );
+  } finally {
+    logAutomaticReadinessOutcome(deps, probeCorrelationId, modelId, overallStatus, 1);
   }
   // A failed report CLEARS the capability entry; without a current-generation observation
   // every subsequent chat attempt would probe the provider again. Persist an explicit
@@ -1613,18 +1699,19 @@ function conversationWalkCandidates(
 export async function ensureAnyConversationReadyChatModel(
   deps: UiHandlerDeps,
   requestedModelId: string,
+  correlationId?: string,
 ): Promise<void> {
   // The budget covers the REQUESTED model's probe too (review finding on the first cut):
   // computed after it, a hanging gateway burned the full provider timeout before the budget
   // even started. The interactive create never waits longer than the budget, full stop.
   const deadlineAt = Date.now() + CHAT_MODEL_WALK_BUDGET_MS;
-  const firstProbe = ensureOnDemandConversationReadiness(deps, requestedModelId);
+  const firstProbe = ensureOnDemandConversationReadiness(deps, requestedModelId, correlationId);
   if (!(await settledWithinBudget(firstProbe, CHAT_MODEL_WALK_BUDGET_MS))) return;
   if (currentConversationReady(deps, requestedModelId)) return;
   for (const capability of conversationWalkCandidates(deps, requestedModelId)) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) return;
-    const probe = ensureOnDemandConversationReadiness(deps, capability.id);
+    const probe = ensureOnDemandConversationReadiness(deps, capability.id, correlationId);
     if (!(await settledWithinBudget(probe, remainingMs))) return;
     if (currentConversationReady(deps, capability.id)) return;
   }

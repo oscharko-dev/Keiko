@@ -128,6 +128,109 @@ const CLIENT_DIAGNOSTIC_REJECTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.dialogue.stage",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logVoiceDialogueStage",
+  fields: {
+    voiceCaptureError: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "type-error",
+        "range-error",
+        "invalid-state",
+        "not-supported",
+        "security",
+        "not-readable",
+        "other",
+      ],
+    },
+    voiceCaptureReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "vad-unavailable",
+        "speech-observed",
+        "renewal-unsupported",
+        "replacement-create-failed",
+        "replacement-start-failed",
+        "previous-stop-failed",
+        "replacement-stop-failed",
+        "unknown-failure",
+      ],
+    },
+    voiceDialogueStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "started",
+        "turn-submitted",
+        "answer-ready",
+        "playback-settled",
+        "playback-fallback",
+        "capture-bound-reached",
+        "capture-renewed",
+        "interrupted",
+        "stopped",
+      ],
+    },
+    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },
+    clientPostsThrottled: { type: "integer", dataClass: "count", required: false },
+    clientPostsFailed: { type: "integer", dataClass: "count", required: false },
+    clientRejectionsSuppressed: { type: "integer", dataClass: "count", required: false },
+    clientErrorsSuppressed: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-diagnostic"],
+  proofIds: ["voice.dialogue.stage.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_MARKDOWN_LAYOUT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.markdown.layout",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logMarkdownLayout",
+  fields: {
+    messageId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    listNumbering: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["source-start"],
+    },
+    listStart: { type: "integer", dataClass: "count", required: false },
+    listIndex: { type: "integer", dataClass: "count", required: false },
+    depth: { type: "integer", dataClass: "count", required: false },
+    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },
+    clientPostsThrottled: { type: "integer", dataClass: "count", required: false },
+    clientPostsFailed: { type: "integer", dataClass: "count", required: false },
+    clientRejectionsSuppressed: { type: "integer", dataClass: "count", required: false },
+    clientErrorsSuppressed: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-diagnostic"],
+  proofIds: ["client.markdown.layout.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -136,13 +239,94 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    moduleLoadFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["git-sync", "git-history"],
+    },
     clientNoteDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     readyState: { type: "integer", dataClass: "count", required: false },
     clientKind: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["boundary", "unhandled-rejection", "window-error", "sse-error", "other"],
+      values: [
+        "boundary",
+        "unhandled-rejection",
+        "window-error",
+        "sse-error",
+        "voice-dialogue",
+        "voice-playback",
+        "markdown-layout",
+        "other",
+      ],
+    },
+    voiceCaptureError: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "type-error",
+        "range-error",
+        "invalid-state",
+        "not-supported",
+        "security",
+        "not-readable",
+        "other",
+      ],
+    },
+    voiceCaptureReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "vad-unavailable",
+        "speech-observed",
+        "renewal-unsupported",
+        "replacement-create-failed",
+        "replacement-start-failed",
+        "previous-stop-failed",
+        "replacement-stop-failed",
+        "unknown-failure",
+      ],
+    },
+    voiceDialogueStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "started",
+        "preparation-failed",
+        "turn-submitted",
+        "queue-unavailable",
+        "answer-ready",
+        "delivery-failed",
+        "delivery-cancelled",
+        "delivery-rejected",
+        "capture-renewal-failed",
+        "playback-settled",
+        "playback-fallback",
+        "capture-bound-reached",
+        "capture-renewed",
+        "interrupted",
+        "stopped",
+      ],
     },
     action: {
       type: "string",
@@ -349,6 +533,9 @@ const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
   "unhandled-rejection": "internal",
   "window-error": "internal",
   "sse-error": "unavailable",
+  "voice-dialogue": "internal",
+  "voice-playback": "unavailable",
+  "markdown-layout": "unknown",
   other: "unknown",
 } as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
 
@@ -385,17 +572,135 @@ function clientDiagnosticErrorKind(
   return kind === undefined ? "unknown" : CLIENT_DIAGNOSTIC_ERROR_KINDS[kind];
 }
 
+const VOICE_FAILURE_STAGES = new Set([
+  "preparation-failed",
+  "queue-unavailable",
+  "delivery-failed",
+  "delivery-cancelled",
+  "delivery-rejected",
+  "capture-renewal-failed",
+]);
+
+function clientDiagnosticCorrelation(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): {
+  readonly correlationId: string;
+  readonly parentCorrelationId?: string;
+} {
+  const parent = request.parentCorrelationId;
+  return {
+    correlationId,
+    ...(parent !== undefined && isValidCorrelationId(parent) && parent !== correlationId
+      ? { parentCorrelationId: parent }
+      : {}),
+  };
+}
+
+function logVoiceDialogueStage(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const stage = request.voiceDialogueStage;
+  if (stage === undefined || VOICE_FAILURE_STAGES.has(stage)) return false;
+  const extra: Record<string, unknown> = {
+    voiceDialogueStage: stage,
+    ...(request.voiceCaptureError === undefined
+      ? {}
+      : { voiceCaptureError: request.voiceCaptureError }),
+    ...(request.voiceCaptureReason === undefined
+      ? {}
+      : { voiceCaptureReason: request.voiceCaptureReason }),
+    completeness: "complete",
+    loss: "none",
+  };
+  projectClientLoss(request.loss, extra);
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_VOICE_DIALOGUE_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      extra as ActivityLogFields<typeof CLIENT_VOICE_DIALOGUE_OPERATION>,
+    ),
+  );
+  return true;
+}
+
+function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId: string): boolean {
+  if (request.kind !== "markdown-layout") return false;
+  const extra: Record<string, unknown> = {
+    listNumbering: "source-start",
+    ...(request.markdownLayout === undefined
+      ? {}
+      : {
+          ...(request.markdownLayout.messageId === undefined
+            ? {}
+            : { messageId: request.markdownLayout.messageId }),
+          listStart: request.markdownLayout.listStart,
+          listIndex: request.markdownLayout.listIndex,
+          depth: request.markdownLayout.depth,
+        }),
+    completeness: "complete",
+    loss: "none",
+  };
+  projectClientLoss(request.loss, extra);
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_MARKDOWN_LAYOUT_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      extra as ActivityLogFields<typeof CLIENT_MARKDOWN_LAYOUT_OPERATION>,
+    ),
+  );
+  return true;
+}
+
 // Projects the validated request onto the activity log. `message` is admitted only as a digest;
 // `readyState`/`kind` ride along as bounded, closed-shape fields.
+function requestDiagnosticErrorKind(request: ClientDiagnosticIngestRequest): ActivityLogErrorKind {
+  if (request.moduleLoadFailure !== undefined) {
+    const errorClass = request.errorEvidence?.errorClass;
+    return errorClass === "ChunkLoadError" || errorClass === "NetworkError"
+      ? "unavailable"
+      : "internal";
+  }
+  if (request.voiceDialogueStage === "delivery-cancelled") return "cancelled";
+  if (request.voiceDialogueStage === "delivery-rejected") return "unavailable";
+  return clientDiagnosticErrorKind(request.kind);
+}
+
+function projectClientFailure(
+  request: ClientDiagnosticIngestRequest,
+  extra: Record<string, unknown>,
+): void {
+  if (request.moduleLoadFailure !== undefined) extra.moduleLoadFailure = request.moduleLoadFailure;
+  if (request.errorEvidence !== undefined) {
+    extra.errorClass = request.errorEvidence.errorClass;
+    extra.frames = request.errorEvidence.frames;
+    extra.causeChain = request.errorEvidence.causeChain;
+  }
+  if (request.voiceCaptureError !== undefined) extra.voiceCaptureError = request.voiceCaptureError;
+  if (request.voiceCaptureReason !== undefined)
+    extra.voiceCaptureReason = request.voiceCaptureReason;
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
 ): void {
+  const correlationId =
+    request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
+      ? request.correlationId
+      : correlationIdOrUnknown(ingestCorrelationId);
+  if (logVoiceDialogueStage(request, correlationId) || logMarkdownLayout(request, correlationId))
+    return;
   const extra: Record<string, unknown> = {
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
   };
+  projectClientFailure(request, extra);
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
+  if (request.voiceDialogueStage !== undefined) {
+    extra.voiceDialogueStage = request.voiceDialogueStage;
+  }
   if (request.gitChangeDescription !== undefined) {
     extra.action = request.gitChangeDescription.action;
     extra.disposition = request.gitChangeDescription.disposition;
@@ -409,16 +714,15 @@ function logClientDiagnostic(
     extra.workspaceId = request.workspaceTrustBinding.workspaceId;
   }
   projectClientLoss(request.loss, extra);
-  const correlationId =
-    request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
-      ? request.correlationId
-      : correlationIdOrUnknown(ingestCorrelationId);
   extra.completeness = "complete";
   extra.loss = "none";
   getServerLogger().warn(
     activityLogEvent(
       CLIENT_DIAGNOSTIC_OPERATION,
-      { correlationId, errorKind: clientDiagnosticErrorKind(request.kind) },
+      {
+        ...clientDiagnosticCorrelation(request, correlationId),
+        errorKind: requestDiagnosticErrorKind(request),
+      },
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );

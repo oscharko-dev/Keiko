@@ -611,7 +611,7 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.type(
       screen.getByLabelText(/audio endpoint url/i),
       "https://voice-gateway.example.com/openai/v1",
@@ -633,7 +633,7 @@ describe("GatewaySetupDialog", () => {
       voiceSpeechToTextModelId: "keiko-stt",
     });
     expect(await screen.findByRole("status")).toHaveTextContent(
-      /updated audio and digital voice settings/i,
+      /updated audio and digital twin settings/i,
     );
   });
 
@@ -664,15 +664,16 @@ describe("GatewaySetupDialog", () => {
       </I18nProvider>,
     );
 
-    await userEvent.click(screen.getByText("Audio- und Digital-Voice-Einstellungen aktualisieren"));
+    await userEvent.click(screen.getByText("Audio- und Digital-Twin-Einstellungen aktualisieren"));
+    await userEvent.click(
+      screen.getByText(/Erweitert: natives Realtime oder separate Audio-Verbindung/i),
+    );
 
     expect(screen.getByLabelText(/Audio-Endpunkt-URL.*leer lassen/i)).toHaveAttribute(
       "placeholder",
       "Mit Zugangsdaten, Lokalität und ausdrücklichen Zielrollen ersetzen",
     );
-    expect(
-      screen.getByText(/um einen audio-endpunkt zu ersetzen.*neue zugangsdaten/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Keiko erkennt Audiomodelle am Gateway/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Audio-Zugangsdaten.*leer lassen/i)).toHaveAttribute(
       "placeholder",
       "Nur ausfüllen, um die gespeicherten Audio-Zugangsdaten zu ersetzen",
@@ -694,25 +695,37 @@ describe("GatewaySetupDialog", () => {
         storedModels={[modelCapability("internal-chat"), speechInputCapability("stored-stt")]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
 
     expect(
-      screen.getByText(/Selected capabilities: Dictate on.*Digital Voice off.*Read aloud off/iu),
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin off.*Read aloud off/iu),
     ).toBeInTheDocument();
 
-    const realtimeDeployment = screen.getByLabelText(/Digital Voice.*Realtime deployment/i);
+    const realtimeDeployment = screen.getByLabelText(/^Native Realtime · deployment/i);
     await userEvent.type(realtimeDeployment, "replacement-realtime");
     expect(
-      screen.getByText(/Selected capabilities: Dictate on.*Digital Voice on.*Read aloud off/iu),
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin off.*Read aloud off/iu),
+    ).toBeInTheDocument();
+
+    const speechOutputDeployment = screen.getByLabelText(/Read aloud.*speech-output deployment/i);
+    await userEvent.type(speechOutputDeployment, "replacement-tts");
+    await userEvent.type(screen.getByLabelText(/Output voice/i), "alloy");
+    expect(
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin on.*Read aloud on/iu),
     ).toBeInTheDocument();
 
     await userEvent.clear(realtimeDeployment);
     expect(
-      screen.getByText(/Selected capabilities: Dictate on.*Digital Voice off.*Read aloud off/iu),
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin on.*Read aloud on/iu),
+    ).toBeInTheDocument();
+
+    await userEvent.clear(speechOutputDeployment);
+    expect(
+      screen.getByText(/Selected capabilities: Dictate on.*Digital Twin off.*Read aloud off/iu),
     ).toBeInTheDocument();
   });
 
-  it("explains and submits separate Dictate, Digital Voice, and read-aloud deployments", async () => {
+  it("explains and submits separate Dictate, Digital Twin, and read-aloud deployments", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,
       testedModelId: "internal-chat",
@@ -726,12 +739,12 @@ describe("GatewaySetupDialog", () => {
     });
     render(<GatewaySetupDialog />);
 
-    expect(screen.getByText(/dictate requires a speech-to-text deployment/i)).toBeInTheDocument();
     expect(
-      screen.getByText(
-        /digital voice requires a realtime media deployment and its compatible live-transcription deployment/i,
-      ),
+      screen.getByText(/Digital Twin works with speech-to-text, chat and speech output/i),
     ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByText(/Advanced: native Realtime or separate audio connection/i),
+    );
     await userEvent.type(screen.getByLabelText(/base url/i), "https://models.example.com/v1");
     await userEvent.type(screen.getByLabelText(/api token/i), "model-token");
     await userEvent.type(
@@ -743,9 +756,9 @@ describe("GatewaySetupDialog", () => {
       screen.getByLabelText(/dictate.*speech-to-text deployment/i),
       "transcribe",
     );
-    await userEvent.type(screen.getByLabelText(/digital voice.*realtime deployment/i), "realtime");
+    await userEvent.type(screen.getByLabelText(/^native realtime · deployment/i), "realtime");
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
       "realtime-transcribe",
     );
     const semanticTurnDetection = screen.getByRole("checkbox", {
@@ -769,6 +782,38 @@ describe("GatewaySetupDialog", () => {
         voiceOutputVoiceId: "provider-neutral",
       }),
     );
+  });
+
+  it("shows speech input, output and voice first, with native Realtime and connection details expandable", async () => {
+    render(<GatewaySetupDialog />);
+    expect(screen.getByLabelText(/dictate.*speech-to-text deployment/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/read aloud.*speech-output deployment/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/output voice/i)).toBeInTheDocument();
+    const advanced = screen.getByTestId("voice-advanced-settings");
+    expect(advanced).not.toHaveAttribute("open");
+    expect(advanced).toContainElement(screen.getByLabelText(/audio endpoint url/i));
+    await userEvent.click(
+      screen.getByText(/Advanced: native Realtime or separate audio connection/i),
+    );
+    expect(advanced).toHaveAttribute("open");
+    expect(screen.getByRole("textbox", { name: /audio endpoint url/i })).toBeInTheDocument();
+  });
+
+  it("keeps Digital Twin off until native Realtime has a speech-output model and voice", async () => {
+    const user = userEvent.setup();
+    render(<GatewaySetupDialog />);
+    await user.click(screen.getByText(/Advanced: native Realtime or separate audio connection/i));
+    await user.type(screen.getByLabelText(/^native realtime · deployment/i), "realtime");
+    expect(screen.getByText(/Digital Twin off · Read aloud off/iu)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/read aloud.*speech-output deployment/i), "tts");
+    expect(screen.getByText(/Digital Twin off · Read aloud off/iu)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/output voice/i), "neutral-voice");
+    expect(screen.getByText(/Digital Twin off · Read aloud on/iu)).toBeInTheDocument();
+    await user.type(
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
+      "transcription",
+    );
+    expect(screen.getByText(/Digital Twin on · Read aloud on/iu)).toBeInTheDocument();
   });
 
   it("does not inherit stored Semantic VAD when configuring a new gateway", () => {
@@ -800,7 +845,10 @@ describe("GatewaySetupDialog", () => {
           storedModels={[modelCapability("internal-chat"), storedRealtime]}
         />,
       );
-      await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+      await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
+      await userEvent.click(
+        screen.getByText(/Advanced: native Realtime or separate audio connection/i),
+      );
       const semanticTurnDetection = screen.getByRole("checkbox", {
         name: /semantic turn detection/i,
       });
@@ -808,12 +856,12 @@ describe("GatewaySetupDialog", () => {
 
       await userEvent.click(semanticTurnDetection);
       await userEvent.type(
-        screen.getByLabelText(/digital voice.*realtime deployment/i),
+        screen.getByLabelText(/^native realtime · deployment/i),
         "replacement-realtime",
       );
       expect(semanticTurnDetection).not.toBeChecked();
       await userEvent.type(
-        screen.getByLabelText(/digital voice.*live transcription deployment/i),
+        screen.getByLabelText(/native realtime.*live transcription deployment/i),
         "replacement-transcription",
       );
       await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
@@ -826,9 +874,9 @@ describe("GatewaySetupDialog", () => {
 
   it("invalidates a live-transcription alias when the Realtime deployment changes", async () => {
     render(<GatewaySetupDialog />);
-    const realtimeDeployment = screen.getByLabelText(/digital voice.*realtime deployment/i);
+    const realtimeDeployment = screen.getByLabelText(/^native realtime · deployment/i);
     const transcriptionDeployment = screen.getByLabelText(
-      /digital voice.*live transcription deployment/i,
+      /native realtime.*live transcription deployment/i,
     );
 
     await userEvent.type(realtimeDeployment, "realtime-a");
@@ -862,7 +910,7 @@ describe("GatewaySetupDialog", () => {
         ]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     const semanticTurnDetection = screen.getByRole("checkbox", {
       name: /semantic turn detection/i,
     });
@@ -871,11 +919,11 @@ describe("GatewaySetupDialog", () => {
       "replacement-stt",
     );
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      screen.getByLabelText(/^native realtime · deployment/i),
       "replacement-realtime",
     );
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
       "replacement-transcription",
     );
     await userEvent.click(semanticTurnDetection);
@@ -892,8 +940,10 @@ describe("GatewaySetupDialog", () => {
     await userEvent.tab();
 
     expect(screen.getByLabelText(/dictate.*speech-to-text deployment/i)).toHaveValue("");
-    expect(screen.getByLabelText(/digital voice.*realtime deployment/i)).toHaveValue("");
-    expect(screen.getByLabelText(/digital voice.*live transcription deployment/i)).toHaveValue("");
+    expect(screen.getByLabelText(/^native realtime · deployment/i)).toHaveValue("");
+    expect(screen.getByLabelText(/native realtime.*live transcription deployment/i)).toHaveValue(
+      "",
+    );
     expect(semanticTurnDetection).not.toBeChecked();
     expect(screen.getByLabelText(/read aloud.*speech-output deployment/i)).toHaveValue("");
     expect(screen.getByLabelText(/output voice/i)).toHaveValue("");
@@ -905,17 +955,14 @@ describe("GatewaySetupDialog", () => {
       name: /semantic turn detection/i,
     });
     const transcriptionDeployment = screen.getByLabelText(
-      /digital voice.*live transcription deployment/i,
+      /native realtime.*live transcription deployment/i,
     );
     const outputVoice = screen.getByLabelText(/output voice/i);
     await userEvent.type(transcriptionDeployment, "first-transcription");
     await userEvent.click(semanticTurnDetection);
     await userEvent.type(outputVoice, "first-provider-neutral");
 
-    await userEvent.type(
-      screen.getByLabelText(/digital voice.*realtime deployment/i),
-      "first-realtime",
-    );
+    await userEvent.type(screen.getByLabelText(/^native realtime · deployment/i), "first-realtime");
     await userEvent.type(
       screen.getByLabelText(/read aloud.*speech-output deployment/i),
       "first-tts",
@@ -969,9 +1016,9 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).toBeChecked();
-    const realtimeDeployment = screen.getByLabelText(/digital voice.*realtime deployment/i);
+    const realtimeDeployment = screen.getByLabelText(/^native realtime · deployment/i);
     await userEvent.type(realtimeDeployment, "replacement-realtime");
     expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).not.toBeChecked();
     await userEvent.clear(realtimeDeployment);
@@ -979,7 +1026,7 @@ describe("GatewaySetupDialog", () => {
     await userEvent.type(realtimeDeployment, "replacement-realtime");
     expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).not.toBeChecked();
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
       "replacement-transcription",
     );
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
@@ -1003,10 +1050,13 @@ describe("GatewaySetupDialog", () => {
         storedModels={[modelCapability("internal-chat"), realtimeCapability("stored-realtime")]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
+    await userEvent.click(
+      screen.getByText(/Advanced: native Realtime or separate audio connection/i),
+    );
     await userEvent.type(screen.getByLabelText(/^audio credential/i), "rotated-token");
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      screen.getByLabelText(/^native realtime · deployment/i),
       "stored-realtime",
     );
 
@@ -1037,19 +1087,19 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     const semanticTurnDetection = screen.getByRole("checkbox", {
       name: /semantic turn detection/i,
     });
     expect(semanticTurnDetection).not.toBeChecked();
 
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      screen.getByLabelText(/^native realtime · deployment/i),
       "secondary-realtime",
     );
     expect(semanticTurnDetection).not.toBeChecked();
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
       "secondary-transcription",
     );
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
@@ -1076,7 +1126,7 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
 
     expect(screen.getByRole("checkbox", { name: /semantic turn detection/i })).toBeChecked();
   });
@@ -1094,7 +1144,7 @@ describe("GatewaySetupDialog", () => {
         ]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     const semanticTurnDetection = screen.getByRole("checkbox", {
       name: /semantic turn detection/i,
     });
@@ -1105,11 +1155,11 @@ describe("GatewaySetupDialog", () => {
     );
     await userEvent.type(screen.getByLabelText(/^audio credential/i), "replacement-token");
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      screen.getByLabelText(/^native realtime · deployment/i),
       "stored-realtime",
     );
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
       "stored-transcription",
     );
     await userEvent.click(screen.getByRole("combobox", { name: /provider locality/i }));
@@ -1141,7 +1191,7 @@ describe("GatewaySetupDialog", () => {
         ]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.type(
       screen.getByLabelText(/audio endpoint url/i),
       "https://replacement-audio.example.com/v1",
@@ -1166,9 +1216,9 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      screen.getByLabelText(/^native realtime · deployment/i),
       "replacement-realtime",
     );
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
@@ -1188,9 +1238,9 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
       "orphan-transcription",
     );
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
@@ -1223,17 +1273,17 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     const semanticTurnDetection = screen.getByRole("checkbox", {
       name: /semantic turn detection/i,
     });
     expect(semanticTurnDetection).toBeChecked();
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*realtime deployment/i),
+      screen.getByLabelText(/^native realtime · deployment/i),
       "replacement-realtime",
     );
     await userEvent.type(
-      screen.getByLabelText(/digital voice.*live transcription deployment/i),
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
       "replacement-transcription",
     );
     expect(semanticTurnDetection).not.toBeChecked();
@@ -1262,7 +1312,7 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await user.click(screen.getByText("Update audio and Digital Voice settings"));
+    await user.click(screen.getByText("Update audio and Digital Twin settings"));
     const locality = screen.getByRole("combobox", { name: /provider locality/i });
 
     expect(locality.tagName).toBe("BUTTON");
@@ -1302,7 +1352,7 @@ describe("GatewaySetupDialog", () => {
         ]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
 
     const outputVoice = screen.getByLabelText(/output voice/i);
     await userEvent.clear(outputVoice);
@@ -1828,7 +1878,7 @@ describe("GatewaySetupDialog", () => {
         storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
     await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
     await userEvent.type(screen.getByLabelText(/audio api version/i), "2025-04-01-preview");
@@ -1905,7 +1955,7 @@ describe("GatewaySetupDialog", () => {
         storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.click(screen.getByRole("combobox", { name: /realtime authentication/i }));
     await userEvent.click(screen.getByRole("option", { name: "Ephemeral session token" }));
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
@@ -1938,7 +1988,7 @@ describe("GatewaySetupDialog", () => {
         storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
     await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
     await userEvent.type(screen.getByLabelText(/audio api version/i), "2025-04-01-preview");
@@ -1977,7 +2027,7 @@ describe("GatewaySetupDialog", () => {
         storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
     await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
     await userEvent.type(screen.getByLabelText(/audio api version/i), "2025-04-01-preview");
@@ -2076,7 +2126,7 @@ describe("GatewaySetupDialog", () => {
         storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     expect(screen.getByRole("button", { name: /test & save/i })).toBeDisabled();
 
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
@@ -2248,7 +2298,7 @@ describe("GatewaySetupDialog", () => {
         storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
       />,
     );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByText("Update audio and Digital Twin settings"));
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
     await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
@@ -2687,7 +2737,7 @@ describe("GatewaySetupDialog", () => {
     expect(screen.getByLabelText(/speech-to-text deployment/i)).toHaveValue("keiko-stt");
     expect(screen.getByLabelText(/speech-output deployment/i)).toHaveValue("keiko-tts");
     // The realtime provider lives on a different connection — skipped and SAID, never silent.
-    expect(screen.getByLabelText(/digital voice · realtime deployment/i)).toHaveValue("");
+    expect(screen.getByLabelText(/native realtime · deployment/i)).toHaveValue("");
     expect(screen.getByText(/realtime voice model uses its own endpoint/i)).toBeInTheDocument();
   });
 

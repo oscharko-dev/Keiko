@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ecfc025fb8d2c04ac35d3f3e404912edf19b3004d8eaf8bb3dfaadec51a6ade4"
+    "catalogDigest": "05038467135c8934865ebbd8543bba327392c4ae7a5936d154c1d7ec9de0169f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 424,
-    "proofCount": 432,
-    "resolvedProofCount": 432,
-    "failureClassCount": 310,
+    "operationCount": 429,
+    "proofCount": 437,
+    "resolvedProofCount": 437,
+    "failureClassCount": 311,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -84,6 +84,7 @@
         "chat.compaction.facts.classified",
         "chat.creation.rejected",
         "chat.regeneration.rejected",
+        "chat.response.message",
         "chat.send.rejected",
         "chat.turn.started",
         "git-change.chat.apply",
@@ -111,7 +112,9 @@
       "operations": [
         "client.diagnostic",
         "client.diagnostic.rate-limited",
-        "client.diagnostic.rejected"
+        "client.diagnostic.rejected",
+        "client.markdown.layout",
+        "voice.dialogue.stage"
       ],
       "scenarios": ["client-diagnostics.dependency-failure", "client-diagnostics.loss"]
     },
@@ -154,6 +157,7 @@
         "gateway.instance.unavailable",
         "gateway.log.sink-failed",
         "gateway.readiness.automatic.completed",
+        "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
         "gateway.retry.budget-exhausted",
         "gateway.retry.exhausted",
@@ -174,6 +178,7 @@
         "gateway.tool-catalog.projected",
         "gateway.tool-catalog.rejected",
         "gateway.tool-catalog.repair",
+        "gateway.voice.setup.resolved",
         "http.gateway.egress.planned",
         "http.gateway.fetch.completed",
         "http.gateway.fetch.failed",
@@ -724,6 +729,7 @@
     "gateway-stream-read": ["model-gateway.dependency-failure"],
     "gateway-tls-trust": ["model-gateway.dependency-failure"],
     "gateway-tool-calling-capability": ["model-gateway.dependency-failure"],
+    "gateway-voice-configuration": ["model-gateway.dependency-failure"],
     "gateway-tool-catalog": ["model-gateway.rejection"],
     "gateway-tool-schema-rejection": ["model-gateway.dependency-failure"],
     "git-change-chat-connect": ["editor-delivery.rejection"],
@@ -950,6 +956,7 @@
     "chat.request.dispatch.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.logging.test.ts"
     ],
+    "chat.response.message.causality": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.response.streamed.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],
@@ -995,6 +1002,7 @@
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
+    "client.markdown.layout.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "coding-app-session.channel.closed.duration": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
     ],
@@ -1384,6 +1392,9 @@
     "gateway.readiness.automatic.completed.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
+    "gateway.readiness.automatic.joined.line": [
+      "packages/keiko-server/src/gateway-readiness.on-demand.test.ts"
+    ],
     "gateway.readiness.automatic.started.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
@@ -1432,6 +1443,7 @@
     "gateway.tool-catalog.repair.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.tool-schema-repair.test.ts"
     ],
+    "gateway.voice.setup.resolved.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
     "git-change.chat.apply.outcome": ["packages/keiko-server/src/chat-activity.test.ts"],
     "git-change.chat.blocked.reason": ["packages/keiko-server/src/gitChangeRoutes.test.ts"],
     "git-change.chat.connected.scope": ["packages/keiko-server/src/gitChangeRoutes.test.ts"],
@@ -2033,6 +2045,7 @@
       "packages/keiko-server/src/update-runtime-activity.test.ts"
     ],
     "update.session.lifecycle.transition": ["packages/keiko-server/src/update-session.test.ts"],
+    "voice.dialogue.stage.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "voice.live-dictation.capacity-rejected.count": [
       "packages/keiko-server/src/voice-live-dictation.test.ts"
     ],

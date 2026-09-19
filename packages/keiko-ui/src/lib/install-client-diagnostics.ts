@@ -113,7 +113,7 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
 // since its last delivered report (#3532).
 function clientDiagnosticPostBody(
   message: string,
-  meta: ClientDiagnosticMeta | undefined,
+  meta: ClientDiagnosticMeta,
   loss: ClientDiagnosticLossCounts | undefined,
 ): ClientDiagnosticIngestRequest {
   const bounded =
@@ -123,13 +123,20 @@ function clientDiagnosticPostBody(
   const base = {
     message: bounded,
     clientTs: new Date().toISOString(),
-    correlationId: validCorrelationId(meta?.correlationId),
-    gitChangeDescription: meta?.gitChangeDescription,
-    workspaceTrustBinding: meta?.workspaceTrustBinding,
+    correlationId: validCorrelationId(meta.correlationId),
+    parentCorrelationId: validCorrelationId(meta.parentCorrelationId),
+    voiceDialogueStage: meta.voiceDialogueStage,
+    voiceCaptureReason: meta.voiceCaptureReason,
+    voiceCaptureError: meta.voiceCaptureError,
+    markdownLayout: meta.markdownLayout,
+    moduleLoadFailure: meta.moduleLoadFailure,
+    errorEvidence: meta.errorEvidence,
+    gitChangeDescription: meta.gitChangeDescription,
+    workspaceTrustBinding: meta.workspaceTrustBinding,
     loss,
   };
   const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];
-  if (readyStateDigit === undefined) return { ...base, kind: meta?.kind };
+  if (readyStateDigit === undefined) return { ...base, kind: meta.kind };
   return { ...base, readyState: parsedSseReadyState(readyStateDigit), kind: "sse-error" };
 }
 
@@ -203,7 +210,7 @@ function sendClientDiagnostic(
   loss: ClientDiagnosticLossCounts | undefined,
 ): void {
   try {
-    const body = clientDiagnosticPostBody(message, meta, loss);
+    const body = clientDiagnosticPostBody(message, meta ?? {}, loss);
     void bffFetchJson<undefined>("/api/diagnostics/client", {
       method: "POST",
       body: JSON.stringify(body),

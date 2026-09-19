@@ -1295,3 +1295,44 @@ describe("code-owned client diagnostic notes (F29)", () => {
     });
   });
 });
+
+describe("production browser frame redaction", () => {
+  it("never persists an untrusted chunk basename even when it matches the wire grammar", () => {
+    const basename = ["customer", "apikey", "1234"].join("");
+    const frame = `dist/ui/static/_next/static/chunks/${basename}.js:1:2`;
+    const redacted = redactLogFields({ frames: [frame] });
+    expect(JSON.stringify(redacted)).not.toContain(basename);
+    expect(redacted).toEqual({
+      frames: [
+        expect.stringMatching(
+          /^dist\/ui\/static\/_next\/static\/chunks\/sha256-[a-f0-9]{64}\.js:1:2$/u,
+        ) as unknown,
+      ],
+    });
+  });
+
+  it("retains only a reduced chunk identity, never a browser URL or source path", () => {
+    const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345";
+    expect(
+      redactLogFields({
+        frames: [
+          frame,
+          "https://private.invalid/chunk.js:1:2",
+          "dist/ui/static/_next/static/chunks/../private.js:1:2",
+          "file:///Users/private/code.js:1:2",
+        ],
+      }),
+    ).toEqual(redactLogFields({ frames: [frame] }));
+  });
+
+  it("keeps chunk identities distinct and stable across line and column changes", () => {
+    const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js";
+    const first = redactLogFields({ frames: [`${frame}:1:2`] });
+    const second = redactLogFields({ frames: [`${frame}:3:4`] });
+    const different = redactLogFields({
+      frames: ["dist/ui/static/_next/static/chunks/2differentchunk.js:1:2"],
+    });
+    expect(first).not.toEqual(different);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first).replace(":1:2", ":3:4"));
+  });
+});
