@@ -519,12 +519,14 @@ describe("useSSE", () => {
   // A restarted BFF invalidates its in-memory app session (ADR-0141 D5), so every reconnect after
   // that was denied again forever, with nothing ever re-establishing one (the defect a live dev
   // Activity Log caught: 35 `workspace.root.denied` warn lines, one per backoff attempt). The
-  // repair must run before the reconnect timer opens a new stream, at most once per failure streak
-  // — not on every error, or a persistent outage would hammer the local pairing endpoint — and
-  // again once a successful reconnect starts a fresh streak.
-  it("repairs the app session once per failure streak, before the reconnect timer opens a new stream", () => {
+  // repair must run before the reconnect timer opens a new stream, at most once IN FLIGHT per
+  // failure streak — not on every error, or a persistent outage would hammer the local pairing
+  // endpoint — and a SUCCESSFUL repair must not be repeated again until a fresh streak starts. See
+  // the next two tests for what happens when the repair itself fails (#3557 review).
+  it("repairs the app session once per failure streak once the repair succeeds", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("EventSource", FakeEventSource);
+    ensureLocalSession.mockResolvedValueOnce(true);
     const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
       initialProps: { runId: "run 9" },
     });
@@ -538,8 +540,11 @@ describe("useSSE", () => {
       first.onopen?.(new Event("open"));
     });
 
-    act(() => {
+    await act(async () => {
       first.onerror?.(new Event("error"));
+      // Let the mocked repair's promise settle before the next assertion — the streak's attempt
+      // is only re-armed or consumed once it resolves.
+      await Promise.resolve();
     });
     // Repaired synchronously inside the onerror handler, strictly before the reconnect timer
     // (whose minimum delay is 1s) has any chance to fire.
@@ -552,10 +557,12 @@ describe("useSSE", () => {
     const second = FakeEventSource.instances[1];
     if (second === undefined) throw new Error("Expected reconnected stream.");
 
-    act(() => {
+    await act(async () => {
       second.onerror?.(new Event("error"));
+      await Promise.resolve();
     });
-    // Same failure streak (no successful open landed between the two errors): no second repair.
+    // Same failure streak (no successful open landed between the two errors), and the first
+    // repair SUCCEEDED above: no second repair.
     expect(ensureLocalSession).toHaveBeenCalledTimes(1);
 
     act(() => {
@@ -571,6 +578,49 @@ describe("useSSE", () => {
       third.onerror?.(new Event("error"));
     });
     // The successful open on `third` started a new streak, so this failure repairs again.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(2);
+
+    view.unmount();
+  });
+
+  // #3557 review (P1): a failed repair used to permanently consume the streak's only repair
+  // attempt — `sessionRepairAttempted` was set unconditionally and reset only by a successful
+  // open, so a repair that raced a restarting BFF and legitimately returned `false` left every
+  // later reconnect in the same streak receiving 403 with no further repair ever attempted, stuck
+  // until a full page reload. Without the fix this assertion sees only ONE call, not two.
+  it("retries the app session repair on the next onerror after a failed repair in the same streak", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    ensureLocalSession.mockResolvedValueOnce(false);
+    const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 10" },
+    });
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    act(() => {
+      first.onopen?.(new Event("open"));
+    });
+
+    await act(async () => {
+      first.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    expect(ensureLocalSession).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+
+    await act(async () => {
+      second.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    // The first repair FAILED, so this onerror — still inside the same failure streak, no
+    // successful open landed in between — must retry it rather than being permanently locked out
+    // for the rest of the streak.
     expect(ensureLocalSession).toHaveBeenCalledTimes(2);
 
     view.unmount();

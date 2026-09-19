@@ -25,9 +25,12 @@ interface SharedEventSourceEntry {
   reconnectAttempts: number;
   reconnectTimer: number | undefined;
   sourceGeneration: number;
-  // Set once an `onerror` in the current failure streak has already asked for a session repair, so
-  // a streak of reconnect failures repairs at most once instead of hammering the local pairing
-  // endpoint on every attempt. Reset to `false` by a successful open (`onopen`), which starts a new
+  // Set once an `onerror` in the current failure streak has a session repair in flight OR
+  // SUCCEEDED, so a streak of reconnect failures repairs at most once IN FLIGHT instead of
+  // hammering the local pairing endpoint on every attempt. A FAILED repair clears it again so the
+  // next `onerror` in the same streak gets its own attempt instead of being permanently locked out
+  // for the rest of the streak (#3557 review: the first repair can race a restarting BFF and
+  // legitimately fail). Also reset to `false` by a successful open (`onopen`), which starts a new
   // streak.
   sessionRepairAttempted: boolean;
 }
@@ -131,15 +134,19 @@ function scheduleReconnect(entry: SharedEventSourceEntry): void {
   }, reconnectDelay(entry));
 }
 
-// Repairs a stale local app session at most once per failure streak (ADR-0141 D5): a restarted BFF
-// invalidates its in-memory session, so every reconnect after that was denied again forever, with
-// nothing ever re-establishing one. Fire-and-forget — the repair is a fast loopback POST that
-// normally completes well before the reconnect timer's minimum 1s delay elapses, so the next
-// attempt carries a valid cookie without slowing the existing backoff.
+// Repairs a stale local app session at most once IN FLIGHT per failure streak (ADR-0141 D5): a
+// restarted BFF invalidates its in-memory session, so every reconnect after that was denied again
+// forever, with nothing ever re-establishing one. Fire-and-forget — the repair is a fast loopback
+// POST that normally completes well before the reconnect timer's minimum 1s delay elapses, so the
+// next attempt carries a valid cookie without slowing the existing backoff. A failed repair
+// (single-flight `false`) re-arms the streak's attempt so the next `onerror` retries instead of
+// leaving the stream permanently unrepaired.
 function repairSessionOnce(entry: SharedEventSourceEntry): void {
   if (entry.sessionRepairAttempted) return;
   entry.sessionRepairAttempted = true;
-  void repairLocalCodingAppSession();
+  void repairLocalCodingAppSession().then((repaired) => {
+    if (!repaired) entry.sessionRepairAttempted = false;
+  });
 }
 
 function openEntrySource(entry: SharedEventSourceEntry): void {

@@ -54,9 +54,12 @@ let sharedEventSource: EventSource | null = null;
 let sharedEventSourceLive = false;
 let reconnectTimer: number | undefined;
 let reconnectAttempts = 0;
-// Set once an `onerror` in the current failure streak has already asked for a session repair
-// (ADR-0141 D5 — a restarted BFF's in-memory session is gone and every reconnect was denied again
-// forever, with nothing re-establishing one). Reset by a successful open, which starts a new streak.
+// Set once an `onerror` in the current failure streak has a session repair in flight OR
+// SUCCEEDED (ADR-0141 D5 — a restarted BFF's in-memory session is gone and every reconnect was
+// denied again forever, with nothing re-establishing one). A FAILED repair clears it again so the
+// next `onerror` in the same streak gets its own attempt instead of being permanently locked out
+// for the rest of the streak (#3557 review: the first repair can race a restarting BFF and
+// legitimately fail). Also reset by a successful open, which starts a new streak.
 let sessionRepairAttempted = false;
 let visibilityListenerInstalled = false;
 
@@ -191,13 +194,17 @@ function runEventsUrl(): string {
   return `${RUN_EVENTS_URL}?resume=${cursors.join(",")}`;
 }
 
-// Repairs a stale local app session at most once per failure streak. Fire-and-forget — the repair
-// is a fast loopback POST that normally completes well before the reconnect timer's minimum 1s
-// delay elapses, so the next attempt carries a valid cookie without slowing the existing backoff.
+// Repairs a stale local app session at most once IN FLIGHT per failure streak. Fire-and-forget —
+// the repair is a fast loopback POST that normally completes well before the reconnect timer's
+// minimum 1s delay elapses, so the next attempt carries a valid cookie without slowing the
+// existing backoff. A failed repair (single-flight `false`) re-arms the streak's attempt so the
+// next `onerror` retries instead of leaving the stream permanently unrepaired.
 function repairSessionOnce(): void {
   if (sessionRepairAttempted) return;
   sessionRepairAttempted = true;
-  void repairLocalCodingAppSession();
+  void repairLocalCodingAppSession().then((repaired) => {
+    if (!repaired) sessionRepairAttempted = false;
+  });
 }
 
 function openSharedEventSource(): void {
