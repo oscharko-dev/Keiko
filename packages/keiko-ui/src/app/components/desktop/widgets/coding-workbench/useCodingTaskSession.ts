@@ -28,6 +28,7 @@ interface SessionInput {
   readonly workspace: ActiveWorkspaceApi | null;
   readonly root: string | undefined;
   readonly selection: string | undefined;
+  readonly onSelectionHandled?: (() => void) | undefined;
 }
 
 function reportFailure(error: unknown): void {
@@ -47,7 +48,11 @@ interface TaskLoader {
   readonly load: (id: string, activate: boolean) => Promise<void>;
 }
 
-export function useCodingTaskSession(input: SessionInput): CodingTaskSession {
+export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
+  const input = {
+    ...options,
+    root: options.workspace?.activeInstance?.repositoryRoot ?? options.root,
+  };
   const ignoredRun = useRef<string | undefined>(undefined);
   const latest = useRef(input);
   latest.current = input;
@@ -77,12 +82,32 @@ export function useCodingTaskSession(input: SessionInput): CodingTaskSession {
     error,
     newTask,
     finish,
-    visibleRun:
-      input.active ||
-      (scoped !== null &&
-        input.snapshot?.conversationId === scoped.task.id &&
-        ignoredRun.current !== input.snapshot.runId),
+    visibleRun: sessionRunVisible(input, scoped, ignoredRun.current),
   };
+}
+
+function sessionRunVisible(
+  input: SessionInput,
+  detail: CodingHistoryDetail | null,
+  ignoredRun: string | undefined,
+): boolean {
+  if (input.active || input.snapshot?.state === "recovery-required") return true;
+  return (
+    detail !== null &&
+    input.snapshot?.conversationId === detail.task.id &&
+    ignoredRun !== input.snapshot.runId
+  );
+}
+
+function taskScopeMatches(
+  detail: CodingHistoryDetail,
+  input: SessionInput,
+  activate: boolean,
+): boolean {
+  const activeWorkspaceId = input.workspace?.activeInstance?.workspaceId;
+  return (
+    activate || activeWorkspaceId === undefined || detail.task.workspaceId === activeWorkspaceId
+  );
 }
 
 function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
@@ -98,6 +123,7 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
       try {
         const result = await fetchCodingTask(id);
         if (seq !== sequence.current) return;
+        if (!taskScopeMatches(result, latest.current, activate)) return;
         if (activate && !(await latest.current.workspace?.switchTo(result.task.workspaceId)))
           throw new Error("Workspace unavailable");
         if (seq === sequence.current) setDetail(result);
@@ -163,10 +189,14 @@ function useSessionSelection(
   setDetail: (value: CodingHistoryDetail | null) => void,
 ): void {
   const { selection, snapshot, root, active } = input;
+  const activeWorkspaceId = input.workspace?.activeInstance?.workspaceId;
+  const selectionHandled = useRef(input.onSelectionHandled);
+  selectionHandled.current = input.onSelectionHandled;
   const lastSelection = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (selection === undefined || lastSelection.current === selection || active) return;
     lastSelection.current = selection;
+    selectionHandled.current?.();
     if (selection.startsWith("new:")) void newTask();
     else {
       ignoredRun.current = snapshot?.runId;
@@ -178,7 +208,14 @@ function useSessionSelection(
     if (id === undefined || snapshot?.runId === ignoredRun.current) return;
     void load(id, false);
     window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
-  }, [snapshot?.conversationId, snapshot?.runId, snapshot?.state, load, ignoredRun]);
+  }, [
+    snapshot?.conversationId,
+    snapshot?.runId,
+    snapshot?.state,
+    activeWorkspaceId,
+    load,
+    ignoredRun,
+  ]);
   useEffect(() => {
     setDetail(null);
   }, [root, setDetail]);

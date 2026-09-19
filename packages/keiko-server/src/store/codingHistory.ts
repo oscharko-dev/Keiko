@@ -113,6 +113,8 @@ function createTask(
   assertId(input.taskId);
   if (!/^[a-f0-9]{64}$/u.test(input.operatorDigest))
     throw invalidRequest("Invalid operator identity.");
+  if (!store.listProjects().some((project) => project.path === input.projectPath))
+    store.createProject(input.projectPath);
   return transaction(db, () => {
     const chat = store.createChat(input.projectPath, input.title, input.modelId, {
       branchLabel: input.branch,

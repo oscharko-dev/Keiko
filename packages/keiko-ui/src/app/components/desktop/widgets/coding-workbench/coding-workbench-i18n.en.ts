@@ -365,6 +365,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repositoryPathPlaceholder": "/absolute/path/to/repository",
   "codingWorkbench.setup.branchesLoading": "Loading branches…",
   "codingWorkbench.setup.branchesUnavailable": "Branches unavailable",
+  "codingWorkbench.setup.branchSelect": "Select a branch",
   "codingWorkbench.setup.branchesRetry": "Reload branches",
   "codingWorkbench.setup.targetBranch": "Target branch",
   "codingWorkbench.setup.targetBranchPlaceholder": "main",

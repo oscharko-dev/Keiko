@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import { useCodingTaskSession } from "./useCodingTaskSession";
+import type { ActiveWorkspaceApi } from "../../context/ActiveWorkspaceContext";
 
 const read = vi.hoisted(() => vi.fn());
 const update = vi.hoisted(() => vi.fn());
@@ -40,12 +41,102 @@ function snapshot(conversationId?: string): CodingWorkbenchRuntimeSnapshot {
     conversationId,
   };
 }
+
+function activeWorkspace(): ActiveWorkspaceApi {
+  const action = vi.fn(async () => true);
+  return {
+    instances: [],
+    activeBinding: null,
+    activeRoot: "/managed/repo",
+    loading: false,
+    switching: false,
+    error: null,
+    inventoryUnavailable: false,
+    refresh: action,
+    switchTo: action,
+    clearActive: action,
+    pause: action,
+    resume: action,
+    prepareHandoff: action,
+    repair: action,
+    provision: action,
+    activeInstance: {
+      schemaVersion: "1",
+      workspaceId: "ws-one",
+      taskId: "task-one",
+      repositoryId: "repo-one",
+      repositoryRoot: "/repo",
+      baseBranch: "master",
+      taskBranch: "keiko/task/one",
+      managedWorktreePath: "/managed/repo",
+      gitdirIdentity: "gitdir-one",
+      lifecycleState: "active",
+      health: "healthy",
+      lock: null,
+      createdAt: "2026-09-19T10:00:00.000Z",
+      updatedAt: "2026-09-19T10:00:00.000Z",
+      driftMarkers: [],
+      recoveryHints: [],
+      auditCorrelationId: "audit-one",
+    },
+  };
+}
 beforeEach(() => {
   vi.clearAllMocks();
   read.mockResolvedValue(detail);
 });
 
 describe("coding task selection", () => {
+  it("keeps a task bound from Code setup visible when the desktop base folder differs", async () => {
+    const workspace = activeWorkspace();
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/desktop-base",
+        workspace,
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-one"));
+    expect(result.current.visibleRun).toBe(true);
+    await act(async () => result.current.newTask());
+    expect(workspace.provision).toHaveBeenCalledWith({
+      root: "/repo",
+      baseBranch: "master",
+      taskId: expect.stringMatching(/^coding-/u),
+    });
+  });
+
+  it("keeps recovery controls reachable for a legacy run without a saved conversation", () => {
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: { ...snapshot(), state: "recovery-required" },
+        active: false,
+        root: "/repo",
+        workspace: null,
+        selection: undefined,
+      }),
+    );
+    expect(result.current.visibleRun).toBe(true);
+  });
+
+  it("does not reload a previous task after a new workspace is active", async () => {
+    read.mockResolvedValue({ ...detail, task: { ...detail.task, workspaceId: "ws-previous" } });
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await act(async () => Promise.resolve());
+    expect(read).toHaveBeenCalledWith("chat-one");
+    expect(result.current.detail).toBeNull();
+  });
+
   it("hides an unassociated finished timeline rather than attributing it to the selected repository", () => {
     const { result } = renderHook(() =>
       useCodingTaskSession({

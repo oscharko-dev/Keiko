@@ -5,10 +5,10 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import styles from "./CodingWorkbenchProgress.module.css";
 
-export type CodingProgressState =
+type CodingProgressState =
   "working" | "approval" | "question" | "paused" | "done" | "failed" | "stopped" | "ready";
 
-export function codingProgressState(
+function codingProgressState(
   state: CodingWorkbenchRuntimeStateName | undefined,
   review: boolean,
   questions: number,

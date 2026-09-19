@@ -1,28 +1,29 @@
 "use client";
 
 import { type ReactNode } from "react";
-import { useRepositoryBranchState } from "../../hooks/useRepositoryBranchState";
+import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 export function CodingWorkbenchBranchField({
-  root,
+  branches,
   value,
   pending,
   onChange,
 }: {
-  readonly root: string;
+  readonly branches: RepositoryBranchState;
   readonly value: string;
   readonly pending: boolean;
   readonly onChange: (value: string) => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const branches = useRepositoryBranchState(root.trim() || null);
   const names = branches.branches.map((branch) => branch.name);
-  const emptyLabel = branches.loading
-    ? "codingWorkbench.setup.branchesLoading"
-    : "codingWorkbench.setup.branchesUnavailable";
+  const readyLabel =
+    names.length === 0
+      ? "codingWorkbench.setup.branchesUnavailable"
+      : "codingWorkbench.setup.branchSelect";
+  const emptyLabel = branches.loading ? "codingWorkbench.setup.branchesLoading" : readyLabel;
   const selected = names.includes(value) ? value : "";
   return (
     <>
@@ -33,7 +34,7 @@ export function CodingWorkbenchBranchField({
         id="coding-workbench-setup-branch"
         className={styles.setupInput}
         value={selected}
-        disabled={pending || branches.loading || names.length === 0}
+        disabled={pending || branches.loading || branches.error !== null || names.length === 0}
         onChange={(event) => {
           reportClientDiagnostic("[keiko] coding workbench target branch selected");
           onChange(event.target.value);
@@ -55,7 +56,7 @@ function BranchRetry({
   branches,
   pending,
 }: {
-  readonly branches: ReturnType<typeof useRepositoryBranchState>;
+  readonly branches: RepositoryBranchState;
   readonly pending: boolean;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();

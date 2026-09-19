@@ -539,7 +539,7 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
         id: "history-42",
         title: "Implement issue",
         projectPath: REPOSITORY_PATH,
-        workspaceId: "ws-1",
+        workspaceId: bound.activeInstance?.workspaceId,
         taskId: codingWorkbenchIssueTaskId(42),
         branch: "keiko/task/issue-42",
         modelId: "coding",

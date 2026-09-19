@@ -25,6 +25,21 @@ function codingHistory(): NonNullable<UiStore["codingHistory"]> {
 }
 
 describe("Coding History on the existing conversation store", () => {
+  it("registers an accepted workspace repository before storing its first coding task", () => {
+    store.deleteProject(root);
+    const task = codingHistory().create({
+      projectPath: root,
+      title: "First task in a bound workspace",
+      modelId: "coding",
+      workspaceId: "ws_new",
+      taskId: "task_new",
+      branch: "keiko/task/new",
+      operatorDigest: "a".repeat(64),
+    });
+    expect(codingHistory().get(task.id)?.projectPath).toBe(root);
+    expect(store.listProjects().map((project) => project.path)).toContain(root);
+  });
+
   it("keeps coding tasks separate from ordinary chat history and retains their workspace", () => {
     const ordinary = store.createChat(root, "Conversation", "test-model");
     const task = codingHistory().create({

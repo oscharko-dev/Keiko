@@ -668,10 +668,12 @@ export function CodingWorkbenchWindow({
   selectedRoot,
   onOpenGit = noopOpenGit,
   historySelection,
+  onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
 }: {
   readonly selectedRoot?: string | undefined;
   readonly historySelection?: string | undefined;
+  readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
 }): ReactNode {
@@ -687,6 +689,7 @@ export function CodingWorkbenchWindow({
     workspace: workspaceContext,
     root: selectedRoot,
     selection: historySelection,
+    onSelectionHandled: onHistorySelectionHandled,
   });
   const state = historyRuntimeState(runtimeState, history);
 

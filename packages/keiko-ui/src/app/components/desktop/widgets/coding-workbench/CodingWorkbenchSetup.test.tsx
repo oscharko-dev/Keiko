@@ -28,6 +28,7 @@ const setActiveMock = vi.hoisted(() => vi.fn());
 const listMock = vi.hoisted(() => vi.fn());
 const repairMock = vi.hoisted(() => vi.fn());
 const baseBranchMock = vi.hoisted(() => vi.fn());
+const branchRead = vi.hoisted(() => ({ loading: false, error: null as string | null }));
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -47,8 +48,7 @@ vi.mock("../../hooks/useRepositoryBranchState", () => ({
       "main-next",
     ].map((name) => ({ name, current: name === "main" })),
     currentBranch: "main",
-    loading: false,
-    error: null,
+    ...branchRead,
     refresh: vi.fn(),
   }),
 }));
@@ -269,10 +269,22 @@ describe("CodingWorkbenchSetup", () => {
     repairMock.mockReset();
     baseBranchMock.mockReset();
     baseBranchMock.mockResolvedValue(null);
+    branchRead.loading = false;
+    branchRead.error = null;
   });
 
   afterEach(() => {
     resetClientDiagnosticWriter();
+  });
+
+  it.each(["loading", "failed"])("does not bind while branch inventory is %s", async (state) => {
+    branchRead.loading = state === "loading";
+    branchRead.error = state === "failed" ? "Branch lookup failed" : null;
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await flushBindSequence();
+    expect(bindButton()).toBeDisabled();
+    await userEvent.setup().type(screen.getByLabelText("Repository path"), "{Enter}");
+    expect(provisionMock).not.toHaveBeenCalled();
   });
 
   it("renders the setup section while the runtime is available and no binding is active", async () => {
@@ -485,6 +497,33 @@ describe("CodingWorkbenchSetup", () => {
     );
     expect(alert).not.toHaveTextContent("WORKSPACE_ROOT_INVALID");
     expect(setActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("binds a separate task when another installation already owns the default task branch", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockRejectedValueOnce(
+      Object.assign(new Error("Existing task branch"), {
+        code: "BRANCH_CONFLICT",
+        failureClass: "blocked",
+      }),
+    );
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-new" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-new", "healthy"));
+    renderWorkbench(api, liveState(), "/repos/selected");
+    await user.click(await bindable());
+    await waitFor(() => expect(api.refresh).toHaveBeenCalledOnce());
+    expect(provisionMock).toHaveBeenCalledTimes(2);
+    expect(provisionMock.mock.calls[1]?.[0]).toEqual({
+      root: "/repos/selected",
+      baseBranch: "main",
+      taskId: expect.stringMatching(/^coding-workbench-main-[a-f0-9-]+$/u),
+      requestedBy: "studio-operator",
+    });
+    expect(setActiveMock).toHaveBeenCalledWith({
+      workspaceId: "ws-new",
+      requestedBy: "studio-operator",
+    });
   });
 
   it("explains a blocked task-branch conflict without exposing server detail", async () => {

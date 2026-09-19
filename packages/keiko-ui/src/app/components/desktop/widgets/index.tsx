@@ -764,6 +764,9 @@ registerWindowRender("codingHistory", (_cfg, ctx) => (
 registerWindowRender("coding", (cfg, ctx) => (
   <CodingWorkbenchWindow
     historySelection={str(cfg, "historySelection")}
+    onHistorySelectionHandled={() =>
+      ctx.openWindow("coding", { historySelection: undefined, repositoryPath: undefined })
+    }
     onOpenHistory={() => ctx.openWindow("codingHistory")}
     selectedRoot={str(cfg, "repositoryPath") ?? ctx.selectedRoot ?? undefined}
     onOpenGit={({ root, binding, repositoryDialog, descriptionReview }) => {
