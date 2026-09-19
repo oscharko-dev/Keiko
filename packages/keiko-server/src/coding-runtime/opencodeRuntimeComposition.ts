@@ -53,6 +53,7 @@ import {
   type OpenCodeV2HttpClient,
 } from "./opencodeV2HttpClient.js";
 import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
+import { recordContextPresentation } from "./codingRuntimeHistory.js";
 import { createOpenCodeV2ApprovalRequests } from "./opencodeV2ApprovalRequests.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencodeV2Questions.js";
@@ -260,7 +261,7 @@ export function createOpenCodeRuntimeComposition(
   input: OpenCodeRuntimeCompositionInput,
 ): OpenCodeRuntimeComposition {
   const runs = new Map<string, PreparedRun>();
-  const approvals = createOpenCodeV2ApprovalRequests();
+  const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics);
   const bridge = createToolBridge(
     input.capabilities.toolFacadeCapability,
     input.toolFacade,
@@ -288,13 +289,14 @@ export function createOpenCodeRuntimeComposition(
   return {
     manager,
     toolBridge: bridge.publicPort,
-    runPort: createRunPort(runs, input.diagnostics, approvals),
+    runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals),
   };
 }
 
 function createRunPort(
   runs: Map<string, PreparedRun>,
   diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
 ): OpenCodeRunPort {
   const readyRun = (runId: string): ReadyRun | undefined => {
@@ -302,7 +304,7 @@ function createRunPort(
     return isReadyRun(run) ? run : undefined;
   };
   return {
-    submitTask: createSubmitTask(readyRun, diagnostics),
+    submitTask: createSubmitTask(readyRun, diagnostics, activityLog),
     abortTask: createAbortTask(readyRun),
     waitForTerminal: async (runId, signal): Promise<boolean> => {
       const run = readyRun(runId);
@@ -312,13 +314,14 @@ function createRunPort(
       return outcome;
     },
     replyPermission: createReplyPermission(readyRun, diagnostics, approvals),
-    ...createQuestionRunPort(readyRun),
+    ...createQuestionRunPort(readyRun, diagnostics),
   };
 }
 
 function createSubmitTask(
   readyRun: ReadyRunLookup,
   diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
 ): OpenCodeRunPort["submitTask"] {
   return async (runId, text, initialContext): Promise<boolean> => {
     const run = readyRun(runId);
@@ -329,7 +332,15 @@ function createSubmitTask(
       await run.client.prompt(
         run.sessionId,
         initialContext === undefined ? text : `${initialContext}\n\n${text}`,
+        undefined,
+        initialContext === undefined
+          ? undefined
+          : {
+              displayText: text,
+              hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
+            },
       );
+      if (initialContext !== undefined) recordContextPresentation(activityLog, runId);
       return run.ready;
     } catch (error) {
       recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
@@ -366,7 +377,7 @@ function createReplyPermission(
   };
 }
 
-type OpenCodeTurnFailureStage = "permission" | "submit" | "terminal";
+type OpenCodeTurnFailureStage = "permission" | "question" | "submit" | "terminal";
 
 function recordOpenCodeTurnFailure(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -500,7 +511,10 @@ function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"]
   };
 }
 
-function createQuestionRunPort(readyRun: ReadyRunLookup): QuestionRunPort {
+function createQuestionRunPort(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+): QuestionRunPort {
   return {
     listQuestions: async (runId): Promise<readonly OpenCodeQuestionRequest[]> => {
       const run = readyRun(runId);
@@ -509,7 +523,8 @@ function createQuestionRunPort(readyRun: ReadyRunLookup): QuestionRunPort {
         return (await run.client.forms())
           .filter((form) => form.sessionID === run.sessionId)
           .map(projectOpenCodeV2Form);
-      } catch {
+      } catch (error) {
+        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
         return [];
       }
     },
@@ -533,14 +548,18 @@ function createQuestionRunPort(readyRun: ReadyRunLookup): QuestionRunPort {
         return run.ready;
       } catch (error) {
         if (error instanceof CodingRuntimeQuestionAnswerRejectedError) throw error;
+        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
         return false;
       }
     },
-    rejectQuestion: createRejectQuestion(readyRun),
+    rejectQuestion: createRejectQuestion(readyRun, diagnostics),
   };
 }
 
-function createRejectQuestion(readyRun: ReadyRunLookup): QuestionRunPort["rejectQuestion"] {
+function createRejectQuestion(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+): QuestionRunPort["rejectQuestion"] {
   return async (runId, requestId): Promise<boolean> => {
     const run = readyRun(runId);
     if (run === undefined) return false;
@@ -552,7 +571,8 @@ function createRejectQuestion(readyRun: ReadyRunLookup): QuestionRunPort["reject
       if (!owned || formId === undefined) return false;
       await run.client.cancelForm(run.sessionId, formId);
       return run.ready;
-    } catch {
+    } catch (error) {
+      recordOpenCodeTurnFailure(diagnostics, run, "question", error);
       return false;
     }
   };
@@ -1349,13 +1369,10 @@ function handleDirectToolRequest(
 }
 
 function parseV2PermissionRequest(body: string): Readonly<Record<string, unknown>> | undefined {
-  try {
-    const parsed: unknown = JSON.parse(body);
-    const value = v2Record(parsed);
-    return value?.action === "permission-request" ? value : undefined;
-  } catch {
-    return undefined;
-  }
+  if (!validJson(body)) return undefined;
+  const parsed: unknown = JSON.parse(body);
+  const value = v2Record(parsed);
+  return value?.action === "permission-request" ? value : undefined;
 }
 
 async function handleV2PermissionRequest(

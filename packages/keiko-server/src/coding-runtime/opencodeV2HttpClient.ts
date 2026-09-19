@@ -17,6 +17,11 @@ export interface OpenCodeV2HttpClientOptions {
   readonly timeoutMs?: number | undefined;
 }
 
+export interface OpenCodeV2PromptDisplay {
+  readonly displayText: string;
+  readonly hiddenContextSha256: string;
+}
+
 export interface OpenCodeV2HttpClient {
   info(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
   document(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
@@ -30,7 +35,12 @@ export interface OpenCodeV2HttpClient {
     sessionId: string,
     signal?: AbortSignal,
   ): Promise<readonly Readonly<Record<string, unknown>>[]>;
-  prompt(sessionId: string, text: string, signal?: AbortSignal): Promise<void>;
+  prompt(
+    sessionId: string,
+    text: string,
+    signal?: AbortSignal,
+    display?: OpenCodeV2PromptDisplay,
+  ): Promise<void>;
   interrupt(sessionId: string, signal?: AbortSignal): Promise<void>;
   active(signal?: AbortSignal): Promise<Readonly<Record<string, unknown>>>;
   permissions(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
@@ -59,20 +69,17 @@ export function parseOpenCodeV2ChildEndpoint(output: string): string | undefined
 }
 
 function parseEndpoint(value: string): URL | undefined {
-  try {
-    const endpoint = new URL(value);
-    return endpoint.protocol === "http:" &&
-      endpoint.hostname === "127.0.0.1" &&
-      endpoint.username === "" &&
-      endpoint.password === "" &&
-      endpoint.pathname === "/" &&
-      endpoint.search === "" &&
-      endpoint.hash === ""
-      ? endpoint
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  if (!URL.canParse(value)) return undefined;
+  const endpoint = new URL(value);
+  return endpoint.protocol === "http:" &&
+    endpoint.hostname === "127.0.0.1" &&
+    endpoint.username === "" &&
+    endpoint.password === "" &&
+    endpoint.pathname === "/" &&
+    endpoint.search === "" &&
+    endpoint.hash === ""
+    ? endpoint
+    : undefined;
 }
 
 function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
@@ -309,14 +316,23 @@ export function createOpenCodeV2HttpClient(
     sessions: async (signal) =>
       arrayEnvelope(await request("GET", "/api/session", undefined, signal)),
     messages: (sessionId, signal) => pagedMessages(request, sessionId, signal),
-    prompt: async (sessionId, value, signal): Promise<void> => {
+    prompt: async (sessionId, value, signal, display): Promise<void> => {
       if (Buffer.byteLength(value, "utf8") > MAX_TEXT_BYTES)
         throw new Error("opencode-v2-prompt-oversized");
+      if (
+        display !== undefined &&
+        (Buffer.byteLength(display.displayText, "utf8") > MAX_TEXT_BYTES ||
+          !/^[a-f0-9]{64}$/u.test(display.hiddenContextSha256))
+      )
+        throw new Error("opencode-v2-prompt-display-invalid");
       objectEnvelope(
         await request(
           "POST",
           `/api/session/${safeSessionId(sessionId)}/prompt`,
-          { text: value },
+          {
+            text: value,
+            ...(display === undefined ? {} : { metadata: { keikoContextPresentationV1: display } }),
+          },
           signal,
         ),
       );

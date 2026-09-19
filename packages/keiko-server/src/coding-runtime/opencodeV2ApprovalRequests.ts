@@ -1,5 +1,10 @@
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
 
@@ -51,8 +56,33 @@ function projected(
   );
 }
 
+function dispatchPermission(
+  runId: string,
+  event: SidecarPermissionEvent,
+  onPermission: (event: SidecarPermissionEvent) => void,
+  settle: (approved: boolean) => void,
+  diagnostics: ServerDiagnosticSink | undefined,
+): void {
+  try {
+    onPermission(event);
+  } catch (error) {
+    settle(false);
+    emitServerDiagnostic(diagnostics, {
+      correlationId: runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.opencode-composition",
+      source: "opencode.permission",
+      errorClass: contentFreeErrorClass(error),
+      message: "runtime-turn-failed",
+      code: "stage=permission-dispatch",
+    });
+  }
+}
+
 /** The existing Keiko approval lane owns the decision; V2 plugin tools have no native ask API. */
-export function createOpenCodeV2ApprovalRequests(): OpenCodeV2ApprovalRequests {
+export function createOpenCodeV2ApprovalRequests(
+  diagnostics?: ServerDiagnosticSink,
+): OpenCodeV2ApprovalRequests {
   const pending = new Map<string, Pending>();
   return {
     request: async ({ value, runId, sessionId, onPermission, signal }): Promise<boolean> => {
@@ -81,11 +111,7 @@ export function createOpenCodeV2ApprovalRequests(): OpenCodeV2ApprovalRequests {
         timer.unref();
         pending.set(event.requestId, { runId, resolve: settle });
         signal.addEventListener("abort", onAbort, { once: true });
-        try {
-          onPermission(event);
-        } catch {
-          settle(false);
-        }
+        dispatchPermission(runId, event, onPermission, settle, diagnostics);
       });
     },
     resolve: (runId, requestId, approved): boolean => {

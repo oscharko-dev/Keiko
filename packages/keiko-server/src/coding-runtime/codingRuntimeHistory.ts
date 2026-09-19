@@ -28,7 +28,16 @@ const HISTORY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["created", "continued", "captured", "read", "updated", "failed", "unavailable"],
+      values: [
+        "created",
+        "continued",
+        "captured",
+        "context-presented",
+        "read",
+        "updated",
+        "failed",
+        "unavailable",
+      ],
     },
     conversationId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
@@ -46,7 +55,14 @@ const HISTORY_OPERATION = defineActivityLogOperation({
 });
 
 type HistoryEvent =
-  "created" | "continued" | "captured" | "read" | "updated" | "failed" | "unavailable";
+  | "created"
+  | "continued"
+  | "captured"
+  | "context-presented"
+  | "read"
+  | "updated"
+  | "failed"
+  | "unavailable";
 
 function recordHistory(
   log: ServerLogSink | undefined,
@@ -79,6 +95,11 @@ function recordHistory(
       },
     ),
   );
+}
+
+/** A V2 prompt carried hidden context while its activity displayed only the human's task. */
+export function recordContextPresentation(log: ServerLogSink | undefined, runId: string): void {
+  recordHistory(log, "context-presented", { correlationId: runId, runId, messageCount: 1 });
 }
 
 function digest(value: string): string {

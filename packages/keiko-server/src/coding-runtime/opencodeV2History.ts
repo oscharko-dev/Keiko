@@ -161,6 +161,22 @@ function textCandidate(id: string, index: number, text: string, occurredAt: stri
   });
 }
 
+function visibleUserText(message: Readonly<Record<string, unknown>>): string {
+  const text = message.text;
+  if (typeof text !== "string") throw new OpenCodeV2HistoryError("reason=user-text-invalid");
+  const display = record(record(message.metadata)?.keikoContextPresentationV1);
+  if (display === undefined) return text;
+  const visible = display.displayText;
+  const expected = display.hiddenContextSha256;
+  if (typeof visible !== "string" || typeof expected !== "string")
+    throw new OpenCodeV2HistoryError("reason=context-display-invalid");
+  const separator = `\n\n${visible}`;
+  const context = text.slice(0, -separator.length);
+  if (!text.endsWith(separator) || createHash("sha256").update(context).digest("hex") !== expected)
+    throw new OpenCodeV2HistoryError("reason=context-display-mismatch");
+  return visible;
+}
+
 function toolIdentity(part: Readonly<Record<string, unknown>>): { id: string; name: string } {
   const id = part.id;
   const name = part.name;
@@ -300,7 +316,7 @@ function messageCandidates(
         messageId: id,
         occurredAt,
       }),
-      textCandidate(id, 0, message.text, occurredAt),
+      textCandidate(id, 0, visibleUserText(message), occurredAt),
     ];
   }
   if (message.type === "idle") {

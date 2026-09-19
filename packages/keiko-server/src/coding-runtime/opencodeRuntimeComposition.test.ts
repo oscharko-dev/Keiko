@@ -46,6 +46,7 @@ import {
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
+import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import { openCodeToolClientTimeoutMs } from "./opencodeRuntimeAdapter.js";
 
@@ -693,6 +694,38 @@ afterAll(() => {
 });
 
 describe("unmounted OpenCode runtime composition", () => {
+  it("shows the human task without replaying attached issue context as a user message", () => {
+    const context = "PRIVATE_ISSUE_CONTEXT";
+    const intent = "Summarize the issue";
+    const projection = createOpenCodeV2HistoryProjection();
+    const events = projection.project(
+      "ses_safe",
+      [
+        {
+          id: "msg_context",
+          type: "user",
+          time: { created: 1 },
+          text: `${context}\n\n${intent}`,
+          metadata: {
+            keikoContextPresentationV1: {
+              displayText: intent,
+              hiddenContextSha256: createHash("sha256").update(context).digest("hex"),
+            },
+          },
+        },
+      ],
+      undefined,
+    );
+    const signals = events.flatMap((event) => {
+      const signal = projection.takeSignal(event);
+      return signal === undefined ? [] : [signal];
+    });
+    expect(signals.filter((signal) => signal.kind === "text")).toEqual([
+      expect.objectContaining({ kind: "text", text: intent }),
+    ]);
+    expect(JSON.stringify(signals)).not.toContain(context);
+  });
+
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
@@ -1266,7 +1299,15 @@ describe("private OpenCode run control", () => {
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
     expect(runControl.abortSessions).toEqual(["ses_tool"]);
     expect(runControl.promptBodies).toEqual([
-      JSON.stringify({ text: `${initialContext}\n\n${prompt}` }),
+      JSON.stringify({
+        text: `${initialContext}\n\n${prompt}`,
+        metadata: {
+          keikoContextPresentationV1: {
+            displayText: prompt,
+            hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
+          },
+        },
+      }),
     ]);
 
     const aborted = new AbortController();

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "2ece557d971d397e0056df7b9dd43e11e2294631a949d245b0bf3825cd2ffe5d" as const;
+  "bfe7ac8b3190fcd147349cbf5411f8d61fc40eb419b140892d3a9e3327b70236" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3677,7 +3677,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["created", "continued", "captured", "read", "updated", "failed", "unavailable"],
+        values: [
+          "created",
+          "continued",
+          "captured",
+          "context-presented",
+          "read",
+          "updated",
+          "failed",
+          "unavailable",
+        ],
       },
       conversationId: {
         type: "string",
