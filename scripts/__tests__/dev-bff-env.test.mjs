@@ -2,7 +2,7 @@
 // merge/default logic is now a small importable module precisely so it can be pinned directly,
 // instead of only indirectly through the slow real-process spawn test
 // (`scripts/__tests__/dev-bff-activity-log.test.mjs`).
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -43,6 +43,23 @@ describe("resolveDevBffStateDir", () => {
 });
 
 describe("buildDevBffEnv", () => {
+  // #3557 review: a `.env` that exists but cannot be read must not pass for a missing one, which
+  // would drop its KEIKO_LOG_* settings without a trace.
+  it("fails closed when the local .env exists but cannot be read", () => {
+    const repoRoot = tempRepoRoot();
+    mkdirSync(join(repoRoot, ".env"));
+    const stateDir = resolveDevBffStateDir({ repoRoot, processEnv: {} });
+
+    expect(() => buildDevBffEnv({ repoRoot, processEnv: {}, stateDir })).toThrow(/EISDIR/u);
+  });
+
+  it("treats a missing .env as no local settings", () => {
+    const repoRoot = tempRepoRoot();
+    const stateDir = resolveDevBffStateDir({ repoRoot, processEnv: {} });
+
+    expect(buildDevBffEnv({ repoRoot, processEnv: {}, stateDir }).KEIKO_STATE_DIR).toBe(stateDir);
+  });
+
   it("pins KEIKO_STATE_DIR to the resolved stateDir, never the generic CLI default", () => {
     const repoRoot = tempRepoRoot();
     const stateDir = resolveDevBffStateDir({ repoRoot, processEnv: {} });

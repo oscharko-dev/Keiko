@@ -21,17 +21,24 @@ function parseEnvValue(raw) {
   return value;
 }
 
+// The repo-local `.env` text, or undefined when there is none. A file that exists but cannot be
+// read fails closed, because treating it as missing would drop its `KEIKO_LOG_*` settings without a
+// trace (#3557 review).
+function readLocalDotenv(file) {
+  try {
+    return readFileSync(file, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 // Reads the repo-local `.env` file, folding only `KEIKO_*` (plus the narrow allowlist above) keys
 // that `env` does not already carry into a NEW copy of it — `env` itself is never mutated, and a
-// key already present wins over the file. Missing file is not an error: it simply returns `env`.
+// key already present wins over the file. A missing file is not an error: it simply returns `env`.
 function loadLocalKeikoEnv(repoRoot, env) {
-  const file = join(repoRoot, ".env");
-  let text;
-  try {
-    text = readFileSync(file, "utf8");
-  } catch {
-    return env;
-  }
+  const text = readLocalDotenv(join(repoRoot, ".env"));
+  if (text === undefined) return env;
   const merged = { ...env };
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
