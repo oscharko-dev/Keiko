@@ -525,6 +525,13 @@ const CLIENT_BINDING_FIELDS = {
   },
 } as const;
 
+const CLIENT_BINDING_TARGET_MISSING_FIELDS = {
+  ...CLIENT_BINDING_FIELDS,
+  // A window whose fingerprint names no listed chat any more: that fingerprint, so a chat the
+  // lookup found gone is told apart from a reference that never named one (#3557 review).
+  targetFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+} as const;
+
 const CLIENT_BINDING_RESOLVED_FIELDS = {
   ...CLIENT_BINDING_FIELDS,
   // A binding found again after redaction (through its fingerprint, or chosen by the person): the
@@ -556,7 +563,7 @@ const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
   category: "diagnostic",
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientBindingTargetMissing",
-  fields: CLIENT_BINDING_FIELDS,
+  fields: CLIENT_BINDING_TARGET_MISSING_FIELDS,
   causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
@@ -1190,7 +1197,11 @@ function logClientStage(
   logClientStageSettled(request, correlationId);
 }
 
-type ClientBindingFields = ActivityLogFields<typeof CLIENT_BINDING_TARGET_MISSING_OPERATION>;
+// The fields every binding line shares; a target fingerprint is added only where a line carries one.
+type ClientBindingFields = Omit<
+  ActivityLogFields<typeof CLIENT_BINDING_TARGET_MISSING_OPERATION>,
+  "targetFingerprint"
+>;
 
 // The deciding list loads the line can name: the primary id when it is a safe correlation id, and
 // each distinct safe related id besides it. An id the server refuses, or one named twice, never
@@ -1242,6 +1253,15 @@ function clientBindingFields(request: ClientBindingIngestRequest): ClientBinding
   };
 }
 
+// The chat a restored binding names, only by its fingerprint and only when the report carries one.
+function targetFingerprintField(request: ClientBindingIngestRequest): {
+  readonly targetFingerprint?: string;
+} {
+  return request.targetFingerprint === undefined
+    ? {}
+    : { targetFingerprint: request.targetFingerprint };
+}
+
 function logClientBindingResolved(
   request: ClientBindingIngestRequest,
   correlationId: string,
@@ -1250,12 +1270,7 @@ function logClientBindingResolved(
     activityLogEvent(
       CLIENT_BINDING_RESOLVED_OPERATION,
       { correlationId },
-      {
-        ...clientBindingFields(request),
-        ...(request.targetFingerprint === undefined
-          ? {}
-          : { targetFingerprint: request.targetFingerprint }),
-      },
+      { ...clientBindingFields(request), ...targetFingerprintField(request) },
     ),
   );
 }
@@ -1351,7 +1366,7 @@ function logClientBindingTargetMissing(
     activityLogEvent(
       CLIENT_BINDING_TARGET_MISSING_OPERATION,
       { correlationId, errorKind: "unavailable" },
-      clientBindingFields(request),
+      { ...clientBindingFields(request), ...targetFingerprintField(request) },
     ),
   );
 }

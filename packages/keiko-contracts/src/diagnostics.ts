@@ -704,8 +704,8 @@ export interface ClientBindingIngestRequest {
   // `candidates-offered` only, and always there: how many of those offers read alike and show a
   // reference from their chat's fingerprint, zero included.
   readonly disambiguatedCount?: number | undefined;
-  // A resolved binding found again after redaction (`fingerprint`, `user-selected`), and always a
-  // person's decision about a chosen chat: the fingerprint of that chat, never its id.
+  // A binding found again after redaction (`fingerprint`, `user-selected`), resolved or found gone,
+  // and always a person's decision about a chosen chat: the fingerprint of that chat, never its id.
   readonly targetFingerprint?: string | undefined;
 }
 
@@ -779,8 +779,9 @@ function hasConsistentOffer(value: Record<string, unknown>): boolean {
   );
 }
 
-// A resolved binding found again after redaction may name the chat it bound to, and a person's
-// decision about a chosen chat always does; each only by the chat's fingerprint.
+// A binding found again after redaction may name the chat it bound to, or the chat its fingerprint
+// no longer finds, and a person's decision about a chosen chat always does; each only by the chat's
+// fingerprint.
 function hasConsistentTargetFingerprint(value: Record<string, unknown>): boolean {
   const { targetFingerprint } = value;
   const decision = CLIENT_BINDING_CHOICE_DECISIONS.has(value.outcome);
@@ -792,7 +793,7 @@ function hasConsistentTargetFingerprint(value: Record<string, unknown>): boolean
     return false;
   }
   return (
-    (decision || value.outcome === "resolved") &&
+    (decision || value.outcome === "resolved" || value.outcome === "target-missing") &&
     isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES) &&
     RESTORED_REFERENCE_SHAPES.has(value.referenceShape)
   );

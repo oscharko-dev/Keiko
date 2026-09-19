@@ -601,18 +601,20 @@ describe("isClientBindingIngestRequest", () => {
 
   // #3557 review: a binding found again after redaction names the chat it bound to, only by the
   // fingerprint the window persists and never by its id, so two choices from one list stay apart.
-  it("accepts a target fingerprint only on a resolved binding found again after redaction", () => {
+  it("accepts a target fingerprint only on a binding found again after redaction", () => {
     const targetFingerprint = "c".repeat(64);
     const restored = { ...bindingRequest(), outcome: "resolved", heuristicFlagged: true };
     for (const referenceShape of ["fingerprint", "user-selected"]) {
-      expect(isClientBindingIngestRequest({ ...restored, referenceShape, targetFingerprint })).toBe(
-        true,
-      );
+      for (const outcome of ["resolved", "target-missing"]) {
+        expect(
+          isClientBindingIngestRequest({ ...restored, outcome, referenceShape, targetFingerprint }),
+        ).toBe(true);
+      }
     }
     for (const patch of [
       { outcome: "resolved", referenceShape: "uuid" },
       { outcome: "resolved", referenceShape: "opaque", heuristicFlagged: false },
-      { outcome: "target-missing", referenceShape: "fingerprint" },
+      { outcome: "target-missing", referenceShape: "redacted", heuristicFlagged: false },
       {
         outcome: "candidates-offered",
         referenceShape: "redacted",

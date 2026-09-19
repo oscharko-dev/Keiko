@@ -260,6 +260,32 @@ describe("client diagnostics loss evidence", () => {
     expect(lines("client.diagnostic")).toEqual([]);
   });
 
+  // #3557 review: a fingerprint that names no listed chat any more persists as that fingerprint, so
+  // the failure never reads like a marker that named nothing.
+  it("persists a missing fingerprint reference with the fingerprint it no longer finds", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-9",
+      outcome: "target-missing",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      correlationId: "ui_list-gone-0002",
+      targetFingerprint: FINGERPRINT_A,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.target-missing");
+    expect(expectActivityLogProof("client.binding.target-missing.line", line ?? "")).toMatchObject({
+      correlationId: "ui_list-gone-0002",
+      errorKind: "unavailable",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
+      completeness: "complete",
+    });
+  });
+
   it("persists a resolved binding whose reference the heuristic flags as client.binding.resolved", async () => {
     const body = JSON.stringify({
       kind: "binding",
