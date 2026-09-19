@@ -33,6 +33,7 @@ import { gitHubCodeContextPortFor } from "./coding-context/githubIssueReaderAuth
 import { deriveRepositoryId } from "./task-workspace/naming.js";
 import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
+import { closeFileServerLogSinks, createFileServerLogSink } from "./observability/server-log.js";
 import {
   addSourceToCapsule,
   createCapsule,
@@ -724,6 +725,55 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(shutdown[0]?.correlationId).toBe(shutdown[1]?.correlationId);
     expect(shutdown[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(JSON.stringify(shutdown)).not.toContain(stateDir);
+  }, 15000);
+
+  // A process that owns its Activity Log (keiko ui, the dev BFF) wrote these shutdown lines after its
+  // own close, so it exited with an active segment the next start recovered as an orphan, on every
+  // restart of a live dev session. With the option set, dispose seals the segment as its last step.
+  it("seals the Activity Log after the shutdown lines when the process owns it", async (): Promise<void> => {
+    const stateDir = tmp("shutdown-seal-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-seal-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: createFileServerLogSink(stateDir),
+      closeActivityLogOnDispose: true,
+    });
+
+    await deps.dispose?.();
+
+    const names = readdirSync(join(stateDir, "logs"));
+    expect(names.filter((name) => name.endsWith(".active.jsonl"))).toEqual([]);
+    const segments = names.filter((name) => name.startsWith("activity-"));
+    expect(segments).toHaveLength(1);
+    const lines = readFileSync(join(stateDir, "logs", segments[0] ?? ""), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.filter((line) => line.op === "server.runtime.shutdown")).toHaveLength(2);
+    expect(lines.at(-1)).toMatchObject({ op: "activity-log.segment.sealed", sealReason: "close" });
+  }, 15000);
+
+  it("leaves the Activity Log open for a caller that builds and disposes deps repeatedly", async (): Promise<void> => {
+    const stateDir = tmp("shutdown-open-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-open-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: createFileServerLogSink(stateDir),
+    });
+    try {
+      await deps.dispose?.();
+
+      const active = readdirSync(join(stateDir, "logs")).filter((name) =>
+        name.endsWith(".active.jsonl"),
+      );
+      expect(active).toHaveLength(1);
+    } finally {
+      closeFileServerLogSinks();
+    }
   }, 15000);
 
   // Owner review, PR #3452: the teardown's cleanup can fail on its own. Both branches of that failure

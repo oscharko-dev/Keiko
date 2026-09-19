@@ -1082,6 +1082,8 @@ async function buildHandlerDepsOrReport(
       uiDbPath: parsed.uiDbPath,
       initialProjectPath: cwd,
       env: effectiveEnv,
+      // `keiko ui` owns its Activity Log for the whole process, so its dispose seals it last.
+      closeActivityLogOnDispose: true,
       ...(localGitMutationEnv === undefined ? {} : { localGitMutationEnv }),
       updateStartupRecovery,
       portableHandoffShutdown: createPortableHandoffShutdownTrigger({
