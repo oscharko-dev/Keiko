@@ -2690,9 +2690,19 @@ function withdrawSegment(
 // The re-check once a new segment exists: it sees every peer's new segment, and this one, at its
 // full reservation and prunes further or withdraws this still empty segment, so the bytes on disk
 // never exceed the budget.
+// A re-check that throws (a redirected directory, a failed listing) admitted nothing either: the
+// still empty segment is withdrawn before the error propagates, so no later write lands in a
+// segment whose reservation was never confirmed (#3557 review).
 function confirmAdmission(active: ActiveLog, cursor: WriteCursor, segment: ActiveSegment): void {
   const safeOpen = active.pendingEvidence[0];
-  if (runMaintenance(active, cursor, 0)) return;
+  let admitted: boolean;
+  try {
+    admitted = runMaintenance(active, cursor, 0);
+  } catch (error) {
+    if (safeOpen !== undefined) withdrawSegment(active, segment, safeOpen);
+    throw error;
+  }
+  if (admitted) return;
   if (safeOpen !== undefined) withdrawSegment(active, segment, safeOpen);
   active.admissionRetryAtMs = Date.now() + ADMISSION_RETRY_MS;
   throw new ActivityLogBudgetError();

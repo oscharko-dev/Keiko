@@ -263,6 +263,9 @@ const fsCalls = vi.hoisted(() => ({
   // `logs` directory (1 = the next one) with EACCES, the error class `readdirSync` rethrows.
   failLogsListingCall: null as number | null,
   logsListings: 0,
+  // Fails the next listing of a `logs` directory that already holds an active segment: the
+  // admission re-check right after a new segment's exclusive create, whatever ran before it.
+  failListingOnceActive: false,
   // `null` passes every write through untouched. A number is a byte budget: the descriptor accepts
   // that many more bytes and then reports 0, which is what a stalled descriptor reports and the
   // only way to produce a short write on a regular file.
@@ -280,6 +283,7 @@ function resetFsKnobs(): void {
   fsCalls.freeBytes = null;
   fsCalls.failLogsListingCall = null;
   fsCalls.logsListings = 0;
+  fsCalls.failListingOnceActive = false;
 }
 
 // The four-argument Buffer overload is the only one the module under test uses, and the only one
@@ -305,6 +309,15 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...actual,
     readdirSync: ((...args: readonly unknown[]): unknown => {
+      const logsDir = /(?:^|[\\/])logs$/u.test(String(args[0])) ? String(args[0]) : undefined;
+      if (
+        fsCalls.failListingOnceActive &&
+        logsDir !== undefined &&
+        actual.readdirSync(logsDir).some((entry) => entry.endsWith(".active.jsonl"))
+      ) {
+        fsCalls.failListingOnceActive = false;
+        throw Object.assign(new Error("forced listing failure"), { code: "EACCES" });
+      }
       if (fsCalls.failLogsListingCall !== null && /(?:^|[\\/])logs$/u.test(String(args[0]))) {
         fsCalls.logsListings += 1;
         if (fsCalls.logsListings === fsCalls.failLogsListingCall) {
@@ -745,6 +758,20 @@ describe("server activity log", () => {
     vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  // #3557 review: a re-check that throws admitted nothing, so the new segment is withdrawn instead
+  // of taking later writes whose reservation was never confirmed.
+  it("withdraws a new segment when its admission re-check throws", () => {
+    const sink = createFileServerLogSink(stateDir);
+    fsCalls.failListingOnceActive = true;
+
+    sink.write({ category: "indexing", op: "while-the-re-check-fails" });
+
+    expect(fsCalls.failListingOnceActive).toBe(false);
+    expect(
+      readdirSync(logsDirectory(stateDir)).filter((name) => name.endsWith(".active.jsonl")),
+    ).toStrictEqual([]);
   });
 
   it("writes one JSON line per event into this process's own active segment", () => {
