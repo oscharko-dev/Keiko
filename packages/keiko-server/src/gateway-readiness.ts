@@ -130,6 +130,69 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
+// Every readiness run other than the Coding Workbench's automatic one: the settings dialog's check
+// and the on-demand probe a conversation entry point runs when this process holds no current
+// observation for the model. Only the automatic run used to leave a line, so a chat refused as not
+// ready could not be told apart from one refused without any check having run (#3557).
+const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.started",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logReadinessStarted",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    trigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settings", "on-demand"],
+    },
+    probeCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.started.line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.completed",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logReadinessCompleted",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    trigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settings", "on-demand"],
+    },
+    overallStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready", "partial", "failed"],
+    },
+    probeCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.completed.line"],
+  releaseImpact: "patch",
+});
+
+/** Who ran a non-automatic readiness check: the settings dialog, or a conversation entry point. */
+export type GatewayReadinessTrigger = "settings" | "on-demand";
+
 type ProbeStatus = GatewayReadinessProbeResult["status"];
 
 export type { GatewayToolCallingProbeStatus } from "./gateway-tool-calling-probe.js";
@@ -327,6 +390,76 @@ function logAutomaticReadinessCompleted(
       },
     ),
   );
+}
+
+function logReadinessStarted(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  trigger: GatewayReadinessTrigger,
+  modelId: string,
+  probeCount: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_STARTED_OPERATION,
+      { correlationId },
+      { modelId: boundedReadinessModelId(modelId), trigger, probeCount },
+    ),
+  );
+}
+
+function logReadinessCompleted(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  trigger: GatewayReadinessTrigger,
+  report: GatewayReadinessReport,
+  durationMs: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_COMPLETED_OPERATION,
+      { correlationId, durationMs },
+      {
+        modelId: boundedReadinessModelId(report.modelId),
+        trigger,
+        overallStatus: report.overallStatus,
+        probeCount: report.probes.length,
+      },
+    ),
+  );
+}
+
+// One run's start line: the Coding Workbench's automatic run keeps its own operation.
+function logReadinessRunStarted(
+  deps: UiHandlerDeps,
+  run: ReadinessRunEvidence,
+  modelId: string,
+  probeCount: number,
+): void {
+  if (run.automatic) {
+    logAutomaticReadinessStarted(deps, run.correlationId, modelId, probeCount);
+    return;
+  }
+  logReadinessStarted(deps, run.correlationId, run.trigger, modelId, probeCount);
+}
+
+function logReadinessRunCompleted(
+  deps: UiHandlerDeps,
+  run: ReadinessRunEvidence,
+  report: GatewayReadinessReport,
+): void {
+  if (run.automatic) {
+    logAutomaticReadinessCompleted(deps, run.correlationId, report);
+    return;
+  }
+  logReadinessCompleted(deps, run.correlationId, run.trigger, report, Date.now() - run.startedAtMs);
+}
+
+interface ReadinessRunEvidence {
+  readonly correlationId: string;
+  readonly automatic: boolean;
+  readonly trigger: GatewayReadinessTrigger;
+  readonly startedAtMs: number;
 }
 
 // Configured model ids do not originate at this route's bounded request parser. Keep the full id
@@ -1427,6 +1560,7 @@ export async function runGatewayReadiness(
   // one id. A caller without a request context (a scheduled/CLI run) gets a freshly minted id rather
   // than an id-less record.
   requestCorrelationId?: string,
+  trigger: GatewayReadinessTrigger = "settings",
 ): Promise<GatewayReadinessReport | RouteResult> {
   const selection = chooseProvider(currentGatewayConfig(deps), request.modelId, request.options);
   if ("status" in selection) return selection;
@@ -1435,9 +1569,13 @@ export async function runGatewayReadiness(
   const observedGeneration = deps.gatewayConfig?.generation();
   const correlationId = requestCorrelationId ?? newCorrelationId();
   const names = requestedProbeNames(request.options);
-  if (request.options?.purpose === "coding-workbench-auto") {
-    logAutomaticReadinessStarted(deps, correlationId, selection.provider.modelId, names.length);
-  }
+  const run: ReadinessRunEvidence = {
+    correlationId,
+    automatic: request.options?.purpose === "coding-workbench-auto",
+    trigger,
+    startedAtMs: Date.now(),
+  };
+  logReadinessRunStarted(deps, run, selection.provider.modelId, names.length);
   const probes: GatewayReadinessProbeResult[] = [];
   const chat = await runProbe("chat", deps, selection, request.options, correlationId);
   probes.push(chat);
@@ -1467,9 +1605,7 @@ export async function runGatewayReadiness(
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
   recordReadinessObservation(deps, report, observedGeneration);
   reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
-  if (request.options?.purpose === "coding-workbench-auto") {
-    logAutomaticReadinessCompleted(deps, correlationId, report);
-  }
+  logReadinessRunCompleted(deps, run, report);
   return report;
 }
 
@@ -1506,9 +1642,12 @@ function withinNotReadyCooldown(
   return ageMs >= 0 && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
 }
 
+// `correlationId` is the conversation request that needed the answer: the probe's lines carry it,
+// so that request's timeline shows the check it waited for.
 export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
+  correlationId?: string,
 ): Promise<void> {
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
@@ -1522,7 +1661,7 @@ export async function ensureOnDemandConversationReadiness(
     await inFlight;
     return;
   }
-  const probe = runOnDemandReadinessProbe(deps, holder, modelId).finally(() => {
+  const probe = runOnDemandReadinessProbe(deps, holder, modelId, correlationId).finally(() => {
     onDemandReadinessProbes.delete(key);
   });
   onDemandReadinessProbes.set(key, probe);
@@ -1533,17 +1672,24 @@ async function runOnDemandReadinessProbe(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
+  requestCorrelationId: string | undefined,
 ): Promise<void> {
   const generation = holder.generation();
+  const correlationId = requestCorrelationId ?? newCorrelationId();
   try {
-    await runGatewayReadiness({ modelId, options: { probes: [] } }, deps);
+    await runGatewayReadiness(
+      { modelId, options: { probes: [] } },
+      deps,
+      correlationId,
+      "on-demand",
+    );
   } catch (error) {
     // The route still answers with the honest unready result — but never silently: the
     // underlying failure lands as a redacted operator diagnostic with a correlation id.
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId: newCorrelationId(),
+        correlationId,
         operation: "gateway.readiness",
         source: "gateway-readiness.on-demand",
         error,
@@ -1613,18 +1759,19 @@ function conversationWalkCandidates(
 export async function ensureAnyConversationReadyChatModel(
   deps: UiHandlerDeps,
   requestedModelId: string,
+  correlationId?: string,
 ): Promise<void> {
   // The budget covers the REQUESTED model's probe too (review finding on the first cut):
   // computed after it, a hanging gateway burned the full provider timeout before the budget
   // even started. The interactive create never waits longer than the budget, full stop.
   const deadlineAt = Date.now() + CHAT_MODEL_WALK_BUDGET_MS;
-  const firstProbe = ensureOnDemandConversationReadiness(deps, requestedModelId);
+  const firstProbe = ensureOnDemandConversationReadiness(deps, requestedModelId, correlationId);
   if (!(await settledWithinBudget(firstProbe, CHAT_MODEL_WALK_BUDGET_MS))) return;
   if (currentConversationReady(deps, requestedModelId)) return;
   for (const capability of conversationWalkCandidates(deps, requestedModelId)) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) return;
-    const probe = ensureOnDemandConversationReadiness(deps, capability.id);
+    const probe = ensureOnDemandConversationReadiness(deps, capability.id, correlationId);
     if (!(await settledWithinBudget(probe, remainingMs))) return;
     if (currentConversationReady(deps, capability.id)) return;
   }

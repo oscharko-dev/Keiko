@@ -10,6 +10,17 @@ import { getServerLogger, type ServerLogSink } from "./observability/index.js";
 
 type ObservedModelKind = ModelKind | "unknown";
 export type ChatRejectionReason = "readiness" | "generation" | "grounding-scope";
+// Which readiness state refused a model: `unobserved` when this process holds no current
+// observation for it (nothing checked it since start or since the configuration changed),
+// `not-ready` when a check ran and failed.
+export type ChatReadinessObservation = "unobserved" | "not-ready";
+
+interface ChatRejectionModelEvidence {
+  readonly modelId?: string | undefined;
+  readonly readinessObservation?: ChatReadinessObservation | undefined;
+}
+
+const MAX_REJECTION_MODEL_ID_CHARS = 240;
 export type GitChangeDescriptionTurnDenial = "authority-expired" | "model-egress-denied";
 export type GitChangeDescriptionTargetDenial =
   "repository-unavailable" | "reader-unauthorized" | "remote-unresolved";
@@ -42,6 +53,15 @@ const CHAT_REJECTION_COMMON_FIELDS = {
     dataClass: "closed-enum",
     required: true,
     values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
+  },
+  // The refused model and, for a readiness refusal, the state that refused it. Without them a
+  // refusal read as a failed live check even when no check had run in this process (#3557).
+  modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 240 },
+  readinessObservation: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["unobserved", "not-ready"],
   },
   completeness: { type: "string", dataClass: "completeness-state", required: true },
   loss: { type: "string", dataClass: "loss-state", required: true },
@@ -222,12 +242,28 @@ function rejectionErrorKind(reason: ChatRejectionReason): ActivityLogErrorKind {
   return reason === "generation" ? "internal" : "invalid-request";
 }
 
-export function logChatCreationRejectionEvent(input: {
-  readonly correlationId: string | undefined;
-  readonly status: number;
-  readonly reason: "readiness" | "configuration";
-  readonly modelKind: ObservedModelKind;
-}): void {
+function rejectionModelFields(evidence: ChatRejectionModelEvidence): {
+  readonly modelId?: string;
+  readonly readinessObservation?: ChatReadinessObservation;
+} {
+  return {
+    ...(evidence.modelId === undefined
+      ? {}
+      : { modelId: evidence.modelId.slice(0, MAX_REJECTION_MODEL_ID_CHARS) }),
+    ...(evidence.readinessObservation === undefined
+      ? {}
+      : { readinessObservation: evidence.readinessObservation }),
+  };
+}
+
+export function logChatCreationRejectionEvent(
+  input: ChatRejectionModelEvidence & {
+    readonly correlationId: string | undefined;
+    readonly status: number;
+    readonly reason: "readiness" | "configuration";
+    readonly modelKind: ObservedModelKind;
+  },
+): void {
   getServerLogger().warn(
     activityLogEvent(
       CHAT_CREATION_REJECTED_OPERATION,
@@ -239,6 +275,7 @@ export function logChatCreationRejectionEvent(input: {
       {
         reason: input.reason,
         modelKind: input.modelKind,
+        ...rejectionModelFields(input),
         completeness: "complete",
         loss: "none",
       },
@@ -248,7 +285,7 @@ export function logChatCreationRejectionEvent(input: {
 
 export function logChatRejectionEvent(
   operation: "chat.send.rejected" | "chat.regeneration.rejected",
-  input: {
+  input: ChatRejectionModelEvidence & {
     readonly correlationId: string | undefined;
     readonly status: number;
     readonly reason: ChatRejectionReason;
@@ -263,6 +300,7 @@ export function logChatRejectionEvent(
   const fields = {
     reason: input.reason,
     modelKind: input.modelKind,
+    ...rejectionModelFields(input),
     completeness: "complete",
     loss: "none",
   } as const;

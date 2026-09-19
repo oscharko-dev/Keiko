@@ -2012,7 +2012,7 @@ async function admitGroundedModel(
   // demand exactly like the create/send paths; injected deterministic answer ports skip the
   // probe as they skip the wire.
   if (!allowInjectedModelSeam) {
-    await ensureOnDemandConversationReadiness(deps, modelId);
+    await ensureOnDemandConversationReadiness(deps, modelId, prepared.correlationId);
   }
   const readinessAdmission = captureConversationReadinessAdmission(deps, modelId);
   return "status" in readinessAdmission

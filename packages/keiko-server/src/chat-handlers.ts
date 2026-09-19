@@ -170,6 +170,7 @@ import {
   logGitChangeApply,
   logGitChangeDescriptionTargetDenied,
   logGitChangeTurnAuthorityEvent,
+  type ChatReadinessObservation,
   type ChatRejectionReason,
   type GitChangeDescriptionTargetDenial,
   type GitChangeDescriptionTurnDenial,
@@ -897,6 +898,17 @@ function unreadyChatModelResult(): RouteResult {
   return conversationModelNotReadyResult();
 }
 
+// Which readiness state refused the model: no current observation in this process, or a check that
+// ran and failed. A model observed as ready yields none, since then readiness did not refuse it.
+function readinessObservationOf(
+  deps: UiHandlerDeps,
+  modelId: string,
+): ChatReadinessObservation | undefined {
+  const observed = currentConversationReadinessObservation(deps, modelId);
+  if (observed === undefined) return "unobserved";
+  return observed ? undefined : "not-ready";
+}
+
 function logChatCreationRejection(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -910,6 +922,8 @@ function logChatCreationRejection(
     status,
     reason: readinessFailure ? "readiness" : "configuration",
     modelKind,
+    modelId,
+    readinessObservation: readinessFailure ? readinessObservationOf(deps, modelId) : undefined,
   });
 }
 
@@ -926,6 +940,9 @@ export function logChatRejection(
     status,
     reason,
     modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
+    modelId,
+    readinessObservation:
+      reason === "readiness" ? readinessObservationOf(deps, modelId) : undefined,
   });
 }
 
@@ -2552,8 +2569,8 @@ export async function handleCreateDesktopChat(
   // probe latency to an already-decided answer.
   const explicitModelId = explicitChatModelId(body);
   await (explicitModelId === undefined
-    ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps))
-    : ensureOnDemandConversationReadiness(deps, explicitModelId));
+    ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps), ctx.correlationId)
+    : ensureOnDemandConversationReadiness(deps, explicitModelId, ctx.correlationId));
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) {
     logChatCreationRejection(
@@ -3308,7 +3325,7 @@ export async function handleSendDesktopChat(
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
     if (activeGitChangeScope(prepared.chat) === undefined) {
-      await ensureOnDemandConversationReadiness(deps, prepared.modelId);
+      await ensureOnDemandConversationReadiness(deps, prepared.modelId, ctx.correlationId);
     }
     const gitChangeDenial = admitGitChangeScopedTurn(
       deps,

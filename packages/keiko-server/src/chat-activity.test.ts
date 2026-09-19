@@ -219,3 +219,59 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
     });
   });
 });
+
+// #3557: a readiness refusal names the refused model and the state that refused it, so a refusal
+// without any check in this process is never mistaken for a failed live check.
+describe("chat rejection readiness evidence (#3557)", () => {
+  it.each(["unobserved", "not-ready"] as const)(
+    "chat.regeneration.rejected — persists the %s readiness observation with the model id",
+    (readinessObservation) => {
+      const sink = captureServerLog();
+
+      logChatRejectionEvent("chat.regeneration.rejected", {
+        correlationId: "corr-chat-regen-readiness-01",
+        status: 400,
+        reason: "readiness",
+        modelKind: "chat",
+        modelId: "example-chat-model",
+        readinessObservation,
+      });
+
+      const [event] = sink.events;
+      const persisted = expectActivityLogProof(
+        "chat.regeneration.rejected.reason",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(persisted).toMatchObject({
+        correlationId: "corr-chat-regen-readiness-01",
+        errorKind: "unavailable",
+        reason: "readiness",
+        modelId: "example-chat-model",
+        readinessObservation,
+      });
+    },
+  );
+
+  it("chat.creation.rejected — bounds a configured model id to the operation's 240 characters", () => {
+    const sink = captureServerLog();
+    const modelId = `model-${"x".repeat(300)}`;
+
+    logChatCreationRejectionEvent({
+      correlationId: "corr-chat-create-long-model",
+      status: 400,
+      reason: "configuration",
+      modelKind: "unknown",
+      modelId,
+    });
+
+    // The operation's bound applies to the projection; the persisted line then also passes the
+    // shared redaction, which may replace an overlong opaque run entirely.
+    const [event] = sink.events;
+    expect(event?.extra?.modelId).toBe(modelId.slice(0, 240));
+    const persisted = expectActivityLogProof(
+      "chat.creation.rejected.reason",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).not.toHaveProperty("readinessObservation");
+  });
+});

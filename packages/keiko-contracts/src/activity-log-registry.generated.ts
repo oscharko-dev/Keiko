@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "87c8b89423937fc55e39f524f99ec4352354b8965ed81e7deef08779a3fd808b" as const;
+  "5511791966a9b3a24b662254a6f8bb8220a1e4adc8a71a111efbaeef72c7e241" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -866,6 +866,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
       },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 240,
+      },
+      readinessObservation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["unobserved", "not-ready"],
+      },
       reason: {
         type: "string",
         dataClass: "closed-enum",
@@ -903,6 +915,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 240,
+      },
+      readinessObservation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["unobserved", "not-ready"],
       },
       reason: {
         type: "string",
@@ -1072,6 +1096,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 240,
+      },
+      readinessObservation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["unobserved", "not-ready"],
       },
       reason: {
         type: "string",
@@ -10054,6 +10090,98 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["gateway-readiness"],
     proofIds: ["gateway.readiness.automatic.started.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.readiness.completed",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-readiness.logReadinessCompleted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 240,
+      },
+      trigger: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["settings", "on-demand"],
+      },
+      overallStatus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["ready", "partial", "failed"],
+      },
+      probeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-readiness"],
+    proofIds: ["gateway.readiness.completed.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.readiness.started",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-readiness.logReadinessStarted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 240,
+      },
+      trigger: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["settings", "on-demand"],
+      },
+      probeCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "start",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-readiness"],
+    proofIds: ["gateway.readiness.started.line"],
     releaseImpact: "patch",
   },
   {
@@ -27168,10 +27296,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "modelKind",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "readinessObservation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "reason",
@@ -27180,7 +27320,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -27198,10 +27338,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "modelKind",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "readinessObservation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "reason",
@@ -27210,7 +27362,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -27228,10 +27380,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "modelKind",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "readinessObservation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "reason",
@@ -27240,7 +27404,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -38907,9 +39071,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       productSurfaces: ["keiko-server"],
       lifecycleTransitions: ["end", "start"],
       lifecycleOperations: {
-        start: ["gateway.readiness.automatic.started"],
+        start: ["gateway.readiness.automatic.started", "gateway.readiness.started"],
         state: [],
-        end: ["gateway.readiness.automatic.completed"],
+        end: ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
         failure: [],
         loss: [],
       },
@@ -38922,11 +39086,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "gateway.readiness.automatic.started",
           mode: "correlation",
         },
+        {
+          op: "gateway.readiness.completed",
+          mode: "correlation",
+        },
+        {
+          op: "gateway.readiness.started",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
       resourceSignals: [
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.started",
+        "gateway.readiness.completed",
+        "gateway.readiness.started",
       ],
       replayReferences: [],
       operations: [
@@ -38999,6 +39173,96 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.readiness.automatic.started.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.readiness.completed",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "overallStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "probeCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "trigger",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.readiness.completed.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.readiness.started",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "start",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "probeCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "trigger",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.readiness.started.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -57231,6 +57495,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.log.sink-failed": "model-gateway",
     "gateway.readiness.automatic.completed": "model-gateway",
     "gateway.readiness.automatic.started": "model-gateway",
+    "gateway.readiness.completed": "model-gateway",
+    "gateway.readiness.started": "model-gateway",
     "gateway.retry.budget-exhausted": "model-gateway",
     "gateway.retry.exhausted": "model-gateway",
     "gateway.retry.scheduled": "model-gateway",

@@ -7,6 +7,11 @@ import {
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
 import type { UiHandlerDeps } from "./deps.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // The cooldown maths compare an observation's checkedAt against the real clock inside the
 // production module, so these tests freeze Date.now to a fixed epoch instead of deriving
@@ -247,5 +252,45 @@ describe("ensureAnyConversationReadyChatModel budget", () => {
     // The requested model and the FIRST walk candidate were probed; the budget expired while
     // that candidate hung, so the walk never reached the third model.
     expect(probed).toEqual(["m1", "m2"]);
+  });
+});
+
+// #3557: the on-demand probe used to leave no line at all, so a conversation refused after it could
+// not be told apart from one refused without any check. Its lines carry the conversation request's
+// correlation id, so that request's timeline shows the check it waited for.
+describe("on-demand readiness evidence", () => {
+  it("logs the probe under the conversation request's correlation id", async () => {
+    const { deps } = probeableDeps("not-a-timestamp");
+    const events: ServerLogEvent[] = [];
+    const logged = {
+      ...deps,
+      activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+    } as UiHandlerDeps;
+
+    await ensureOnDemandConversationReadiness(logged, "chat-model", "corr-chat-send-0001");
+
+    const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+    expect(readiness.map((event) => [event.op, event.correlationId])).toEqual([
+      ["gateway.readiness.started", "corr-chat-send-0001"],
+      ["gateway.readiness.completed", "corr-chat-send-0001"],
+    ]);
+    expect(
+      expectActivityLogProof(
+        "gateway.readiness.started.line",
+        formatActivityLogProofLine(readiness[0] ?? {}),
+      ),
+    ).toMatchObject({ modelId: "chat-model", trigger: "on-demand", probeCount: 1 });
+    expect(
+      expectActivityLogProof(
+        "gateway.readiness.completed.line",
+        formatActivityLogProofLine(readiness[1] ?? {}),
+      ),
+    ).toMatchObject({
+      modelId: "chat-model",
+      trigger: "on-demand",
+      overallStatus: "ready",
+      probeCount: 1,
+    });
+    expect(readiness[1]?.durationMs).toEqual(expect.any(Number));
   });
 });

@@ -290,6 +290,56 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  // #3557: only the automatic run used to leave a line. A settings check now does too, under the
+  // request's correlation id, with its outcome, so a later refusal can name what the check found.
+  it.each([
+    ["passes", chatPayload("OK"), 200, "ready"],
+    ["fails", { error: { message: "upstream unavailable" } }, 503, "failed"],
+  ] as const)(
+    "logs a settings check that %s under the request's correlation id",
+    async (_label, payload, status, overallStatus) => {
+      const events: ServerLogEvent[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsWith(
+          gatewayConfig(),
+          vi.fn(() => Promise.resolve(jsonResponse(payload, status))),
+        ),
+        activityLog: { write: (event): void => void events.push(event) },
+      };
+
+      await runGatewayReadiness(
+        { modelId: "test-chat-model", options: { probes: [] } },
+        deps,
+        "corr-settings-readiness-0001",
+      );
+
+      const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+      expect(readiness.map((event) => [event.op, event.correlationId])).toEqual([
+        ["gateway.readiness.started", "corr-settings-readiness-0001"],
+        ["gateway.readiness.completed", "corr-settings-readiness-0001"],
+      ]);
+      expect(
+        expectActivityLogProof(
+          "gateway.readiness.started.line",
+          formatActivityLogProofLine(readiness[0] ?? {}),
+        ),
+      ).toMatchObject({ modelId: "test-chat-model", trigger: "settings", probeCount: 1 });
+      expect(
+        expectActivityLogProof(
+          "gateway.readiness.completed.line",
+          formatActivityLogProofLine(readiness[1] ?? {}),
+        ),
+      ).toMatchObject({
+        modelId: "test-chat-model",
+        trigger: "settings",
+        overallStatus,
+        probeCount: 1,
+      });
+      expect(JSON.stringify(readiness)).not.toContain("upstream unavailable");
+      deps.store.close();
+    },
+  );
+
   it("bounds a configured model id only at the 240-character activity-log projection", async () => {
     const modelId = `coding-${"x".repeat(250)}`;
     const config: GatewayConfig = {

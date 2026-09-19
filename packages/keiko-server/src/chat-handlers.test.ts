@@ -270,6 +270,7 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "grounding-scope",
             modelKind: "chat",
+            modelId: "breaker-chat",
             completeness: "complete",
             loss: "none",
           },
@@ -357,6 +358,9 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "readiness",
             modelKind: "chat",
+            // The on-demand probe ran and failed, so the refusal names a failed check (#3557).
+            modelId: "breaker-chat",
+            readinessObservation: "not-ready",
             completeness: "complete",
             loss: "none",
           },
@@ -372,6 +376,8 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "readiness",
             modelKind: "chat",
+            modelId: "breaker-chat",
+            readinessObservation: "not-ready",
             completeness: "complete",
             loss: "none",
           },
@@ -410,6 +416,7 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "configuration",
             modelKind: "unknown",
+            modelId: "missing-model",
             completeness: "complete",
             loss: "none",
           },

@@ -1416,6 +1416,13 @@ describe("desktop chat SSE streaming handler", () => {
         op: "chat.regeneration.rejected",
         correlationId: "corr-regeneration-admission-unready",
         errorKind: "unavailable",
+        // No check ran for this model in this process: the refusal says so, instead of reading as
+        // a failed live check (#3557, the live dev log after a BFF restart).
+        extra: expect.objectContaining({
+          reason: "readiness",
+          modelId: CHAT_MODEL,
+          readinessObservation: "unobserved",
+        }) as unknown,
       }),
     );
     expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
@@ -1500,6 +1507,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
+          modelId: "example-chat-model",
           completeness: "complete",
           loss: "none",
         },
@@ -1695,6 +1703,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
+          modelId: "example-chat-model",
           completeness: "complete",
           loss: "none",
         },
@@ -1977,6 +1986,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
+          modelId: "example-chat-model",
           completeness: "complete",
           loss: "none",
         },
