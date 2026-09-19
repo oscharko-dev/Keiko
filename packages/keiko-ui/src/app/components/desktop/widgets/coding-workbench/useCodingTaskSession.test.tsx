@@ -4,6 +4,7 @@ import type { CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import { useCodingTaskSession } from "./useCodingTaskSession";
 import type { ActiveWorkspaceApi } from "../../context/ActiveWorkspaceContext";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 const read = vi.hoisted(() => vi.fn());
 const update = vi.hoisted(() => vi.fn());
@@ -87,6 +88,83 @@ beforeEach(() => {
 });
 
 describe("coding task selection", () => {
+  it.each(["/repo", "/other-repository"])(
+    "keeps an explicitly opened task visible after switching from %s",
+    async (initialRoot) => {
+      const original = activeWorkspace();
+      if (original.activeInstance === null) throw new Error("Missing workspace fixture");
+      const workspace = {
+        ...original,
+        activeInstance: { ...original.activeInstance, repositoryRoot: initialRoot },
+      };
+      const opened = { ...detail, task: { ...detail.task, id: "chat-two", workspaceId: "ws-two" } };
+      read.mockResolvedValue(opened);
+      const { result, rerender } = renderHook(
+        ({ current }) =>
+          useCodingTaskSession({
+            snapshot: null,
+            active: false,
+            root: "/repo",
+            workspace: current,
+            selection: "chat-two",
+          }),
+        { initialProps: { current: workspace } },
+      );
+      await waitFor(() => expect(workspace.switchTo).toHaveBeenCalledWith("ws-two"));
+      await waitFor(() => expect(result.current.pending).toBe(false));
+      if (workspace.activeInstance === null) throw new Error("Missing workspace fixture");
+      rerender({
+        current: {
+          ...workspace,
+          activeInstance: {
+            ...workspace.activeInstance,
+            repositoryRoot: "/repo",
+            workspaceId: "ws-two",
+          },
+        },
+      });
+      expect(result.current.conversationId).toBe("chat-two");
+      expect(result.current.detail).toEqual(opened);
+    },
+  );
+
+  it("clears the loaded conversation when changing workspaces within the same repository", async () => {
+    const workspace = activeWorkspace();
+    const { result, rerender } = renderHook(
+      ({ current }) =>
+        useCodingTaskSession({
+          snapshot: snapshot("chat-one"),
+          active: false,
+          root: "/repo",
+          workspace: current,
+          selection: undefined,
+        }),
+      { initialProps: { current: workspace } },
+    );
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-one"));
+    if (workspace.activeInstance === null) throw new Error("Missing workspace fixture");
+    rerender({
+      current: {
+        ...workspace,
+        activeInstance: {
+          ...workspace.activeInstance,
+          repositoryRoot: "/repo",
+          workspaceId: "ws-two",
+          taskId: "task-two",
+        },
+      },
+    });
+    expect(result.current.detail).toBeNull();
+    expect(result.current.conversationId).toBeUndefined();
+    expect(result.current.visibleRun).toBe(false);
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding task history scope mismatch",
+      { correlationId: "run-one" },
+    );
+  });
+
   it("keeps a task bound from Code setup visible when the desktop base folder differs", async () => {
     const workspace = activeWorkspace();
     const { result } = renderHook(() =>

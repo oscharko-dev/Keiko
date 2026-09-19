@@ -1,5 +1,12 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import type { CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspaceApi } from "../../context/ActiveWorkspaceContext";
@@ -39,7 +46,7 @@ function reportFailure(error: unknown): void {
 
 interface TaskLoader {
   readonly detail: CodingHistoryDetail | null;
-  readonly setDetail: (value: CodingHistoryDetail | null) => void;
+  readonly setDetail: Dispatch<SetStateAction<CodingHistoryDetail | null>>;
   readonly pending: boolean;
   readonly setPending: (value: boolean) => void;
   readonly error: boolean;
@@ -57,9 +64,9 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const latest = useRef(input);
   latest.current = input;
   const controller = useTaskLoader(latest);
-  const { detail, setDetail, pending, setPending, error, setError, load } = controller;
+  const { detail, pending, setPending, error, setError, load } = controller;
   const newTask = useNewTask(latest, ignoredRun, controller);
-  useSessionSelection(input, load, newTask, ignoredRun, setDetail);
+  useSessionSelection(input, load, newTask, ignoredRun);
   const finish = async (): Promise<void> => {
     if (input.active || detail === null) return;
     setPending(true);
@@ -73,8 +80,7 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
       setPending(false);
     }
   };
-  const scoped =
-    detail?.task.projectPath === input.root || input.root === undefined ? detail : null;
+  const scoped = detail !== null && taskScopeMatches(detail, input, false) ? detail : null;
   return {
     detail: scoped,
     conversationId: scoped?.task.id,
@@ -106,7 +112,9 @@ function taskScopeMatches(
 ): boolean {
   const activeWorkspaceId = input.workspace?.activeInstance?.workspaceId;
   return (
-    activate || activeWorkspaceId === undefined || detail.task.workspaceId === activeWorkspaceId
+    activate ||
+    ((input.root === undefined || detail.task.projectPath === input.root) &&
+      (activeWorkspaceId === undefined || detail.task.workspaceId === activeWorkspaceId))
   );
 }
 
@@ -115,6 +123,7 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(false);
   const sequence = useRef(0);
+  useHistoryScope(latest, setDetail);
   const load = useCallback(
     async (id: string, activate: boolean): Promise<void> => {
       const seq = ++sequence.current;
@@ -123,7 +132,11 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
       try {
         const result = await fetchCodingTask(id);
         if (seq !== sequence.current) return;
-        if (!taskScopeMatches(result, latest.current, activate)) return;
+        if (!taskScopeMatches(result, latest.current, activate)) {
+          setDetail(null);
+          reportScopeMismatch(latest.current);
+          return;
+        }
         if (activate && !(await latest.current.workspace?.switchTo(result.task.workspaceId)))
           throw new Error("Workspace unavailable");
         if (seq === sequence.current) setDetail(result);
@@ -139,6 +152,25 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
     [latest],
   );
   return { detail, setDetail, pending, setPending, error, setError, load, sequence };
+}
+
+function reportScopeMismatch(input: SessionInput): void {
+  reportClientDiagnostic("[keiko] coding task history scope mismatch", {
+    correlationId: input.snapshot?.runId,
+  });
+}
+
+function useHistoryScope(
+  latest: { current: SessionInput },
+  setDetail: TaskLoader["setDetail"],
+): void {
+  const root = latest.current.root;
+  const workspaceId = latest.current.workspace?.activeInstance?.workspaceId;
+  useEffect(() => {
+    setDetail((current) =>
+      current !== null && !taskScopeMatches(current, latest.current, false) ? null : current,
+    );
+  }, [root, workspaceId, latest, setDetail]);
 }
 
 function useNewTask(
@@ -186,9 +218,8 @@ function useSessionSelection(
   load: (id: string, activate: boolean) => Promise<void>,
   newTask: () => Promise<void>,
   ignoredRun: { current: string | undefined },
-  setDetail: (value: CodingHistoryDetail | null) => void,
 ): void {
-  const { selection, snapshot, root, active } = input;
+  const { selection, snapshot, active } = input;
   const activeWorkspaceId = input.workspace?.activeInstance?.workspaceId;
   const selectionHandled = useRef(input.onSelectionHandled);
   selectionHandled.current = input.onSelectionHandled;
@@ -216,7 +247,4 @@ function useSessionSelection(
     load,
     ignoredRun,
   ]);
-  useEffect(() => {
-    setDetail(null);
-  }, [root, setDetail]);
 }
