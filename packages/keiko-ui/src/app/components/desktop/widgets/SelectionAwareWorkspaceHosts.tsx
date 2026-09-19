@@ -21,10 +21,11 @@ import {
   chatListCorrelationId,
   sharedFetchChats,
   useChatSession,
+  type ChatListLoad,
   type ChatSessionApi,
 } from "../hooks/useChatSession";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
-import { persistedReferenceEvidence, windowBindingDigest } from "../hooks/workspace-persistence";
+import { persistedReferenceEvidence } from "../hooks/workspace-persistence";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
@@ -677,21 +678,25 @@ interface BoundChatRouting {
   readonly resolvingLegacyProject: boolean;
   readonly switchingProject: boolean;
   readonly targetMissing: boolean;
+  // The chat list loads a legacy binding's scan read before it judged the chat missing.
+  readonly legacyScanCorrelationIds: readonly string[] | undefined;
 }
 
+// A missing verdict keeps the correlation id of every list the scan read: each of those answers
+// decided it (#3557 review).
 type ChatProjectLookup =
   | { readonly kind: "found"; readonly path: string }
-  | { readonly kind: "missing" }
+  | { readonly kind: "missing"; readonly scanCorrelationIds: readonly string[] }
   | { readonly kind: "failed" };
 
 async function findChatProjectPath(
   chatId: string,
   projects: readonly ProjectWithAvailability[],
 ): Promise<ChatProjectLookup> {
-  const projectChats = await Promise.all(
-    projects.map(async (project): Promise<readonly Chat[] | undefined> => {
+  const loads = await Promise.all(
+    projects.map(async (project): Promise<ChatListLoad | undefined> => {
       try {
-        return (await sharedFetchChats(project.path)).chats;
+        return await sharedFetchChats(project.path);
       } catch {
         window.reportError(
           correlatedDiagnostic(CHAT_PROJECT_LOOKUP_DIAGNOSTIC, newClientCorrelationId()),
@@ -700,11 +705,13 @@ async function findChatProjectPath(
       }
     }),
   );
-  const found = projectChats
-    .flatMap((chats): readonly Chat[] => chats ?? [])
+  const answered = loads.filter((load): load is ChatListLoad => load !== undefined);
+  const found = answered
+    .flatMap((load): readonly Chat[] => load.chats)
     .find((chat): boolean => chat.id === chatId && chat.status !== "closed");
   if (found !== undefined) return { kind: "found", path: found.projectPath };
-  return projectChats.includes(undefined) ? { kind: "failed" } : { kind: "missing" };
+  if (answered.length < loads.length) return { kind: "failed" };
+  return { kind: "missing", scanCorrelationIds: answered.map((load) => load.correlationId) };
 }
 
 interface LegacyChatProjectPathArgs {
@@ -746,7 +753,7 @@ function startRemoteChatProjectLookup(
   if (args.projects.length === 0) {
     args.setLookup(
       args.chatId,
-      args.error === undefined ? { kind: "missing" } : { kind: "failed" },
+      args.error === undefined ? { kind: "missing", scanCorrelationIds: [] } : { kind: "failed" },
     );
     return undefined;
   }
@@ -769,11 +776,14 @@ function startLegacyChatProjectLookup(args: LegacyChatLookupEffectArgs): (() => 
   return startRemoteChatProjectLookup({ ...args, chatId: args.chatId });
 }
 
-function useLegacyChatProjectPath(args: LegacyChatProjectPathArgs): {
+interface LegacyChatProjectPath {
   readonly failed: boolean;
   readonly path: string | undefined;
   readonly pending: boolean;
-} {
+  readonly scanCorrelationIds: readonly string[] | undefined;
+}
+
+function useLegacyChatProjectPath(args: LegacyChatProjectPathArgs): LegacyChatProjectPath {
   const { chatId, chats, configuredProjectPath, loading, persistProjectPath, projects, updateCfg } =
     args;
   const [lookups, setLookups] = useState<ReadonlyMap<string, ChatProjectLookup>>(() => new Map());
@@ -817,7 +827,18 @@ function useLegacyChatProjectPath(args: LegacyChatProjectPathArgs): {
     failed: lookup?.kind === "failed",
     path,
     pending: chatId !== undefined && path === undefined && lookup === undefined,
+    scanCorrelationIds: legacyScanCorrelationIds(configuredProjectPath, lookup),
   };
+}
+
+// Only a binding without a persisted project is judged by the scan; a configured project's own
+// list decides every other binding.
+function legacyScanCorrelationIds(
+  configuredProjectPath: string | undefined,
+  lookup: ChatProjectLookup | undefined,
+): readonly string[] | undefined {
+  if (configuredProjectPath !== undefined || lookup?.kind !== "missing") return undefined;
+  return lookup.scanCorrelationIds;
 }
 
 function activeChatTarget(session: ChatSessionApi): Chat | undefined {
@@ -914,6 +935,7 @@ function routingResult(
     resolvingLegacyProject: legacyProject.pending,
     switchingProject,
     targetMissing,
+    legacyScanCorrelationIds: legacyProject.scanCorrelationIds,
   };
 }
 
@@ -1058,8 +1080,8 @@ function chatBindingMessage(
 ): string {
   const head =
     outcome === "resolved" ? CHAT_BINDING_RESOLVED_DIAGNOSTIC : CHAT_TARGET_MISSING_DIAGNOSTIC;
-  const exempt = evidence.heuristicExempt ? ", heuristic-exempt" : "";
-  return `${head} (reference=${evidence.referenceShape}${exempt})`;
+  const flagged = evidence.heuristicFlagged ? ", heuristic-flagged" : "";
+  return `${head} (reference=${evidence.referenceShape}${flagged})`;
 }
 
 function useBoundChatBindingEvidence(
@@ -1073,87 +1095,80 @@ function useBoundChatBindingEvidence(
     routing,
     chatId: configuration.chatId,
     windowId: ctx.windowId,
-    projectPaths: chatBindingProjectPaths(outcome, configuration.projectPath, session),
+    loads: chatBindingDecidingLoads(outcome, routing, session),
   });
 }
 
-// The project lists the verdict depended on (#3557 review). A resolved binding was decided by the
-// list of the project it resolved in, the active one. A legacy binding without a persisted project
-// is judged missing only after the lookup scanned every project and none held the chat, so that
-// verdict names every scanned list. A failed lookup reports no binding outcome: it records its own
-// correlated diagnostic when a project list cannot be read.
-function chatBindingProjectPaths(
+// The chat list loads a binding verdict depended on (#3557 review).
+interface ChatBindingDecidingLoads {
+  // The loads whose correlation id is known.
+  readonly correlationIds: readonly string[];
+  // Every load that decided the verdict, known or not.
+  readonly count: number;
+}
+
+// A legacy binding without a persisted project is judged missing only after its scan read every
+// project's list and none held the chat: every one of those loads decided it, and the scan kept
+// their ids. Any other verdict was decided by the active project's list. A failed lookup reports
+// no binding outcome: it records its own correlated diagnostic when a list cannot be read.
+function chatBindingDecidingLoads(
   outcome: ChatBindingOutcome | undefined,
-  configuredProjectPath: string | undefined,
+  routing: BoundChatRouting,
   session: ChatSessionApi,
-): readonly string[] {
-  if (outcome === "target-missing" && configuredProjectPath === undefined) {
-    return session.projects.map((project) => project.path);
+): ChatBindingDecidingLoads {
+  const scanned = routing.legacyScanCorrelationIds;
+  if (outcome === "target-missing" && scanned !== undefined) {
+    return { correlationIds: scanned, count: scanned.length };
   }
-  return session.activeProject === undefined ? [] : [session.activeProject.path];
-}
-
-function listCorrelationIds(projectPaths: readonly string[]): readonly string[] {
-  const ids = projectPaths.flatMap((path): string[] => {
-    const id = chatListCorrelationId(path);
-    return id === undefined ? [] : [id];
-  });
-  return [...new Set(ids)];
+  if (session.activeProject === undefined) return { correlationIds: [], count: 0 };
+  const id = chatListCorrelationId(session.activeProject.path);
+  return { correlationIds: id === undefined ? [] : [id], count: 1 };
 }
 
 interface ChatBindingEvidenceArgs {
   readonly routing: BoundChatRouting;
   readonly chatId: string | undefined;
   readonly windowId: string;
-  readonly projectPaths: readonly string[];
+  readonly loads: ChatBindingDecidingLoads;
 }
 
 // A restored chat window whose conversation cannot be resolved renders "Chat not found". Without
 // evidence, a lost binding (a persisted id that no longer names the chat) looked exactly like a
 // deleted conversation, and a binding that resolved only through the reference-field exemption
 // looked like no restore at all (#3557 review). Report each outcome once per bound id as a typed,
-// body-free binding report: the closed shape of the persisted reference and its exemption, never
-// the id; the window's own id (the server logs its digest), so two windows restored from one list
-// answer stay apart; and the correlation ids of every chat list load whose answer decided it.
+// body-free binding report: the closed shape of the persisted reference and whether the card-number
+// heuristic flags it, never the id; the window's own id (the server logs only its digest), so two
+// windows restored from one list answer stay apart; the correlation ids of the chat list loads whose
+// answer decided it, and how many loads that was, so the server records any it cannot name as loss.
 function useChatBindingEvidence({
   routing,
   chatId,
   windowId,
-  projectPaths,
+  loads,
 }: ChatBindingEvidenceArgs): void {
   const reportedRef = useRef(new Set<string>());
   const outcome = chatBindingOutcome(routing, chatId);
-  const projectKey = projectPaths.join("\u0000");
+  const idsKey = loads.correlationIds.join("\u0000");
+  const { count } = loads;
   useEffect((): void => {
     if (outcome === undefined || chatId === undefined) return;
     const key = `${outcome}\u0000${chatId}`;
     if (reportedRef.current.has(key)) return;
     reportedRef.current.add(key);
     const evidence = persistedReferenceEvidence(chatId);
-    const message = chatBindingMessage(outcome, evidence);
-    // Read now, while these are the loads that decided the outcome.
-    const ids = listCorrelationIds(projectKey.split("\u0000"));
-    const [correlationId, ...related] = ids;
-    windowBindingDigest(windowId).then(
-      (windowDigest): void => {
-        reportClientDiagnostic(message, {
-          correlationId,
-          bindingReport: {
-            surface: "chat-window",
-            outcome,
-            ...evidence,
-            windowDigest,
-            ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
-            ...(ids.length > 1 ? { decidingLoadCount: ids.length } : {}),
-          },
-        });
+    const [correlationId, ...related] = idsKey === "" ? [] : idsKey.split("\u0000");
+    reportClientDiagnostic(chatBindingMessage(outcome, evidence), {
+      correlationId,
+      bindingReport: {
+        surface: "chat-window",
+        outcome,
+        ...evidence,
+        windowRef: windowId,
+        ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+        ...(count === 0 ? {} : { decidingLoadCount: count }),
       },
-      (): void => {
-        // The hashing runtime did not load: the outcome still reaches the log, as a message.
-        reportClientDiagnostic(`${message} (window digest unavailable)`, { correlationId });
-      },
-    );
-  }, [chatId, outcome, projectKey, windowId]);
+    });
+  }, [chatId, count, idsKey, outcome, windowId]);
 }
 
 function ChatNotFound(): ReactNode {

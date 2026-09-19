@@ -25,10 +25,6 @@ import {
   useChatCreationCoordinator,
 } from "./SelectionAwareWorkspaceHosts";
 import { subText } from "../windows/connectionUtils";
-import { windowBindingDigest } from "../hooks/workspace-persistence";
-
-// The digest the binding evidence carries for the default test window, from the producer itself.
-const WINDOW_ONE_DIGEST = await windowBindingDigest("window-1");
 import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
 
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
@@ -54,7 +50,10 @@ type UpdateChat = (
   patch: { readonly title: string },
 ) => Promise<{ readonly chat: Chat }>;
 const updateChatMock = vi.hoisted((): Mock<UpdateChat> => vi.fn<UpdateChat>());
-type FetchChats = (projectPath: string) => Promise<{ readonly chats: readonly Chat[] }>;
+type FetchChats = (
+  projectPath: string,
+  correlationId?: string,
+) => Promise<{ readonly chats: readonly Chat[] }>;
 const fetchChatsMock = vi.hoisted((): Mock<FetchChats> => vi.fn<FetchChats>());
 
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -1660,8 +1659,8 @@ describe("ChatWindowSessionHost target missing", () => {
             surface: "chat-window",
             outcome: "target-missing",
             referenceShape: "opaque",
-            heuristicExempt: false,
-            windowDigest: WINDOW_ONE_DIGEST,
+            heuristicFlagged: false,
+            windowRef: "window-1",
           },
         },
       ),
@@ -1699,7 +1698,45 @@ describe("ChatWindowSessionHost target missing", () => {
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
         expect.stringContaining("restore target not found"),
-        expect.objectContaining({ correlationId: "ui_chat-list-load-0001" }),
+        {
+          correlationId: "ui_chat-list-load-0001",
+          bindingReport: expect.objectContaining({ decidingLoadCount: 1 }) as unknown,
+        },
+      ),
+    );
+  });
+
+  // #3557 review: a verdict whose deciding load has no known id still states that one load
+  // decided it, so the server records the unnamed load as loss instead of a complete line.
+  it("counts the deciding load even when its correlation id is unknown", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.activeProject = {
+      path: "/repo",
+      name: "Repo",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: "chat-missing", projectPath: "/repo" }}
+          ctx={context()}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("restore target not found"),
+        {
+          correlationId: undefined,
+          bindingReport: expect.objectContaining({ decidingLoadCount: 1 }) as unknown,
+        },
       ),
     );
   });
@@ -1721,9 +1758,6 @@ describe("ChatWindowSessionHost target missing", () => {
     chatSessionState.projects = [projectA, projectB];
     chatSessionState.loading = false;
     fetchChatsMock.mockResolvedValue({ chats: [] });
-    chatListCorrelationIdMock.mockImplementation((projectPath: string) =>
-      projectPath === "/repo-a" ? "ui_chat-list-load-a" : "ui_chat-list-load-b",
-    );
 
     render(
       <I18nProvider>
@@ -1731,14 +1765,61 @@ describe("ChatWindowSessionHost target missing", () => {
       </I18nProvider>,
     );
 
+    // The ids are the ones the scan's own list loads carried, not a cache lookup.
+    await waitFor((): void => expect(fetchChatsMock).toHaveBeenCalledTimes(2));
+    const loadIds = new Map(fetchChatsMock.mock.calls.map(([path, id]) => [path, id]));
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
         expect.stringContaining("restore target not found"),
         {
-          correlationId: "ui_chat-list-load-a",
+          correlationId: loadIds.get("/repo-a"),
           bindingReport: expect.objectContaining({
             outcome: "target-missing",
-            relatedCorrelationIds: ["ui_chat-list-load-b"],
+            relatedCorrelationIds: [loadIds.get("/repo-b")],
+            decidingLoadCount: 2,
+          }) as unknown,
+        },
+      ),
+    );
+    expect(chatListCorrelationIdMock).not.toHaveBeenCalled();
+  });
+
+  // #3557 review: 40 projects, none holding the chat — every one of the 40 answers decided the
+  // verdict, and each is named with the id its own load carried, however many lists the page
+  // loaded before.
+  it("names all of a large legacy scan's list loads with the ids they carried", async (): Promise<void> => {
+    const projects = Array.from({ length: 40 }, (_value, index): ProjectWithAvailability => ({
+      path: `/repo-${String(index)}`,
+      name: `Repo ${String(index)}`,
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    }));
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.projects = projects;
+    chatSessionState.loading = false;
+    fetchChatsMock.mockResolvedValue({ chats: [] });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-missing" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(fetchChatsMock).toHaveBeenCalledTimes(40));
+    const loadIds = new Map(fetchChatsMock.mock.calls.map(([path, id]) => [path, id]));
+    const expected = projects.map((project) => loadIds.get(project.path));
+    expect(new Set(expected).size).toBe(40);
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("restore target not found"),
+        {
+          correlationId: expected[0],
+          bindingReport: expect.objectContaining({
+            relatedCorrelationIds: expected.slice(1),
+            decidingLoadCount: 40,
           }) as unknown,
         },
       ),
@@ -1788,11 +1869,6 @@ describe("ChatWindowSessionHost target missing", () => {
 
   // #3557 review: two windows restored from one list answer must stay apart in the evidence.
   it("names each window in its own binding report", async (): Promise<void> => {
-    const expectedDigests = [
-      await windowBindingDigest("window-1"),
-      await windowBindingDigest("window-2"),
-    ];
-    expect(new Set(expectedDigests).size).toBe(2);
     chatSessionState.activeChat = undefined;
     chatSessionState.chats = [];
     chatSessionState.loading = false;
@@ -1810,39 +1886,39 @@ describe("ChatWindowSessionHost target missing", () => {
     await waitFor((): void => {
       const windows = reportClientDiagnosticMock.mock.calls.flatMap(([message, meta]) =>
         String(message).includes("restore target not found")
-          ? [(meta as { bindingReport: { windowDigest: string } }).bindingReport.windowDigest]
+          ? [(meta as { bindingReport: { windowRef: string } }).bindingReport.windowRef]
           : [],
       );
-      expect([...windows].sort()).toEqual([...expectedDigests].sort());
+      expect([...windows].sort()).toEqual(["window-1", "window-2"]);
     });
   });
 
-  // #3557 review: a Luhn-looking server-issued UUID that survived persistence only through the
-  // reference exemption and resolved to its live chat must be told apart from no restore attempt.
-  it("reports a binding that resolved through the reference exemption, once", async (): Promise<void> => {
-    const exemptId = "1404206d-9ab6-4bca-8853-813867352087";
-    const live = chatFixture(exemptId, "Deploy status", 3);
+  // #3557 review: a Luhn-looking server-issued UUID that survived persistence only through its
+  // compact stored form and resolved to its live chat must be told apart from no restore attempt.
+  it("reports a binding whose reference the heuristic flags, resolved, once", async (): Promise<void> => {
+    const flaggedId = "1404206d-9ab6-4bca-8853-813867352087";
+    const live = chatFixture(flaggedId, "Deploy status", 3);
     chatSessionState.activeChat = live;
     chatSessionState.chats = [live];
     chatSessionState.loading = false;
     const host = (
       <I18nProvider>
-        <ChatWindowSessionHost cfg={{ chatId: exemptId }} ctx={context()} />
+        <ChatWindowSessionHost cfg={{ chatId: flaggedId }} ctx={context()} />
       </I18nProvider>
     );
 
     const { rerender } = render(host);
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
-        "[keiko] chat window binding resolved (reference=uuid, heuristic-exempt)",
+        "[keiko] chat window binding resolved (reference=uuid, heuristic-flagged)",
         {
           correlationId: undefined,
           bindingReport: {
             surface: "chat-window",
             outcome: "resolved",
             referenceShape: "uuid",
-            heuristicExempt: true,
-            windowDigest: WINDOW_ONE_DIGEST,
+            heuristicFlagged: true,
+            windowRef: "window-1",
           },
         },
       ),
@@ -1853,7 +1929,7 @@ describe("ChatWindowSessionHost target missing", () => {
       String(message).startsWith("[keiko] chat window binding resolved"),
     );
     expect(resolved).toHaveLength(1);
-    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(exemptId);
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(flaggedId);
   });
 
   it("reports a binding lost to redaction once, as a redacted reference", async (): Promise<void> => {
@@ -1882,8 +1958,8 @@ describe("ChatWindowSessionHost target missing", () => {
             surface: "chat-window",
             outcome: "target-missing",
             referenceShape: "redacted",
-            heuristicExempt: false,
-            windowDigest: WINDOW_ONE_DIGEST,
+            heuristicFlagged: false,
+            windowRef: "window-1",
           },
         },
       ],

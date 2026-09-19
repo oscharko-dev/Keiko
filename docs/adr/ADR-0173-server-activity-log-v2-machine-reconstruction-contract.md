@@ -563,8 +563,9 @@ available fields (node/platform/arch/product version, install mode, host, port, 
 provider count) ride directly on `process.started` itself — there is no separate `process.config`
 op — while the gateway-specific fields that are only knowable once a `GatewayConfig` has been
 assembled ride on their own `gateway.config.resolved` line (emitted once per `Gateway`
-construction: per-provider `modelId`, `endpointHost`, `timeoutMs`, `maxRetries`,
-`retryBaseDelayMs` — never `baseUrl` or `apiKey`). Folding the cheap fields into `process.started`
+construction: `providerCount` and `providerConfigDigest`, a digest over the per-provider
+`modelId`, `endpointHost`, `timeoutMs`, `maxRetries` and `retryBaseDelayMs` — never `baseUrl`
+or `apiKey`). Folding the cheap fields into `process.started`
 rather than a separate `process.config` line avoids a second, always-co-occurring event for data
 that is knowable at the exact same instant `process.started` already fires. Feature flags remain an
 explicitly named, out-of-scope-for-this-epic follow-up.
@@ -890,15 +891,28 @@ request":
     bounded to the contract's ceiling;
   - a restored window's binding: `client.binding.resolved` at `info`, or
     `client.binding.target-missing` at `warn` with `errorKind: unavailable`. It carries the
-    persisted reference's closed shape (`uuid`, `opaque`, `redacted`), whether the reference
-    survived persistence only through the reference-field exemption from the card-number
-    heuristic, and the digest of the window's own id, never the reference itself. Its correlation
-    id is that of the chat list load that decided the outcome, and a missing legacy binding names
-    every scanned list in `relatedCorrelationIds`;
-  - a stale-session repair: `client.session-repair.recovered` at `info`, or
-    `client.session-repair.failed` at `warn` with outcome `replay-failed`, `replay-skipped`
-    or `repair-failed`. It sits on the denied request's timeline, because the replay reuses that
-    request's correlation id, and it names the repair request's id.
+    persisted reference's closed shape (`uuid`, `opaque`, `redacted`) and whether the
+    card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
+    reference itself. No reference is exempt from that heuristic: the two server-issued references
+    a window stores (a chat window's `chatId`, a governed pull request's
+    `descriptionProposalId`) are persisted compact, as 32 hex digits, which the heuristic never
+    reads as a card number, and expanded on restore. The window's own persisted id, which
+    persistence holds to a closed safe shape, reaches the server whole and is logged only as its
+    digest (`bindingDigest`), so two windows never share one. Its correlation id is that of the
+    chat list load that decided the outcome; a missing legacy binding names every list its scan
+    read, with the ids those loads carried, in `relatedCorrelationIds`. When more loads decided
+    the outcome than the line names, `decidingLoadCount` states the total and the line is
+    `partial` with `loss: event-location-unknown`;
+  - a stale-session repair: `client.session-repair.recovered` at `info` (outcome `replayed`
+    or `stream-repaired`), or `client.session-repair.failed` at `warn` with outcome
+    `replay-failed`, `replay-skipped` or `repair-failed`. A repaired read sits on the denied
+    request's timeline, because the replay reuses that request's correlation id. A stream
+    (`EventSource`) exposes no request id, so its repair sits on the stream's failure streak: a
+    client-minted id that the streak's `sse-error` diagnostics carry too, with the closed
+    `stream` name. Both name the repair request's id, and a failed repair its closed failure
+    class. The repair request itself (the local-session ensure) mints its id before it is sent, so
+    a failure that never reached the server is still recorded under that id with its closed
+    class, which a message report may now carry as `errorKind`.
   Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
   budget in the browser (60 per minute, failures 20) and on the server (a separate 60-per-minute
   sliding window), so it can never starve a failure report. Every drop is still counted as loss.
@@ -910,9 +924,13 @@ browser saw. Everything on these lines is a count, a closed label, a template, o
 **For a restored window that shows "not found"**, read its `client.binding.target-missing` line.
 `referenceShape: redacted` means the reference was lost at persistence. `uuid` means the target
 is really gone. The line's correlation id, and `relatedCorrelationIds`, name the list loads the
-verdict came from. **For a conversation refused as not ready**, read `readinessObservation` on the
-rejection. `unobserved` means no check ran in that process. `not-ready` means a check ran and
-failed. Then read the `gateway.readiness.started` / `.completed` lines of that check.
+verdict came from; a `partial` line says how many it could not name. **For a conversation
+refused as not ready**, read `readinessObservation` on the rejection. `unobserved` means no check
+ran in that process. `not-ready` means a check ran and failed. Then read the
+`gateway.readiness.started` / `.completed` lines of that check. A refused model id is logged raw
+(`modelId`) only when a configured gateway names it and it passes the opaque-id check, the data
+class the Model Gateway records it under on every call; any other candidate appears only as the
+16-hex `modelIdDigest` of the whole id, so two refused candidates stay apart.
 
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 

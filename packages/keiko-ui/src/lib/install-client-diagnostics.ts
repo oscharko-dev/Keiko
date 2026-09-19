@@ -30,11 +30,12 @@
 // call site that catches such an error passes it through `meta.correlationId`, and
 // `clientDiagnosticPostBody` below puts it on the wire once it re-validates the shape client-side
 // (defense in depth — the server, `client-diagnostics-routes.ts`, re-validates it again
-// independently before trusting it for anything). It stays genuinely absent for the four SSE
+// independently before trusting it for anything). No request id exists for the four SSE
 // `onerror` call sites (sharedEventSource.ts, useSSE.ts, coding-workbench-event-retention.ts,
 // useRelationshipActivityStream.ts): the native `EventSource` API exposes no response headers to
-// page script, so there is no id to recover at that call site, ever — not a gap, a hard platform
-// limit.
+// page script — a hard platform limit. The two streams that repair a stale session
+// (sharedEventSource.ts, useSSE.ts) carry their failure streak's client-minted id instead, which
+// their session-repair reports share (#3557 review).
 
 import type {
   ClientBindingIngestRequest,
@@ -42,6 +43,7 @@ import type {
   ClientDiagnosticLossCounts,
   ClientDiagnosticReadyState,
   ClientSessionRepairIngestRequest,
+  ClientSessionRepairOutcome,
   ClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
@@ -154,8 +156,8 @@ function clientBindingPostBody(
     surface: report.surface,
     outcome: report.outcome,
     referenceShape: report.referenceShape,
-    heuristicExempt: report.heuristicExempt,
-    windowDigest: report.windowDigest,
+    heuristicFlagged: report.heuristicFlagged,
+    windowRef: report.windowRef,
     correlationId: validCorrelationId(correlationId),
     ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
     // The total stays even when the named list is cut, so the server marks the line partial.
@@ -178,6 +180,7 @@ function clientSessionRepairPostBody(
     correlationId: id,
     repairCorrelationId: validCorrelationId(report.repairCorrelationId),
     errorKind: report.errorKind,
+    stream: report.stream,
   };
 }
 
@@ -221,6 +224,7 @@ function clientMessagePostBody(
     message: bounded,
     clientTs: new Date().toISOString(),
     correlationId: validCorrelationId(meta?.correlationId),
+    errorKind: meta?.errorKind,
     gitChangeDescription: meta?.gitChangeDescription,
     workspaceTrustBinding: meta?.workspaceTrustBinding,
     loss,
@@ -273,12 +277,20 @@ const postWindows: Record<ClientDiagnosticPostBudget, PostWindow> = {
 let postFailureCount = 0;
 let postThrottledCount = 0;
 
+const ROUTINE_SESSION_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> = new Set([
+  "replayed",
+  "stream-repaired",
+]);
+
 // Routine evidence: a stage, a binding that resolved, a session repair that recovered. Everything
 // else is a failure report.
 function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
   if (meta?.stageReport !== undefined) return "routine";
   if (meta?.bindingReport?.outcome === "resolved") return "routine";
-  return meta?.sessionRepairReport?.outcome === "replayed" ? "routine" : "failure";
+  const repair = meta?.sessionRepairReport?.outcome;
+  return repair !== undefined && ROUTINE_SESSION_REPAIR_OUTCOMES.has(repair)
+    ? "routine"
+    : "failure";
 }
 
 function admittedByClientPostRateLimit(window: PostWindow, limit: number, nowMs: number): boolean {

@@ -38,6 +38,7 @@ import {
   type ClientBindingReferenceShape,
   type ClientBindingSurface,
   type ClientSessionRepairOutcome,
+  type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
@@ -68,27 +69,31 @@ export interface ClientDiagnosticBindingReport {
   readonly surface: ClientBindingSurface;
   readonly outcome: ClientBindingOutcome;
   readonly referenceShape: ClientBindingReferenceShape;
-  readonly heuristicExempt: boolean;
-  // SHA-256 of the window's own persisted id; the id itself never leaves the browser.
-  readonly windowDigest: string;
+  readonly heuristicFlagged: boolean;
+  // The window's own persisted id; the server logs only its digest.
+  readonly windowRef: string;
   // Further list loads the verdict depended on, beyond `meta.correlationId`.
   readonly relatedCorrelationIds?: readonly string[] | undefined;
-  // How many list loads decided the outcome in total.
+  // How many list loads decided the outcome in total, named or not.
   readonly decidingLoadCount?: number | undefined;
 }
 
 // The outcome of repairing and replaying a read a restarted BFF denied (#3557). `meta.correlationId`
-// is the denied request's id, which the replay reuses.
+// is the denied request's id, which the replay reuses; for a stream, its failure streak's id.
 export interface ClientDiagnosticSessionRepairReport {
   readonly outcome: ClientSessionRepairOutcome;
   readonly repairCorrelationId?: string | undefined;
   // The closed class of the step that failed: the repair request, or the replay.
   readonly errorKind?: ActivityLogErrorKind | undefined;
+  // The stream whose failure streak asked for the repair.
+  readonly stream?: ClientSessionRepairStream | undefined;
 }
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  // The closed class of the failure, when the caller classified it (`bffRequestErrorKind`).
+  readonly errorKind?: ActivityLogErrorKind | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

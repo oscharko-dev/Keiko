@@ -313,13 +313,14 @@ const CLIENT_BINDING_FIELDS = {
     required: true,
     values: CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES,
   },
-  heuristicExempt: { type: "boolean", dataClass: "closed-enum", required: true },
-  // The digest of the window's own persisted id, computed in the browser: two windows restored
-  // from one list answer stay apart, and a later failure of the same window carries the same
-  // digest (#3557 review).
+  // The hyphenated reference trips the card-number heuristic; it survived as its compact form.
+  heuristicFlagged: { type: "boolean", dataClass: "closed-enum", required: true },
+  // The digest of the window's own persisted id, computed here from the validated reference: two
+  // windows restored from one list answer stay apart, and a later failure of the same window
+  // carries the same digest (#3557 review).
   bindingDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
   // How many list loads decided the outcome, when more than the line names; the line is then
-  // `partial`, never silently complete.
+  // `partial` with `loss: event-location-unknown`, never silently complete.
   decidingLoadCount: { type: "integer", dataClass: "count", required: false },
   // The other list loads a legacy binding's verdict depended on, beyond the line's correlation id.
   relatedCorrelationIds: {
@@ -327,7 +328,7 @@ const CLIENT_BINDING_FIELDS = {
     dataClass: "opaque-id",
     required: false,
     maxLength: 128,
-    maxItems: 15,
+    maxItems: 63,
   },
 } as const;
 
@@ -371,6 +372,8 @@ const CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES = [
   "replay-skipped",
   "repair-failed",
 ] as const;
+const CLIENT_SESSION_REPAIR_ACTIVITY_LOG_RECOVERIES = ["replayed", "stream-repaired"] as const;
+const CLIENT_SESSION_REPAIR_ACTIVITY_LOG_STREAMS = ["run-events", "shared-event-source"] as const;
 
 const CLIENT_SESSION_REPAIR_RECOVERED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -380,6 +383,19 @@ const CLIENT_SESSION_REPAIR_RECOVERED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientSessionRepairRecovered",
   fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_RECOVERIES,
+    },
+    // The stream whose failure streak asked for the repair; a stream has no readable request id.
+    stream: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_STREAMS,
+    },
     repairCorrelationId: {
       type: "string",
       dataClass: "opaque-id",
@@ -408,6 +424,12 @@ const CLIENT_SESSION_REPAIR_FAILED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES,
+    },
+    stream: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_STREAMS,
     },
     repairCorrelationId: {
       type: "string",
@@ -675,7 +697,7 @@ function logClientDiagnostic(
   getServerLogger().warn(
     activityLogEvent(
       CLIENT_DIAGNOSTIC_OPERATION,
-      { correlationId, errorKind: clientDiagnosticErrorKind(request.kind) },
+      { correlationId, errorKind: request.errorKind ?? clientDiagnosticErrorKind(request.kind) },
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );
@@ -751,22 +773,27 @@ function relatedCorrelationIds(request: ClientBindingIngestRequest): readonly st
   return (request.relatedCorrelationIds ?? []).filter((id) => isValidCorrelationId(id));
 }
 
-// A causal set longer than the line can name stays explicit: the total count is kept and the line
-// is `partial` (#3557 review).
+export function clientBindingDigest(windowRef: string): string {
+  return sha256Hex(`keiko-client-binding-v1\0${windowRef}`);
+}
+
+// Every deciding list load is named when the line can hold it (up to 64). When more loads decided
+// the outcome than the line names, the missing ones are classified loss, not a quiet count: the
+// line is `partial` with `loss: event-location-unknown`, and the total is kept (#3557 review).
 function clientBindingFields(request: ClientBindingIngestRequest): ClientBindingFields {
   const related = relatedCorrelationIds(request);
-  const named = 1 + related.length;
+  const named = (request.correlationId === undefined ? 0 : 1) + related.length;
   const deciding = request.decidingLoadCount;
-  const partial = deciding !== undefined && deciding > named;
+  const unnamed = deciding !== undefined && deciding > named;
   return {
     surface: request.surface,
     referenceShape: request.referenceShape,
-    heuristicExempt: request.heuristicExempt,
-    bindingDigest: request.windowDigest,
+    heuristicFlagged: request.heuristicFlagged,
+    bindingDigest: clientBindingDigest(request.windowRef),
     ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
-    ...(partial ? { decidingLoadCount: deciding } : {}),
-    completeness: partial ? "partial" : "complete",
-    loss: "none",
+    ...(unnamed ? { decidingLoadCount: deciding } : {}),
+    completeness: unnamed ? "partial" : "complete",
+    loss: unnamed ? "event-location-unknown" : "none",
   };
 }
 
@@ -813,20 +840,31 @@ function logClientBinding(
 
 function sessionRepairCorrelation(request: ClientSessionRepairIngestRequest): {
   readonly repairCorrelationId?: string;
+  readonly stream?: NonNullable<ClientSessionRepairIngestRequest["stream"]>;
 } {
   const id = request.repairCorrelationId;
-  return id !== undefined && isValidCorrelationId(id) ? { repairCorrelationId: id } : {};
+  return {
+    ...(id !== undefined && isValidCorrelationId(id) ? { repairCorrelationId: id } : {}),
+    ...(request.stream === undefined ? {} : { stream: request.stream }),
+  };
 }
 
 function logClientSessionRepairRecovered(
-  request: ClientSessionRepairIngestRequest,
+  request: ClientSessionRepairIngestRequest & {
+    readonly outcome: (typeof CLIENT_SESSION_REPAIR_ACTIVITY_LOG_RECOVERIES)[number];
+  },
   correlationId: string,
 ): void {
   getServerLogger().info(
     activityLogEvent(
       CLIENT_SESSION_REPAIR_RECOVERED_OPERATION,
       { correlationId },
-      { ...sessionRepairCorrelation(request), completeness: "complete", loss: "none" },
+      {
+        outcome: request.outcome,
+        ...sessionRepairCorrelation(request),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }
@@ -859,16 +897,16 @@ function logClientSessionRepairFailed(
   );
 }
 
-// The line joins the denied request's own timeline: the report carries that request's id, which
-// the replay reused.
+// The line joins the denied request's own timeline (the replay reused its id), or a stream's
+// failure streak.
 function logClientSessionRepair(
   request: ClientSessionRepairIngestRequest,
   ingestCorrelationId: string | undefined,
 ): void {
   const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
   const { outcome } = request;
-  if (outcome === "replayed") {
-    logClientSessionRepairRecovered(request, correlationId);
+  if (outcome === "replayed" || outcome === "stream-repaired") {
+    logClientSessionRepairRecovered({ ...request, outcome }, correlationId);
     return;
   }
   logClientSessionRepairFailed({ ...request, outcome }, correlationId);
@@ -900,7 +938,10 @@ function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
     case "binding":
       return classified.report.outcome === "resolved" ? "routine" : "failure";
     case "session-repair":
-      return classified.report.outcome === "replayed" ? "routine" : "failure";
+      return classified.report.outcome === "replayed" ||
+        classified.report.outcome === "stream-repaired"
+        ? "routine"
+        : "failure";
     case "message":
       return "failure";
   }

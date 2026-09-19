@@ -259,6 +259,23 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
     expect(lastPostedBody(fetchMock)["kind"]).toBe("window-error");
   });
 
+  // #3557 review: a failure the caller classified keeps its closed class on the wire.
+  it("puts the caller's classified error kind on the wire", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic("[keiko] local app session ensure failed: TypeError", {
+      correlationId: "ui_session-ensure-0001",
+      errorKind: "unavailable",
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "ui_session-ensure-0001",
+      errorKind: "unavailable",
+    });
+  });
+
   it("flushes the remaining loss in one final report when the page is hidden", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -466,8 +483,8 @@ describe("fanOutClientDiagnostic binding evidence", () => {
         surface: "chat-window",
         outcome: "target-missing",
         referenceShape: "redacted",
-        heuristicExempt: false,
-        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        heuristicFlagged: false,
+        windowRef: "chat-mfr3k2x1-2",
         decidingLoadCount: 17,
         relatedCorrelationIds: ["ui_chat-list-load-0004", "not a safe id"],
       },
@@ -479,8 +496,8 @@ describe("fanOutClientDiagnostic binding evidence", () => {
       surface: "chat-window",
       outcome: "target-missing",
       referenceShape: "redacted",
-      heuristicExempt: false,
-      windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      heuristicFlagged: false,
+      windowRef: "chat-mfr3k2x1-2",
       correlationId: "ui_chat-list-load-0003",
       relatedCorrelationIds: ["ui_chat-list-load-0004"],
       decidingLoadCount: 17,
@@ -535,6 +552,30 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
     expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 1 });
   });
 
+  // #3557 review: a stream repair travels under its failure streak, naming its stream.
+  it("posts a stream repair report with its stream under the failure streak's id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] run-events stream session repair: stream-repaired", {
+      correlationId: "ui_stream-streak-0001",
+      sessionRepairReport: {
+        outcome: "stream-repaired",
+        repairCorrelationId: "ui_session-repair-0002",
+        stream: "run-events",
+      },
+    });
+
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "session-repair",
+      outcome: "stream-repaired",
+      correlationId: "ui_stream-streak-0001",
+      repairCorrelationId: "ui_session-repair-0002",
+      stream: "run-events",
+    });
+  });
+
   it("falls back to a plain message report when a session repair has no safe denied-request id", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
@@ -584,5 +625,23 @@ describe("fanOutClientDiagnostic budgets", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(60);
     expect(clientDiagnosticPostThrottledCount()).toBe(1);
+  });
+
+  // #3557 review: a recovered stream is routine evidence, like a replayed read.
+  it("spends a stream repair from the routine budget, never the failure budget", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let index = 1; index <= 25; index += 1) {
+      fanOutClientDiagnostic("[keiko] run-events stream session repair: stream-repaired", {
+        correlationId: `ui_stream-streak-${String(index).padStart(4, "0")}`,
+        sessionRepairReport: { outcome: "stream-repaired", stream: "run-events" },
+      });
+    }
+    fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(26);
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
   });
 });

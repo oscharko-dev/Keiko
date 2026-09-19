@@ -1,12 +1,18 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "./client-diagnostics";
 import { useSSE } from "./useSSE";
 
-const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+const ensureLocalSession = vi.hoisted(() =>
+  vi.fn((_stream: string, _streakCorrelationId: string) => Promise.resolve(false)),
+);
 
 vi.mock("./coding-app-session-client", () => ({
-  repairLocalCodingAppSession: ensureLocalSession,
+  repairLocalCodingAppSessionForStream: ensureLocalSession,
 }));
 
 class FakeEventSource {
@@ -579,7 +585,51 @@ describe("useSSE", () => {
     });
     // The successful open on `third` started a new streak, so this failure repairs again.
     expect(ensureLocalSession).toHaveBeenCalledTimes(2);
+    // Each repair reports under its own streak's id, for this stream (#3557 review).
+    const calls = ensureLocalSession.mock.calls;
+    expect(calls.map(([stream]) => stream)).toEqual(["run-events", "run-events"]);
+    expect(calls[1]?.[1]).not.toBe(calls[0]?.[1]);
 
+    view.unmount();
+  });
+
+  // #3557 review: the streak's error diagnostics and its repair share the streak's id, so the log
+  // reads the retry sequence as one timeline even though an EventSource exposes no request id.
+  it("carries the failure streak's id on every stream error of the streak and on its repair", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => reported.push(meta));
+    const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 11" },
+    });
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+    act(() => {
+      first.onopen?.(new Event("open"));
+    });
+
+    await act(async () => {
+      first.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+    await act(async () => {
+      second.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+
+    const streaks = reported.map((meta) => meta?.correlationId);
+    expect(streaks).toHaveLength(2);
+    expect(streaks[0]).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    expect(streaks[1]).toBe(streaks[0]);
+    for (const [stream, streak] of ensureLocalSession.mock.calls) {
+      expect([stream, streak]).toEqual(["run-events", streaks[0]]);
+    }
     view.unmount();
   });
 
@@ -622,6 +672,9 @@ describe("useSSE", () => {
     // successful open landed in between — must retry it rather than being permanently locked out
     // for the rest of the streak.
     expect(ensureLocalSession).toHaveBeenCalledTimes(2);
+    // Both attempts belong to the one streak, so both report under its id.
+    const calls = ensureLocalSession.mock.calls;
+    expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
 
     view.unmount();
   });

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
 } from "../../../../../lib/client-diagnostics";
 import {
   resetSharedEventSourcesForTests,
@@ -9,10 +10,12 @@ import {
   subscribeSharedEventSource,
 } from "./sharedEventSource";
 
-const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+const ensureLocalSession = vi.hoisted(() =>
+  vi.fn((_stream: string, _streakCorrelationId: string) => Promise.resolve(false)),
+);
 
 vi.mock("../../../../../lib/coding-app-session-client", () => ({
-  repairLocalCodingAppSession: ensureLocalSession,
+  repairLocalCodingAppSessionForStream: ensureLocalSession,
 }));
 
 class FakeEventSource {
@@ -366,7 +369,45 @@ describe("subscribeSharedEventSource", () => {
 
     // The successful open in between started a new streak, so this failure repairs again.
     expect(ensureLocalSession).toHaveBeenCalledTimes(2);
+    // Each repair reports under its own streak's id, for this stream (#3557 review).
+    const calls = ensureLocalSession.mock.calls;
+    expect(calls.map(([stream]) => stream)).toEqual(["shared-event-source", "shared-event-source"]);
+    expect(calls[1]?.[1]).not.toBe(calls[0]?.[1]);
 
+    unsubscribe();
+    vi.useRealTimers();
+  });
+
+  // #3557 review: the streak's error diagnostics and its repair share the streak's id, so the log
+  // reads the retry sequence as one timeline even though an EventSource exposes no request id.
+  it("carries the failure streak's id on every stream error of the streak and on its repair", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => reported.push(meta));
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/editor/workspace-watch/events?root=workspace-1",
+      ["editor-watch:changed"],
+      () => {},
+    );
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    first.onerror?.();
+    await Promise.resolve();
+    vi.advanceTimersByTime(1_500);
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+    second.onerror?.();
+    await Promise.resolve();
+
+    const streaks = reported.map((meta) => meta?.correlationId);
+    expect(streaks).toHaveLength(2);
+    expect(streaks[0]).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    expect(streaks[1]).toBe(streaks[0]);
+    for (const [stream, streak] of ensureLocalSession.mock.calls) {
+      expect([stream, streak]).toEqual(["shared-event-source", streaks[0]]);
+    }
     unsubscribe();
     vi.useRealTimers();
   });

@@ -1632,7 +1632,14 @@ interface SharedBootstrapCacheEntry {
 let sharedBootstrapCache: SharedBootstrapCacheEntry | undefined;
 let sharedBootstrapInflight: Promise<Partial<SessionState>> | undefined;
 let sharedBootstrapVersion = 0;
-const sharedChatListInflight = new Map<string, Promise<{ readonly chats: readonly Chat[] }>>();
+
+/** A project's chat list and the correlation id of the load that answered it (#3557). */
+export interface ChatListLoad {
+  readonly chats: readonly Chat[];
+  readonly correlationId: string;
+}
+
+const sharedChatListInflight = new Map<string, Promise<ChatListLoad>>();
 const sharedChatMessagesInflight = new Map<
   string,
   Promise<{ readonly messages: readonly ChatMessage[] }>
@@ -1708,10 +1715,8 @@ function invalidateSharedBootstrap(): void {
   sharedBootstrapInflight = undefined;
 }
 
-function cloneChatListPayload(payload: { readonly chats: readonly Chat[] }): {
-  readonly chats: readonly Chat[];
-} {
-  return { chats: Array.from(payload.chats) };
+function cloneChatListPayload(payload: ChatListLoad): ChatListLoad {
+  return { chats: Array.from(payload.chats), correlationId: payload.correlationId };
 }
 
 function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMessage[] }): {
@@ -1740,16 +1745,14 @@ export function chatListCorrelationId(projectPath: string): string | undefined {
   return chatListCorrelationIds.get(projectPath);
 }
 
-export function sharedFetchChats(
-  projectPath: string,
-): Promise<{ readonly chats: readonly Chat[] }> {
+export function sharedFetchChats(projectPath: string): Promise<ChatListLoad> {
   const existing = sharedChatListInflight.get(projectPath);
   if (existing !== undefined) return existing.then(cloneChatListPayload);
   const correlationId = newClientCorrelationId();
   const pending = fetchChats(projectPath, correlationId)
-    .then((payload) => {
+    .then((payload): ChatListLoad => {
       rememberChatListCorrelation(projectPath, correlationId);
-      return cloneChatListPayload(payload);
+      return { chats: Array.from(payload.chats), correlationId };
     })
     .finally(() => {
       if (sharedChatListInflight.get(projectPath) === pending) {

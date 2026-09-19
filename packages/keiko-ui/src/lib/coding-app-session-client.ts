@@ -22,9 +22,10 @@ import {
   decodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { newClientCorrelationId } from "./bff-correlation";
+import type { ClientSessionRepairStream } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { reportClientDiagnostic } from "./client-diagnostics";
-import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
+import { clientErrorSummary } from "./client-error-summary";
 import { bffFetchJson, bffRequestErrorKind } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
@@ -37,14 +38,12 @@ export interface CodingAppSessionPairingSeams {
   readonly readFragment: () => string;
   readonly stripFragment: () => void;
   readonly postPairing: (attestation: CodingAppSessionPairingAttestation) => Promise<unknown>;
-  readonly postLocalSession?: () => Promise<unknown>;
+  // `correlationId` is the id the local-session request carries. The caller mints it, so a failure
+  // that never reached the server still names its request.
+  readonly postLocalSession?: (correlationId: string) => Promise<unknown>;
 }
 
-// `localSessionCorrelationId`, when given, is the id the local-session request carries, so a repair
-// can name it in evidence.
-function defaultSeams(
-  localSessionCorrelationId?: string,
-): CodingAppSessionPairingSeams | undefined {
+function defaultSeams(): CodingAppSessionPairingSeams | undefined {
   if (typeof window === "undefined") return undefined;
   return {
     readFragment: (): string => window.location.hash,
@@ -57,13 +56,11 @@ function defaultSeams(
         { method: "POST", cache: "no-store", body: JSON.stringify(attestation) },
         WITHOUT_SESSION_REPAIR,
       ),
-    postLocalSession: (): Promise<unknown> =>
+    postLocalSession: (correlationId: string): Promise<unknown> =>
       bffFetchJson(
         LOCAL_SESSION_PATH,
         { method: "POST", cache: "no-store" },
-        localSessionCorrelationId === undefined
-          ? WITHOUT_SESSION_REPAIR
-          : { ...WITHOUT_SESSION_REPAIR, correlationId: localSessionCorrelationId },
+        { ...WITHOUT_SESSION_REPAIR, correlationId },
       ),
   };
 }
@@ -103,30 +100,34 @@ type LocalSessionOutcome =
 
 // The ensure request's outcome with the closed class of a failure, for the repair's evidence. The
 // endpoint acknowledges whether or not it issued a cookie, so a thrown error is a real failure
-// (transport, 5xx), recorded under the ensure request's own correlation id rather than swallowed.
+// (transport, 5xx), recorded rather than swallowed: under the ensure request's own correlation id
+// and with its closed failure class, also when `fetch` rejected before any response (#3557 review).
 async function localSessionOutcome(
   seams: CodingAppSessionPairingSeams | undefined,
+  correlationId: string,
 ): Promise<LocalSessionOutcome> {
   if (seams?.postLocalSession === undefined) return { repaired: false, errorKind: "unavailable" };
   try {
-    await seams.postLocalSession();
+    await seams.postLocalSession(correlationId);
     return { repaired: true };
   } catch (error) {
+    const errorKind = bffRequestErrorKind(error);
     // i18n-exempt: body-free diagnostic message for the activity log, never rendered
     reportClientDiagnostic(
       `[keiko] local app session ensure failed: ${clientErrorSummary(error)}`,
       {
-        correlationId: correlationIdOf(error),
+        correlationId,
+        errorKind,
       },
     );
-    return { repaired: false, errorKind: bffRequestErrorKind(error) };
+    return { repaired: false, errorKind };
   }
 }
 
 export async function ensureLocalCodingAppSession(
   seams: CodingAppSessionPairingSeams | undefined = defaultSeams(),
 ): Promise<boolean> {
-  return (await localSessionOutcome(seams)).repaired;
+  return (await localSessionOutcome(seams, newClientCorrelationId())).repaired;
 }
 
 /** One shared repair attempt: whether it succeeded, and the id its local-session request carried. */
@@ -148,7 +149,7 @@ let localSessionRepair: Promise<LocalCodingAppSessionRepair> | undefined;
 export function repairLocalCodingAppSessionWithEvidence(): Promise<LocalCodingAppSessionRepair> {
   if (localSessionRepair === undefined) {
     const correlationId = newClientCorrelationId();
-    localSessionRepair = localSessionOutcome(defaultSeams(correlationId))
+    localSessionRepair = localSessionOutcome(defaultSeams(), correlationId)
       .then((outcome): LocalCodingAppSessionRepair =>
         outcome.repaired
           ? { repaired: true, correlationId }
@@ -164,6 +165,31 @@ export function repairLocalCodingAppSessionWithEvidence(): Promise<LocalCodingAp
 /** {@link repairLocalCodingAppSessionWithEvidence}, for callers that need only the verdict. */
 export async function repairLocalCodingAppSession(): Promise<boolean> {
   return (await repairLocalCodingAppSessionWithEvidence()).repaired;
+}
+
+/**
+ * {@link repairLocalCodingAppSessionWithEvidence} for a stream whose reconnects a restarted BFF
+ * denies (#3557 review). An EventSource exposes no request id, so the outcome is reported under
+ * the stream's failure streak, the id its error diagnostics carry too: the stream, the repair
+ * request's id and, on failure, its closed failure class. Returns the verdict.
+ */
+export async function repairLocalCodingAppSessionForStream(
+  stream: ClientSessionRepairStream,
+  streakCorrelationId: string,
+): Promise<boolean> {
+  const repair = await repairLocalCodingAppSessionWithEvidence();
+  const outcome = repair.repaired ? "stream-repaired" : "repair-failed";
+  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+  reportClientDiagnostic(`[keiko] ${stream} stream session repair: ${outcome}`, {
+    correlationId: streakCorrelationId,
+    sessionRepairReport: {
+      outcome,
+      repairCorrelationId: repair.correlationId,
+      stream,
+      errorKind: repair.errorKind,
+    },
+  });
+  return repair.repaired;
 }
 
 async function bootCodingAppSession(): Promise<boolean> {

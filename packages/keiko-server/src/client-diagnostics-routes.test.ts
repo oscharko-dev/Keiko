@@ -3,6 +3,7 @@ import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clientBindingDigest,
   clientDiagnosticNoteDigest,
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
@@ -357,6 +358,24 @@ describe("POST /api/diagnostics/client", () => {
     ).toMatchObject({ completeness: "complete", loss: "event-dropped" });
   });
 
+  // #3557 review: a failure the page classified keeps its closed class instead of `unknown`.
+  it("logs a message report's classified error kind in place of the kind-derived one", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] local app session ensure failed: TypeError",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_session-ensure-0001",
+      errorKind: "unavailable",
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    expect(clientDiagnosticEvents(sink)[0]).toMatchObject({
+      correlationId: "ui_session-ensure-0001",
+      errorKind: "unavailable",
+    });
+  });
+
   // #3557 review: a restored window's binding outcome is typed evidence, never a message digest.
   describe("binding evidence", () => {
     function bindingEvents(
@@ -371,10 +390,10 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        windowRef: "chat-mfr3k2x1-1",
         outcome: "target-missing",
         referenceShape: "redacted",
-        heuristicExempt: false,
+        heuristicFlagged: false,
         correlationId: "ui_chat-list-load-0001",
       });
 
@@ -390,20 +409,29 @@ describe("POST /api/diagnostics/client", () => {
         category: "diagnostic",
         errorKind: "unavailable",
         correlationId: "ui_chat-list-load-0001",
-        extra: { surface: "chat-window", referenceShape: "redacted", heuristicExempt: false },
+        extra: {
+          surface: "chat-window",
+          referenceShape: "redacted",
+          heuristicFlagged: false,
+          bindingDigest: clientBindingDigest("chat-mfr3k2x1-1"),
+          completeness: "complete",
+          loss: "none",
+        },
       });
+      // The window's own id reaches the log only as its digest.
+      expect(JSON.stringify(events)).not.toContain("chat-mfr3k2x1-1");
       expect(clientDiagnosticEvents(sink)).toEqual([]);
     });
 
-    it("logs a binding that resolved through the reference exemption at info, without an error kind", async () => {
+    it("logs a resolved binding whose reference the heuristic flags at info, without an error kind", async () => {
       const sink = captureServerLog();
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        windowRef: "chat-mfr3k2x1-1",
         outcome: "resolved",
         referenceShape: "uuid",
-        heuristicExempt: true,
+        heuristicFlagged: true,
       });
 
       expect(await handleClientDiagnosticIngest(context(body))).toEqual({
@@ -417,7 +445,7 @@ describe("POST /api/diagnostics/client", () => {
       expect(events[0]?.errorKind).toBeUndefined();
       // Without a client-supplied id, the ingest POST's own id applies.
       expect(events[0]?.correlationId).toBe(CORRELATION_ID);
-      expect(events[0]?.extra).toMatchObject({ referenceShape: "uuid", heuristicExempt: true });
+      expect(events[0]?.extra).toMatchObject({ referenceShape: "uuid", heuristicFlagged: true });
     });
 
     it("falls back to the ingest id when the client-supplied id is not a safe correlation id", async () => {
@@ -425,10 +453,10 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        windowRef: "chat-mfr3k2x1-1",
         outcome: "target-missing",
         referenceShape: "uuid",
-        heuristicExempt: false,
+        heuristicFlagged: false,
         correlationId: "not a safe id",
       });
 
@@ -443,57 +471,98 @@ describe("POST /api/diagnostics/client", () => {
     // and a legacy verdict names every list load it depended on.
     it("gives each window its own digest and keeps the related list loads", async () => {
       const sink = captureServerLog();
-      for (const windowDigest of [
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      ]) {
+      const windows = ["chat-mfr3k2x1-1", "chat-mfr3k2x1-2"];
+      for (const windowRef of windows) {
         const body = JSON.stringify({
           kind: "binding",
           surface: "chat-window",
-          windowDigest,
+          windowRef,
           outcome: "resolved",
           referenceShape: "uuid",
-          heuristicExempt: false,
+          heuristicFlagged: false,
           correlationId: "ui_chat-list-load-0001",
           relatedCorrelationIds: ["ui_chat-list-load-0002", "not a safe id"],
+          decidingLoadCount: 2,
         });
         expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
       }
 
       const events = bindingEvents(sink, "client.binding.resolved");
-      expect(events.map((event) => event.extra?.bindingDigest)).toEqual([
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      ]);
+      const digests = events.map((event) => event.extra?.bindingDigest);
+      expect(digests).toEqual(windows.map((windowRef) => clientBindingDigest(windowRef)));
+      expect(new Set(digests).size).toBe(2);
       // Only the safe related id survives, and a line naming its whole causal set is complete.
       expect(events[0]?.extra?.relatedCorrelationIds).toEqual(["ui_chat-list-load-0002"]);
-      expect(events[0]?.extra?.completeness).toBe("complete");
+      expect(events[0]?.extra).toMatchObject({ completeness: "complete", loss: "none" });
+      expect(events[0]?.extra).not.toHaveProperty("decidingLoadCount");
     });
 
-    // #3557 review: a causal set longer than the line can name must be explicitly partial.
-    it("marks a binding line partial when more list loads decided it than it names", async () => {
+    // #3557 review: a deciding load the line cannot name is classified loss, never a quiet count.
+    it("records the unnamed deciding loads as loss on a partial line", async () => {
       const sink = captureServerLog();
       const related = Array.from(
-        { length: 15 },
+        { length: 63 },
         (_value, index) => `ui_chat-list-load-${String(index + 2).padStart(4, "0")}`,
       );
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        windowRef: "chat-mfr3k2x1-1",
         outcome: "target-missing",
         referenceShape: "uuid",
-        heuristicExempt: false,
+        heuristicFlagged: false,
         correlationId: "ui_chat-list-load-0001",
         relatedCorrelationIds: related,
-        decidingLoadCount: 17,
+        decidingLoadCount: 70,
       });
 
       await handleClientDiagnosticIngest(context(body));
 
       const [event] = bindingEvents(sink, "client.binding.target-missing");
-      expect(event?.extra).toMatchObject({ completeness: "partial", decidingLoadCount: 17 });
-      expect(event?.extra?.relatedCorrelationIds).toHaveLength(15);
+      expect(event?.extra).toMatchObject({
+        completeness: "partial",
+        loss: "event-location-unknown",
+        decidingLoadCount: 70,
+      });
+      expect(event?.extra?.relatedCorrelationIds).toHaveLength(63);
+    });
+
+    // #3557 review: a verdict decided by a load whose id the page does not know is not complete.
+    it("records a deciding load without a known id as loss", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "chat-mfr3k2x1-1",
+        outcome: "resolved",
+        referenceShape: "uuid",
+        heuristicFlagged: false,
+        decidingLoadCount: 1,
+      });
+
+      await handleClientDiagnosticIngest(context(body));
+
+      const [event] = bindingEvents(sink, "client.binding.resolved");
+      expect(event?.extra).toMatchObject({
+        completeness: "partial",
+        loss: "event-location-unknown",
+        decidingLoadCount: 1,
+      });
+    });
+
+    it("refuses a binding report that carries a browser digest instead of the window reference", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowDigest: "a".repeat(64),
+        outcome: "resolved",
+        referenceShape: "uuid",
+        heuristicFlagged: false,
+      });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+      expect(bindingEvents(sink, "client.binding.resolved")).toEqual([]);
     });
 
     it("refuses a resolved binding for a redacted reference", async () => {
@@ -501,25 +570,25 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        windowRef: "chat-mfr3k2x1-1",
         outcome: "resolved",
         referenceShape: "redacted",
-        heuristicExempt: false,
+        heuristicFlagged: false,
       });
 
       expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
       expect(bindingEvents(sink, "client.binding.resolved")).toEqual([]);
     });
 
-    it("refuses a binding report that claims an exemption for a non-UUID reference", async () => {
+    it("refuses a binding report that claims a heuristic flag for a non-UUID reference", async () => {
       const sink = captureServerLog();
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        windowRef: "chat-mfr3k2x1-1",
         outcome: "resolved",
         referenceShape: "opaque",
-        heuristicExempt: true,
+        heuristicFlagged: true,
       });
 
       expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
@@ -587,17 +656,20 @@ describe("POST /api/diagnostics/client", () => {
   // #3557 review: the stale-session repair outcome joins the denied request's timeline.
   describe("session repair evidence", () => {
     it.each([
-      ["replayed", "client.session-repair.recovered", "info"],
-      ["replay-failed", "client.session-repair.failed", "warn"],
-      ["replay-skipped", "client.session-repair.failed", "warn"],
-      ["repair-failed", "client.session-repair.failed", "warn"],
-    ] as const)("logs a %s outcome as %s at %s", async (outcome, op, level) => {
+      ["replayed", "client.session-repair.recovered", "info", undefined],
+      ["stream-repaired", "client.session-repair.recovered", "info", "run-events"],
+      ["replay-failed", "client.session-repair.failed", "warn", undefined],
+      ["replay-skipped", "client.session-repair.failed", "warn", undefined],
+      ["repair-failed", "client.session-repair.failed", "warn", undefined],
+      ["repair-failed", "client.session-repair.failed", "warn", "shared-event-source"],
+    ] as const)("logs a %s outcome as %s at %s (stream %s)", async (outcome, op, level, stream) => {
       const sink = captureServerLog();
       const body = JSON.stringify({
         kind: "session-repair",
         outcome,
         correlationId: "ui_denied-read-0001",
         repairCorrelationId: "ui_session-repair-0001",
+        stream,
       });
 
       expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
@@ -607,8 +679,9 @@ describe("POST /api/diagnostics/client", () => {
       expect(events[0]).toMatchObject({
         level,
         correlationId: "ui_denied-read-0001",
-        extra: { repairCorrelationId: "ui_session-repair-0001" },
+        extra: { outcome, repairCorrelationId: "ui_session-repair-0001" },
       });
+      expect(events[0]?.extra?.stream).toBe(stream);
       expect(events[0]?.errorKind).toBe(
         level === "info"
           ? undefined
@@ -616,10 +689,29 @@ describe("POST /api/diagnostics/client", () => {
             ? "authority-denied"
             : "unknown",
       );
-      if (op === "client.session-repair.failed") {
-        expect(events[0]?.extra?.outcome).toBe(outcome);
-      }
       expect(clientDiagnosticEvents(sink)).toEqual([]);
+    });
+
+    // #3557 review: a stream repair is routine evidence, like a replayed read.
+    it("keeps a failure report admitted after a burst of stream repairs", async () => {
+      const sink = captureServerLog();
+      for (let index = 1; index <= 61; index += 1) {
+        const repair = {
+          kind: "session-repair",
+          outcome: "stream-repaired",
+          stream: "run-events",
+          correlationId: `ui_stream-streak-${String(index).padStart(4, "0")}`,
+        };
+        await handleClientDiagnosticIngest(context(JSON.stringify(repair)));
+      }
+      const failure = JSON.stringify({
+        message: "boundary",
+        clientTs: CLIENT_TS,
+        kind: "boundary",
+      });
+
+      expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+      expect(clientDiagnosticEvents(sink)).toHaveLength(1);
     });
   });
 

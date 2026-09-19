@@ -14,11 +14,16 @@ import {
   redeemCodingAppSessionPairingNavigation,
   redeemCodingAppSessionPairingOnBoot,
   repairLocalCodingAppSession,
+  repairLocalCodingAppSessionForStream,
   repairLocalCodingAppSessionWithEvidence,
   useCodingAppSessionRedemptions,
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "./client-diagnostics";
 
 const attestation = {
   requestId: "req_launcher-1",
@@ -115,6 +120,8 @@ describe("redeemCodingAppSessionPairingFragment (#2478)", () => {
     );
 
     expect(postLocalSession).toHaveBeenCalledOnce();
+    // The ensure request carries an id minted before it is sent.
+    expect(postLocalSession).toHaveBeenCalledWith(expect.stringMatching(/^[A-Za-z0-9._-]{8,128}$/));
   });
 
   it("fails closed when local app-session ensure cannot reach the BFF", async () => {
@@ -375,18 +382,104 @@ describe("ensureLocalCodingAppSession failure evidence", () => {
     resetClientDiagnosticWriter();
   });
 
-  it("reports a failed ensure request with its error class", async () => {
-    const reports: string[] = [];
-    setClientDiagnosticWriter((message) => {
-      reports.push(message);
+  // #3557 review: a fetch that rejects before any response still names the request it sent and
+  // its closed failure class, so the ensure attempt joins and explains itself in the log.
+  it("reports a failed ensure request under its own id, with its closed failure class", async () => {
+    const reports: { readonly message: string; readonly meta: ClientDiagnosticMeta | undefined }[] =
+      [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((): Promise<Response> => Promise.reject(new TypeError("Failed to fetch: secret-host"))),
+    const fetchMock = vi.fn((_path: string, _init: RequestInit): Promise<Response> =>
+      Promise.reject(new TypeError("Failed to fetch: secret-host")),
     );
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(ensureLocalCodingAppSession()).resolves.toBe(false);
 
-    expect(reports).toEqual(["[keiko] local app session ensure failed: TypeError"]);
+    const headers = fetchMock.mock.calls[0]?.[1].headers as Record<string, string>;
+    const sentId = headers["X-Keiko-Correlation-Id"];
+    expect(sentId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    expect(reports).toEqual([
+      {
+        message: "[keiko] local app session ensure failed: TypeError",
+        meta: { correlationId: sentId, errorKind: "unavailable" },
+      },
+    ]);
+  });
+});
+
+// #3557 review: a stream's session repair is typed evidence under the stream's failure streak.
+describe("repairLocalCodingAppSessionForStream", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetClientDiagnosticWriter();
+  });
+
+  function captureReports(): {
+    readonly message: string;
+    readonly meta: ClientDiagnosticMeta | undefined;
+  }[] {
+    const reports: { readonly message: string; readonly meta: ClientDiagnosticMeta | undefined }[] =
+      [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
+    return reports;
+  }
+
+  it("reports a repaired stream with the repair request's id", async () => {
+    const reports = captureReports();
+    const fetchMock = vi.fn((_path: string, _init: RequestInit) =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      repairLocalCodingAppSessionForStream("run-events", "ui_stream-streak-0001"),
+    ).resolves.toBe(true);
+
+    const headers = fetchMock.mock.calls[0]?.[1].headers as Record<string, string>;
+    expect(reports).toEqual([
+      {
+        message: "[keiko] run-events stream session repair: stream-repaired",
+        meta: {
+          correlationId: "ui_stream-streak-0001",
+          sessionRepairReport: {
+            outcome: "stream-repaired",
+            repairCorrelationId: headers["X-Keiko-Correlation-Id"],
+            stream: "run-events",
+            errorKind: undefined,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("reports a failed repair with its closed failure class, and the ensure failure itself", async () => {
+    const reports = captureReports();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => Promise.reject(new TypeError("Failed to fetch"))),
+    );
+
+    await expect(
+      repairLocalCodingAppSessionForStream("shared-event-source", "ui_stream-streak-0002"),
+    ).resolves.toBe(false);
+
+    const [ensure, repair] = reports;
+    expect(ensure?.meta).toMatchObject({ errorKind: "unavailable" });
+    expect(repair).toEqual({
+      message: "[keiko] shared-event-source stream session repair: repair-failed",
+      meta: {
+        correlationId: "ui_stream-streak-0002",
+        sessionRepairReport: {
+          outcome: "repair-failed",
+          repairCorrelationId: ensure?.meta?.correlationId,
+          stream: "shared-event-source",
+          errorKind: "unavailable",
+        },
+      },
+    });
   });
 });

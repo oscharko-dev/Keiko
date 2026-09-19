@@ -6,8 +6,9 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { newClientCorrelationId } from "./bff-correlation";
 import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
-import { repairLocalCodingAppSession } from "./coding-app-session-client";
+import { repairLocalCodingAppSessionForStream } from "./coding-app-session-client";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -61,6 +62,10 @@ let reconnectAttempts = 0;
 // for the rest of the streak (#3557 review: the first repair can race a restarting BFF and
 // legitimately fail). Also reset by a successful open, which starts a new streak.
 let sessionRepairAttempted = false;
+// The client-minted id of the current failure streak (#3557 review). An EventSource exposes no
+// request id, so the streak's error diagnostics and its session-repair outcomes share this one,
+// and the log reads the retry sequence as one timeline. A successful open ends the streak.
+let failureStreakCorrelationId: string | undefined;
 let visibilityListenerInstalled = false;
 
 function subscriberCount(): number {
@@ -199,10 +204,10 @@ function runEventsUrl(): string {
 // minimum 1s delay elapses, so the next attempt carries a valid cookie without slowing the
 // existing backoff. A failed repair (single-flight `false`) re-arms the streak's attempt so the
 // next `onerror` retries instead of leaving the stream permanently unrepaired.
-function repairSessionOnce(): void {
+function repairSessionOnce(streakCorrelationId: string): void {
   if (sessionRepairAttempted) return;
   sessionRepairAttempted = true;
-  void repairLocalCodingAppSession().then((repaired) => {
+  void repairLocalCodingAppSessionForStream("run-events", streakCorrelationId).then((repaired) => {
     if (!repaired) sessionRepairAttempted = false;
   });
 }
@@ -216,6 +221,7 @@ function openSharedEventSource(): void {
   sharedEventSource.onopen = () => {
     reconnectAttempts = 0;
     sessionRepairAttempted = false;
+    failureStreakCorrelationId = undefined;
     sharedEventSourceLive = true;
     notifyAll("live", null);
   };
@@ -223,15 +229,19 @@ function openSharedEventSource(): void {
   sharedEventSource.addEventListener("ready", () => {
     reconnectAttempts = 0;
     sessionRepairAttempted = false;
+    failureStreakCorrelationId = undefined;
     sharedEventSourceLive = true;
     notifyAll("live", null);
   });
 
   sharedEventSource.onerror = () => {
-    reportClientDiagnostic(sseStreamErrorDiagnostic("run-events", sharedEventSource?.readyState));
+    failureStreakCorrelationId ??= newClientCorrelationId();
+    reportClientDiagnostic(sseStreamErrorDiagnostic("run-events", sharedEventSource?.readyState), {
+      correlationId: failureStreakCorrelationId,
+    });
     notifyAll("error", "Stream disconnected. Attempting to reconnect…");
     closeSharedEventSource();
-    repairSessionOnce();
+    repairSessionOnce(failureStreakCorrelationId);
     scheduleReconnect();
   };
 

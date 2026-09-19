@@ -9,6 +9,7 @@ import {
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
   CLIENT_BINDING_DECIDING_LOADS_MAX,
   CLIENT_SESSION_REPAIR_OUTCOMES,
+  CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
@@ -132,6 +133,17 @@ describe("isClientDiagnosticIngestRequest", () => {
 
   it("rejects a kind outside the closed vocabulary", () => {
     expect(isClientDiagnosticIngestRequest({ ...validRequest(), kind: "crash" })).toBe(false);
+  });
+
+  // #3557 review: a failure the page classified keeps its closed class, e.g. a refused connection.
+  it("accepts a classified error kind from the closed vocabulary and refuses any other", () => {
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), errorKind: "unavailable" })).toBe(
+      true,
+    );
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), errorKind: "exploded" })).toBe(
+      false,
+    );
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), errorKind: 503 })).toBe(false);
   });
 
   it("rejects a correlationId that is empty or over the bounded length", () => {
@@ -403,8 +415,8 @@ describe("isClientBindingIngestRequest", () => {
       surface: "chat-window",
       outcome: "target-missing",
       referenceShape: "redacted",
-      heuristicExempt: false,
-      windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      heuristicFlagged: false,
+      windowRef: "chat-mfr3k2x1-2",
     };
   }
 
@@ -437,13 +449,13 @@ describe("isClientBindingIngestRequest", () => {
     ).toBe(false);
   });
 
-  it("accepts an exemption only for a server-issued UUID", () => {
+  it("accepts a heuristic flag only for a server-issued UUID", () => {
     expect(
       isClientBindingIngestRequest({
         ...bindingRequest(),
         outcome: "resolved",
         referenceShape: "uuid",
-        heuristicExempt: true,
+        heuristicFlagged: true,
       }),
     ).toBe(true);
     for (const referenceShape of ["opaque", "redacted"]) {
@@ -451,9 +463,17 @@ describe("isClientBindingIngestRequest", () => {
         isClientBindingIngestRequest({
           ...bindingRequest(),
           referenceShape,
-          heuristicExempt: true,
+          heuristicFlagged: true,
         }),
       ).toBe(false);
+    }
+  });
+
+  // #3557 review: the window's own id reaches the server whole (it logs only its digest), so two
+  // windows can never share one; it is held to the shape persistence restores.
+  it("accepts a window reference up to its bound in the safe alphabet", () => {
+    for (const windowRef of ["files", "chat-mfr3k2x1-2", "w".repeat(128), "a.b_c-1"]) {
+      expect(isClientBindingIngestRequest({ ...bindingRequest(), windowRef })).toBe(true);
     }
   });
 
@@ -485,14 +505,15 @@ describe("isClientBindingIngestRequest", () => {
     ["an unknown surface", { surface: "files-window" }],
     ["an unknown outcome", { outcome: "restored" }],
     ["an unknown reference shape", { referenceShape: "chat-123" }],
-    ["a non-boolean exemption", { heuristicExempt: "false" }],
-    ["a missing exemption", { heuristicExempt: undefined }],
-    ["a missing window digest", { windowDigest: undefined }],
-    ["a raw window id instead of a digest", { windowDigest: "window-1" }],
-    [
-      "an uppercase digest",
-      { windowDigest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
-    ],
+    ["a non-boolean heuristic flag", { heuristicFlagged: "false" }],
+    ["a missing heuristic flag", { heuristicFlagged: undefined }],
+    ["a missing window reference", { windowRef: undefined }],
+    ["an empty window reference", { windowRef: "" }],
+    ["an oversized window reference", { windowRef: "w".repeat(129) }],
+    ["a window reference outside the safe alphabet", { windowRef: "chat 1" }],
+    ["a window reference joining two window ids", { windowRef: "files-1~chat-1" }],
+    ["a non-string window reference", { windowRef: 7 }],
+    ["a browser digest instead of the reference", { windowDigest: "a".repeat(64) }],
     ["an oversized correlation id", { correlationId: "c".repeat(129) }],
     ["a related id that is not a string", { relatedCorrelationIds: [7] }],
     ["related ids that are not a list", { relatedCorrelationIds: "ui_list-load-0001" }],
@@ -528,7 +549,10 @@ describe("isClientSessionRepairIngestRequest", () => {
 
   it("accepts every closed outcome, with and without the repair's correlation id", () => {
     for (const outcome of CLIENT_SESSION_REPAIR_OUTCOMES) {
-      expect(isClientSessionRepairIngestRequest({ ...repairRequest(), outcome })).toBe(true);
+      const stream = outcome === "stream-repaired" ? { stream: "run-events" } : {};
+      expect(isClientSessionRepairIngestRequest({ ...repairRequest(), outcome, ...stream })).toBe(
+        true,
+      );
     }
     expect(
       isClientSessionRepairIngestRequest({ ...repairRequest(), repairCorrelationId: undefined }),
@@ -550,8 +574,23 @@ describe("isClientSessionRepairIngestRequest", () => {
     ["a malformed repair id", { repairCorrelationId: "" }],
     ["an error kind outside the closed vocabulary", { errorKind: "gateway-exploded" }],
     ["an undeclared field", { path: "/api/files" }],
+    ["an unknown stream", { stream: "chat-tokens" }],
+    ["a stream repair that names no stream", { outcome: "stream-repaired" }],
+    ["a stream on a replayed request", { stream: "run-events" }],
+    ["a stream on a failed replay", { outcome: "replay-failed", stream: "run-events" }],
   ])("refuses %s", (_label, patch) => {
     const value = typeof patch === "string" ? patch : { ...repairRequest(), ...patch };
     expect(isClientSessionRepairIngestRequest(value)).toBe(false);
+  });
+
+  // #3557 review: a stream repair reports under its failure streak, naming its stream.
+  it("accepts every stream on a stream repair and on a failed repair", () => {
+    for (const stream of CLIENT_SESSION_REPAIR_STREAMS) {
+      for (const outcome of ["stream-repaired", "repair-failed"]) {
+        expect(isClientSessionRepairIngestRequest({ ...repairRequest(), outcome, stream })).toBe(
+          true,
+        );
+      }
+    }
   });
 });

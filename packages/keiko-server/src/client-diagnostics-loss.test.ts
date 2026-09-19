@@ -19,6 +19,7 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import {
+  clientBindingDigest,
   flushClientDiagnosticsIngestCounts,
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
@@ -180,10 +181,10 @@ describe("client diagnostics loss evidence", () => {
     const body = JSON.stringify({
       kind: "binding",
       surface: "chat-window",
-      windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      windowRef: "chat-mfr3k2x1-1",
       outcome: "target-missing",
       referenceShape: "redacted",
-      heuristicExempt: false,
+      heuristicFlagged: false,
       correlationId: "ui_chat-list-load-0002",
     });
     expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
@@ -194,21 +195,22 @@ describe("client diagnostics loss evidence", () => {
       errorKind: "unavailable",
       surface: "chat-window",
       referenceShape: "redacted",
-      heuristicExempt: false,
+      heuristicFlagged: false,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-1"),
       completeness: "complete",
       loss: "none",
     });
     expect(lines("client.diagnostic")).toEqual([]);
   });
 
-  it("persists a binding resolved through the reference exemption as client.binding.resolved", async () => {
+  it("persists a resolved binding whose reference the heuristic flags as client.binding.resolved", async () => {
     const body = JSON.stringify({
       kind: "binding",
       surface: "chat-window",
-      windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      windowRef: "chat-mfr3k2x1-1",
       outcome: "resolved",
       referenceShape: "uuid",
-      heuristicExempt: true,
+      heuristicFlagged: true,
     });
     expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
 
@@ -217,7 +219,7 @@ describe("client diagnostics loss evidence", () => {
     expect(record).toMatchObject({
       correlationId: CORRELATION_ID,
       referenceShape: "uuid",
-      heuristicExempt: true,
+      heuristicFlagged: true,
     });
     expect(record.errorKind).toBeUndefined();
   });
@@ -241,6 +243,29 @@ describe("client diagnostics loss evidence", () => {
       loss: "none",
     });
     expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: a stream repair persists under its failure streak, naming the stream.
+  it("persists a stream repair as client.session-repair.recovered with its stream", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "stream-repaired",
+      stream: "shared-event-source",
+      correlationId: "ui_stream-streak-0001",
+      repairCorrelationId: "ui_session-repair-0004",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.recovered");
+    const record = expectActivityLogProof("client.session-repair.recovered.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_stream-streak-0001",
+      outcome: "stream-repaired",
+      stream: "shared-event-source",
+      repairCorrelationId: "ui_session-repair-0004",
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   it("persists a failed session repair as client.session-repair.failed", async () => {

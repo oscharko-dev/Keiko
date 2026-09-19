@@ -216,6 +216,9 @@ export interface ClientDiagnosticIngestRequest {
   readonly readyState?: ClientDiagnosticReadyState | undefined;
   readonly correlationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  // The closed class of the failure the page observed, when it classified one (a refused
+  // connection is `unavailable`, never `unknown`); otherwise the server derives it from `kind`.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -363,7 +366,8 @@ function isClientDiagnosticLossCounts(value: unknown): value is ClientDiagnostic
 }
 
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { gitChangeDescription, workspaceTrustBinding, loss } = value;
+  const { errorKind, gitChangeDescription, workspaceTrustBinding, loss } = value;
+  if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
   return isOptional(loss, isClientDiagnosticLossCounts);
@@ -504,26 +508,29 @@ export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPE
 
 // A legacy binding (no persisted project) is decided by a scan over every project's list; the report
 // names each list load it depended on beyond `correlationId`, up to this bound, and states how many
-// loads decided it in total, so a longer causal set is explicitly partial, never silently cut.
-export const CLIENT_BINDING_RELATED_CORRELATIONS_MAX = 15;
+// loads decided it in total. Any deciding load the report cannot name is recorded as classified
+// loss on a partial line, never silently cut (#3557 review).
+export const CLIENT_BINDING_RELATED_CORRELATIONS_MAX = 63;
 export const CLIENT_BINDING_DECIDING_LOADS_MAX = 10_000;
-// The window's own persisted id reaches the report only as a SHA-256 digest computed in the
-// browser: injective for any id length, and the id itself never leaves the page.
-const WINDOW_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+// The window's own persisted id, which workspace persistence bounds to this safe shape (a
+// restored window with any other id is dropped). The server logs only its digest, and no
+// truncation ever happens, so two windows can never share one (#3557 review). `~` stays out: it
+// joins two window ids into a connection id.
+export const CLIENT_BINDING_WINDOW_REF_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
 
 export interface ClientBindingIngestRequest {
   readonly kind: "binding";
   readonly surface: ClientBindingSurface;
   readonly outcome: ClientBindingOutcome;
   readonly referenceShape: ClientBindingReferenceShape;
-  // The persisted reference is a server-issued UUID that the shared secret heuristic reads as a
-  // card number: it survived persistence only through the reference-field exemption.
-  readonly heuristicExempt: boolean;
-  readonly windowDigest: string;
+  // The persisted reference is a server-issued UUID whose hyphenated form the shared secret
+  // heuristic reads as a card number: it survived persistence only through its compact stored form.
+  readonly heuristicFlagged: boolean;
+  readonly windowRef: string;
   // The request whose answer decided the outcome (the target list load), when the client knows it.
   readonly correlationId?: string | undefined;
   readonly relatedCorrelationIds?: readonly string[] | undefined;
-  // How many list loads decided the outcome in total, when more than the named ones.
+  // How many list loads decided the outcome in total; any the report does not name is loss.
   readonly decidingLoadCount?: number | undefined;
 }
 
@@ -532,8 +539,8 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "surface",
   "outcome",
   "referenceShape",
-  "heuristicExempt",
-  "windowDigest",
+  "heuristicFlagged",
+  "windowRef",
   "correlationId",
   "relatedCorrelationIds",
   "decidingLoadCount",
@@ -543,14 +550,14 @@ function isOneOf<T extends string>(value: unknown, values: readonly T[]): value 
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }
 
-// Only a server-issued UUID can be exempt from the heuristic, and a redaction marker can never
+// Only a server-issued UUID can be flagged by the heuristic, and a redaction marker can never
 // have resolved to a live target; every other impossible combination is refused as well.
 function hasConsistentBindingReference(value: Record<string, unknown>): boolean {
   if (!isOneOf(value.outcome, CLIENT_BINDING_OUTCOMES)) return false;
   if (!isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES)) return false;
-  if (typeof value.heuristicExempt !== "boolean") return false;
+  if (typeof value.heuristicFlagged !== "boolean") return false;
   if (value.outcome === "resolved" && value.referenceShape === "redacted") return false;
-  return !value.heuristicExempt || value.referenceShape === "uuid";
+  return !value.heuristicFlagged || value.referenceShape === "uuid";
 }
 
 function isDecidingLoadCount(value: unknown): boolean {
@@ -579,7 +586,10 @@ export function isClientBindingIngestRequest(value: unknown): value is ClientBin
   if (!isRecord(value) || value.kind !== "binding") return false;
   if (Object.keys(value).some((key) => !CLIENT_BINDING_INGEST_REQUEST_KEYS.has(key))) return false;
   if (!isOneOf(value.surface, CLIENT_BINDING_SURFACES)) return false;
-  if (typeof value.windowDigest !== "string" || !WINDOW_DIGEST_PATTERN.test(value.windowDigest)) {
+  if (
+    typeof value.windowRef !== "string" ||
+    !CLIENT_BINDING_WINDOW_REF_PATTERN.test(value.windowRef)
+  ) {
     return false;
   }
   return hasConsistentBindingReference(value) && hasBindingCorrelations(value);
@@ -590,14 +600,19 @@ export function isClientBindingIngestRequest(value: unknown): value is ClientBin
 // keiko-ui repairs a read that a restarted BFF denied with 403 DENIED (a local-session request) and
 // replays it once. The denied request, the repair and the replay are separate requests; this report
 // links them under the denied request's correlation id, which the replay reuses, and names the
-// outcome, so a self-healed refusal and one that stayed denied are both reconstructable.
+// outcome, so a self-healed refusal and one that stayed denied are both reconstructable. A stream
+// (EventSource) repair reports under its failure streak's id instead, with the closed stream name:
+// an EventSource carries no request correlation the page can read.
 
 export const CLIENT_SESSION_REPAIR_OUTCOMES = [
   "replayed",
+  "stream-repaired",
   "replay-failed",
   "replay-skipped",
   "repair-failed",
 ] as const;
+export const CLIENT_SESSION_REPAIR_STREAMS = ["run-events", "shared-event-source"] as const;
+export type ClientSessionRepairStream = (typeof CLIENT_SESSION_REPAIR_STREAMS)[number];
 export type ClientSessionRepairOutcome = (typeof CLIENT_SESSION_REPAIR_OUTCOMES)[number];
 
 export interface ClientSessionRepairIngestRequest {
@@ -610,6 +625,8 @@ export interface ClientSessionRepairIngestRequest {
   // The closed class of the step that failed (the repair request or the replay), so a 502 or a
   // transport failure is never recorded as an authority denial.
   readonly errorKind?: ActivityLogErrorKind | undefined;
+  // The stream whose failure streak asked for the repair.
+  readonly stream?: ClientSessionRepairStream | undefined;
 }
 
 const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
@@ -618,7 +635,20 @@ const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "correlationId",
   "repairCorrelationId",
   "errorKind",
+  "stream",
 ]);
+
+// Only a repair's own outcome can name a stream (a stream is never replayed), and a stream repair
+// always names one.
+const STREAM_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> = new Set([
+  "stream-repaired",
+  "repair-failed",
+]);
+
+function hasConsistentRepairStream(outcome: ClientSessionRepairOutcome, stream: unknown): boolean {
+  if (stream === undefined) return outcome !== "stream-repaired";
+  return isOneOf(stream, CLIENT_SESSION_REPAIR_STREAMS) && STREAM_REPAIR_OUTCOMES.has(outcome);
+}
 
 export function isClientSessionRepairIngestRequest(
   value: unknown,
@@ -629,6 +659,7 @@ export function isClientSessionRepairIngestRequest(
   }
   if (!isOneOf(value.outcome, CLIENT_SESSION_REPAIR_OUTCOMES)) return false;
   if (!isOptional(value.errorKind, isActivityLogErrorKind)) return false;
+  if (!hasConsistentRepairStream(value.outcome, value.stream)) return false;
   return (
     isCorrelationIdShape(value.correlationId) &&
     isOptional(value.repairCorrelationId, isCorrelationIdShape)

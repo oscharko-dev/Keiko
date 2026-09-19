@@ -4,7 +4,9 @@ import {
   MAX_PERSISTED_CONNECTION_SCAN,
   parsePersistedConnections,
   parsePersistedWindows,
+  persistableWorkspace,
   persistedReferenceShape,
+  restoredWorkspace,
   sanitizePersistedConnections,
   sanitizePersistedWorkspace,
   sanitizePersistedWindows,
@@ -755,43 +757,49 @@ describe("workspace-persistence", () => {
     // Persisted as the redaction marker, it left the restored chat window reporting its live
     // conversation as deleted. The heuristic must still misread it, or this test proves nothing.
     const id = "1404206d-9ab6-4bca-8853-813867352087";
+    const compact = "1404206d9ab64bca8853813867352087";
     expect(isSecretShapedString(id)).toBe(true);
+    // The stored form never trips the heuristic, so nothing is exempted from it (#3557 review).
+    expect(isSecretShapedString(compact)).toBe(false);
     const digest = "a".repeat(64);
-    const persisted = sanitizePersistedWindows([
-      win({ id: "chat-1", type: "chat", cfg: { chatId: id, title: "Deploy status" } }),
-      // governedPullRequest.descriptionProposalId is the other field the app itself sets from a
-      // real server randomUUID() (gitDelivery/prDescriptionService.ts) and a user can never type
-      // (WIN_TYPES.governedPullRequest.config exposes only projectPath/headBranchName).
-      win({
-        id: "pr-1",
-        type: "governedPullRequest",
-        cfg: {
-          projectPath: "/repo",
-          descriptionOwnerAndRepo: "owner/repo",
-          descriptionPrNumber: 42,
-          descriptionProposalId: id,
-          descriptionSnapshotDigest: digest,
-        },
-      }),
-      // #3557 review (P1): review.runId and qiRun.runId are user-editable text fields
-      // (WIN_TYPES.review.config / WIN_TYPES.qiRun.config, both "text"), and figma.snapshotRunId
-      // is app-written but never in this bare shape (the server issues `fs-${randomUUID()}`).
-      // None of the three is a proven server-issued reference, so none gets the UUID exemption —
-      // even though this particular value IS one.
-      win({ id: "review-1", type: "review", cfg: { runId: id } }),
-      win({ id: "qi-run-1", type: "qiRun", cfg: { runId: id } }),
-      win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: id } }),
-    ]);
+    const { wins: persisted } = persistableWorkspace(
+      [
+        win({ id: "chat-1", type: "chat", cfg: { chatId: id, title: "Deploy status" } }),
+        // governedPullRequest.descriptionProposalId is the other field the app itself sets from a
+        // real server randomUUID() (gitDelivery/prDescriptionService.ts) and a user can never type
+        // (WIN_TYPES.governedPullRequest.config exposes only projectPath/headBranchName).
+        win({
+          id: "pr-1",
+          type: "governedPullRequest",
+          cfg: {
+            projectPath: "/repo",
+            descriptionOwnerAndRepo: "owner/repo",
+            descriptionPrNumber: 42,
+            descriptionProposalId: id,
+            descriptionSnapshotDigest: digest,
+          },
+        }),
+        // #3557 review (P1): review.runId and qiRun.runId are user-editable text fields
+        // (WIN_TYPES.review.config / WIN_TYPES.qiRun.config, both "text"), and figma.snapshotRunId
+        // is app-written but never in this bare shape (the server issues `fs-${randomUUID()}`).
+        // None of the three is a proven server-issued reference, so none gets the UUID exemption —
+        // even though this particular value IS one.
+        win({ id: "review-1", type: "review", cfg: { runId: id } }),
+        win({ id: "qi-run-1", type: "qiRun", cfg: { runId: id } }),
+        win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: id } }),
+      ],
+      [],
+    );
 
     expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
-      ["chat-1", { chatId: id, title: "Deploy status" }],
+      ["chat-1", { chatId: compact, title: "Deploy status" }],
       [
         "pr-1",
         {
           projectPath: "/repo",
           descriptionOwnerAndRepo: "owner/repo",
           descriptionPrNumber: 42,
-          descriptionProposalId: id,
+          descriptionProposalId: compact,
           descriptionSnapshotDigest: digest,
         },
       ],
@@ -799,7 +807,38 @@ describe("workspace-persistence", () => {
       ["qi-run-1", {}],
       ["figma-1", {}],
     ]);
-    expect(parsePersistedWindows(JSON.stringify(persisted))).toEqual(persisted);
+    // Restore expands the stored form back to the id the server knows.
+    const restored = restoredWorkspace(JSON.parse(JSON.stringify(persisted)) as unknown[], []);
+    expect(restored.wins.find((entry) => entry.id === "chat-1")?.cfg["chatId"]).toBe(id);
+    expect(restored.wins.find((entry) => entry.id === "pr-1")?.cfg["descriptionProposalId"]).toBe(
+      id,
+    );
+    expect(parsePersistedWindows(JSON.stringify(persisted))?.[0]?.cfg["chatId"]).toBe(id);
+  });
+
+  // #3557 review (P1): a restored snapshot is untrusted, and shape is no proof of server issuance.
+  // A hyphenated PAN-shaped v4 value in it is redacted like any other string, never kept verbatim.
+  it("redacts a hyphenated PAN-shaped chat id in a restored snapshot", () => {
+    const hostile = "deadbeef-cafe-4abe-8853-813867352087";
+    expect(isSecretShapedString(hostile)).toBe(true);
+
+    const restored = restoredWorkspace(
+      [
+        win({ id: "chat-1", type: "chat", cfg: { chatId: hostile } }),
+        win({
+          id: "pr-1",
+          type: "governedPullRequest",
+          cfg: { projectPath: "/repo", descriptionProposalId: hostile },
+        }),
+      ],
+      [],
+    );
+
+    expect(restored.wins.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { chatId: "[REDACTED]" }],
+      ["pr-1", { projectPath: "/repo" }],
+    ]);
+    expect(JSON.stringify(restored)).not.toContain(hostile);
   });
 
   // #3557 review (P1): isSafeOpaqueReference used to accept ANY v4-shaped value outright,
@@ -840,16 +879,19 @@ describe("workspace-persistence", () => {
     const lookalike = "deadbeef-cafe-babe-4111-111111111111";
     const serverIssued = "1404206d-9ab6-4bca-8853-813867352087";
     expect(isSecretShapedString(lookalike)).toBe(true);
-    const persisted = sanitizePersistedWindows([
-      win({ id: "chat-1", type: "chat", cfg: { chatId: lookalike, title: lookalike } }),
-      win({ id: "chat-2", type: "chat", cfg: { chatId: serverIssued, title: serverIssued } }),
-      win({ id: "review-1", type: "review", cfg: { runId: lookalike } }),
-      win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: lookalike } }),
-    ]);
+    const { wins: persisted } = persistableWorkspace(
+      [
+        win({ id: "chat-1", type: "chat", cfg: { chatId: lookalike, title: lookalike } }),
+        win({ id: "chat-2", type: "chat", cfg: { chatId: serverIssued, title: serverIssued } }),
+        win({ id: "review-1", type: "review", cfg: { runId: lookalike } }),
+        win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: lookalike } }),
+      ],
+      [],
+    );
 
     expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
       ["chat-1", { chatId: "[REDACTED]", title: "[REDACTED]" }],
-      ["chat-2", { chatId: serverIssued, title: "[REDACTED]" }],
+      ["chat-2", { chatId: serverIssued.replaceAll("-", ""), title: "[REDACTED]" }],
       ["review-1", {}],
       ["figma-1", {}],
     ]);
@@ -1330,6 +1372,35 @@ describe("workspace-persistence", () => {
     const persisted = sanitizePersistedWindows(raw as unknown as AppWindow[]);
 
     expect(persisted.map((window) => window.id)).toEqual(["good-1"]);
+  });
+
+  // #3557 review: a restored window id reaches DOM attributes, connection ids and the binding
+  // evidence (the server logs its digest), so it is held to the closed shape the app mints; a
+  // window with any other id is dropped.
+  describe("restored window ids", () => {
+    it("keeps a window whose id has the shape the app mints", () => {
+      const raw = [
+        win({ id: "chat-mfr3k2x1-2", type: "chat" }),
+        win({ id: "files", type: "files" }),
+        win({ id: "w".repeat(128), type: "chat" }),
+      ];
+      expect(sanitizePersistedWindows(raw).map((entry) => entry.id)).toEqual([
+        "chat-mfr3k2x1-2",
+        "files",
+        "w".repeat(128),
+      ]);
+    });
+
+    it.each([
+      ["an empty id", ""],
+      ["an oversized id", "w".repeat(129)],
+      ["an id outside the safe alphabet", "chat 1"],
+      ["an id that joins two window ids", "files-1~chat-1"],
+      ["an id carrying markup", "<img src=x>"],
+    ])("drops a window with %s", (_label, id) => {
+      const raw = [win({ id: "good-1", type: "chat" }), win({ id, type: "chat" })];
+      expect(sanitizePersistedWindows(raw).map((entry) => entry.id)).toEqual(["good-1"]);
+    });
   });
 
   // F1/F1b — hasWindowType used `value in WIN_TYPES` rather than Object.hasOwn. The `in`
