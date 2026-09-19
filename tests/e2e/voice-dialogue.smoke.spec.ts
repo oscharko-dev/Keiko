@@ -49,6 +49,8 @@ declare global {
     readonly __holdBatchSpeech?: boolean;
     readonly __releaseCanonicalTts?: () => void;
     readonly __pcmSamples?: number;
+    readonly __silentVadSamples?: number;
+    readonly __silentRecorderStarts?: number;
   }
 }
 
@@ -1221,17 +1223,27 @@ test("voice dialogue @smoke — long silent playback keeps interruption capture 
   page,
 }) => {
   await page.clock.install();
+  // Keep the real VAD sampling and capture-renewal code, but supply deterministic silent samples.
+  // A real AudioContext.resume() can remain pending on Linux Firefox without an output device.
   await page.addInitScript(`${BATCH_AUDIO_INIT}
     window.__holdBatchSpeech = true;
-    navigator.mediaDevices.getUserMedia = async () => {
-      const context = new AudioContext();
-      await context.resume();
-      const stream = context.createMediaStreamDestination().stream;
-      for (const track of stream.getTracks()) {
-        const stop = track.stop.bind(track);
-        track.stop = () => { stop(); void context.close(); };
+    window.__silentVadSamples = 0;
+    window.__silentRecorderStarts = 0;
+    const Recorder = window.MediaRecorder;
+    window.MediaRecorder = class extends Recorder {
+      start() { window.__silentRecorderStarts += 1; super.start(); }
+    };
+    window.AudioContext = class {
+      constructor() { this.state = "running"; }
+      resume() { return Promise.resolve(); }
+      close() { this.state = "closed"; return Promise.resolve(); }
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+      createAnalyser() {
+        return { fftSize: 1024, getFloatTimeDomainData(samples) {
+          window.__silentVadSamples += 1;
+          samples.fill(0);
+        } };
       }
-      return stream;
     };
   `);
   await stubCapability(page, BATCH_VOICE_CAPABILITY);
@@ -1252,9 +1264,14 @@ test("voice dialogue @smoke — long silent playback keeps interruption capture 
   const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
   await expect(interrupt).toBeVisible();
   for (let interval = 0; interval < 3; interval += 1) {
+    const starts = await page.evaluate(() => window.__silentRecorderStarts ?? 0);
     await page.clock.fastForward(61_000);
     await page.clock.runFor(600);
+    await expect
+      .poll(() => page.evaluate(() => window.__silentRecorderStarts ?? 0))
+      .toBeGreaterThan(starts);
   }
+  expect(await page.evaluate(() => window.__silentVadSamples ?? 0)).toBeGreaterThan(0);
   expect(transcriptions).toBe(1);
   await expect(interrupt).toBeVisible();
   await interrupt.click();
