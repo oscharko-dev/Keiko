@@ -6,7 +6,11 @@ import type { ClientVoiceDialogueStage } from "@oscharko-dev/keiko-contracts/run
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { SendMessageOutcome } from "./useChatSession";
 import { useDictation, type DictationController, type UseDictationOptions } from "./useDictation";
-import { createBrowserVoiceActivityDetector } from "./voice-activity-detector";
+import {
+  createBrowserVoiceActivityDetector,
+  type VoiceActivityDetector,
+  type VoiceActivityMonitor,
+} from "./voice-activity-detector";
 import {
   canonicalVoiceHasherIsReady,
   prepareCanonicalVoiceHasher as prepareDefaultCanonicalVoiceHasher,
@@ -19,6 +23,7 @@ export interface BatchVoiceDialogueOptions {
   readonly dictation?:
     Pick<UseDictationOptions, "createRecorder" | "transcribe" | "vad"> | undefined;
   readonly prepareCanonicalVoiceHasher?: (() => Promise<void>) | undefined;
+  readonly playback?: { readonly active: boolean; readonly interrupt: () => void } | undefined;
 }
 
 export interface BatchVoiceDialogue {
@@ -30,6 +35,8 @@ export interface BatchVoiceDialogue {
   readonly start: () => void;
   readonly stop: () => void;
   readonly retry: () => void;
+  readonly interrupt: () => void;
+  readonly canInterrupt: boolean;
   readonly onSpeechSettled: (assistantMessageId: string) => void;
 }
 
@@ -64,7 +71,7 @@ interface BatchTurnDelivery {
   readonly activate: () => void;
   readonly deactivate: () => void;
   readonly clearError: () => void;
-  readonly takeSettledAnswer: (assistantMessageId: string) => boolean;
+  readonly takeSettledAnswer: (assistantMessageId: string, interrupted?: boolean) => boolean;
 }
 
 function deliveryIsCurrent(flags: DeliveryFlags, generation: number): boolean {
@@ -182,12 +189,15 @@ function useBatchDeliveryLifecycle(
     setFailedTranscript(undefined);
   }, [setError, setFailedTranscript]);
   const takeSettledAnswer = useCallback(
-    (id: string): boolean => {
+    (id: string, interrupted = false): boolean => {
       const flags = flagsRef.current;
       if (!flags.active || flags.expectedAnswerId !== id) return false;
       flags.expectedAnswerId = undefined;
       setWaiting(false);
-      reportBatchStage("playback-settled", flags.expectedAnswerCorrelationId);
+      reportBatchStage(
+        interrupted ? "interrupted" : "playback-settled",
+        flags.expectedAnswerCorrelationId,
+      );
       flags.expectedAnswerCorrelationId = undefined;
       return true;
     },
@@ -328,29 +338,106 @@ function useBatchCapturePreparation(
   return { start, preparedRef, preparing, startupError, reset };
 }
 
+function captureInProgress(phase: DictationController["phase"]): boolean {
+  return (
+    phase === "requesting" ||
+    phase === "recording" ||
+    phase === "finalizing" ||
+    phase === "transcribing"
+  );
+}
+
 function useBatchSpeechSettlement(
-  takeSettledAnswer: (assistantMessageId: string) => boolean,
-  startDictation: () => void,
+  takeSettledAnswer: BatchTurnDelivery["takeSettledAnswer"],
+  dictation: DictationController,
 ): (assistantMessageId: string) => void {
+  const { phase, start } = dictation;
   return useCallback(
     (id: string): void => {
-      if (takeSettledAnswer(id)) startDictation();
+      // Capture armed for barge-in also owns the next utterance. Never cancel it at TTS completion.
+      if (takeSettledAnswer(id) && !captureInProgress(phase)) start();
     },
-    [takeSettledAnswer, startDictation],
+    [takeSettledAnswer, phase, start],
   );
+}
+
+function useBatchInterruptionVad(
+  configured: VoiceActivityDetector | undefined,
+  interruptRef: { current: () => void },
+): VoiceActivityDetector {
+  return useMemo(() => {
+    const detector = configured ?? createBrowserVoiceActivityDetector();
+    return {
+      start(stream, onEvent): VoiceActivityMonitor {
+        let stopped = false;
+        const monitor = detector.start(stream, (event) => {
+          if (stopped) return;
+          onEvent(event);
+          if (event === "speech-onset") interruptRef.current();
+        });
+        return {
+          stop(): void {
+            stopped = true;
+            monitor.stop();
+          },
+        };
+      },
+    };
+  }, [configured, interruptRef]);
+}
+
+function useBatchPlaybackCapture(
+  delivery: BatchTurnDelivery,
+  dictation: DictationController,
+  playback: BatchVoiceDialogueOptions["playback"],
+): Pick<BatchVoiceDialogue, "interrupt" | "canInterrupt"> {
+  const { flagsRef, waitingForAnswer, takeSettledAnswer } = delivery;
+  const { phase, start } = dictation;
+  const active = playback?.active === true;
+  const stopPlayback = playback?.interrupt;
+  const interrupt = useCallback((): void => {
+    const flags = flagsRef.current;
+    const answerId = flags.expectedAnswerId;
+    if (!active || !flags.active || answerId === undefined) return;
+    if (!takeSettledAnswer(answerId, true)) return;
+    stopPlayback?.();
+    // Speech-onset already belongs to this recording; restarting would lose its initial words.
+    if (!captureInProgress(phase)) start();
+  }, [active, flagsRef, phase, start, stopPlayback, takeSettledAnswer]);
+  useEffect((): void => {
+    if (active && waitingForAnswer && flagsRef.current.active && phase === "idle") start();
+  }, [active, waitingForAnswer, flagsRef, phase, start]);
+  return { interrupt, canInterrupt: active && waitingForAnswer };
+}
+
+function useBatchStop(
+  flagsRef: BatchTurnDelivery["flagsRef"],
+  deactivate: () => void,
+  reset: () => void,
+  cancel: () => void,
+): () => void {
+  return useCallback((): void => {
+    if (flagsRef.current.active) {
+      reportBatchStage("stopped", flagsRef.current.sessionCorrelationId);
+    }
+    deactivate();
+    reset();
+    cancel();
+  }, [deactivate, reset, cancel, flagsRef]);
 }
 
 export function useBatchVoiceDialogue(options: BatchVoiceDialogueOptions): BatchVoiceDialogue {
   const delivery = useBatchTurnDelivery(options.submit);
   const { flagsRef, acceptTranscript, activate, deactivate, clearError, takeSettledAnswer } =
     delivery;
-  const vad = useMemo(() => createBrowserVoiceActivityDetector(), []);
+  const interruptRef = useRef<() => void>(() => {});
+  const vad = useBatchInterruptionVad(options.dictation?.vad, interruptRef);
   const dictation = useDictation({
     ...options.dictation,
     onInsert: acceptTranscript,
     captureOwner: options.captureOwner,
     captureLease: options.captureLease,
-    vad: options.dictation?.vad ?? vad,
+    vad,
   });
   const { start: startDictation, cancel, retry: retryDictation } = dictation;
   useBatchTranscriptPreview(dictation, flagsRef);
@@ -360,23 +447,19 @@ export function useBatchVoiceDialogue(options: BatchVoiceDialogueOptions): Batch
     activate,
     startDictation,
   );
-  const stop = useCallback((): void => {
-    if (flagsRef.current.active) {
-      reportBatchStage("stopped", flagsRef.current.sessionCorrelationId);
-    }
-    deactivate();
-    reset();
-    cancel();
-  }, [deactivate, reset, cancel, flagsRef]);
+  const stop = useBatchStop(flagsRef, deactivate, reset, cancel);
   const retry = useCallback((): void => {
     if (!flagsRef.current.active) return;
     clearError();
     if (!preparedRef.current) start();
     else retryDictation();
   }, [flagsRef, clearError, retryDictation, preparedRef, start]);
-  const onSpeechSettled = useBatchSpeechSettlement(takeSettledAnswer, startDictation);
+  const onSpeechSettled = useBatchSpeechSettlement(takeSettledAnswer, dictation);
+  const interruption = useBatchPlaybackCapture(delivery, dictation, options.playback);
+  interruptRef.current = interruption.interrupt;
   useEffect(() => stop, [stop]);
   return {
+    ...interruption,
     dictation,
     waitingForAnswer: delivery.waitingForAnswer,
     preparing,

@@ -78,6 +78,7 @@ export const CLIENT_VOICE_DIALOGUE_STAGES = [
   "answer-ready",
   "delivery-failed",
   "playback-settled",
+  "interrupted",
   "stopped",
 ] as const;
 export type ClientVoiceDialogueStage = (typeof CLIENT_VOICE_DIALOGUE_STAGES)[number];

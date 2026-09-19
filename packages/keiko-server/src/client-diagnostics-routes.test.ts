@@ -154,6 +154,43 @@ describe("POST /api/diagnostics/client", () => {
     expect(JSON.stringify(line)).not.toContain("batch voice dialogue");
   });
 
+  it.each([
+    "started",
+    "turn-submitted",
+    "answer-ready",
+    "playback-settled",
+    "interrupted",
+    "stopped",
+  ] as const)(
+    "records successful voice stage %s as timeline evidence without a failure",
+    async (voiceDialogueStage) => {
+      const sink = captureServerLog();
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private content must never be retained",
+            clientTs: CLIENT_TS,
+            kind: "voice-dialogue",
+            correlationId: "voice-turn-correlation",
+            voiceDialogueStage,
+          }),
+        ),
+      );
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          level: "info",
+          op: "voice.dialogue.stage",
+          correlationId: "voice-turn-correlation",
+          extra: expect.objectContaining({ voiceDialogueStage }),
+        }),
+      );
+      const event = sink.events.find((entry) => entry.op === "voice.dialogue.stage");
+      expect(event?.errorKind).toBeUndefined();
+      expect(sink.lines().join("\n")).not.toContain("private content");
+    },
+  );
+
   it("projects the hostile message only as a digest", async () => {
     const sink = captureServerLog();
     const message = "boundary caught TypeError";

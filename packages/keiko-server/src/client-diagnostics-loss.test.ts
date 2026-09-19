@@ -120,6 +120,28 @@ describe("client diagnostics loss evidence", () => {
     expect(lines("client.diagnostic.rate-limited")).toHaveLength(2);
   });
 
+  it("persists a correlated voice lifecycle stage and accounts for client loss", async () => {
+    const body = JSON.stringify({
+      message: "bounded voice event",
+      clientTs: CLIENT_TS,
+      kind: "voice-dialogue",
+      voiceDialogueStage: "interrupted",
+      correlationId: "voice-turn-correlation",
+      loss: { postsFailed: 1 },
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const [line] = lines("voice.dialogue.stage");
+    const proof = expectActivityLogProof("voice.dialogue.stage.line", line ?? "");
+    expect(proof).toMatchObject({
+      level: "info",
+      correlationId: "voice-turn-correlation",
+      voiceDialogueStage: "interrupted",
+      clientPostsFailed: 1,
+    });
+    expect(proof).not.toHaveProperty("errorKind");
+    expect(activityLogLossCounters()["client-post-failed"]).toBe(1);
+  });
+
   it("persists and counts the browser's own delivery loss on the next accepted report", async () => {
     const body = JSON.stringify({
       message: "[keiko] uncaught window error: TypeError",

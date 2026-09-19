@@ -1,10 +1,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DictationRecorder, DictationSession } from "./dictation-recorder";
-import type { VoiceActivityDetector } from "./voice-activity-detector";
+import type { DictationCapture, DictationRecorder, DictationSession } from "./dictation-recorder";
+import type { VoiceActivityDetector, VoiceActivityEvent } from "./voice-activity-detector";
 import { claimVoiceCapture, resetVoiceCaptureOwnerForTests } from "./voice-capture-owner";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
-import { useBatchVoiceDialogue } from "./useBatchVoiceDialogue";
+import { useBatchVoiceDialogue, type BatchVoiceDialogue } from "./useBatchVoiceDialogue";
 import type { SendMessageOutcome } from "./useChatSession";
 
 const silentVad: VoiceActivityDetector = {
@@ -16,7 +16,11 @@ function fakeRecorder(): {
   readonly starts: ReturnType<typeof vi.fn>;
 } {
   const session: DictationSession = {
-    stop: async () => ({ audioBase64: "QUJDRA==", mimeType: "audio/webm", durationMs: 500 }),
+    stop: async (): Promise<DictationCapture> => ({
+      audioBase64: "QUJDRA==",
+      mimeType: "audio/webm",
+      durationMs: 500,
+    }),
     cancel: (): void => {},
   };
   const starts = vi.fn(async () => session);
@@ -218,6 +222,69 @@ describe("turn-based Digital Twin", () => {
     expect(diagnostics).toContainEqual({ correlationId, stage: "answer-ready" });
     expect(diagnostics).toContainEqual({ correlationId, stage: "playback-settled" });
     unmount();
+  });
+
+  it("captures a spoken interruption without dropping or restarting its first words", async () => {
+    const lease = Symbol("dialogue");
+    expect(claimVoiceCapture("chat-a", lease)).toBe(true);
+    const events: ((event: VoiceActivityEvent) => void)[] = [];
+    const vad: VoiceActivityDetector = {
+      start: (_stream, onEvent) => {
+        events.push(onEvent);
+        return { stop: vi.fn() };
+      },
+    };
+    const cancel = vi.fn();
+    const starts = vi.fn(async () => ({
+      stream: {} as MediaStream,
+      stop: async (): Promise<DictationCapture> => ({
+        audioBase64: "QUJDRA==",
+        mimeType: "audio/webm",
+        durationMs: 500,
+      }),
+      cancel,
+    }));
+    const interrupt = vi.fn();
+    const submit = vi.fn(async () => ({
+      status: "completed" as const,
+      assistantMessageId: "answer-a",
+    }));
+    const { result, rerender, unmount } = renderHook(
+      ({ active }): BatchVoiceDialogue =>
+        useBatchVoiceDialogue({
+          captureOwner: "chat-a",
+          captureLease: lease,
+          submit,
+          playback: { active, interrupt },
+          prepareCanonicalVoiceHasher: async () => {},
+          dictation: {
+            createRecorder: () => ({ start: starts }),
+            transcribe: async () => ({ transcript: "Thank you, that is enough." }),
+            vad,
+          },
+        }),
+      { initialProps: { active: false } },
+    );
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.dictation.phase).toBe("recording"));
+    act(() => result.current.dictation.stop());
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    rerender({ active: true });
+    await waitFor(() => expect(starts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.dictation.phase).toBe("recording"));
+    act(() => events.at(-1)?.("speech-onset"));
+    expect(interrupt).toHaveBeenCalledOnce();
+    expect(result.current.waitingForAnswer).toBe(false);
+    expect(cancel).not.toHaveBeenCalled();
+    act(() => result.current.onSpeechSettled("answer-a"));
+    expect(starts).toHaveBeenCalledTimes(2);
+    rerender({ active: false });
+    act(() => events.at(-1)?.("end-of-turn"));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+    expect(submit).toHaveBeenLastCalledWith("Thank you, that is enough.", expect.any(String));
+    unmount();
+    act(() => events.at(-1)?.("speech-onset"));
+    expect(interrupt).toHaveBeenCalledOnce();
   });
 
   it("discards a late transcription when the user leaves during STT", async () => {

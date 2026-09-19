@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1ded022456f4bbebe4d75b605ef1dbc9861c2ab82eb85b9aa2d859495b3eb40c"
+    "catalogDigest": "1a91edd19d3861d2d904646ca78bec6ab59bb50056ae15f3ac223f42f772e11c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 425,
-    "proofCount": 433,
-    "resolvedProofCount": 433,
+    "operationCount": 426,
+    "proofCount": 434,
+    "resolvedProofCount": 434,
     "failureClassCount": 311,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -111,7 +111,8 @@
       "operations": [
         "client.diagnostic",
         "client.diagnostic.rate-limited",
-        "client.diagnostic.rejected"
+        "client.diagnostic.rejected",
+        "voice.dialogue.stage"
       ],
       "scenarios": ["client-diagnostics.dependency-failure", "client-diagnostics.loss"]
     },
@@ -2036,6 +2037,7 @@
       "packages/keiko-server/src/update-runtime-activity.test.ts"
     ],
     "update.session.lifecycle.transition": ["packages/keiko-server/src/update-session.test.ts"],
+    "voice.dialogue.stage.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "voice.live-dictation.capacity-rejected.count": [
       "packages/keiko-server/src/voice-live-dictation.test.ts"
     ],

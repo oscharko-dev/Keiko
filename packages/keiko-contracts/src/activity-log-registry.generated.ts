@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1ded022456f4bbebe4d75b605ef1dbc9861c2ab82eb85b9aa2d859495b3eb40c" as const;
+  "1a91edd19d3861d2d904646ca78bec6ab59bb50056ae15f3ac223f42f772e11c" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1738,6 +1738,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "answer-ready",
           "delivery-failed",
           "playback-settled",
+          "interrupted",
           "stopped",
         ],
       },
@@ -25099,6 +25100,70 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "voice.dialogue.stage",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logVoiceDialogueStage",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      voiceDialogueStage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "started",
+          "turn-submitted",
+          "answer-ready",
+          "playback-settled",
+          "interrupted",
+          "stopped",
+        ],
+      },
+      clientBufferEvicted: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      clientPostsThrottled: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      clientPostsFailed: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      clientRejectionsSuppressed: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      clientErrorsSuppressed: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-diagnostic"],
+    proofIds: ["voice.dialogue.stage.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "voice.live-dictation.capacity-rejected",
     category: "http",
     owner: "keiko-server",
@@ -27712,10 +27777,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "client-diagnostic",
       requirementContract: "client-diagnostic",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["failure"],
+      lifecycleTransitions: ["failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: [],
+        state: ["voice.dialogue.stage"],
         end: [],
         failure: ["client.diagnostic"],
         loss: [],
@@ -27725,9 +27790,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "client.diagnostic",
           mode: "correlation",
         },
+        {
+          op: "voice.dialogue.stage",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
-      resourceSignals: [],
+      resourceSignals: ["voice.dialogue.stage"],
       replayReferences: [],
       operations: [
         {
@@ -27854,6 +27923,60 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.diagnostic.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "voice.dialogue.stage",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "clientBufferEvicted",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "clientErrorsSuppressed",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "clientPostsFailed",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "clientPostsThrottled",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "clientRejectionsSuppressed",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "voiceDialogueStage",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["voice.dialogue.stage.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -57262,6 +57385,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "update.runtime.legacy-import-deferred": "ui",
     "update.runtime.legacy-snapshot-imported": "runtime-packages",
     "update.session.lifecycle": "runtime-packages",
+    "voice.dialogue.stage": "client-diagnostics",
     "voice.live-dictation.capacity-rejected": "model-gateway",
     "voice.live-dictation.initial-frame-timeout": "model-gateway",
     "voice.realtime.policy-decision": "model-gateway",

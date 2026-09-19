@@ -171,8 +171,11 @@ persona mapped to that provider. It selects capture in this order:
    the same canonical Chat-owned queue as native Realtime. Assistant speech is still the matching
    persisted chat answer rendered through the same TTS path.
 
-The turn-based mode is identified as such in the UI and does not claim native Realtime latency or
-barge-in. Composer dictation remains a distinct draft-editing feature; it never silently sends a
+Turn-based capture does not claim native Realtime transcription latency. During canonical TTS, the
+same echo-cancelled recorder and local VAD capture a spoken interruption; local playback stops while
+the current recording retains the first words. An explicit Interrupt control remains available.
+Natural playback completion never restarts an already active microphone recording. Composer dictation
+remains a distinct draft-editing feature; it never silently sends a
 message. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
 
 No default transcription deployment or output voice is inherited when a deployment changes. An
@@ -275,7 +278,7 @@ already owned by canonical chat. Passing the final transcript to chat is smaller
 ### Present turn-based STT+TTS as native Realtime
 
 Rejected. Turn-based capture is a supported Digital Twin path, but its higher latency and lack of
-native barge-in must remain visible. It reuses the existing dictation recorder, VAD, canonical Chat
+native transcription latency must remain explicit. It reuses the existing dictation recorder, VAD, canonical Chat
 queue, and assistant playback instead of adding a second answer or persistence authority.
 
 ### Infer universal model and voice defaults

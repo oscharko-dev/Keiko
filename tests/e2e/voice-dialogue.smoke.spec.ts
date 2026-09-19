@@ -1145,7 +1145,11 @@ test("voice dialogue @smoke — Whisper-style STT and TTS complete a browser dia
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
-  await expect(page.getByText(/Turn-based Digital Twin/u)).toBeVisible();
+  await expect(
+    page.getByText("Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Finish speaking" }).click();
   const conversation = page.getByRole("log", { name: "Conversation" });
   await expect(conversation.getByText(transcript, { exact: true })).toHaveCount(1);
@@ -1396,7 +1400,11 @@ test("voice dialogue @smoke — full-realtime without WebRTC uses turn-based cap
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
-  await expect(page.getByText(/Turn-based Digital Twin/u)).toBeVisible();
+  await expect(
+    page.getByText("Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
 });

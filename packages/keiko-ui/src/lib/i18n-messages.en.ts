@@ -653,7 +653,7 @@ export const EN_MESSAGES = {
   "chat.voice.batchRetry": "Try again",
   "chat.voice.batchUseText": "Continue with this text",
   "chat.voice.batchFinish": "Finish speaking",
-  "chat.voice.batchMode": "Turn-based Digital Twin: Keiko listens, answers, then listens again.",
+  "chat.voice.batchMode": "Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.",
   "chat.error.send": "Could not send message.",
   "chat.error.load": "Could not load chat.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",

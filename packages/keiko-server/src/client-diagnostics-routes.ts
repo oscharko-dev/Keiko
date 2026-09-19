@@ -128,6 +128,43 @@ const CLIENT_DIAGNOSTIC_REJECTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.dialogue.stage",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logVoiceDialogueStage",
+  fields: {
+    voiceDialogueStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "started",
+        "turn-submitted",
+        "answer-ready",
+        "playback-settled",
+        "interrupted",
+        "stopped",
+      ],
+    },
+    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },
+    clientPostsThrottled: { type: "integer", dataClass: "count", required: false },
+    clientPostsFailed: { type: "integer", dataClass: "count", required: false },
+    clientRejectionsSuppressed: { type: "integer", dataClass: "count", required: false },
+    clientErrorsSuppressed: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-diagnostic"],
+  proofIds: ["voice.dialogue.stage.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -163,6 +200,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "answer-ready",
         "delivery-failed",
         "playback-settled",
+        "interrupted",
         "stopped",
       ],
     },
@@ -408,12 +446,45 @@ function clientDiagnosticErrorKind(
   return kind === undefined ? "unknown" : CLIENT_DIAGNOSTIC_ERROR_KINDS[kind];
 }
 
+const VOICE_FAILURE_STAGES = new Set([
+  "preparation-failed",
+  "queue-unavailable",
+  "delivery-failed",
+]);
+
+function logVoiceDialogueStage(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const stage = request.voiceDialogueStage;
+  if (stage === undefined || VOICE_FAILURE_STAGES.has(stage)) return false;
+  const extra: Record<string, unknown> = {
+    voiceDialogueStage: stage,
+    completeness: "complete",
+    loss: "none",
+  };
+  projectClientLoss(request.loss, extra);
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_VOICE_DIALOGUE_OPERATION,
+      { correlationId },
+      extra as ActivityLogFields<typeof CLIENT_VOICE_DIALOGUE_OPERATION>,
+    ),
+  );
+  return true;
+}
+
 // Projects the validated request onto the activity log. `message` is admitted only as a digest;
 // `readyState`/`kind` ride along as bounded, closed-shape fields.
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
 ): void {
+  const correlationId =
+    request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
+      ? request.correlationId
+      : correlationIdOrUnknown(ingestCorrelationId);
+  if (logVoiceDialogueStage(request, correlationId)) return;
   const extra: Record<string, unknown> = {
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
   };
@@ -435,10 +506,6 @@ function logClientDiagnostic(
     extra.workspaceId = request.workspaceTrustBinding.workspaceId;
   }
   projectClientLoss(request.loss, extra);
-  const correlationId =
-    request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
-      ? request.correlationId
-      : correlationIdOrUnknown(ingestCorrelationId);
   extra.completeness = "complete";
   extra.loss = "none";
   getServerLogger().warn(

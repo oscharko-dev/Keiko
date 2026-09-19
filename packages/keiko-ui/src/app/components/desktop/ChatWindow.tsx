@@ -2725,11 +2725,12 @@ function isVoiceInterruptReachable(
 }
 
 function composerVoiceInterruptAction(
-  batchActive: boolean,
+  batchDialogue: BatchVoiceDialogue | undefined,
   voiceDialogActive: boolean,
   controller: RealtimeVoiceController,
 ): (() => void) | undefined {
-  if (batchActive || !isVoiceInterruptReachable(voiceDialogActive, controller)) return undefined;
+  if (batchDialogue !== undefined) return batchDialogue.interrupt;
+  if (!isVoiceInterruptReachable(voiceDialogActive, controller)) return undefined;
   return controller.interrupt;
 }
 
@@ -2828,7 +2829,7 @@ function BatchVoiceStatus({
           ) : null}
         </div>
       ) : null}
-      {dialogue.dictation.phase === "recording" ? (
+      {dialogue.dictation.phase === "recording" && !dialogue.waitingForAnswer ? (
         <button type="button" className="cmp-voice-btn" onClick={dialogue.dictation.stop}>
           {t("chat.voice.batchFinish")}
         </button>
@@ -2922,9 +2923,11 @@ function ComposerVoiceOverlay({
               playbackButtonRef={playbackButtonRef}
               voiceDialogActive={voiceDialogActive}
               onToggleVoiceDialog={onToggleVoiceDialog}
-              canInterrupt={realtimeVoiceController.canInterrupt}
+              canInterrupt={
+                batchActive ? batchDialogue.canInterrupt : realtimeVoiceController.canInterrupt
+              }
               onInterrupt={composerVoiceInterruptAction(
-                batchActive,
+                batchActive ? batchDialogue : undefined,
                 voiceDialogActive,
                 realtimeVoiceController,
               )}
@@ -3183,6 +3186,7 @@ function ComposerCoreImpl({
     captureOwner: voiceCaptureOwner,
     captureLease: voiceDialog.captureLease,
     submit: submitBatchVoiceTurn,
+    playback: { active: playback.snapshot.active, interrupt: playback.interrupt },
   });
   const { start: startBatchDialogue, stop: stopBatchDialogue } = batchDialogue;
   batchSpeechSettledRef.current = batchDialogue.onSpeechSettled;
