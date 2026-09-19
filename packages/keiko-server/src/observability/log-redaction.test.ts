@@ -1295,3 +1295,19 @@ describe("code-owned client diagnostic notes (F29)", () => {
     });
   });
 });
+
+describe("production browser frame redaction", () => {
+  it("retains only a bounded shipped chunk location, never a browser URL or source path", () => {
+    const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345";
+    expect(
+      redactLogFields({
+        frames: [
+          frame,
+          "https://private.invalid/chunk.js:1:2",
+          "dist/ui/static/_next/static/chunks/../private.js:1:2",
+          "file:///Users/private/code.js:1:2",
+        ],
+      }),
+    ).toEqual({ frames: [frame] });
+  });
+});

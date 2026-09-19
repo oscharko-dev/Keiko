@@ -165,7 +165,6 @@ import {
   isActivityLogReadinessSnapshot,
   type HealthResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { validateGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
 import {
   validateGitRemotesResponse,
   validateGitRepositorySummary,
@@ -188,6 +187,7 @@ import type {
   PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorEvidence } from "./client-error-evidence";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
@@ -1932,11 +1932,8 @@ export async function fetchGitHistory(input: {
   readonly limit?: number;
   readonly skip?: number;
 }): Promise<GitHistoryResponse> {
-  const params = new URLSearchParams();
-  params.set("root", input.root);
-  if (input.limit !== undefined) params.set("limit", input.limit.toString());
-  if (input.skip !== undefined) params.set("skip", input.skip.toString());
-  return fetchJson(`/api/git/history?${params.toString()}`, undefined, validateGitHistoryResponse);
+  const api = await loadGitWorkbenchApi("git-history");
+  return api.fetchGitHistory(fetchJson, input);
 }
 
 export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
@@ -3135,21 +3132,24 @@ export interface GitDeliverySyncInput {
   readonly userInitiated?: true | undefined;
 }
 
-async function loadGitSyncApi(): Promise<typeof import("./coding-workbench-lazy-fetchers")> {
+async function loadGitWorkbenchApi(
+  moduleLoadFailure: "git-sync" | "git-history" = "git-sync",
+): Promise<typeof import("./coding-workbench-lazy-fetchers")> {
   try {
     return await import("./coding-workbench-lazy-fetchers");
   } catch (cause) {
     const error = new ApiError(
       "MODULE_LOAD_FAILED",
-      "Git sync could not start. Reload Keiko and try again.",
+      "Git could not start. Reload Keiko and try again.",
       0,
     );
     error.correlationId = newClientCorrelationId();
     error.cause = cause;
-    reportClientDiagnostic("git-sync:validator-load-failed", {
+    reportClientDiagnostic("git:module-load-failed", {
       kind: "other",
       correlationId: error.correlationId,
-      moduleLoadFailure: "git-sync",
+      moduleLoadFailure,
+      errorEvidence: clientErrorEvidence(cause),
     });
     throw error;
   }
@@ -3159,7 +3159,7 @@ export async function fetchGitDeliverySyncPreview(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
-  const api = await loadGitSyncApi();
+  const api = await loadGitWorkbenchApi();
   return api.fetchGitSyncPreview(fetchJson, input, signal);
 }
 
@@ -3167,7 +3167,7 @@ export async function fetchGitDeliverySyncExecute(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
-  const api = await loadGitSyncApi();
+  const api = await loadGitWorkbenchApi();
   return api.fetchGitSyncExecute(fetchJson, input, signal);
 }
 
@@ -3181,7 +3181,7 @@ export async function fetchGitDeliverySyncApprove(
   input: Omit<GitDeliverySyncInput, "approval" | "userInitiated">,
   signal?: AbortSignal,
 ): Promise<GitDeliverySyncApproveResponse> {
-  const api = await loadGitSyncApi();
+  const api = await loadGitWorkbenchApi();
   return api.fetchGitSyncApprove(fetchJson, input, signal);
 }
 

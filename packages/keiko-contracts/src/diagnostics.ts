@@ -186,6 +186,7 @@ export const CLIENT_ERROR_CLASSES: ReadonlySet<string> = new Set([
   "QuotaExceededError",
   "SecurityError",
   "TimeoutError",
+  "ChunkLoadError",
   "ApiError",
   "ChatLookupFailure",
   "DebugRequestError",
@@ -234,6 +235,7 @@ export const CLIENT_VOICE_CAPTURE_REASONS = [
   "vad-unavailable",
   "speech-observed",
   "renewal-unsupported",
+  "replacement-create-failed",
   "replacement-start-failed",
   "previous-stop-failed",
   "replacement-stop-failed",
@@ -258,6 +260,41 @@ export type ClientVoiceCaptureError = (typeof CLIENT_VOICE_CAPTURE_ERRORS)[numbe
 const VOICE_CAPTURE_ERROR_SET: ReadonlySet<unknown> = new Set(CLIENT_VOICE_CAPTURE_ERRORS);
 function isClientVoiceCaptureError(value: unknown): value is ClientVoiceCaptureError {
   return VOICE_CAPTURE_ERROR_SET.has(value);
+}
+
+/** Production browser frames name only immutable shipped chunks, never an origin or source path. */
+export function isClientDiagnosticFrame(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^dist\/ui\/static\/_next\/static\/chunks\/[a-z0-9_-]{8,32}\.js:[0-9]{1,8}:[0-9]{1,8}$/u.test(
+      value,
+    )
+  );
+}
+
+export interface ClientErrorEvidence {
+  readonly errorClass: string;
+  readonly frames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+
+function isClientErrorClass(value: unknown): value is string {
+  return typeof value === "string" && CLIENT_ERROR_CLASSES.has(value);
+}
+
+function isClientErrorEvidence(value: unknown): value is ClientErrorEvidence {
+  if (!isRecord(value) || !isClientErrorClass(value.errorClass)) return false;
+  if (
+    !Array.isArray(value.frames) ||
+    value.frames.length > 8 ||
+    !value.frames.every(isClientDiagnosticFrame)
+  )
+    return false;
+  return (
+    Array.isArray(value.causeChain) &&
+    value.causeChain.length <= 5 &&
+    value.causeChain.every(isClientErrorClass)
+  );
 }
 
 export interface ClientMarkdownLayout {
@@ -291,7 +328,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
-  readonly moduleLoadFailure?: "git-sync" | undefined;
+  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -443,11 +481,15 @@ function isClientDiagnosticLossCounts(value: unknown): value is ClientDiagnostic
   );
 }
 
+function isClientModuleLoadFailure(value: unknown): boolean {
+  return value === "git-sync" || value === "git-history";
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
   const { gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } = value;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
-  if (value.moduleLoadFailure !== undefined && value.moduleLoadFailure !== "git-sync") return false;
+  if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
   if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
@@ -459,6 +501,7 @@ export function isClientDiagnosticIngestRequest(
   value: unknown,
 ): value is ClientDiagnosticIngestRequest {
   if (!isRecord(value)) return false;
+  if (!isOptional(value.errorEvidence, isClientErrorEvidence)) return false;
   const { message, clientTs, readyState, correlationId, kind, voiceDialogueStage } = value;
   if (!isBoundedString(message, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)) return false;
   if (!isIsoInstant(clientTs)) return false;

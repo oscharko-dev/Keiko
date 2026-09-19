@@ -1,3 +1,4 @@
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 // Turn-based Digital Twin capture. The existing dictation recorder, VAD, canonical chat queue,
 // and assistant playback own media, answer generation, and speech. This hook advances the floor.
 
@@ -78,13 +79,14 @@ function reportBatchStage(
 
 function reportCaptureFailure(error: unknown, correlationId: string | undefined): void {
   const failure = error instanceof DictationRecorderError ? error : undefined;
-  reportBatchStage(
-    "capture-renewal-failed",
+  reportClientDiagnostic("[keiko] batch voice dialogue (stage=capture-renewal-failed)", {
+    kind: "voice-dialogue",
+    voiceDialogueStage: "capture-renewal-failed",
     correlationId,
-    undefined,
-    failure?.captureReason ?? "unknown-failure",
-    failure?.captureError ?? "other",
-  );
+    voiceCaptureReason: failure?.captureReason ?? "unknown-failure",
+    voiceCaptureError: failure?.captureError ?? "other",
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 interface BatchTurnDelivery {

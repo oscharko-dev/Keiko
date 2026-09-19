@@ -277,13 +277,28 @@ interface RecordingBuffer {
   readonly startedAt: number;
 }
 
+function createMediaRecorder(stream: MediaStream, mimeType: string): MediaRecorder {
+  return mimeType === "" ? new MediaRecorder(stream) : new MediaRecorder(stream, { mimeType });
+}
+
+function createRenewalRecorder(stream: MediaStream, mimeType: string): MediaRecorder {
+  try {
+    return createMediaRecorder(stream, mimeType);
+  } catch (cause) {
+    throw new DictationRecorderError(
+      "capture-failed",
+      "Audio capture renewal failed.",
+      "replacement-create-failed",
+      captureErrorClass(cause),
+      cause,
+    );
+  }
+}
+
 async function beginRecordingBuffer(
-  stream: MediaStream,
-  mimeType: string,
+  recorder: MediaRecorder,
   options: DictationRecorderStartOptions,
 ): Promise<RecordingBuffer> {
-  const recorder =
-    mimeType === "" ? new MediaRecorder(stream) : new MediaRecorder(stream, { mimeType });
   const chunks: Blob[] = [];
   recorder.addEventListener("dataavailable", (event) => {
     if (event.data.size > 0) {
@@ -337,8 +352,9 @@ async function beginRenewalBuffer(
   mimeType: string,
   options: DictationRecorderStartOptions,
 ): Promise<RecordingBuffer> {
+  const recorder = createRenewalRecorder(stream, mimeType);
   try {
-    return await beginRecordingBuffer(stream, mimeType, options);
+    return await beginRecordingBuffer(recorder, options);
   } catch (error) {
     throw new DictationRecorderError(
       "capture-failed",
@@ -355,7 +371,7 @@ async function beginSession(
   options: DictationRecorderStartOptions = {},
 ): Promise<DictationSession> {
   const mimeType = selectMimeType();
-  let capture = await beginRecordingBuffer(stream, mimeType, options);
+  let capture = await beginRecordingBuffer(createMediaRecorder(stream, mimeType), options);
   // Ready = start event seen (above) AND the analyser has produced its first sample (below), so the
   // caller only invites the user to speak once capture is verifiably live. Fired at most once.
   let readyFired = false;

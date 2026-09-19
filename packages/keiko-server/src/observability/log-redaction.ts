@@ -78,6 +78,7 @@
 // `diagnosticSummary` fields; the same field name nested inside some unrelated object merely
 // happens to share it, carries no such promise, and takes the ordinary generic path instead.
 
+import { isClientDiagnosticFrame } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { CLIENT_ERROR_CLASSES } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME,
@@ -569,6 +570,7 @@ function redactLogArray(value: readonly unknown[], depth: number): unknown[] {
 function isConformingFrame(value: unknown): value is string {
   if (typeof value !== "string") return false;
   if (RELATIVE_MARKER_PATTERN.test(value)) return false;
+  if (isClientDiagnosticFrame(value)) return true;
   const match = FRAME_SHAPE_PATTERN.exec(value);
   if (match === null) return false;
   const packageName = match.groups?.pkg;

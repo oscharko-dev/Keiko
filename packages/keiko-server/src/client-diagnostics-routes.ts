@@ -158,6 +158,7 @@ const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
         "vad-unavailable",
         "speech-observed",
         "renewal-unsupported",
+        "replacement-create-failed",
         "replacement-start-failed",
         "previous-stop-failed",
         "replacement-stop-failed",
@@ -238,11 +239,26 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
     moduleLoadFailure: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["git-sync"],
+      values: ["git-sync", "git-history"],
     },
     clientNoteDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     readyState: { type: "integer", dataClass: "count", required: false },
@@ -283,6 +299,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "vad-unavailable",
         "speech-observed",
         "renewal-unsupported",
+        "replacement-create-failed",
         "replacement-start-failed",
         "previous-stop-failed",
         "replacement-stop-failed",
@@ -639,6 +656,12 @@ function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId
 // Projects the validated request onto the activity log. `message` is admitted only as a digest;
 // `readyState`/`kind` ride along as bounded, closed-shape fields.
 function requestDiagnosticErrorKind(request: ClientDiagnosticIngestRequest): ActivityLogErrorKind {
+  if (request.moduleLoadFailure !== undefined) {
+    const errorClass = request.errorEvidence?.errorClass;
+    return errorClass === "ChunkLoadError" || errorClass === "NetworkError"
+      ? "unavailable"
+      : "internal";
+  }
   if (request.voiceDialogueStage === "delivery-cancelled") return "cancelled";
   if (request.voiceDialogueStage === "delivery-rejected") return "unavailable";
   return clientDiagnosticErrorKind(request.kind);
@@ -649,6 +672,11 @@ function projectClientFailure(
   extra: Record<string, unknown>,
 ): void {
   if (request.moduleLoadFailure !== undefined) extra.moduleLoadFailure = request.moduleLoadFailure;
+  if (request.errorEvidence !== undefined) {
+    extra.errorClass = request.errorEvidence.errorClass;
+    extra.frames = request.errorEvidence.frames;
+    extra.causeChain = request.errorEvidence.causeChain;
+  }
   if (request.voiceCaptureError !== undefined) extra.voiceCaptureError = request.voiceCaptureError;
   if (request.voiceCaptureReason !== undefined)
     extra.voiceCaptureReason = request.voiceCaptureReason;

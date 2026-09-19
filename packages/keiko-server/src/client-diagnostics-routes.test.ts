@@ -235,6 +235,7 @@ describe("POST /api/diagnostics/client", () => {
     ["capture-bound-reached", "vad-unavailable", undefined],
     ["capture-bound-reached", "speech-observed", undefined],
     ["capture-bound-reached", "renewal-unsupported", undefined],
+    ["capture-renewal-failed", "replacement-create-failed", "type-error"],
     ["capture-renewal-failed", "replacement-start-failed", "invalid-state"],
     ["capture-renewal-failed", "replacement-start-failed", "type-error"],
     ["capture-renewal-failed", "replacement-start-failed", "range-error"],
@@ -340,6 +341,64 @@ describe("POST /api/diagnostics/client", () => {
       moduleLoadFailure: "git-sync",
     });
     expect(sink.lines().join("")).not.toContain("private chunk URL");
+  });
+
+  it.each(["ChunkLoadError", "TypeError"])(
+    "persists module failure class %s and safe causes/frames",
+    async (errorClass) => {
+      const sink = captureServerLog();
+      const frames = ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"];
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private URL",
+            clientTs: CLIENT_TS,
+            kind: "other",
+            correlationId: "chunk-failure-id",
+            moduleLoadFailure: "git-sync",
+            errorEvidence: { errorClass, frames, causeChain: ["TypeError"] },
+          }),
+        ),
+      );
+      expect(clientDiagnosticLine(sink)).toMatchObject({
+        correlationId: "chunk-failure-id",
+        errorClass,
+        frames,
+        causeChain: ["TypeError"],
+        errorKind: errorClass === "ChunkLoadError" ? "unavailable" : "internal",
+      });
+      expect(sink.lines().join("")).not.toContain("private URL");
+    },
+  );
+
+  it("persists a recorder failure with its original cause location", async () => {
+    const sink = captureServerLog();
+    const frames = ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:30:567"];
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private device",
+          clientTs: CLIENT_TS,
+          kind: "voice-dialogue",
+          correlationId: "recorder-session",
+          voiceDialogueStage: "capture-renewal-failed",
+          voiceCaptureReason: "replacement-create-failed",
+          voiceCaptureError: "type-error",
+          errorEvidence: {
+            errorClass: "DictationRecorderError",
+            frames,
+            causeChain: ["TypeError"],
+          },
+        }),
+      ),
+    );
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      correlationId: "recorder-session",
+      voiceCaptureReason: "replacement-create-failed",
+      frames,
+      causeChain: ["TypeError"],
+    });
+    expect(sink.lines().join("")).not.toContain("private device");
   });
 
   it("projects the hostile message only as a digest", async () => {

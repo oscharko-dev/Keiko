@@ -38,6 +38,9 @@ describe("turn-based Digital Twin", () => {
     vi.useFakeTimers();
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
+    const failure = new Error("private recorder detail", {
+      cause: new TypeError("private native detail"),
+    });
     const recorder = fakeRecorder().recorder;
     const { result, unmount } = renderHook(() =>
       useBatchVoiceDialogue({
@@ -52,7 +55,7 @@ describe("turn-based Digital Twin", () => {
               ...(await recorder.start(options)),
               stream: { getTracks: () => [] } as unknown as MediaStream,
               renewSilence: async (): Promise<never> => {
-                throw new Error("private recorder detail");
+                throw failure;
               },
             }),
           }),
@@ -72,6 +75,7 @@ describe("turn-based Digital Twin", () => {
         kind: "voice-dialogue",
         voiceDialogueStage: "capture-renewal-failed",
         voiceCaptureReason: "unknown-failure",
+        errorEvidence: expect.objectContaining({ errorClass: "Error", causeChain: ["TypeError"] }),
         correlationId: started?.[1]?.correlationId,
       }),
     );

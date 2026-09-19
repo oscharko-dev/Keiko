@@ -3,6 +3,7 @@
 // that it does — and that it does nothing else — lives where a reviewer looks for it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clientErrorEvidence } from "./client-error-evidence";
 import {
   clientDiagnosticPostFailureCount,
   clientDiagnosticPostThrottledCount,
@@ -430,4 +431,28 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
     expect(body["readyState"]).toBe(0);
     expect(body["kind"]).toBe("sse-error");
   });
+});
+
+it("posts reduced production frames and closed causes through the existing transport", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const cause = new TypeError("private browser detail");
+  cause.stack = `TypeError: private browser detail\n    at start (${location.origin}/_next/static/chunks/1wntg-7ptuw73.js:12:345)`;
+  fanOutClientDiagnostic("recorder:failure", {
+    correlationId: "capture-session",
+    kind: "voice-dialogue",
+    errorEvidence: clientErrorEvidence(new Error("private wrapper", { cause })),
+  });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "capture-session",
+    errorEvidence: {
+      errorClass: "Error",
+      causeChain: ["TypeError"],
+      frames: ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"],
+    },
+  });
+  expect(JSON.stringify(fetchMock.mock.calls)).not.toMatch(
+    /private browser detail|private wrapper|https?:/,
+  );
 });

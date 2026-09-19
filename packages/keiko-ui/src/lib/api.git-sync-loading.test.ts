@@ -4,6 +4,7 @@ import {
   fetchGitDeliverySyncPreview,
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncApprove,
+  fetchGitHistory,
 } from "./api";
 
 vi.mock("./coding-workbench-lazy-fetchers", () => {
@@ -29,10 +30,27 @@ describe("git sync validator chunk failure", () => {
         expect.any(String),
         expect.objectContaining({
           moduleLoadFailure: "git-sync",
+          errorEvidence: expect.objectContaining({ causeChain: ["TypeError"] }),
           correlationId: expect.any(String),
         }),
       );
       expect(JSON.stringify(writer.mock.calls)).not.toMatch(/private chunk URL|private\/repo/);
     },
+  );
+});
+
+it("records history module failure with its own operation identity", async () => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  await expect(fetchGitHistory({ root: "/private/repo" })).rejects.toBeDefined();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(writer).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.objectContaining({
+      moduleLoadFailure: "git-history",
+      errorEvidence: expect.objectContaining({ causeChain: ["TypeError"] }),
+    }),
   );
 });

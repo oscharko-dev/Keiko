@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "46b733fe78f0304444816a636f5154f4bd4d8ca1991d2f58ccddeef693b5daaf" as const;
+  "2270f646122186d9ffa80b2711ec742efcb0211db6c3b14ab8e2fe8e4162e1ab" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1728,11 +1728,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      errorClass: {
+        type: "string",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 64,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
       moduleLoadFailure: {
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["git-sync"],
+        values: ["git-sync", "git-history"],
       },
       clientNoteDigest: {
         type: "string",
@@ -1782,6 +1802,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "vad-unavailable",
           "speech-observed",
           "renewal-unsupported",
+          "replacement-create-failed",
           "replacement-start-failed",
           "previous-stop-failed",
           "replacement-stop-failed",
@@ -25283,6 +25304,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "vad-unavailable",
           "speech-observed",
           "renewal-unsupported",
+          "replacement-create-failed",
           "replacement-start-failed",
           "previous-stop-failed",
           "replacement-stop-failed",
@@ -28016,6 +28038,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "clientBufferEvicted",
               type: "integer",
               dataClass: "count",
@@ -28061,6 +28089,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "disposition",
               type: "string",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "errorClass",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
               required: false,
             },
             {
@@ -28135,12 +28175,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "completeness-state",
             "count",
             "digest",
+            "error-kind",
             "loss-state",
             "opaque-id",
+            "safe-platform-class",
           ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["client.diagnostic.line"],
           replayReferences: [],

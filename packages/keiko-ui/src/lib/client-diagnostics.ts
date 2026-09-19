@@ -36,6 +36,7 @@ import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
   type ClientDiagnosticGitChangeDescription,
   type ClientMarkdownLayout,
+  type ClientErrorEvidence,
   type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
   type ClientDiagnosticLossCounts,
@@ -53,7 +54,8 @@ export interface ClientDiagnosticMeta {
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
-  readonly moduleLoadFailure?: "git-sync" | undefined;
+  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }

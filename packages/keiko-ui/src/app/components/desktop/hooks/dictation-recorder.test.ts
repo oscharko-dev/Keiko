@@ -183,6 +183,28 @@ describe("createBrowserDictationRecorder", () => {
     },
   );
 
+  it("distinguishes replacement construction from replacement start failures", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const session = await createBrowserDictationRecorder().start();
+    const cause = new TypeError("private constructor detail");
+    class BrokenRecorder extends FakeMediaRecorder {
+      constructor(stream: unknown, options?: { mimeType?: string }) {
+        super(stream, options);
+        throw cause;
+      }
+    }
+    vi.stubGlobal("MediaRecorder", BrokenRecorder);
+    try {
+      await expect(session.renewSilence?.(() => true)).rejects.toMatchObject({
+        captureReason: "replacement-create-failed",
+        captureError: "type-error",
+        cause,
+      });
+    } finally {
+      session.cancel();
+    }
+  });
+
   it("captures audio and returns base64 + mime + duration, releasing the track", async () => {
     const track = { stop: vi.fn() };
     stubMedia(async () => fakeStream(track), track);

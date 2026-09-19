@@ -375,3 +375,22 @@ describe("client module and markdown identity boundaries", () => {
     ).toBe(false);
   });
 });
+
+describe("client error evidence trust boundary", () => {
+  const base = { message: "failure", clientTs: "2026-09-19T00:00:00.000Z" };
+  const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345";
+  const evidence = { errorClass: "TypeError", frames: [frame], causeChain: ["Error"] };
+  it("accepts the bounded closed evidence shape", () => {
+    expect(isClientDiagnosticIngestRequest({ ...base, errorEvidence: evidence })).toBe(true);
+  });
+  it.each([
+    { ...evidence, errorClass: "PrivateCustomer" },
+    { ...evidence, frames: ["https://private.invalid/file.js:1:2"] },
+    { ...evidence, frames: ["dist/ui/static/_next/static/chunks/../private.js:1:2"] },
+    { ...evidence, frames: Array.from({ length: 9 }, () => frame) },
+    { ...evidence, causeChain: ["private cause"] },
+    { ...evidence, causeChain: Array.from({ length: 6 }, () => "Error") },
+  ])("rejects hostile or unbounded evidence", (errorEvidence) => {
+    expect(isClientDiagnosticIngestRequest({ ...base, errorEvidence })).toBe(false);
+  });
+});

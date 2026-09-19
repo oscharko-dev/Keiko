@@ -23,11 +23,13 @@
  */
 
 import type {
+  GitHistoryResponse,
   GitSyncOperation,
   GitSyncPreview,
   GitSyncExecuteResponse,
   GitRepositoryValidation,
 } from "@oscharko-dev/keiko-contracts";
+import { validateGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
 import {
   validateGitSyncPreview,
   validateGitSyncExecuteResponse,
@@ -514,4 +516,15 @@ export async function fetchGitSyncApprove(
     body: gitDeliverySyncBody(input),
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+export async function fetchGitHistory(
+  fetchJson: ApiFetchJson,
+  input: Parameters<typeof import("./api").fetchGitHistory>[0],
+): Promise<GitHistoryResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  if (input.limit !== undefined) params.set("limit", input.limit.toString());
+  if (input.skip !== undefined) params.set("skip", input.skip.toString());
+  return fetchJson(`/api/git/history?${params.toString()}`, undefined, validateGitHistoryResponse);
 }
