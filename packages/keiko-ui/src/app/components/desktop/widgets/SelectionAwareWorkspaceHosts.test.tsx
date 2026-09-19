@@ -2038,38 +2038,62 @@ describe("ChatWindowSessionHost target missing", () => {
     expectNoMissingReport();
   });
 
-  // #3557 review (P0): the snapshot an older build actually wrote holds only the redaction marker,
-  // with no fingerprint. Its chat still exists, and the window must reopen it: a redacted reference
-  // can only have named a chat whose id persistence redacts, and the project lists exactly one.
-  it("reopens a chat from a snapshot an older build wrote, without the id's fingerprint", async (): Promise<void> => {
-    const flaggedId = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
-    const window = flaggedChatWindow({ chatId: flaggedId, projectPath: "/repo" });
+  // #3557 review: the snapshot an older build actually wrote holds only the redaction marker, with no
+  // fingerprint, and that marker identifies nothing. The chat it named may be gone while another
+  // flagged chat is the only one left, so the window must never guess: it stays unbound and reports
+  // its chat as missing, with the redacted reference's typed evidence.
+  it("keeps a snapshot an older build wrote unbound, never guessing the only flagged chat", async (): Promise<void> => {
+    const onlyFlagged = listFlaggedChat("2404206d-9ab6-4bca-8853-813867352087");
+    const window = flaggedChatWindow({
+      chatId: "1404206d-9ab6-4bca-8853-813867352087",
+      projectPath: "/repo",
+    });
 
     const { restoredCfg, ctx } = restoreChatWindow(window);
 
     expect(restoredCfg).toEqual({ chatId: "[REDACTED]", projectPath: "/repo" });
-    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: flaggedId }));
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
-        "[keiko] chat window binding resolved (reference=sole-candidate, heuristic-flagged)",
-        {
-          correlationId: lookupLoadId(),
-          bindingReport: {
-            surface: "chat-window",
-            outcome: "resolved",
-            referenceShape: "sole-candidate",
-            heuristicFlagged: true,
-            windowRef: "window-1",
-            decidingLoadCount: 1,
-          },
-        },
+        "[keiko] chat window restore target not found (reference=redacted)",
+        expect.objectContaining({
+          bindingReport: expect.objectContaining({
+            outcome: "target-missing",
+            referenceShape: "redacted",
+          }) as unknown,
+        }),
       ),
     );
-    // From now on the window keeps its binding through the fingerprint it records.
-    expect(ctx.updateCfg).toHaveBeenCalledWith({
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: onlyFlagged });
+    const resolved = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).startsWith("[keiko] chat window binding resolved"),
+    );
+    expect(resolved).toEqual([]);
+  });
+
+  // #3557 review: a chat list that cannot be read decides nothing, and its failure is reported
+  // under the id that load was sent with, with a closed class, although no response ever arrived.
+  it("reports a lookup whose list cannot be read under that load's id, and keeps the window pending", async (): Promise<void> => {
+    const flaggedId = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    fetchChatsMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    const window = flaggedChatWindow({
+      chatId: flaggedId,
       chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+      projectPath: "/repo",
     });
-    expectNoMissingReport();
+
+    const { ctx } = restoreChatWindow(window);
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat reference lookup failed: TypeError",
+        { correlationId: lookupLoadId(), errorKind: "unavailable" },
+      ),
+    );
+    expect(lookupLoadId()).toEqual(expect.any(String));
+    expect(screen.getByText("Opening chat...")).toBeInTheDocument();
+    expect(screen.queryByText("Chat not found")).toBeNull();
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: flaggedId });
   });
 
   it("reports a redacted binding whose fingerprint matches no chat as missing", async (): Promise<void> => {
@@ -2286,6 +2310,12 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(reported).toBeInstanceOf(Error);
     expect((reported as Error).message).toMatch(
       /^Chat project lookup failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
+    );
+    // #3557 review: the id the failed load was sent with, never a fresh one.
+    const failedLoadId = fetchChatsMock.mock.calls.find(([path]) => path === projectA.path)?.[1];
+    expect(failedLoadId).toEqual(expect.any(String));
+    expect((reported as Error).message).toBe(
+      `Chat project lookup failed. Correlation ID: ${String(failedLoadId)}`,
     );
     expect((reported as Error).message).not.toContain("temporary lookup failure");
   });

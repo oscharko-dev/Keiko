@@ -10,20 +10,18 @@
 // On restore, the window finds its chat again by comparing that fingerprint with the chats the
 // server lists: the server is the proof that the id is real, and the id never reaches storage.
 //
-// A snapshot an older build wrote holds the redaction marker without a fingerprint. A redacted
-// reference can only have named a chat whose id persistence redacts, so when exactly one listed
-// chat has such an id, the window binds to it; with none, or with several, it reports its chat as
-// missing rather than guess.
+// A redaction marker without a fingerprint identifies nothing: no listed chat can be proven to be
+// the one it named, so such a window is never rebound and reports its chat as missing.
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { useEffect, useLayoutEffect, useState } from "react";
 
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { clientErrorSummary } from "@/lib/client-error-summary";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 
-import { sharedFetchChats } from "../hooks/useChatSession";
+import { sharedFetchChatsOutcome, type ChatListLoad } from "../hooks/useChatSession";
 import {
   CHAT_ID_FINGERPRINT_CFG_KEY,
   persistedReferenceEvidence,
@@ -33,104 +31,59 @@ import type { WindowRenderContext } from "../windows/WindowsRegistry";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const MAX_REBIND_RETRY_DELAY_MS = 30_000;
-const SOLE_CANDIDATE_KEY = "sole-candidate";
+const FINGERPRINT_DOMAIN = "keiko-chat-reference-v1";
+const FINGERPRINT_SEPARATOR = String.fromCharCode(0);
 
 /**
  * The SHA-256 fingerprint of a chat id, domain-separated so it matches nothing else. Synchronous,
  * so a window records it in the same commit that shows the id.
  */
 export function chatReferenceFingerprint(chatId: string): string {
-  return bytesToHex(sha256(utf8ToBytes(`keiko-chat-reference-v1\u0000${chatId}`)));
+  const input = `${FINGERPRINT_DOMAIN}${FINGERPRINT_SEPARATOR}${chatId}`;
+  return bytesToHex(sha256(utf8ToBytes(input)));
 }
-
-/** How a redacted reference is found again: through its fingerprint, or as the sole candidate. */
-export type ChatReferenceTarget =
-  | { readonly kind: "fingerprint"; readonly fingerprint: string }
-  | { readonly kind: "sole-candidate" };
-
-type ChatReferenceShape = ChatReferenceTarget["kind"];
 
 // `unavailable`: a list that could hold the chat could not be read, so nothing is decided yet.
 export type ChatReferenceLookup =
   | {
       readonly status: "found";
       readonly chat: Chat;
-      readonly shape: ChatReferenceShape;
-      // The chat list loads whose answer decided the match.
-      readonly correlationIds: readonly string[];
+      // The chat list load whose answer decided the match.
+      readonly correlationId: string;
     }
   | { readonly status: "absent" }
   | { readonly status: "unavailable" };
 
-interface ChatListing {
-  readonly chats: readonly Chat[];
-  readonly correlationId: string;
+// A failed load is reported under the id it was sent with and its closed class, so its failure
+// joins the list load's own timeline (#3557 review).
+async function projectListing(project: ProjectWithAvailability): Promise<ChatListLoad | undefined> {
+  const outcome = await sharedFetchChatsOutcome(project.path);
+  if (outcome.ok) return outcome.load;
+  const { correlationId, errorClass, errorKind } = outcome.failure;
+  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+  reportClientDiagnostic(`[keiko] chat reference lookup failed: ${errorClass}`, {
+    correlationId,
+    errorKind,
+  });
+  return undefined;
 }
 
-async function projectListing(project: ProjectWithAvailability): Promise<ChatListing | undefined> {
-  try {
-    return await sharedFetchChats(project.path);
-  } catch (error) {
-    // i18n-exempt: body-free diagnostic message for the activity log, never rendered
-    reportClientDiagnostic(`[keiko] chat reference lookup failed: ${clientErrorSummary(error)}`, {
-      correlationId: correlationIdOf(error),
-    });
-    return undefined;
-  }
-}
-
-interface ListedChat {
-  readonly chat: Chat;
-  readonly correlationId: string;
-}
-
-function openChats(listings: readonly ChatListing[]): readonly ListedChat[] {
-  return listings.flatMap((listing) =>
-    listing.chats
-      .filter((chat) => chat.status !== "closed")
-      .map((chat) => ({ chat, correlationId: listing.correlationId })),
-  );
-}
-
-function fingerprintMatch(
+/** The open chat, among the listed projects' chats, whose id has this fingerprint. */
+export async function findChatByFingerprint(
   fingerprint: string,
-  listings: readonly ChatListing[],
-  complete: boolean,
-): ChatReferenceLookup {
-  const match = openChats(listings).find(
-    (listed) => chatReferenceFingerprint(listed.chat.id) === fingerprint,
-  );
-  if (match !== undefined) {
-    const { chat, correlationId } = match;
-    return { status: "found", chat, shape: "fingerprint", correlationIds: [correlationId] };
-  }
-  return complete ? { status: "absent" } : { status: "unavailable" };
-}
-
-// Uniqueness is only known once every list that could hold a second candidate has been read, so
-// every one of those loads decided the match.
-function soleCandidate(listings: readonly ChatListing[], complete: boolean): ChatReferenceLookup {
-  if (!complete) return { status: "unavailable" };
-  const candidates = openChats(listings).filter(
-    (listed) => persistedReferenceEvidence(listed.chat.id).heuristicFlagged,
-  );
-  const [only] = candidates;
-  if (candidates.length !== 1 || only === undefined) return { status: "absent" };
-  const correlationIds = listings.map((listing) => listing.correlationId);
-  return { status: "found", chat: only.chat, shape: "sole-candidate", correlationIds };
-}
-
-/** The open chat, among the listed projects' chats, that a redacted reference named. */
-export async function findRestoredChat(
-  target: ChatReferenceTarget,
   projects: readonly ProjectWithAvailability[],
 ): Promise<ChatReferenceLookup> {
   const read = await Promise.all(projects.map(projectListing));
-  const listings = read.filter((listing): listing is ChatListing => listing !== undefined);
-  const complete = listings.length === read.length;
-  return target.kind === "fingerprint"
-    ? fingerprintMatch(target.fingerprint, listings, complete)
-    : soleCandidate(listings, complete);
+  for (const listing of read) {
+    const chat = listing?.chats.find(
+      (candidate) =>
+        candidate.status !== "closed" && chatReferenceFingerprint(candidate.id) === fingerprint,
+    );
+    if (listing !== undefined && chat !== undefined) {
+      return { status: "found", chat, correlationId: listing.correlationId };
+    }
+  }
+  return read.includes(undefined) ? { status: "unavailable" } : { status: "absent" };
 }
 
 function cfgString(cfg: Record<string, unknown>, key: string): string | undefined {
@@ -155,10 +108,9 @@ export function useChatReferenceFingerprint(
   }, [chatId, recorded, updateCfg]);
 }
 
-/** How the window found its chat again, and the chat list loads that decided it. */
+/** A window found its chat again through the fingerprint, decided by this chat list load. */
 export interface ChatReferenceRestoration {
-  readonly shape: ChatReferenceShape;
-  readonly correlationIds: readonly string[];
+  readonly correlationId: string;
 }
 
 export interface ChatReferenceRebind {
@@ -170,23 +122,30 @@ export interface ChatReferenceRebind {
 
 interface ChatReferenceRebindSession {
   readonly loading: boolean;
+  readonly error?: string | undefined;
   readonly projects: readonly ProjectWithAvailability[];
 }
 
-// A malformed fingerprint cannot come from storage (persistence keeps only a digest), so a window
-// holding one is left as it is. The key is the fingerprint itself or the sole-candidate marker.
-function rebindKey(cfg: Record<string, unknown>): string | undefined {
+// The window's fingerprint when its chat id was redacted. Without one, or with a malformed one
+// (persistence keeps only a digest, so it cannot come from storage), the window is not rebound.
+function rebindFingerprint(cfg: Record<string, unknown>): string | undefined {
   const chatId = cfgString(cfg, "chatId");
   if (chatId === undefined || persistedReferenceShape(chatId) !== "redacted") return undefined;
   const fingerprint = cfgString(cfg, CHAT_ID_FINGERPRINT_CFG_KEY);
-  if (fingerprint === undefined) return SOLE_CANDIDATE_KEY;
-  return SHA256_HEX.test(fingerprint) ? fingerprint : undefined;
+  return fingerprint !== undefined && SHA256_HEX.test(fingerprint) ? fingerprint : undefined;
 }
 
-function rebindTarget(key: string): ChatReferenceTarget {
-  return key === SOLE_CANDIDATE_KEY
-    ? { kind: "sole-candidate" }
-    : { kind: "fingerprint", fingerprint: key };
+// The projects a lookup searches, or undefined while their answer could still change: the project
+// catalog is loading or failed to load, or the window's own project is not listed (#3557 review).
+function lookupProjects(
+  session: ChatReferenceRebindSession,
+  projectPath: string | undefined,
+): readonly ProjectWithAvailability[] | undefined {
+  if (session.loading) return undefined;
+  if (session.projects.length === 0 && session.error !== undefined) return undefined;
+  if (projectPath === undefined) return session.projects;
+  const own = session.projects.filter((entry) => entry.path === projectPath);
+  return own.length === 0 ? undefined : own;
 }
 
 function retryDelayMs(attempt: number): number {
@@ -200,7 +159,7 @@ interface RestoredBinding {
 }
 
 interface RebindLookupArgs {
-  readonly key: string;
+  readonly fingerprint: string;
   readonly projects: readonly ProjectWithAvailability[];
   readonly attempt: number;
   readonly updateCfg: WindowRenderContext["updateCfg"];
@@ -223,7 +182,7 @@ function runRebindLookup(args: RebindLookupArgs): () => void {
       if (active) args.onRetry();
     }, retryDelayMs(args.attempt));
   };
-  findRestoredChat(rebindTarget(args.key), args.projects).then(
+  findChatByFingerprint(args.fingerprint, args.projects).then(
     (lookup): void => {
       if (!active) return;
       if (lookup.status === "unavailable") {
@@ -234,9 +193,11 @@ function runRebindLookup(args: RebindLookupArgs): () => void {
         args.onSettled(undefined);
         return;
       }
-      const { chat, correlationIds, shape } = lookup;
-      args.updateCfg({ chatId: chat.id });
-      args.onSettled({ chatId: chat.id, restoration: { shape, correlationIds } });
+      args.updateCfg({ chatId: lookup.chat.id });
+      args.onSettled({
+        chatId: lookup.chat.id,
+        restoration: { correlationId: lookup.correlationId },
+      });
     },
     (error: unknown): void => {
       reportRebindFailure(error);
@@ -250,46 +211,44 @@ function runRebindLookup(args: RebindLookupArgs): () => void {
 }
 
 /**
- * Finds a restored window's chat again when persistence redacted its id, among the chats of the
- * window's project, or of every project for a window that has none. While that runs the window is
- * pending. A list that cannot be read decides nothing: the lookup runs again after a bounded
- * backoff, and at once when the listed projects change. Without a match the window reports its
- * chat as missing, as before.
+ * Finds a restored window's chat again through the fingerprint of its redacted id, among the chats
+ * of the window's project, or of every project for a window that has none. The window stays pending
+ * while the project catalog cannot answer yet, and while a list cannot be read: the lookup runs
+ * again after a bounded backoff, and at once when the catalog changes. Without a match the window
+ * reports its chat as missing, as before.
  */
 export function useChatReferenceRebind(
   cfg: Record<string, unknown>,
   session: ChatReferenceRebindSession,
   updateCfg: WindowRenderContext["updateCfg"],
 ): ChatReferenceRebind {
-  const key = rebindKey(cfg);
+  const fingerprint = rebindFingerprint(cfg);
   const chatId = cfgString(cfg, "chatId");
   const projectPath = cfgString(cfg, "projectPath");
-  const [settledKey, setSettledKey] = useState<string | undefined>(undefined);
+  const [settled, setSettled] = useState<string | undefined>(undefined);
   const [restored, setRestored] = useState<RestoredBinding | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
-  const { loading, projects } = session;
+  const { error, loading, projects } = session;
   useEffect((): (() => void) | undefined => {
-    if (key === undefined || loading || settledKey === key) return undefined;
+    if (fingerprint === undefined || settled === fingerprint) return undefined;
+    const searched = lookupProjects({ error, loading, projects }, projectPath);
+    if (searched === undefined) return undefined;
     return runRebindLookup({
-      key,
-      projects:
-        projectPath === undefined
-          ? projects
-          : projects.filter((entry) => entry.path === projectPath),
+      fingerprint,
+      projects: searched,
       attempt,
       updateCfg,
       onSettled: (binding): void => {
         setRestored(binding);
-        setSettledKey(key);
+        setSettled(fingerprint);
       },
       onRetry: (): void => {
         setAttempt((previous) => previous + 1);
       },
     });
-  }, [attempt, key, loading, projectPath, projects, settledKey, updateCfg]);
+  }, [attempt, error, fingerprint, loading, projectPath, projects, settled, updateCfg]);
   return {
-    pending: key !== undefined && settledKey !== key,
-    restored:
-      restored !== undefined && restored.chatId === chatId ? restored.restoration : undefined,
+    pending: fingerprint !== undefined && settled !== fingerprint,
+    restored: restored !== undefined && restored.chatId === chatId ? restored.restoration : undefined,
   };
 }

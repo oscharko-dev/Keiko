@@ -20,7 +20,7 @@ import {
 } from "../windows/chatWindowActivity";
 import {
   chatListCorrelationId,
-  sharedFetchChats,
+  sharedFetchChatsOutcome,
   useChatSession,
   type ChatListLoad,
   type ChatSessionApi,
@@ -698,22 +698,24 @@ type ChatProjectLookup =
   | { readonly kind: "missing"; readonly scanCorrelationIds: readonly string[] }
   | { readonly kind: "failed" };
 
+// A list that cannot be read is reported under the id its load was sent with, so the failure joins
+// that load's own timeline (#3557 review).
+async function readProjectChats(
+  project: ProjectWithAvailability,
+): Promise<ChatListLoad | undefined> {
+  const outcome = await sharedFetchChatsOutcome(project.path);
+  if (outcome.ok) return outcome.load;
+  window.reportError(
+    correlatedDiagnostic(CHAT_PROJECT_LOOKUP_DIAGNOSTIC, outcome.failure.correlationId),
+  );
+  return undefined;
+}
+
 async function findChatProjectPath(
   chatId: string,
   projects: readonly ProjectWithAvailability[],
 ): Promise<ChatProjectLookup> {
-  const loads = await Promise.all(
-    projects.map(async (project): Promise<ChatListLoad | undefined> => {
-      try {
-        return await sharedFetchChats(project.path);
-      } catch {
-        window.reportError(
-          correlatedDiagnostic(CHAT_PROJECT_LOOKUP_DIAGNOSTIC, newClientCorrelationId()),
-        );
-        return undefined;
-      }
-    }),
-  );
+  const loads = await Promise.all(projects.map(readProjectChats));
   const answered = loads.filter((load): load is ChatListLoad => load !== undefined);
   const found = answered
     .flatMap((load): readonly Chat[] => load.chats)
@@ -1094,7 +1096,7 @@ function chatBindingReferenceEvidence(
   restoration: ChatReferenceRestoration | undefined,
 ): ChatBindingReferenceEvidence {
   const evidence = persistedReferenceEvidence(chatId);
-  return restoration === undefined ? evidence : { ...evidence, referenceShape: restoration.shape };
+  return restoration === undefined ? evidence : { ...evidence, referenceShape: "fingerprint" };
 }
 
 function chatBindingMessage(
@@ -1145,7 +1147,7 @@ function chatBindingDecidingLoads(
   restoration: ChatReferenceRestoration | undefined,
 ): ChatBindingDecidingLoads {
   if (outcome === "resolved" && restoration !== undefined) {
-    return { correlationIds: restoration.correlationIds, count: restoration.correlationIds.length };
+    return { correlationIds: [restoration.correlationId], count: 1 };
   }
   const scanned = routing.legacyScanCorrelationIds;
   if (outcome === "target-missing" && scanned !== undefined) {

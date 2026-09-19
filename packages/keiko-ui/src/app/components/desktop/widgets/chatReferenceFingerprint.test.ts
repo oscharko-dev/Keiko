@@ -1,24 +1,34 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor, type RenderHookResult } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 
+import type { ChatListLoadOutcome } from "../hooks/useChatSession";
 import {
   chatReferenceFingerprint,
-  findRestoredChat,
+  findChatByFingerprint,
   useChatReferenceFingerprint,
   useChatReferenceRebind,
+  type ChatReferenceRebind,
 } from "./chatReferenceFingerprint";
 
-const sharedFetchChatsMock = vi.hoisted(() =>
-  vi.fn(
-    (_projectPath: string): Promise<{ readonly chats: readonly Chat[]; correlationId: string }> =>
-      Promise.resolve({ chats: [], correlationId: "ui_list-0000" }),
+type RebindSession = Parameters<typeof useChatReferenceRebind>[1];
+
+interface RebindProps {
+  readonly cfg: Record<string, unknown>;
+  readonly session: RebindSession;
+}
+
+const sharedFetchChatsOutcomeMock = vi.hoisted(() =>
+  vi.fn((_projectPath: string): Promise<ChatListLoadOutcome> =>
+    Promise.resolve({ ok: true, load: { chats: [], correlationId: "ui_list-0000" } }),
   ),
 );
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../hooks/useChatSession", () => ({ sharedFetchChats: sharedFetchChatsMock }));
+vi.mock("../hooks/useChatSession", () => ({
+  sharedFetchChatsOutcome: sharedFetchChatsOutcomeMock,
+}));
 vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/client-diagnostics")>()),
   reportClientDiagnostic: reportClientDiagnosticMock,
@@ -26,8 +36,6 @@ vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
 
 // A chat id the shared secret heuristic flags (its digits across the last hyphen are Luhn-valid).
 const FLAGGED_ID = "1404206d-9ab6-4bca-8853-813867352087";
-// A second flagged id: the same digits, another first group.
-const OTHER_FLAGGED_ID = "2404206d-9ab6-4bca-8853-813867352087";
 const CLEAN_ID = "0f7c2e9a-3b1d-4c5e-9a8b-7d6c5b4a3f2e";
 
 function project(path: string): ProjectWithAvailability {
@@ -38,23 +46,21 @@ function chat(id: string, projectPath: string, status: Chat["status"] = "open"):
   return { id, projectPath, status, title: "Deploy status" } as unknown as Chat;
 }
 
-function listing(
-  chats: readonly Chat[],
-  correlationId = "ui_list-0001",
-): { readonly chats: readonly Chat[]; correlationId: string } {
-  return { chats, correlationId };
+function listed(chats: readonly Chat[], correlationId = "ui_list-0001"): ChatListLoadOutcome {
+  return { ok: true, load: { chats, correlationId } };
 }
 
-// Each project's list answers under its own load id.
-function listsByProject(chatsByPath: Readonly<Record<string, readonly Chat[]>>): void {
-  sharedFetchChatsMock.mockImplementation((path) =>
-    Promise.resolve(listing(chatsByPath[path] ?? [], `ui_list-${path.slice(1)}`)),
-  );
+// A transport failure: no response could carry an id, so the load keeps the one it was sent with.
+function unreadable(correlationId = "ui_list-failed-0001"): ChatListLoadOutcome {
+  return {
+    ok: false,
+    failure: { correlationId, errorKind: "unavailable", errorClass: "TypeError" },
+  };
 }
 
 afterEach(() => {
-  sharedFetchChatsMock.mockReset();
-  sharedFetchChatsMock.mockResolvedValue(listing([]));
+  sharedFetchChatsOutcomeMock.mockReset();
+  sharedFetchChatsOutcomeMock.mockResolvedValue(listed([]));
   reportClientDiagnosticMock.mockReset();
 });
 
@@ -69,111 +75,62 @@ describe("chatReferenceFingerprint", () => {
   });
 });
 
-describe("findRestoredChat through a fingerprint", () => {
-  const target = {
-    kind: "fingerprint" as const,
-    fingerprint: chatReferenceFingerprint(FLAGGED_ID),
-  };
+describe("findChatByFingerprint", () => {
+  const fingerprint = chatReferenceFingerprint(FLAGGED_ID);
 
   it("finds the open chat whose id has the fingerprint, named by the load that listed it", async () => {
-    listsByProject({ "/repo-a": [chat("chat-a", "/repo-a")], "/repo-b": [chat(FLAGGED_ID, "/b")] });
+    sharedFetchChatsOutcomeMock.mockImplementation((path) =>
+      Promise.resolve(
+        path === "/repo-b"
+          ? listed([chat(FLAGGED_ID, path)], "ui_list-repo-b")
+          : listed([chat("chat-a", path)], "ui_list-repo-a"),
+      ),
+    );
 
-    const lookup = await findRestoredChat(target, [project("/repo-a"), project("/repo-b")]);
+    const lookup = await findChatByFingerprint(fingerprint, [
+      project("/repo-a"),
+      project("/repo-b"),
+    ]);
 
-    expect(lookup).toMatchObject({
-      status: "found",
-      shape: "fingerprint",
-      correlationIds: ["ui_list-repo-b"],
-    });
+    expect(lookup).toMatchObject({ status: "found", correlationId: "ui_list-repo-b" });
     expect(lookup.status === "found" ? lookup.chat.id : undefined).toBe(FLAGGED_ID);
   });
 
   it("never matches a closed chat", async () => {
-    sharedFetchChatsMock.mockResolvedValue(listing([chat(FLAGGED_ID, "/repo", "closed")]));
+    sharedFetchChatsOutcomeMock.mockResolvedValue(listed([chat(FLAGGED_ID, "/repo", "closed")]));
 
-    await expect(findRestoredChat(target, [project("/repo")])).resolves.toEqual({
+    await expect(findChatByFingerprint(fingerprint, [project("/repo")])).resolves.toEqual({
       status: "absent",
     });
   });
 
-  // #3557 review: a failed list is not an authoritative empty one.
-  it("stays undecided when a list it could not read may hold the chat", async () => {
-    sharedFetchChatsMock.mockImplementation((path) =>
-      path === "/repo-a"
-        ? Promise.reject(new TypeError("Failed to fetch"))
-        : Promise.resolve(listing([chat(CLEAN_ID, path)])),
+  // #3557 review: a failed list is not an authoritative empty one, and its failure keeps the id
+  // its load was sent with and a closed class.
+  it("stays undecided when a list it could not read may hold the chat, naming that load", async () => {
+    sharedFetchChatsOutcomeMock.mockImplementation((path) =>
+      Promise.resolve(path === "/repo-a" ? unreadable() : listed([chat(CLEAN_ID, path)])),
     );
 
     await expect(
-      findRestoredChat(target, [project("/repo-a"), project("/repo-b")]),
+      findChatByFingerprint(fingerprint, [project("/repo-a"), project("/repo-b")]),
     ).resolves.toEqual({ status: "unavailable" });
     expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
       "[keiko] chat reference lookup failed: TypeError",
-      { correlationId: undefined },
+      { correlationId: "ui_list-failed-0001", errorKind: "unavailable" },
     );
   });
 
   it("still finds the chat in a list it could read when another fails", async () => {
-    sharedFetchChatsMock.mockImplementation((path) =>
-      path === "/repo-a"
-        ? Promise.reject(new TypeError("Failed to fetch"))
-        : Promise.resolve(listing([chat(FLAGGED_ID, path)])),
+    sharedFetchChatsOutcomeMock.mockImplementation((path) =>
+      Promise.resolve(path === "/repo-a" ? unreadable() : listed([chat(FLAGGED_ID, path)])),
     );
 
-    const lookup = await findRestoredChat(target, [project("/repo-a"), project("/repo-b")]);
+    const lookup = await findChatByFingerprint(fingerprint, [
+      project("/repo-a"),
+      project("/repo-b"),
+    ]);
 
-    expect(lookup).toMatchObject({ status: "found", shape: "fingerprint" });
-  });
-});
-
-// #3557 review (P0): a snapshot an older build wrote holds the redaction marker and no fingerprint.
-describe("findRestoredChat for a redacted reference without a fingerprint", () => {
-  const target = { kind: "sole-candidate" as const };
-
-  it("finds the only listed chat whose id persistence redacts, decided by every list", async () => {
-    listsByProject({
-      "/repo-a": [chat(CLEAN_ID, "/repo-a")],
-      "/repo-b": [chat(FLAGGED_ID, "/repo-b"), chat("chat-b", "/repo-b")],
-    });
-
-    const lookup = await findRestoredChat(target, [project("/repo-a"), project("/repo-b")]);
-
-    expect(lookup).toMatchObject({
-      status: "found",
-      shape: "sole-candidate",
-      correlationIds: ["ui_list-repo-a", "ui_list-repo-b"],
-    });
-    expect(lookup.status === "found" ? lookup.chat.id : undefined).toBe(FLAGGED_ID);
-  });
-
-  it("never picks between two chats whose ids persistence redacts", async () => {
-    sharedFetchChatsMock.mockResolvedValue(
-      listing([chat(FLAGGED_ID, "/repo"), chat(OTHER_FLAGGED_ID, "/repo")]),
-    );
-
-    await expect(findRestoredChat(target, [project("/repo")])).resolves.toEqual({
-      status: "absent",
-    });
-  });
-
-  it("finds nothing when no listed chat has such an id", async () => {
-    sharedFetchChatsMock.mockResolvedValue(listing([chat(CLEAN_ID, "/repo")]));
-
-    await expect(findRestoredChat(target, [project("/repo")])).resolves.toEqual({
-      status: "absent",
-    });
-  });
-
-  it("never decides while a list that could hold a second candidate is unreadable", async () => {
-    sharedFetchChatsMock.mockImplementation((path) =>
-      path === "/repo-a"
-        ? Promise.reject(new TypeError("Failed to fetch"))
-        : Promise.resolve(listing([chat(FLAGGED_ID, path)])),
-    );
-
-    await expect(
-      findRestoredChat(target, [project("/repo-a"), project("/repo-b")]),
-    ).resolves.toEqual({ status: "unavailable" });
+    expect(lookup).toMatchObject({ status: "found" });
   });
 });
 
@@ -205,60 +162,65 @@ describe("useChatReferenceFingerprint", () => {
 describe("useChatReferenceRebind", () => {
   const repo = [project("/repo")];
   const session = { loading: false, projects: repo };
+  const redacted = {
+    chatId: "[REDACTED]",
+    chatIdFingerprint: chatReferenceFingerprint(FLAGGED_ID),
+    projectPath: "/repo",
+  };
+
+  function renderRebind(
+    cfg: Record<string, unknown>,
+    rebindSession: RebindSession,
+    updateCfg: Parameters<typeof useChatReferenceRebind>[2],
+  ): RenderHookResult<ChatReferenceRebind, RebindProps> {
+    return renderHook(
+      (props: RebindProps) => useChatReferenceRebind(props.cfg, props.session, updateCfg),
+      { initialProps: { cfg, session: rebindSession } },
+    );
+  }
 
   it("stays pending until the fingerprint finds the chat, then binds the window to it", async () => {
-    sharedFetchChatsMock.mockResolvedValue(listing([chat(FLAGGED_ID, "/repo")], "ui_list-c1"));
-    const updateCfg = vi.fn();
-    const cfg = {
-      chatId: "[REDACTED]",
-      chatIdFingerprint: chatReferenceFingerprint(FLAGGED_ID),
-      projectPath: "/repo",
-    };
-
-    const view = renderHook(
-      ({ current }: { current: Record<string, unknown> }) =>
-        useChatReferenceRebind(current, session, updateCfg),
-      { initialProps: { current: cfg } },
+    sharedFetchChatsOutcomeMock.mockResolvedValue(
+      listed([chat(FLAGGED_ID, "/repo")], "ui_list-c1"),
     );
+    const updateCfg = vi.fn();
+
+    const view = renderRebind(redacted, session, updateCfg);
 
     expect(view.result.current.pending).toBe(true);
     await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID }));
-    view.rerender({ current: { ...cfg, chatId: FLAGGED_ID } });
+    view.rerender({ cfg: { ...redacted, chatId: FLAGGED_ID }, session });
     // The binding carries the load that decided it, never a later one.
     expect(view.result.current).toEqual({
       pending: false,
-      restored: { shape: "fingerprint", correlationIds: ["ui_list-c1"] },
+      restored: { correlationId: "ui_list-c1" },
     });
-    view.rerender({ current: { ...cfg, chatId: "chat-elsewhere" } });
+    view.rerender({ cfg: { ...redacted, chatId: "chat-elsewhere" }, session });
     expect(view.result.current.restored).toBeUndefined();
   });
 
-  it("rebinds a window an older build persisted without a fingerprint to its sole candidate", async () => {
-    sharedFetchChatsMock.mockResolvedValue(
-      listing([chat(FLAGGED_ID, "/repo"), chat(CLEAN_ID, "/repo")], "ui_list-c1"),
-    );
+  // #3557 review: a redaction marker without a fingerprint identifies nothing. The chat it named may
+  // be gone while another flagged chat is the only one left; binding to it would open the wrong
+  // conversation, so such a window is never rebound.
+  it("never rebinds a redaction marker without a fingerprint, even to the only flagged chat", () => {
+    sharedFetchChatsOutcomeMock.mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")]));
     const updateCfg = vi.fn();
-    const cfg = { chatId: "[REDACTED]", projectPath: "/repo" };
 
-    const view = renderHook(
-      ({ current }: { current: Record<string, unknown> }) =>
-        useChatReferenceRebind(current, session, updateCfg),
-      { initialProps: { current: cfg } },
-    );
+    const view = renderRebind({ chatId: "[REDACTED]", projectPath: "/repo" }, session, updateCfg);
 
-    await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID }));
-    view.rerender({ current: { ...cfg, chatId: FLAGGED_ID } });
-    expect(view.result.current).toEqual({
-      pending: false,
-      restored: { shape: "sole-candidate", correlationIds: ["ui_list-c1"] },
-    });
+    expect(view.result.current).toEqual({ pending: false, restored: undefined });
+    expect(sharedFetchChatsOutcomeMock).not.toHaveBeenCalled();
+    expect(updateCfg).not.toHaveBeenCalled();
   });
 
   it("settles without a binding when no listed chat has the fingerprint", async () => {
     const updateCfg = vi.fn();
-    const cfg = { chatId: "[REDACTED]", chatIdFingerprint: "a".repeat(64), projectPath: "/repo" };
 
-    const view = renderHook(() => useChatReferenceRebind(cfg, session, updateCfg));
+    const view = renderRebind(
+      { chatId: "[REDACTED]", chatIdFingerprint: "a".repeat(64), projectPath: "/repo" },
+      session,
+      updateCfg,
+    );
 
     await waitFor(() =>
       expect(view.result.current).toEqual({ pending: false, restored: undefined }),
@@ -268,22 +230,18 @@ describe("useChatReferenceRebind", () => {
 
   // #3557 review: a transient list failure must not settle the window as missing for good.
   it("looks again at once when the listed projects change after a list could not be read", async () => {
-    sharedFetchChatsMock
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockResolvedValue(listing([chat(FLAGGED_ID, "/repo")]));
+    sharedFetchChatsOutcomeMock
+      .mockResolvedValueOnce(unreadable())
+      .mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")]));
     const updateCfg = vi.fn();
-    const cfg = { chatId: "[REDACTED]", chatIdFingerprint: chatReferenceFingerprint(FLAGGED_ID) };
 
-    const view = renderHook(
-      ({ current }: { current: typeof session }) => useChatReferenceRebind(cfg, current, updateCfg),
-      { initialProps: { current: session } },
-    );
+    const view = renderRebind(redacted, session, updateCfg);
 
-    await waitFor(() => expect(sharedFetchChatsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(sharedFetchChatsOutcomeMock).toHaveBeenCalledTimes(1));
     await act(async () => Promise.resolve());
     expect(view.result.current.pending).toBe(true);
     expect(updateCfg).not.toHaveBeenCalled();
-    view.rerender({ current: { loading: false, projects: [project("/repo")] } });
+    view.rerender({ cfg: redacted, session: { loading: false, projects: [project("/repo")] } });
 
     await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID }));
   });
@@ -291,13 +249,12 @@ describe("useChatReferenceRebind", () => {
   it("looks again after a backoff while the list stays unreadable", async () => {
     vi.useFakeTimers();
     try {
-      sharedFetchChatsMock
-        .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-        .mockResolvedValue(listing([chat(FLAGGED_ID, "/repo")]));
+      sharedFetchChatsOutcomeMock
+        .mockResolvedValueOnce(unreadable())
+        .mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")]));
       const updateCfg = vi.fn();
-      const cfg = { chatId: "[REDACTED]", chatIdFingerprint: chatReferenceFingerprint(FLAGGED_ID) };
 
-      const view = renderHook(() => useChatReferenceRebind(cfg, session, updateCfg));
+      const view = renderRebind(redacted, session, updateCfg);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
@@ -313,34 +270,63 @@ describe("useChatReferenceRebind", () => {
     }
   });
 
+  // #3557 review: a failed project catalog leaves the projects empty; that is no answer at all.
+  it("stays undecided while the project catalog failed, and binds once it loads", async () => {
+    sharedFetchChatsOutcomeMock.mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")]));
+    const updateCfg = vi.fn();
+    const failedCatalog = { loading: false, error: "Projects could not be loaded", projects: [] };
+
+    const view = renderRebind(redacted, failedCatalog, updateCfg);
+    await act(async () => Promise.resolve());
+
+    expect(view.result.current.pending).toBe(true);
+    expect(sharedFetchChatsOutcomeMock).not.toHaveBeenCalled();
+    view.rerender({ cfg: redacted, session });
+    await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID }));
+  });
+
+  it("stays undecided while the window's own project is not listed", async () => {
+    sharedFetchChatsOutcomeMock.mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")]));
+    const updateCfg = vi.fn();
+
+    const view = renderRebind(
+      redacted,
+      { loading: false, projects: [project("/other")] },
+      updateCfg,
+    );
+    await act(async () => Promise.resolve());
+
+    expect(view.result.current.pending).toBe(true);
+    expect(sharedFetchChatsOutcomeMock).not.toHaveBeenCalled();
+    view.rerender({
+      cfg: redacted,
+      session: { loading: false, projects: [project("/other"), ...repo] },
+    });
+    await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID }));
+  });
+
   it("never rebinds a live id, a malformed fingerprint, or before the session loaded", () => {
     const updateCfg = vi.fn();
 
-    const live = renderHook(() =>
-      useChatReferenceRebind(
-        { chatId: FLAGGED_ID, chatIdFingerprint: "a".repeat(64) },
-        session,
-        updateCfg,
-      ),
+    const live = renderRebind(
+      { chatId: FLAGGED_ID, chatIdFingerprint: "a".repeat(64) },
+      session,
+      updateCfg,
     );
-    const malformed = renderHook(() =>
-      useChatReferenceRebind(
-        { chatId: "[REDACTED]", chatIdFingerprint: "not-a-digest" },
-        session,
-        updateCfg,
-      ),
+    const malformed = renderRebind(
+      { chatId: "[REDACTED]", chatIdFingerprint: "not-a-digest" },
+      session,
+      updateCfg,
     );
-    const loading = renderHook(() =>
-      useChatReferenceRebind(
-        { chatId: "[REDACTED]", chatIdFingerprint: "a".repeat(64) },
-        { loading: true, projects: [] },
-        updateCfg,
-      ),
+    const loading = renderRebind(
+      { chatId: "[REDACTED]", chatIdFingerprint: "a".repeat(64) },
+      { loading: true, projects: [] },
+      updateCfg,
     );
 
     expect(live.result.current.pending).toBe(false);
     expect(malformed.result.current.pending).toBe(false);
     expect(loading.result.current.pending).toBe(true);
-    expect(sharedFetchChatsMock).not.toHaveBeenCalled();
+    expect(sharedFetchChatsOutcomeMock).not.toHaveBeenCalled();
   });
 });

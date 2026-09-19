@@ -59,6 +59,9 @@ import {
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { clientErrorSummary } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   classifyRunReport,
   formatRunSummaryFromManifest,
@@ -1639,7 +1642,14 @@ export interface ChatListLoad {
   readonly correlationId: string;
 }
 
-const sharedChatListInflight = new Map<string, Promise<ChatListLoad>>();
+// A load in flight keeps the correlation id it was sent with, so a caller that joins it can still
+// name the load when it fails.
+interface InflightChatListLoad {
+  readonly promise: Promise<ChatListLoad>;
+  readonly correlationId: string;
+}
+
+const sharedChatListInflight = new Map<string, InflightChatListLoad>();
 const sharedChatMessagesInflight = new Map<
   string,
   Promise<{ readonly messages: readonly ChatMessage[] }>
@@ -1745,22 +1755,57 @@ export function chatListCorrelationId(projectPath: string): string | undefined {
   return chatListCorrelationIds.get(projectPath);
 }
 
-export function sharedFetchChats(projectPath: string): Promise<ChatListLoad> {
+function startSharedChatListLoad(projectPath: string): InflightChatListLoad {
   const existing = sharedChatListInflight.get(projectPath);
-  if (existing !== undefined) return existing.then(cloneChatListPayload);
+  if (existing !== undefined) return existing;
   const correlationId = newClientCorrelationId();
-  const pending = fetchChats(projectPath, correlationId)
+  const promise = fetchChats(projectPath, correlationId)
     .then((payload): ChatListLoad => {
       rememberChatListCorrelation(projectPath, correlationId);
       return { chats: Array.from(payload.chats), correlationId };
     })
     .finally(() => {
-      if (sharedChatListInflight.get(projectPath) === pending) {
+      if (sharedChatListInflight.get(projectPath)?.promise === promise) {
         sharedChatListInflight.delete(projectPath);
       }
     });
-  sharedChatListInflight.set(projectPath, pending);
-  return pending.then(cloneChatListPayload);
+  const load = { promise, correlationId };
+  sharedChatListInflight.set(projectPath, load);
+  return load;
+}
+
+function sharedFetchChats(projectPath: string): Promise<ChatListLoad> {
+  return startSharedChatListLoad(projectPath).promise.then(cloneChatListPayload);
+}
+
+/** A chat list load that failed: the id it was sent with and the closed class of its failure. */
+interface ChatListLoadFailure {
+  readonly correlationId: string;
+  readonly errorKind: ActivityLogErrorKind;
+  // The error's class from the closed vocabulary, never its message.
+  readonly errorClass: string;
+}
+
+export type ChatListLoadOutcome =
+  | { readonly ok: true; readonly load: ChatListLoad }
+  | { readonly ok: false; readonly failure: ChatListLoadFailure };
+
+/**
+ * The same shared load as `sharedFetchChats`, for a caller that records its failure (#3557 review):
+ * a transport failure rejects before any response could carry an id, so the failure keeps the id
+ * this load was sent with, and its closed class.
+ */
+export async function sharedFetchChatsOutcome(projectPath: string): Promise<ChatListLoadOutcome> {
+  const { promise, correlationId } = startSharedChatListLoad(projectPath);
+  try {
+    return { ok: true, load: cloneChatListPayload(await promise) };
+  } catch (error) {
+    const errorKind = bffRequestErrorKind(error);
+    return {
+      ok: false,
+      failure: { correlationId, errorKind, errorClass: clientErrorSummary(error) },
+    };
+  }
 }
 
 function sharedFetchChatMessages(
