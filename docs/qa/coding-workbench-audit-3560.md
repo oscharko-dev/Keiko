@@ -92,9 +92,8 @@ Pending explicit history loads now remember the workspace-scope revision that re
 Switching repositories or task workspaces, including switching away and back before the response,
 cancels the stale activation. Closing the Workbench also invalidates the request. A successful
 history-owned workspace switch remains valid; an externally superseded switch cannot restore stale
-conversation detail. Scope cancellation and clearing a completed historical conversation without a
-live snapshot emit separate body-free client diagnostics through the existing port. Four new race
-cases failed before the fix; all 18 session tests pass afterward.
+conversation detail, including after the operator clears the active binding. Scope cancellation and clearing a completed historical conversation without a
+live snapshot emit separate body-free client diagnostics through the existing port. Five race checks failed before their respective fixes; all 19 session tests pass afterward.
 
 The same no-issue live task continued in its existing workspace. The model corrected the Vite
 configuration, and the production build verifier passed. The keyboard test still failed: successive

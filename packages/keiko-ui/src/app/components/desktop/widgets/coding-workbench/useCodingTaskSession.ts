@@ -169,7 +169,10 @@ function activationSuperseded(
   requestedScope: number,
   currentScope: number,
 ): boolean {
-  if (requestedScope === currentScope || taskScopeMatches(result, input, false)) return false;
+  const acknowledged =
+    input.workspace?.activeInstance?.workspaceId === result.task.workspaceId &&
+    input.root === result.task.projectPath;
+  if (requestedScope === currentScope || acknowledged) return false;
   reportScopeChange(input, "activation-superseded");
   return true;
 }

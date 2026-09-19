@@ -459,6 +459,31 @@ describe("history activation settlement", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("does not restore history after the active workspace is cleared during its switch", async () => {
+    const switching = deferred<boolean>();
+    const workspace = { ...activeWorkspace(), switchTo: vi.fn(() => switching.promise) };
+    const { result, rerender } = renderHook(
+      ({ current }: { current: ActiveWorkspaceApi }) =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace: current,
+          selection: "chat-one",
+        }),
+      { initialProps: { current: workspace } },
+    );
+    await waitFor(() => expect(workspace.switchTo).toHaveBeenCalledWith("ws-one"));
+    rerender({ current: { ...workspace, activeInstance: null } });
+    await act(async () => switching.resolve(true));
+    expect(result.current.detail).toBeNull();
+    expect(result.current.pending).toBe(false);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding task history scope changed: activation-superseded",
+      { correlationId: undefined },
+    );
+  });
+
   it("discards a late fetch failure after the operator changed projects", async () => {
     const pending = deferred<CodingHistoryDetail>();
     read.mockReturnValue(pending.promise);
