@@ -45,6 +45,9 @@ describe("portable secure-read bounded load runner", () => {
   });
 });
 
+const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
+  .sidecarRuntimes[0];
+
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
 const DIGEST_C = "c".repeat(64);
@@ -166,46 +169,18 @@ function stagingSidecarRuntime() {
     approvalSchemaVersion: 2,
     name: "opencode-compatible",
     kind: "coding-runtime",
-    upstream: {
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.18.30",
-      tag: "v1.18.30",
-      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
-    },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      transport: "http-sse",
-    },
-    protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
-      sha256: DIGEST_A,
-      hashAlgorithm: "sha256",
-      hashEncoding: "lowercase-hex",
-      digestInput: "upstream-raw-bytes",
-      transport: "http-sse",
-    },
-    releaseApproval: {
-      redistribution: {
-        status: "approved",
-        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-      },
-      subscriptionAuth: {
-        status: "not-applicable",
-        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-      },
-    },
+    upstream: structuredClone(APPROVED_SIDECAR.upstream),
+    adapterCompatibility: structuredClone(APPROVED_SIDECAR.adapterCompatibility),
+    protocolSchema: structuredClone(APPROVED_SIDECAR.protocolSchema),
+    releaseApproval: structuredClone(APPROVED_SIDECAR.releaseApproval),
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
+      url: APPROVED_SIDECAR.license.url,
       sha256: DIGEST_F,
     },
     archive: {
       platformTarget: "windows-x64",
-      url: "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode.zip",
+      url: APPROVED_SIDECAR.archives["windows-x64"].url,
       sizeBytes: 123456,
       sha256: DIGEST_B,
     },

@@ -33,7 +33,7 @@ describe("real-binary skill discovery model response boundary (#3417)", () => {
     const script = {
       mode: "productive-search",
       proveSkillDiscovery: true,
-      calls: 3,
+      calls: 2,
       old: "export const marker = true;\n",
       next: "export const marker = false;\n",
     } as ScriptState;
@@ -53,7 +53,7 @@ describe("real-binary skill discovery model response boundary (#3417)", () => {
   it("keeps the productive search journey unchanged without the skill proof", () => {
     const script = {
       mode: "productive-search",
-      calls: 3,
+      calls: 2,
       old: "export const marker = true;\n",
       next: "export const marker = false;\n",
     } as ScriptState;

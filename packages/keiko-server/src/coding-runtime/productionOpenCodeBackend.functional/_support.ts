@@ -14,7 +14,7 @@ import type {
   CodingWorkbenchSidecarGatewayRunMetadata,
   WorkspaceInfo,
 } from "@oscharko-dev/keiko-contracts";
-import { CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import { CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   resolveCodingSafeSidecarGatewayProfile,
@@ -76,10 +76,7 @@ const MAX_READ_BYTES = 65_536;
 export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479:";
 export const FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL = "TRUNCATED_TAIL_2479";
 export const FUNCTIONAL_PLAN_STEP_READ = "PLAN_STEP_READ_2480";
-export const FUNCTIONAL_PLAN_STEP_EDIT = "PLAN_STEP_EDIT_2480";
 export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
-/** Rides an unprojected todo field; it must never appear in any sink, including the feed. */
-export const FUNCTIONAL_PLAN_DROPPED_CANARY = "PLAN_DROPPED_CANARY_2480";
 
 export interface ScriptState {
   mode: "productive" | "productive-search" | "out-of-scope" | "discovery" | "research";
@@ -753,13 +750,15 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
 }
 
 function productiveResponse(step: number, script: ScriptState): NormalizedResponse {
-  if (step === 0) return tool("todowrite", planUpdate(1));
-  if (step === 1)
-    return tool("keiko_workspace_read", { relativePath: "src/example.ts" }, script.toolCallId);
-  if (step === 2) return tool("question", question());
-  if (step === 3) return tool("keiko_changeset_edit", edit(script));
-  if (step === 4) return tool("todowrite", planUpdate(2));
-  if (step === 5) {
+  if (step === 0)
+    return {
+      ...tool("keiko_workspace_read", { relativePath: "src/example.ts" }, script.toolCallId),
+      content: FUNCTIONAL_PLAN_STEP_READ,
+    };
+  if (step === 1) return tool("question", question());
+  if (step === 2)
+    return { ...tool("keiko_changeset_edit", edit(script)), content: FUNCTIONAL_PLAN_STEP_VERIFY };
+  if (step === 3) {
     script.verificationIssued = true;
     return tool("keiko_verification", { verifierId: "typecheck" });
   }
@@ -774,62 +773,37 @@ function productiveSearchResponse(
   script: ScriptState,
   transcript: string,
 ): NormalizedResponse {
-  if (step === 1) {
-    return tool(
-      "keiko_repository_search",
-      {
-        mode: "literal",
-        query: script.old.trim(),
-        caseSensitive: true,
-        includeGlobs: ["src/**/*.ts"],
-        excludeGlobs: [],
-        maxResults: 5,
-      },
-      H1_PROOF_SEARCH_CALL_ID,
-    );
+  if (step === 0) {
+    return {
+      ...tool(
+        "keiko_repository_search",
+        {
+          mode: "literal",
+          query: script.old.trim(),
+          caseSensitive: true,
+          includeGlobs: ["src/**/*.ts"],
+          excludeGlobs: [],
+          maxResults: 5,
+        },
+        H1_PROOF_SEARCH_CALL_ID,
+      ),
+      content: FUNCTIONAL_PLAN_STEP_READ,
+    };
   }
-  if (step === 2) {
+  if (step === 1) {
     return tool(
       "keiko_workspace_read",
       repositorySearchReadHandoff(transcript, script.old.trim(), script.observeRepositorySearch),
     );
   }
   const skillSteps = script.proveSkillDiscovery === true ? 2 : 0;
-  if (skillSteps > 0 && step === 3) {
+  if (skillSteps > 0 && step === 2) {
     return tool("keiko_skill_discover", {}, SKILL_DISCOVERY_PROOF_CALL_ID);
   }
-  if (skillSteps > 0 && step === 4) {
+  if (skillSteps > 0 && step === 3) {
     return tool("keiko_skill", skillInvocationHandoff(transcript, script.observeSkillDiscovery));
   }
-  return productiveResponse(step > 2 ? step - 1 - skillSteps : step, script);
-}
-
-/** Revision 1 opens two steps; revision 2 flips their states and appends the verify step. */
-function planUpdate(revision: 1 | 2): Record<string, unknown> {
-  const opened = [
-    {
-      content: FUNCTIONAL_PLAN_STEP_READ,
-      status: revision === 1 ? "in_progress" : "completed",
-      priority: "high",
-    },
-    {
-      content: FUNCTIONAL_PLAN_STEP_EDIT,
-      status: revision === 1 ? "pending" : "in_progress",
-      priority: "medium",
-    },
-  ];
-  if (revision === 1) return { todos: opened };
-  return {
-    todos: [
-      ...opened,
-      {
-        content: FUNCTIONAL_PLAN_STEP_VERIFY,
-        status: "pending",
-        priority: "low",
-        notes: FUNCTIONAL_PLAN_DROPPED_CANARY,
-      },
-    ],
-  };
+  return productiveResponse(step - 1 - skillSteps, script);
 }
 
 function question(): Record<string, unknown> {
@@ -860,11 +834,10 @@ function digest(value: string): string {
 function normal(): NormalizedResponse {
   return {
     modelId: "functional-model",
-    // Intrinsically over the projection's segment bound so the assistant text truncates identically
-    // for the scripted child and the real binary (which streams the raw content, without the
-    // child's artificial display expansion). Exercises the long-text admission fix end to end.
+    // Exceed the owning message-byte bound with actual model output. Both the scripted child
+    // and V2 must truncate the same tail without artificially expanding ordinary progress.
     content: `${FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX}${"x".repeat(
-      CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS + 512,
+      CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES + 512,
     )}${FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL}`,
     finishReason: "stop",
     toolCalls: [],
@@ -891,8 +864,7 @@ function tool(
     | "keiko_skill_discover"
     | "keiko_skill"
     | "keiko_child_agent"
-    | "question"
-    | "todowrite",
+    | "question",
   args: Record<string, unknown>,
   callId?: string,
 ): NormalizedResponse {
@@ -927,7 +899,9 @@ export function functionalGatewayConfig(): GatewayConfig {
         id: "functional-model",
         kind: "chat",
         contextWindow: 128_000,
-        maxOutputTokens: 4_096,
+        // Admit the deliberately oversized display sample through the gateway, then prove
+        // the independent safe-activity message bound clips it for the paired client.
+        maxOutputTokens: 8_192,
         toolCalling: true,
         toolCallingVerification: {
           status: "verified",

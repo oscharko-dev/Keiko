@@ -68,6 +68,24 @@ patches and exhausted its prompt budget. It is not a successful verification res
 that failure remains part of the next task cycle. A stale browser pairing after a BFF restart also
 required a page reload; restarting alone must not leave the composer falsely ready.
 
+## Follow-up test-generation exercise — 2026-09-19
+
+A no-issue task generated navigation, FAQ interaction, and keyboard-accessibility tests in the
+disposable landing-page repository. The governed eight-file change was applied. Package-script
+trust was granted through the contextual composer action, and the run resumed. The model observed
+a failing keyboard test, repaired it, and the test verifier then passed. The production build
+failed; a later repair did not apply, and the run exhausted its accepted 200,000-token cumulative
+prompt budget. This is a partial result, not a successful task or build. No commit or push was
+requested or performed by that run. The next optimization must address bounded task completion,
+budget visibility and continuation, and excessive repeated planning output without bypassing the
+accepted authority limits.
+
+The functional V2 fixture now uses the actual managed tools and assistant progress text, replacing
+its retired V1 todowrite emulation. Its long-output proof exceeds the message-byte bound using
+real fixture model output, with a separate sufficient model output allowance; it no longer pads
+every ordinary progress message. Existing paired visibility, truncation, redaction, question,
+verification, stop, and workspace-escape assertions remain exercised.
+
 ## Remaining qualification
 
 - Repeated selection of the same history task, concurrent refreshes, and title synchronization.

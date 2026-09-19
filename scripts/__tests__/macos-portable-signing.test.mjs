@@ -36,6 +36,9 @@ import {
 } from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { qualificationReceiptFor as macosQualificationReceiptFor } from "../qualify-macos-runtime-release.mjs";
 
+const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
+  .sidecarRuntimes[0];
+
 const roots = [];
 function root() {
   const path = mkdtempSync(join(tmpdir(), "keiko-macos-signing-"));
@@ -248,9 +251,9 @@ function macManifest(executableBytes, licenseBytes) {
   sidecar.platformTarget = "macos-arm64";
   sidecar.archive = {
     platformTarget: "macos-arm64",
-    url: "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-darwin-arm64.zip",
-    sizeBytes: 46240880,
-    sha256: "a5e43d6887386efc7d68ce49ae28e3bbdfdee3dfd1d7169b612c3ce67e53b1e8",
+    url: APPROVED_SIDECAR.archives["macos-arm64"].url,
+    sizeBytes: APPROVED_SIDECAR.archives["macos-arm64"].sizeBytes,
+    sha256: APPROVED_SIDECAR.archives["macos-arm64"].sha256,
   };
   sidecar.executablePath = "runtime/sidecars/opencode-compatible/bin/opencode";
   sidecar.executableSha256 = sha256(executableBytes);
@@ -259,7 +262,7 @@ function macManifest(executableBytes, licenseBytes) {
     .digest("hex");
   sidecar.license = {
     spdxId: "MIT",
-    url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
+    url: APPROVED_SIDECAR.license.url,
     sha256: sha256(licenseBytes),
   };
   sidecar.licenseEvidence.sha256 = sidecar.license.sha256;

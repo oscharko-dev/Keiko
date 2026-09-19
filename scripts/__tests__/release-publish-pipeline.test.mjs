@@ -68,6 +68,9 @@ import {
   PORTABLE_EVALUATION_TARGET_NAMES,
 } from "../lib/portable-evaluation-manifest.mjs";
 
+const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
+  .sidecarRuntimes[0];
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 beforeAll(() => {
@@ -979,46 +982,18 @@ function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind) {
     name,
     kind: "coding-runtime",
     approvalSchemaVersion: 2,
-    upstream: {
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.18.30",
-      tag: "v1.18.30",
-      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
-    },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      transport: "http-sse",
-    },
-    protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
-      sha256: "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
-      hashAlgorithm: "sha256",
-      hashEncoding: "lowercase-hex",
-      digestInput: "upstream-raw-bytes",
-      transport: "http-sse",
-    },
-    releaseApproval: {
-      redistribution: {
-        status: "approved",
-        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-      },
-      subscriptionAuth: {
-        status: "not-applicable",
-        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-      },
-    },
+    upstream: structuredClone(APPROVED_SIDECAR.upstream),
+    adapterCompatibility: structuredClone(APPROVED_SIDECAR.adapterCompatibility),
+    protocolSchema: structuredClone(APPROVED_SIDECAR.protocolSchema),
+    releaseApproval: structuredClone(APPROVED_SIDECAR.releaseApproval),
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
+      url: APPROVED_SIDECAR.license.url,
       sha256: digestFor(licenseBytes),
     },
     archive: {
       platformTarget: target.platformTarget,
-      url: `https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-${target.platformTarget}.zip`,
+      url: APPROVED_SIDECAR.archives[target.platformTarget].url,
       sizeBytes: executableBytes.length,
       sha256: "a".repeat(64),
     },
@@ -1316,8 +1291,8 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         },
       });
 
-      expect(lastRun.status).toBe(0);
-      expect(lastRun.stdout).toContain("PLAN-ONLY complete");
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      expect(lastRun.stdout, lastRun.stderr).toContain("PLAN-ONLY complete");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 

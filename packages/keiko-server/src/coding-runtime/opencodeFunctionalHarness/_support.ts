@@ -769,7 +769,7 @@ class FakeOpenCodeChild {
       sessionID: FAKE_SESSION_ID,
       info: assistantHistoryInfo(messageId, parentId, { created }),
     });
-    for (const [index, chunk] of splitFunctionalText(expandFunctionalDisplayText(text)).entries()) {
+    for (const [index, chunk] of splitFunctionalText(text).entries()) {
       this.appendHistory("message.part.updated.1", {
         sessionID: FAKE_SESSION_ID,
         part: {
@@ -867,7 +867,6 @@ class FakeOpenCodeChild {
 
   private executeToolCall(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     if (call.name === "question") return this.askQuestion(call, signal);
-    if (call.name === "todowrite") return Promise.resolve(executeBuiltInTodoWrite(call));
     return this.callToolFacade(call, signal);
   }
 
@@ -937,22 +936,12 @@ class FakeOpenCodeChild {
   }
 }
 
-/** Mirrors the v2.0.10 built-in: full-replace todo state, no facade round-trip, no tool event. */
-function executeBuiltInTodoWrite(call: FakeToolCall): string {
-  return JSON.stringify(call.args.todos ?? [], null, 2);
-}
-
 function splitFunctionalText(value: string): readonly string[] {
   const chunks: string[] = [];
   for (let start = 0; start < value.length; start += 4096) {
     chunks.push(value.slice(start, start + 4096));
   }
   return chunks;
-}
-
-function expandFunctionalDisplayText(value: string): string {
-  if (value.length === 0) return value;
-  return `${value.slice(0, 256)}${"x".repeat(4096 * 5)}${value.slice(-128)}`;
 }
 
 function assistantHistoryInfo(
