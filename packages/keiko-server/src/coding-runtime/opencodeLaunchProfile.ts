@@ -78,7 +78,7 @@ Delivering your work, when granted: keiko_git_status and keiko_git_diff read the
 
 Work in small read/edit/verify cycles, keep patches minimal, and never describe an edit in prose instead of submitting it through keiko_changeset_edit. Progress happens only through tool calls.`;
 
-const OPENCODE_GOVERNED_V2_SYSTEM_PROMPT = OPENCODE_GOVERNED_SYSTEM_PROMPT.replace(
+export const OPENCODE_GOVERNED_V2_SYSTEM_PROMPT = OPENCODE_GOVERNED_SYSTEM_PROMPT.replace(
   "1. Plan: keep a short plan up to date with todowrite so the operator can follow your progress.",
   "1. Plan: state your next steps briefly so the operator can follow your progress.",
 );
