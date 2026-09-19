@@ -550,6 +550,84 @@ describe("POST /api/diagnostics/client", () => {
       });
     });
 
+    // #3557 review: an id the server refuses, or one named twice, never counts as a named load.
+    it("counts neither a refused primary id nor a duplicate as a named deciding load", async () => {
+      const sink = captureServerLog();
+      const reports = [
+        { correlationId: "not a safe id", decidingLoadCount: 1 },
+        { correlationId: "not a safe id" },
+        {
+          correlationId: "ui_chat-list-load-0001",
+          relatedCorrelationIds: [
+            "ui_chat-list-load-0001",
+            "ui_chat-list-load-0002",
+            "ui_chat-list-load-0002",
+          ],
+          decidingLoadCount: 3,
+        },
+      ];
+      for (const report of reports) {
+        const body = JSON.stringify({
+          kind: "binding",
+          surface: "chat-window",
+          windowRef: "chat-mfr3k2x1-1",
+          outcome: "target-missing",
+          referenceShape: "uuid",
+          heuristicFlagged: false,
+          ...report,
+        });
+        expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+      }
+
+      const lines = bindingEvents(sink, "client.binding.target-missing").map(
+        (event) => event.extra,
+      );
+      expect(lines).toEqual([
+        expect.objectContaining({
+          completeness: "partial",
+          loss: "event-location-unknown",
+          decidingLoadCount: 1,
+        }),
+        expect.objectContaining({
+          completeness: "partial",
+          loss: "event-location-unknown",
+          decidingLoadCount: 1,
+        }),
+        expect.objectContaining({
+          relatedCorrelationIds: ["ui_chat-list-load-0002"],
+          completeness: "partial",
+          loss: "event-location-unknown",
+          decidingLoadCount: 3,
+        }),
+      ]);
+    });
+
+    // Distinct safe ids that name every deciding load make a complete line.
+    it("keeps a line complete when its distinct safe ids name every deciding load", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "chat-mfr3k2x1-1",
+        outcome: "target-missing",
+        referenceShape: "uuid",
+        heuristicFlagged: false,
+        correlationId: "ui_chat-list-load-0001",
+        relatedCorrelationIds: ["ui_chat-list-load-0002", "ui_chat-list-load-0002"],
+        decidingLoadCount: 2,
+      });
+
+      await handleClientDiagnosticIngest(context(body));
+
+      const [event] = bindingEvents(sink, "client.binding.target-missing");
+      expect(event?.extra).toMatchObject({
+        relatedCorrelationIds: ["ui_chat-list-load-0002"],
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(event?.extra).not.toHaveProperty("decidingLoadCount");
+    });
+
     it("refuses a binding report that carries a browser digest instead of the window reference", async () => {
       const sink = captureServerLog();
       const body = JSON.stringify({

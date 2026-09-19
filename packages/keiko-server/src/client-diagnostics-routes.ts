@@ -768,9 +768,30 @@ function logClientStage(
 
 type ClientBindingFields = ActivityLogFields<typeof CLIENT_BINDING_RESOLVED_OPERATION>;
 
-// Only safe correlation ids are kept; a malformed one is dropped rather than refusing the line.
-function relatedCorrelationIds(request: ClientBindingIngestRequest): readonly string[] {
-  return (request.relatedCorrelationIds ?? []).filter((id) => isValidCorrelationId(id));
+// The deciding list loads the line can name: the primary id when it is a safe correlation id, and
+// each distinct safe related id besides it. An id the server refuses, or one named twice, never
+// counts as named; a malformed one is dropped rather than refusing the line (#3557 review).
+function namedDecidingLoads(request: ClientBindingIngestRequest): {
+  readonly primary: string | undefined;
+  readonly related: readonly string[];
+} {
+  const { correlationId } = request;
+  const primary =
+    correlationId !== undefined && isValidCorrelationId(correlationId) ? correlationId : undefined;
+  const related = [...new Set(request.relatedCorrelationIds ?? [])].filter(
+    (id) => id !== primary && isValidCorrelationId(id),
+  );
+  return { primary, related };
+}
+
+// How many loads decided the outcome: the reported total, or else every distinct id the report
+// declared, valid or not.
+function decidingLoadTotal(request: ClientBindingIngestRequest): number {
+  if (request.decidingLoadCount !== undefined) return request.decidingLoadCount;
+  return new Set([
+    ...(request.correlationId === undefined ? [] : [request.correlationId]),
+    ...(request.relatedCorrelationIds ?? []),
+  ]).size;
 }
 
 export function clientBindingDigest(windowRef: string): string {
@@ -781,10 +802,10 @@ export function clientBindingDigest(windowRef: string): string {
 // the outcome than the line names, the missing ones are classified loss, not a quiet count: the
 // line is `partial` with `loss: event-location-unknown`, and the total is kept (#3557 review).
 function clientBindingFields(request: ClientBindingIngestRequest): ClientBindingFields {
-  const related = relatedCorrelationIds(request);
-  const named = (request.correlationId === undefined ? 0 : 1) + related.length;
-  const deciding = request.decidingLoadCount;
-  const unnamed = deciding !== undefined && deciding > named;
+  const { primary, related } = namedDecidingLoads(request);
+  const named = (primary === undefined ? 0 : 1) + related.length;
+  const deciding = decidingLoadTotal(request);
+  const unnamed = deciding > named;
   return {
     surface: request.surface,
     referenceShape: request.referenceShape,
