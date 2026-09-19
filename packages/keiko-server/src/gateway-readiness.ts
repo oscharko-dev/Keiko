@@ -46,6 +46,10 @@ import {
 } from "./gateway-tool-calling-probe.js";
 import { reconcileGatewayToolCallingReadiness } from "./gateway-setup.js";
 import { processServerLogSink } from "./process-log-sink.js";
+// #3557 review finding A: the one owning projection from a candidate model id to Activity Log
+// evidence — reused here so a readiness line never carries a value that would fail
+// `activityLogEvent`'s own opaque-id validation and silently drop the whole line.
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
 const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
   "chat",
@@ -86,6 +90,13 @@ const RED_PIXEL_PNG_DATA_URL =
 const MINI_PDF_DATA_URL =
   "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMTQ0XSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MSA+PgpzdHJlYW0KQlQKL0YxIDE4IFRmCjUwIDgwIFRkCihLRUlLTyBQREYgUkVBRElORVNTIFBST0JFKSBUagpFVApzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNjIgMDAwMDAgbiAKMDAwMDAwMDM3MyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9Sb290IDEgMCBSIC9TaXplIDYgPj4Kc3RhcnR4cmVmCjQ0MgolJUVPRgo=";
 
+// `modelId`/`modelIdDigest`: projected by `observability/model-id-evidence.ts`, never a caller
+// value verbatim, and mutually exclusive — see its module doc (#3557 review finding A).
+const GATEWAY_READINESS_MODEL_ID_FIELDS = {
+  modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 240 },
+  modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+} as const;
+
 const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -94,7 +105,7 @@ const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation
   owner: "keiko-server",
   emitter: "gateway-readiness.logAutomaticReadinessStarted",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
@@ -113,7 +124,7 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
   owner: "keiko-server",
   emitter: "gateway-readiness.logAutomaticReadinessCompleted",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     overallStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -142,7 +153,7 @@ const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gateway-readiness.logReadinessStarted",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     trigger: {
       type: "string",
       dataClass: "closed-enum",
@@ -167,7 +178,7 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gateway-readiness.logReadinessCompleted",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     trigger: {
       type: "string",
       dataClass: "closed-enum",
@@ -187,6 +198,32 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-readiness"],
   proofIds: ["gateway.readiness.completed.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review finding B: a caller that finds a readiness probe already in flight for the same
+// model does not run its own probe — it awaits the one already running
+// (`ensureOnDemandConversationReadiness`). Its own request still needs a durable link to the
+// evidence that decided its outcome, or its timeline cannot reconstruct the check it awaited: the
+// probe's `gateway.readiness.started`/`.completed` lines carry only the FIRST caller's correlation
+// id. This op lets every JOINING caller log one line under its OWN correlation id, linking to the
+// probe's.
+const GATEWAY_READINESS_JOINED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.joined",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logReadinessJoined",
+  fields: {
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    probeCorrelationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.joined.line"],
   releaseImpact: "patch",
 });
 
@@ -369,7 +406,7 @@ function logAutomaticReadinessStarted(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
       { correlationId },
-      { modelId: boundedReadinessModelId(modelId), probeCount },
+      { ...modelIdEvidence(deps, modelId), probeCount },
     ),
   );
 }
@@ -384,7 +421,7 @@ function logAutomaticReadinessCompleted(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
       { correlationId },
       {
-        modelId: boundedReadinessModelId(report.modelId),
+        ...modelIdEvidence(deps, report.modelId),
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
       },
@@ -403,7 +440,7 @@ function logReadinessStarted(
     activityLogEvent(
       GATEWAY_READINESS_STARTED_OPERATION,
       { correlationId },
-      { modelId: boundedReadinessModelId(modelId), trigger, probeCount },
+      { ...modelIdEvidence(deps, modelId), trigger, probeCount },
     ),
   );
 }
@@ -420,11 +457,28 @@ function logReadinessCompleted(
       GATEWAY_READINESS_COMPLETED_OPERATION,
       { correlationId, durationMs },
       {
-        modelId: boundedReadinessModelId(report.modelId),
+        ...modelIdEvidence(deps, report.modelId),
         trigger,
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
       },
+    ),
+  );
+}
+
+// #3557 review finding B: logs the JOIN fact under the joining caller's own correlation id,
+// linking to the probe it is about to await.
+function logReadinessJoined(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  probeCorrelationId: string,
+  modelId: string,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_JOINED_OPERATION,
+      { correlationId },
+      { ...modelIdEvidence(deps, modelId), probeCorrelationId },
     ),
   );
 }
@@ -460,13 +514,6 @@ interface ReadinessRunEvidence {
   readonly automatic: boolean;
   readonly trigger: GatewayReadinessTrigger;
   readonly startedAtMs: number;
-}
-
-// Configured model ids do not originate at this route's bounded request parser. Keep the full id
-// for provider selection and the response, but project only the operation contract's opaque-id
-// bound into reconstruction evidence.
-function boundedReadinessModelId(modelId: string): string {
-  return modelId.slice(0, MAX_MODEL_ID_CHARS);
 }
 
 async function providerRequest(
@@ -1615,7 +1662,17 @@ export async function runGatewayReadiness(
 // When a conversation guard finds no CURRENT-GENERATION observation for the model, verify on
 // demand with the minimal chat probe. The admission stays honest — the probe must actually
 // pass. Concurrent callers share one in-flight probe per model.
-const onDemandReadinessProbes = new Map<string, Promise<void>>();
+//
+// `correlationId` is the FIRST caller's — the one the probe's `gateway.readiness.started`/
+// `.completed` lines carry. Every LATER caller that joins it instead of starting its own logs a
+// `gateway.readiness.joined` line under its OWN correlation id, linking to this one (#3557 review
+// finding B), so a joiner's timeline can still reconstruct the check it awaited.
+interface OnDemandReadinessProbe {
+  readonly promise: Promise<void>;
+  readonly correlationId: string;
+}
+
+const onDemandReadinessProbes = new Map<string, OnDemandReadinessProbe>();
 
 // A failed probe must not pin the model for the whole configuration generation: a transient
 // gateway outage would brick every chat surface until a manual re-probe or restart (the
@@ -1658,24 +1715,27 @@ export async function ensureOnDemandConversationReadiness(
   const key = `${String(holder.generation())}:${modelId}`;
   const inFlight = onDemandReadinessProbes.get(key);
   if (inFlight !== undefined) {
-    await inFlight;
+    logReadinessJoined(deps, correlationId ?? newCorrelationId(), inFlight.correlationId, modelId);
+    await inFlight.promise;
     return;
   }
-  const probe = runOnDemandReadinessProbe(deps, holder, modelId, correlationId).finally(() => {
-    onDemandReadinessProbes.delete(key);
-  });
-  onDemandReadinessProbes.set(key, probe);
-  await probe;
+  const probeCorrelationId = correlationId ?? newCorrelationId();
+  const promise = runOnDemandReadinessProbe(deps, holder, modelId, probeCorrelationId).finally(
+    () => {
+      onDemandReadinessProbes.delete(key);
+    },
+  );
+  onDemandReadinessProbes.set(key, { promise, correlationId: probeCorrelationId });
+  await promise;
 }
 
 async function runOnDemandReadinessProbe(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
-  requestCorrelationId: string | undefined,
+  correlationId: string,
 ): Promise<void> {
   const generation = holder.generation();
-  const correlationId = requestCorrelationId ?? newCorrelationId();
   try {
     await runGatewayReadiness(
       { modelId, options: { probes: [] } },

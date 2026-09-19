@@ -7,6 +7,7 @@ import {
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
 import {
   expectActivityLogProof,
@@ -292,5 +293,69 @@ describe("on-demand readiness evidence", () => {
       probeCount: 1,
     });
     expect(readiness[1]?.durationMs).toEqual(expect.any(Number));
+  });
+
+  // Review finding B (P1) and its CodeRabbit duplicate at gateway-readiness.ts:1664: after a
+  // restart, two sends for the same unobserved model can arrive together. The FIRST starts the
+  // probe; before this fix the SECOND just awaited it silently, so its own timeline had no line at
+  // all connecting it to the check that actually decided its outcome.
+  it("logs a join line under the SECOND caller's own correlation id, linked to the probe's", async () => {
+    const { deps } = probeableDeps("not-a-timestamp");
+    const events: ServerLogEvent[] = [];
+    const logged = {
+      ...deps,
+      activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+    } as UiHandlerDeps;
+
+    // Both calls are issued before either is awaited: `ensureOnDemandConversationReadiness` writes
+    // the shared in-flight map synchronously, before its own first `await`, so the second call is
+    // guaranteed to observe the first's in-flight probe instead of racing to start its own — this
+    // mirrors two concurrent chat requests for the same unobserved model hitting the BFF together.
+    const first = ensureOnDemandConversationReadiness(logged, "chat-model", "corr-probe-A");
+    const second = ensureOnDemandConversationReadiness(logged, "chat-model", "corr-joiner-B");
+    await Promise.all([first, second]);
+
+    const joined = events.filter((event) => event.op === "gateway.readiness.joined");
+    expect(joined).toHaveLength(1);
+    const [joinEvent] = joined;
+    expect(joinEvent?.correlationId).toBe("corr-joiner-B");
+    const persisted = expectActivityLogProof(
+      "gateway.readiness.joined.line",
+      formatActivityLogProofLine(joinEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      probeCorrelationId: "corr-probe-A",
+      modelId: "chat-model",
+    });
+
+    // The probe itself still ran exactly once, under the FIRST caller's correlation id — the
+    // joiner never starts a probe of its own.
+    const readiness = events.filter(
+      (event) =>
+        event.op.startsWith("gateway.readiness.") && event.op !== "gateway.readiness.joined",
+    );
+    expect(readiness.map((event) => [event.op, event.correlationId])).toEqual([
+      ["gateway.readiness.started", "corr-probe-A"],
+      ["gateway.readiness.completed", "corr-probe-A"],
+    ]);
+  });
+
+  it("mints its own correlation id for a joiner that supplied none", async () => {
+    const { deps } = probeableDeps("not-a-timestamp");
+    const events: ServerLogEvent[] = [];
+    const logged = {
+      ...deps,
+      activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+    } as UiHandlerDeps;
+
+    const first = ensureOnDemandConversationReadiness(logged, "chat-model", "corr-probe-only");
+    const second = ensureOnDemandConversationReadiness(logged, "chat-model");
+    await Promise.all([first, second]);
+
+    const joined = events.filter((event) => event.op === "gateway.readiness.joined");
+    expect(joined).toHaveLength(1);
+    expect(typeof joined[0]?.correlationId).toBe("string");
+    expect(joined[0]?.correlationId).not.toBe("corr-probe-only");
+    expect(joined[0]?.correlationId).not.toBe(UNKNOWN_CORRELATION_ID);
   });
 });
