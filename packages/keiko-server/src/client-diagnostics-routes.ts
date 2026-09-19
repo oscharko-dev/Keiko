@@ -56,6 +56,8 @@ import type {
   ClientStageStartedIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
   isClientSessionRepairIngestRequest,
@@ -1501,18 +1503,16 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
   return undefined;
 }
 
-// A replayed read, a reopened stream and an acknowledged repair are routine evidence.
-const ROUTINE_SESSION_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairIngestRequest["outcome"]> =
-  new Set(["replayed", "stream-repaired", "repair-acknowledged"]);
-
 function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
   switch (classified.shape) {
     case "stage":
       return "routine";
     case "binding":
-      return classified.report.outcome === "target-missing" ? "failure" : "routine";
+      return CLIENT_BINDING_FAILURE_OUTCOMES.has(classified.report.outcome) ? "failure" : "routine";
     case "session-repair":
-      return ROUTINE_SESSION_REPAIR_OUTCOMES.has(classified.report.outcome) ? "routine" : "failure";
+      return CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES.has(classified.report.outcome)
+        ? "routine"
+        : "failure";
     case "message":
       return "failure";
   }

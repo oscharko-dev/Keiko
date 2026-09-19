@@ -39,6 +39,7 @@
 
 import type {
   ClientBindingIngestRequest,
+  ClientBindingOutcome,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
   ClientDiagnosticReadyState,
@@ -47,8 +48,10 @@ import type {
   ClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  CLIENT_BINDING_FAILURE_OUTCOMES,
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+  CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   type ClientDiagnosticBindingReport,
@@ -293,21 +296,26 @@ const postWindows: Record<ClientDiagnosticPostBudget, PostWindow> = {
 let postFailureCount = 0;
 let postThrottledCount = 0;
 
-const ROUTINE_SESSION_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> = new Set([
-  "replayed",
-  "stream-repaired",
-  "repair-acknowledged",
-]);
+function bindingPostBudget(outcome: ClientBindingOutcome): ClientDiagnosticPostBudget {
+  return CLIENT_BINDING_FAILURE_OUTCOMES.has(outcome) ? "failure" : "routine";
+}
 
-// Routine evidence: a stage, a binding that resolved, a session repair that recovered. Everything
-// else is a failure report.
-function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
-  if (meta?.stageReport !== undefined) return "routine";
-  if (meta?.bindingReport?.outcome === "resolved") return "routine";
-  const repair = meta?.sessionRepairReport?.outcome;
-  return repair !== undefined && ROUTINE_SESSION_REPAIR_OUTCOMES.has(repair)
+function repairPostBudget(
+  outcome: ClientSessionRepairOutcome | undefined,
+): ClientDiagnosticPostBudget {
+  return outcome !== undefined && CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES.has(outcome)
     ? "routine"
     : "failure";
+}
+
+// Routine evidence: a stage, every binding outcome but a missing target (an offer and a person's
+// decision included), a session repair that recovered. Everything else is a failure report. The
+// binding and repair rules are the server's own (keiko-contracts), so the two budgets never drift.
+function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
+  if (meta === undefined) return "failure";
+  if (meta.stageReport !== undefined) return "routine";
+  if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
+  return repairPostBudget(meta.sessionRepairReport?.outcome);
 }
 
 function admittedByClientPostRateLimit(window: PostWindow, limit: number, nowMs: number): boolean {

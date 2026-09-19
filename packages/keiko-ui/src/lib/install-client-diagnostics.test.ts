@@ -774,6 +774,51 @@ describe("fanOutClientDiagnostic budgets", () => {
     expect(fetchMock).toHaveBeenCalledTimes(26);
     expect(clientDiagnosticPostThrottledCount()).toBe(0);
   });
+
+  // #3557 review: an offer and a person's decisions are routine binding evidence. Only a missing
+  // target is a failure, so twenty-odd offers and withdrawals never crowd out the binding failure
+  // another window reports next.
+  it("spends binding offers and decisions from the routine budget, never the failure budget", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const binding = { surface: "chat-window", heuristicFlagged: false } as const;
+
+    for (let index = 1; index <= 12; index += 1) {
+      fanOutClientDiagnostic("[keiko] chat window offered conversations to choose from", {
+        bindingReport: {
+          ...binding,
+          outcome: "candidates-offered",
+          referenceShape: "redacted",
+          windowRef: `chat-offer-${String(index)}`,
+          candidateCount: 2,
+          disambiguatedCount: 0,
+        },
+      });
+      fanOutClientDiagnostic("[keiko] chat window withdrew the conversation the person chose", {
+        bindingReport: {
+          ...binding,
+          outcome: "choice-withdrawn",
+          referenceShape: "user-selected",
+          heuristicFlagged: true,
+          windowRef: `chat-offer-${String(index)}`,
+          targetFingerprint: "a1".repeat(32),
+        },
+      });
+    }
+    fanOutClientDiagnostic("[keiko] chat window restore target not found (reference=redacted)", {
+      bindingReport: {
+        ...binding,
+        outcome: "target-missing",
+        referenceShape: "redacted",
+        windowRef: "chat-missing-1",
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(25);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ outcome: "target-missing" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
 });
 
 it("posts reduced production frames and closed causes through the existing transport", () => {

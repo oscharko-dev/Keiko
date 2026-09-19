@@ -5,11 +5,13 @@ import {
   ACTIVITY_LOG_READINESS_STATES,
   ACTIVITY_LOG_WRITER_KINDS,
   CLIENT_BINDING_CANDIDATES_MAX,
+  CLIENT_BINDING_FAILURE_OUTCOMES,
   CLIENT_BINDING_OUTCOMES,
   CLIENT_BINDING_REFERENCE_SHAPES,
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
   CLIENT_BINDING_DECIDING_LOADS_MAX,
   CLIENT_SESSION_REPAIR_OUTCOMES,
+  CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
@@ -710,6 +712,25 @@ describe("isClientBindingIngestRequest", () => {
   ])("refuses %s", (_label, patch) => {
     const value = typeof patch === "string" ? patch : { ...bindingRequest(), ...patch };
     expect(isClientBindingIngestRequest(value)).toBe(false);
+  });
+});
+
+// #3557 review: the browser and the server budget their reports by one rule. Only a missing target
+// is a binding failure (an offer and a person's decisions are routine), and only a recovery is a
+// routine session repair.
+describe("client report budgets", () => {
+  it("classifies exactly the missing target as a binding failure", () => {
+    expect(
+      CLIENT_BINDING_OUTCOMES.filter((outcome) => CLIENT_BINDING_FAILURE_OUTCOMES.has(outcome)),
+    ).toEqual(["target-missing"]);
+  });
+
+  it("classifies exactly the recoveries as routine session repairs", () => {
+    expect(
+      CLIENT_SESSION_REPAIR_OUTCOMES.filter((outcome) =>
+        CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES.has(outcome),
+      ),
+    ).toEqual(["replayed", "stream-repaired", "repair-acknowledged"]);
   });
 });
 

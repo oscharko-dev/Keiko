@@ -647,6 +647,12 @@ export const CLIENT_BINDING_OUTCOMES = [
   "choice-withdrawn",
 ] as const;
 export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
+// The binding outcomes that report a failure; every other one is routine evidence. The browser and
+// the server budget binding reports by this one rule, so routine offers and decisions never spend
+// the capacity a failure report needs (#3557 review).
+export const CLIENT_BINDING_FAILURE_OUTCOMES: ReadonlySet<ClientBindingOutcome> = new Set([
+  "target-missing",
+]);
 
 // `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
 // `opaque`: any other opaque reference; `fingerprint`: persisted as the redaction marker plus the
@@ -854,6 +860,10 @@ export const CLIENT_SESSION_REPAIR_OUTCOMES = [
 export const CLIENT_SESSION_REPAIR_STREAMS = ["run-events", "shared-event-source"] as const;
 export type ClientSessionRepairStream = (typeof CLIENT_SESSION_REPAIR_STREAMS)[number];
 export type ClientSessionRepairOutcome = (typeof CLIENT_SESSION_REPAIR_OUTCOMES)[number];
+// A replayed read, a reopened stream and an acknowledged repair are routine evidence; the browser
+// and the server budget repair reports by this one rule.
+export const CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> =
+  new Set(["replayed", "stream-repaired", "repair-acknowledged"]);
 
 export interface ClientSessionRepairIngestRequest {
   readonly kind: "session-repair";
