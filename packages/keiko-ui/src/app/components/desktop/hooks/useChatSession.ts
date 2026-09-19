@@ -58,6 +58,10 @@ import {
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { clientErrorSummary } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   classifyRunReport,
   formatRunSummaryFromManifest,
@@ -1647,7 +1651,21 @@ interface SharedBootstrapCacheEntry {
 let sharedBootstrapCache: SharedBootstrapCacheEntry | undefined;
 let sharedBootstrapInflight: Promise<Partial<SessionState>> | undefined;
 let sharedBootstrapVersion = 0;
-const sharedChatListInflight = new Map<string, Promise<{ readonly chats: readonly Chat[] }>>();
+
+/** A project's chat list and the correlation id of the load that answered it (#3557). */
+export interface ChatListLoad {
+  readonly chats: readonly Chat[];
+  readonly correlationId: string;
+}
+
+// A load in flight keeps the correlation id it was sent with, so a caller that joins it can still
+// name the load when it fails.
+interface InflightChatListLoad {
+  readonly promise: Promise<ChatListLoad>;
+  readonly correlationId: string;
+}
+
+const sharedChatListInflight = new Map<string, InflightChatListLoad>();
 const sharedChatMessagesInflight = new Map<
   string,
   Promise<{ readonly messages: readonly ChatMessage[] }>
@@ -1723,10 +1741,8 @@ function invalidateSharedBootstrap(): void {
   sharedBootstrapInflight = undefined;
 }
 
-function cloneChatListPayload(payload: { readonly chats: readonly Chat[] }): {
-  readonly chats: readonly Chat[];
-} {
-  return { chats: Array.from(payload.chats) };
+function cloneChatListPayload(payload: ChatListLoad): ChatListLoad {
+  return { chats: Array.from(payload.chats), correlationId: payload.correlationId };
 }
 
 function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMessage[] }): {
@@ -1735,20 +1751,80 @@ function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMes
   return { messages: Array.from(payload.messages) };
 }
 
-export function sharedFetchChats(
-  projectPath: string,
-): Promise<{ readonly chats: readonly Chat[] }> {
+// The correlation id of each project's last successful chat list load (#3557). A restored chat
+// window decides from that list whether its conversation still exists, and its binding evidence
+// names this id, so the load and the outcome read as one timeline in the Activity Log.
+const CHAT_LIST_CORRELATION_LIMIT = 32;
+const chatListCorrelationIds = new Map<string, string>();
+
+function rememberChatListCorrelation(projectPath: string, correlationId: string): void {
+  chatListCorrelationIds.delete(projectPath);
+  chatListCorrelationIds.set(projectPath, correlationId);
+  const oldest = chatListCorrelationIds.keys().next().value;
+  if (chatListCorrelationIds.size > CHAT_LIST_CORRELATION_LIMIT && oldest !== undefined) {
+    chatListCorrelationIds.delete(oldest);
+  }
+}
+
+/** The correlation id of the last successful chat list load for `projectPath`, if any. */
+export function chatListCorrelationId(projectPath: string): string | undefined {
+  return chatListCorrelationIds.get(projectPath);
+}
+
+function startSharedChatListLoad(projectPath: string): InflightChatListLoad {
   const existing = sharedChatListInflight.get(projectPath);
-  if (existing !== undefined) return existing.then(cloneChatListPayload);
-  const pending = fetchChats(projectPath)
-    .then(cloneChatListPayload)
+  if (existing !== undefined) return existing;
+  const correlationId = newClientCorrelationId();
+  const promise = fetchChats(projectPath, correlationId)
+    .then((payload): ChatListLoad => {
+      rememberChatListCorrelation(projectPath, correlationId);
+      return { chats: Array.from(payload.chats), correlationId };
+    })
     .finally(() => {
-      if (sharedChatListInflight.get(projectPath) === pending) {
+      if (sharedChatListInflight.get(projectPath)?.promise === promise) {
         sharedChatListInflight.delete(projectPath);
       }
     });
-  sharedChatListInflight.set(projectPath, pending);
-  return pending.then(cloneChatListPayload);
+  const load = { promise, correlationId };
+  sharedChatListInflight.set(projectPath, load);
+  return load;
+}
+
+function sharedFetchChats(projectPath: string): Promise<ChatListLoad> {
+  return startSharedChatListLoad(projectPath).promise.then(cloneChatListPayload);
+}
+
+/**
+ * A chat list load that failed (#3557 review). A transport failure rejects before any response
+ * could carry an id, so the error keeps the id the load was sent with, and the closed class of its
+ * cause; never the cause's message.
+ */
+export class ChatListLoadError extends Error {
+  public readonly correlationId: string;
+  public readonly errorKind: ActivityLogErrorKind;
+  // The cause's class from the closed vocabulary.
+  public readonly errorClass: string;
+
+  public constructor(cause: unknown, correlationId: string) {
+    super("Chat list load failed", { cause });
+    this.name = "ChatListLoadError";
+    this.correlationId = correlationId;
+    this.errorKind = bffRequestErrorKind(cause);
+    this.errorClass = clientErrorSummary(cause);
+  }
+}
+
+/**
+ * The same shared load as `sharedFetchChats`, for a caller that records its failure: it rejects with
+ * a `ChatListLoadError` that names the load.
+ */
+export async function sharedFetchChatsWithEvidence(projectPath: string): Promise<ChatListLoad> {
+  const { promise, correlationId } = startSharedChatListLoad(projectPath);
+  try {
+    return cloneChatListPayload(await promise);
+  } catch (error) {
+    throw new ChatListLoadError(error, correlationId);
+  }
 }
 
 function sharedFetchChatMessages(
@@ -1774,6 +1850,7 @@ export function clearChatSessionBootstrapCacheForTests(): void {
   gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();
+  chatListCorrelationIds.clear();
   for (const entry of sharedRunSummarySyncs.values()) entry.controller.abort();
   sharedRunSummarySyncs.clear();
 }

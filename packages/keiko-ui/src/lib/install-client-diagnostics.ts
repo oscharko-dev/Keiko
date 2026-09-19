@@ -30,20 +30,34 @@
 // call site that catches such an error passes it through `meta.correlationId`, and
 // `clientDiagnosticPostBody` below puts it on the wire once it re-validates the shape client-side
 // (defense in depth — the server, `client-diagnostics-routes.ts`, re-validates it again
-// independently before trusting it for anything). It stays genuinely absent for the four SSE
+// independently before trusting it for anything). No request id exists for the four SSE
 // `onerror` call sites (sharedEventSource.ts, useSSE.ts, coding-workbench-event-retention.ts,
 // useRelationshipActivityStream.ts): the native `EventSource` API exposes no response headers to
-// page script, so there is no id to recover at that call site, ever — not a gap, a hard platform
-// limit.
+// page script — a hard platform limit. The two streams that repair a stale session
+// (sharedEventSource.ts, useSSE.ts) carry their failure streak's client-minted id instead, which
+// their session-repair reports share (#3557 review).
 
 import type {
+  ClientBindingIngestRequest,
+  ClientBindingOutcome,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
   ClientDiagnosticReadyState,
+  ClientSessionRepairIngestRequest,
+  ClientSessionRepairOutcome,
+  ClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
+  CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+  CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  type ClientDiagnosticBindingReport,
   type ClientDiagnosticMeta,
+  type ClientDiagnosticSessionRepairReport,
+  type ClientDiagnosticStageReport,
   recordClientDiagnosticLoss,
   restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
@@ -103,6 +117,104 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
   return 1;
 }
 
+// The stage wire body carries no `message`, `clientTs`, `correlationId` or `loss`: a stage mount is
+// not itself a server request (there is nothing to correlate against) and its evidence is already
+// closed and bounded, never free text (KEIKO-3557).
+function clientStagePostBody(
+  report: ClientDiagnosticStageReport,
+  correlationId: string | undefined,
+): ClientStageIngestRequest {
+  const id = validCorrelationId(correlationId);
+  return report.phase === "started"
+    ? {
+        kind: "stage",
+        stage: report.stage,
+        phase: "started",
+        ordinal: report.ordinal,
+        correlationId: id,
+      }
+    : {
+        kind: "stage",
+        stage: report.stage,
+        phase: "settled",
+        ordinal: report.ordinal,
+        durationMs: report.durationMs,
+        correlationId: id,
+      };
+}
+
+// A binding report (#3557) is closed values plus the correlation id of the request that decided it.
+function clientBindingPostBody(
+  report: ClientDiagnosticBindingReport,
+  correlationId: string | undefined,
+): ClientBindingIngestRequest {
+  const related = (report.relatedCorrelationIds ?? [])
+    .flatMap((id): string[] => {
+      const valid = validCorrelationId(id);
+      return valid === undefined ? [] : [valid];
+    })
+    .slice(0, CLIENT_BINDING_RELATED_CORRELATIONS_MAX);
+  return {
+    kind: "binding",
+    surface: report.surface,
+    outcome: report.outcome,
+    referenceShape: report.referenceShape,
+    heuristicFlagged: report.heuristicFlagged,
+    windowRef: report.windowRef,
+    correlationId: validCorrelationId(correlationId),
+    ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+    // The total stays even when the named list is cut, so the server marks the line partial.
+    ...(report.decidingLoadCount === undefined
+      ? {}
+      : { decidingLoadCount: report.decidingLoadCount }),
+    ...(report.candidateCount === undefined ? {} : { candidateCount: report.candidateCount }),
+    ...(report.disambiguatedCount === undefined
+      ? {}
+      : { disambiguatedCount: report.disambiguatedCount }),
+    ...(report.targetFingerprint === undefined
+      ? {}
+      : { targetFingerprint: report.targetFingerprint }),
+  };
+}
+
+// A session-repair report (#3557) belongs to the denied request's timeline, so it needs that id,
+// and it links the repair request it describes, so it needs that one too.
+function clientSessionRepairPostBody(
+  report: ClientDiagnosticSessionRepairReport,
+  correlationId: string | undefined,
+): ClientSessionRepairIngestRequest | undefined {
+  const id = validCorrelationId(correlationId);
+  const repairCorrelationId = validCorrelationId(report.repairCorrelationId);
+  if (id === undefined || repairCorrelationId === undefined) return undefined;
+  return {
+    kind: "session-repair",
+    outcome: report.outcome,
+    correlationId: id,
+    repairCorrelationId,
+    errorKind: report.errorKind,
+    stream: report.stream,
+  };
+}
+
+type StructuredPostBody =
+  ClientStageIngestRequest | ClientBindingIngestRequest | ClientSessionRepairIngestRequest;
+
+// The closed report the metadata names, if any. A closed report carries no loss counts.
+function structuredPostBody(
+  meta: ClientDiagnosticMeta | undefined,
+): StructuredPostBody | undefined {
+  if (meta?.stageReport !== undefined) {
+    return clientStagePostBody(meta.stageReport, meta.correlationId);
+  }
+  if (meta?.bindingReport !== undefined) {
+    return clientBindingPostBody(meta.bindingReport, meta.correlationId);
+  }
+  if (meta?.sessionRepairReport !== undefined) {
+    return clientSessionRepairPostBody(meta.sessionRepairReport, meta.correlationId);
+  }
+  return undefined;
+}
+
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
 // time (not at the original `reportClientDiagnostic` call), which is close enough for an operator
 // diagnostic and avoids threading a timestamp through the sink's string-only contract.
@@ -111,7 +223,7 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
 // `JSON.stringify` drops an `undefined`-valued key from the wire body regardless, so an absent
 // correlation id never reaches the request at all. `loss` carries the page's counted delivery loss
 // since its last delivered report (#3532).
-function clientDiagnosticPostBody(
+function clientMessagePostBody(
   message: string,
   meta: ClientDiagnosticMeta,
   loss: ClientDiagnosticLossCounts | undefined,
@@ -125,6 +237,7 @@ function clientDiagnosticPostBody(
     clientTs: new Date().toISOString(),
     correlationId: validCorrelationId(meta.correlationId),
     parentCorrelationId: validCorrelationId(meta.parentCorrelationId),
+    errorKind: meta.errorKind,
     voiceDialogueStage: meta.voiceDialogueStage,
     voiceCaptureReason: meta.voiceCaptureReason,
     voiceCaptureError: meta.voiceCaptureError,
@@ -140,30 +253,79 @@ function clientDiagnosticPostBody(
   return { ...base, readyState: parsedSseReadyState(readyStateDigit), kind: "sse-error" };
 }
 
+// `meta.stageReport` or `meta.bindingReport`, when present, means `message` is the console text of
+// a closed report: the structured report is sent instead, never folded into the message shape.
+function clientDiagnosticPostBody(
+  message: string,
+  meta: ClientDiagnosticMeta | undefined,
+  loss: ClientDiagnosticLossCounts | undefined,
+): ClientDiagnosticIngestRequest | StructuredPostBody {
+  return structuredPostBody(meta) ?? clientMessagePostBody(message, meta ?? {}, loss);
+}
+
 // Process-wide (module-scope), not per-diagnostic: a flapping stream or a hostile page must not be
 // able to grow the activity log without bound. The server independently rate-limits the same route
 // (client-diagnostics-routes.ts); this is defense in depth on the sending side, so a burst never
 // leaves the tab at all.
-const CLIENT_DIAGNOSTIC_POST_LIMIT_PER_WINDOW = 20;
+//
+// Two budgets (#3557): a page load posts about a dozen routine stage reports, and with one shared
+// budget a failure raised during boot, the one most likely to hold a real stall, was dropped
+// console-only. Routine evidence now spends its own budget and can never starve a failure report.
+const CLIENT_DIAGNOSTIC_POST_LIMITS = { failure: 20, routine: 60 } as const;
 const CLIENT_DIAGNOSTIC_POST_WINDOW_MS = 60_000;
 
-let postWindowStartedAtMs = 0;
-let postCountInWindow = 0;
+type ClientDiagnosticPostBudget = keyof typeof CLIENT_DIAGNOSTIC_POST_LIMITS;
+
+interface PostWindow {
+  startedAtMs: number;
+  count: number;
+  // Drops in the CURRENT window, reset with it: the throttle notice is written on the first drop of
+  // every window, so a burst in a later window leaves its own trace instead of vanishing behind a
+  // process-lifetime counter (#3376 review).
+  throttled: number;
+}
+
+function freshPostWindow(): PostWindow {
+  return { startedAtMs: 0, count: 0, throttled: 0 };
+}
+
+const postWindows: Record<ClientDiagnosticPostBudget, PostWindow> = {
+  failure: freshPostWindow(),
+  routine: freshPostWindow(),
+};
 let postFailureCount = 0;
 let postThrottledCount = 0;
-// Drops in the CURRENT window, reset with it: the throttle notice is written on the first drop of
-// every window, so a burst in a later window leaves its own trace instead of vanishing behind a
-// process-lifetime counter (#3376 review).
-let postThrottledInWindow = 0;
 
-function admittedByClientPostRateLimit(nowMs: number): boolean {
-  if (nowMs - postWindowStartedAtMs >= CLIENT_DIAGNOSTIC_POST_WINDOW_MS) {
-    postWindowStartedAtMs = nowMs;
-    postCountInWindow = 0;
-    postThrottledInWindow = 0;
+function bindingPostBudget(outcome: ClientBindingOutcome): ClientDiagnosticPostBudget {
+  return CLIENT_BINDING_FAILURE_OUTCOMES.has(outcome) ? "failure" : "routine";
+}
+
+function repairPostBudget(
+  outcome: ClientSessionRepairOutcome | undefined,
+): ClientDiagnosticPostBudget {
+  return outcome !== undefined && CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES.has(outcome)
+    ? "routine"
+    : "failure";
+}
+
+// Routine evidence: a stage, every binding outcome but a missing target (an offer and a person's
+// decision included), a session repair that recovered. Everything else is a failure report. The
+// binding and repair rules are the server's own (keiko-contracts), so the two budgets never drift.
+function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
+  if (meta === undefined) return "failure";
+  if (meta.stageReport !== undefined) return "routine";
+  if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
+  return repairPostBudget(meta.sessionRepairReport?.outcome);
+}
+
+function admittedByClientPostRateLimit(window: PostWindow, limit: number, nowMs: number): boolean {
+  if (nowMs - window.startedAtMs >= CLIENT_DIAGNOSTIC_POST_WINDOW_MS) {
+    window.startedAtMs = nowMs;
+    window.count = 0;
+    window.throttled = 0;
   }
-  if (postCountInWindow >= CLIENT_DIAGNOSTIC_POST_LIMIT_PER_WINDOW) return false;
-  postCountInWindow += 1;
+  if (window.count >= limit) return false;
+  window.count += 1;
   return true;
 }
 
@@ -179,11 +341,10 @@ export function clientDiagnosticPostThrottledCount(): number {
 
 /** Test-only: put the POST transport's rate limiter and failure/drop counters back to a clean start. */
 export function resetClientDiagnosticPostStateForTests(): void {
-  postWindowStartedAtMs = 0;
-  postCountInWindow = 0;
+  postWindows.failure = freshPostWindow();
+  postWindows.routine = freshPostWindow();
   postFailureCount = 0;
   postThrottledCount = 0;
-  postThrottledInWindow = 0;
 }
 
 // Best-effort POST to the server activity log. Never awaited by a call site and never lets a
@@ -223,15 +384,22 @@ function sendClientDiagnostic(
   }
 }
 
+// A closed report's wire shape (stage, binding, session repair) has no `loss` field, so draining
+// the ledger here would silently discard it — never taken, so it keeps
+// accumulating for the next message report or the pagehide flush to carry, exactly as it already
+// does today when a burst of one kind of report happens to fall between two of another.
 function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
-  if (!admittedByClientPostRateLimit(Date.now())) {
+  const budget = postBudget(meta);
+  const window = postWindows[budget];
+  if (!admittedByClientPostRateLimit(window, CLIENT_DIAGNOSTIC_POST_LIMITS[budget], Date.now())) {
     postThrottledCount += 1;
-    postThrottledInWindow += 1;
+    window.throttled += 1;
     recordClientDiagnosticLoss("postsThrottled");
-    if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
+    if (window.throttled === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
     return;
   }
-  sendClientDiagnostic(message, meta, takeClientDiagnosticLoss());
+  const loss = structuredPostBody(meta) === undefined ? takeClientDiagnosticLoss() : undefined;
+  sendClientDiagnostic(message, meta, loss);
 }
 
 // Loss counted after the page's last report would otherwise stay in the tab forever: a storm of

@@ -850,8 +850,18 @@ describe("op catalog drift", () => {
 
   // #3532: the sink stamps these envelope names and redaction drops a producer value for them, so a
   // skill catalog digest once persisted as the log format's own and a PR-description schema version
-  // as the envelope's.
-  it.each(["catalogDigest", "schemaVersion", "productVersion", "writerCapability"])(
+  // as the envelope's. The sink stamps the process identity (`pid`, `instanceId`, `seq`) the same way,
+  // so no producer can supply or spoof it.
+  const reservedEnvelopeFields = [
+    "catalogDigest",
+    "schemaVersion",
+    "productVersion",
+    "writerCapability",
+    "pid",
+    "instanceId",
+    "seq",
+  ];
+  it.each(reservedEnvelopeFields)(
     "rejects a registration that declares the reserved envelope field %s",
     (fieldName) => {
       withTypedRegistryFixture(

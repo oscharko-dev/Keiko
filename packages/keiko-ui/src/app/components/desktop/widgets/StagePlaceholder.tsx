@@ -8,14 +8,18 @@ import { useWindowStageEvidence, type WindowStage } from "../hooks/useWindowStag
 export function StagePlaceholder({
   stage,
   marker,
+  onStall,
   children,
 }: {
   readonly stage: WindowStage;
   readonly marker:
-    { readonly "data-window-chunk": "loading" } | { readonly "data-chat-bind": "opening" };
+    | { readonly "data-window-chunk": "loading" | "stalled" }
+    | { readonly "data-chat-bind": "opening" };
+  // A stable callback (a state setter) that learns when the stage has not settled in time.
+  readonly onStall?: ((stalled: boolean) => void) | undefined;
   readonly children: ReactNode;
 }): ReactNode {
-  useWindowStageEvidence(stage);
+  useWindowStageEvidence(stage, onStall);
   return (
     <output className="lk-loading" style={{ display: "block" }} {...marker}>
       {children}

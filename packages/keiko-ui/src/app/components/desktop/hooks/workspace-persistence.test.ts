@@ -4,6 +4,7 @@ import {
   MAX_PERSISTED_CONNECTION_SCAN,
   parsePersistedConnections,
   parsePersistedWindows,
+  persistedReferenceShape,
   sanitizePersistedConnections,
   sanitizePersistedWorkspace,
   sanitizePersistedWindows,
@@ -13,6 +14,8 @@ import {
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
 import { subText } from "../windows/connectionUtils";
+import { isSecretShapedString } from "./isSecretShapedString";
+import { chatReferenceFingerprint } from "../widgets/chatReferenceFingerprint";
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -748,6 +751,208 @@ describe("workspace-persistence", () => {
     expect(JSON.stringify(persisted)).not.toContain(bearerToken);
   });
 
+  // The real-CI pin (#3557): the chat id from a CI failure is one the payment-card rule misreads as a
+  // card number (the 16 digits across its last hyphen pass the Luhn check). Persisted as the
+  // redaction marker alone, it left the restored chat window reporting its live conversation as
+  // deleted. The binding must survive the round trip, without any stored form that works around
+  // the heuristic (#3557 review): the id itself is redacted, and its one-way fingerprint persists,
+  // through which the restored window finds its chat again (SelectionAwareWorkspaceHosts.test.tsx,
+  // "reopens a chat whose id persistence redacts"). Every other reference field judges the id by
+  // its content and drops it; the server no longer issues such ids (`newReferenceId`).
+  it("keeps the binding of a server-issued UUID that the payment-card rule misreads as a card number", async () => {
+    const id = "1404206d-9ab6-4bca-8853-813867352087";
+    expect(isSecretShapedString(id)).toBe(true);
+    const fingerprint = await chatReferenceFingerprint(id);
+    const digest = "a".repeat(64);
+    const { wins: persisted } = sanitizePersistedWorkspace(
+      [
+        win({
+          id: "chat-1",
+          type: "chat",
+          cfg: { chatId: id, chatIdFingerprint: fingerprint, title: "Deploy status" },
+        }),
+        win({
+          id: "pr-1",
+          type: "governedPullRequest",
+          cfg: {
+            projectPath: "/repo",
+            descriptionOwnerAndRepo: "owner/repo",
+            descriptionPrNumber: 42,
+            descriptionProposalId: id,
+            descriptionSnapshotDigest: digest,
+          },
+        }),
+        win({ id: "review-1", type: "review", cfg: { runId: id } }),
+        win({ id: "qi-run-1", type: "qiRun", cfg: { runId: id } }),
+        win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: `fs-${id}` } }),
+      ],
+      [],
+    );
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { chatId: "[REDACTED]", chatIdFingerprint: fingerprint, title: "Deploy status" }],
+      [
+        "pr-1",
+        {
+          projectPath: "/repo",
+          descriptionOwnerAndRepo: "owner/repo",
+          descriptionPrNumber: 42,
+          descriptionSnapshotDigest: digest,
+        },
+      ],
+      ["review-1", {}],
+      ["qi-run-1", {}],
+      ["figma-1", {}],
+    ]);
+    expect(JSON.stringify(persisted)).not.toContain("8853-813867352087");
+    // A reload keeps the binding: the restored window carries the fingerprint it rebinds through.
+    expect(parsePersistedWindows(JSON.stringify(persisted))?.[0]?.cfg).toEqual({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: fingerprint,
+      title: "Deploy status",
+    });
+  });
+
+  // Only a well-formed SHA-256 fingerprint persists: it is never read as anything but a digest.
+  it.each([
+    ["an uppercase digest", "A".repeat(64)],
+    ["a short digest", "a".repeat(63)],
+    ["free text", "patient-Alice-Jones"],
+    ["a chat id", "1404206d-9ab6-4bca-8853-813867352087"],
+  ])("drops a chat fingerprint that is %s", (_label, chatIdFingerprint) => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: "[REDACTED]", chatIdFingerprint } }),
+    ]);
+
+    expect(persisted[0]?.cfg).toEqual({ chatId: "[REDACTED]" });
+  });
+
+  // #3557 review: a chat the person chose for a redacted snapshot stays a choice across a reload
+  // until they keep it. The marker is closed: only `true` persists, anything else is dropped.
+  it("persists the chosen-chat marker when it is set", () => {
+    const fingerprint = "a".repeat(64);
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "chat-1",
+        type: "chat",
+        cfg: { chatId: "[REDACTED]", chatIdFingerprint: fingerprint, chatIdChosen: true },
+      }),
+    ]);
+
+    expect(persisted[0]?.cfg).toEqual({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: fingerprint,
+      chatIdChosen: true,
+    });
+  });
+
+  it.each([
+    ["kept", false],
+    ["text", "true"],
+    ["a number", 1],
+  ])("drops a chosen-chat marker that is %s", (_label, chatIdChosen) => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: "[REDACTED]", chatIdChosen } }),
+    ]);
+
+    expect(persisted[0]?.cfg).toEqual({ chatId: "[REDACTED]" });
+  });
+
+  // #3557 review (P1): a restored snapshot is untrusted, and shape is no proof of server issuance.
+  // A hyphenated PAN-shaped v4 value in it is redacted like any other string, never kept verbatim,
+  // and a compact 32-hex value is an opaque string that is never expanded into that shape.
+  it("redacts a hyphenated PAN-shaped reference and never expands a compact one", () => {
+    const hostile = "deadbeef-cafe-4abe-8853-813867352087";
+    const compact = "deadbeefcafe4abe8853813867352087";
+    expect(isSecretShapedString(hostile)).toBe(true);
+
+    const raw = JSON.stringify([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: hostile } }),
+      win({ id: "chat-2", type: "chat", cfg: { chatId: compact } }),
+      win({
+        id: "pr-1",
+        type: "governedPullRequest",
+        cfg: { projectPath: "/repo", descriptionProposalId: hostile },
+      }),
+      win({
+        id: "pr-2",
+        type: "governedPullRequest",
+        cfg: { projectPath: "/repo", descriptionProposalId: compact },
+      }),
+    ]);
+    const restored = parsePersistedWindows(raw) ?? [];
+
+    expect(restored.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { chatId: "[REDACTED]" }],
+      ["chat-2", { chatId: compact }],
+      ["pr-1", { projectPath: "/repo" }],
+      ["pr-2", { projectPath: "/repo", descriptionProposalId: compact }],
+    ]);
+    expect(JSON.stringify(restored)).not.toContain(hostile);
+    expect(JSON.stringify(sanitizePersistedWindows(restored))).not.toContain(hostile);
+  });
+
+  // #3557 review (P1): isSafeOpaqueReference used to accept ANY v4-shaped value outright,
+  // regardless of which field it was checked for. review.runId is a plain user-editable text field
+  // (the New Window dialog's "Run ID" text input AND ReviewWidget's own inline input both write it
+  // directly from what the user types), so a user could type this v4-shaped, Luhn-valid-tail value
+  // straight in and have it persist verbatim, unredacted — even though isSecretShapedString
+  // correctly flags it. The prior regression test only covered an invalid-v4 lookalike, which never
+  // reached the exemption branch at all and so proved nothing about this path.
+  it("never persists a v4-shaped PAN lookalike typed into the editable review.runId field", () => {
+    const typedByUser = "deadbeef-cafe-4abe-8853-813867352087";
+    expect(isSecretShapedString(typedByUser)).toBe(true);
+    const persisted = sanitizePersistedWindows([
+      win({ id: "review-1", type: "review", cfg: { runId: typedByUser } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([["review-1", {}]]);
+    expect(JSON.stringify(persisted)).not.toContain(typedByUser);
+  });
+
+  it("still redacts a card number that is not a canonical UUID", () => {
+    const pan = "4111 1111 1111 1111";
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: pan, title: pan } }),
+      win({ id: "review-1", type: "review", cfg: { runId: "4111-1111-1111-1111" } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { chatId: "[REDACTED]", title: "[REDACTED]" }],
+      ["review-1", {}],
+    ]);
+  });
+
+  // No exemption anywhere. A value that merely has a UUID's shape (here with a Luhn-valid 4111…
+  // tail and neither the v4 version nor variant nibble) is redacted in the title and in the
+  // reference fields alike.
+  it("never exempts a UUID-shaped card number in any field", () => {
+    const lookalike = "deadbeef-cafe-babe-4111-111111111111";
+    expect(isSecretShapedString(lookalike)).toBe(true);
+    const { wins: persisted } = sanitizePersistedWorkspace(
+      [
+        win({ id: "chat-1", type: "chat", cfg: { chatId: lookalike, title: lookalike } }),
+        win({ id: "review-1", type: "review", cfg: { runId: lookalike } }),
+        win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: lookalike } }),
+      ],
+      [],
+    );
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { chatId: "[REDACTED]", title: "[REDACTED]" }],
+      ["review-1", {}],
+      ["figma-1", {}],
+    ]);
+    expect(JSON.stringify(persisted)).not.toContain("4111-111111111111");
+  });
+
+  it("classifies a restored reference by its closed shape only", () => {
+    expect(persistedReferenceShape("[REDACTED]")).toBe("redacted");
+    expect(persistedReferenceShape("1404206d-9ab6-4bca-8853-813867352087")).toBe("uuid");
+    expect(persistedReferenceShape("chat-a")).toBe("opaque");
+    expect(persistedReferenceShape("deadbeef-cafe-babe-4111-111111111111")).toBe("opaque");
+  });
+
   it("scrubs secret-shaped config values during browser-local restore", () => {
     const raw = JSON.stringify([
       win({ id: "files-1", type: "files", cfg: { root: `token=${"t".repeat(20)}` } }),
@@ -1215,6 +1420,35 @@ describe("workspace-persistence", () => {
     const persisted = sanitizePersistedWindows(raw as unknown as AppWindow[]);
 
     expect(persisted.map((window) => window.id)).toEqual(["good-1"]);
+  });
+
+  // #3557 review: a restored window id reaches DOM attributes, connection ids and the binding
+  // evidence (the server logs its digest), so it is held to the closed shape the app mints; a
+  // window with any other id is dropped.
+  describe("restored window ids", () => {
+    it("keeps a window whose id has the shape the app mints", () => {
+      const raw = [
+        win({ id: "chat-mfr3k2x1-2", type: "chat" }),
+        win({ id: "files", type: "files" }),
+        win({ id: "w".repeat(128), type: "chat" }),
+      ];
+      expect(sanitizePersistedWindows(raw).map((entry) => entry.id)).toEqual([
+        "chat-mfr3k2x1-2",
+        "files",
+        "w".repeat(128),
+      ]);
+    });
+
+    it.each([
+      ["an empty id", ""],
+      ["an oversized id", "w".repeat(129)],
+      ["an id outside the safe alphabet", "chat 1"],
+      ["an id that joins two window ids", "files-1~chat-1"],
+      ["an id carrying markup", "<img src=x>"],
+    ])("drops a window with %s", (_label, id) => {
+      const raw = [win({ id: "good-1", type: "chat" }), win({ id, type: "chat" })];
+      expect(sanitizePersistedWindows(raw).map((entry) => entry.id)).toEqual(["good-1"]);
+    });
   });
 
   // F1/F1b — hasWindowType used `value in WIN_TYPES` rather than Object.hasOwn. The `in`

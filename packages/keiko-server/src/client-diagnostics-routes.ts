@@ -29,14 +29,40 @@
 // body) gets its own throttled `client.diagnostic.rejected` line, and every drop, rejection and
 // browser-reported delivery loss is also counted in the process-wide loss ledger that the
 // `activity-log.loss` summary persists. None of those paths ever carries the refused content.
+//
+// #3557: a third shape, a binding report, carries a restored window's binding outcome
+// (`client.binding.resolved`/`client.binding.target-missing`) with closed values only.
+//
+// KEIKO-3557: this route accepts TWO closed report shapes on the same rate limit, size bound, and
+// rejection/loss accounting above. A message report (the shape this header describes) reaches
+// `client.diagnostic` — a FAILURE, always at warn. A stage report (`useWindowStageEvidence`,
+// keiko-ui: a desktop window placeholder mounting and later unmounting) reaches
+// `client.stage.started`/`client.stage.settled` instead — the ORDINARY case, at info, with no
+// `errorKind`. Routing routine evidence through the failure-shaped operation is exactly the defect
+// this pair fixes: a live log showed 416 of 449 `client.diagnostic` lines were stage evidence, all
+// misclassified warn/unknown and burying the rare real failures a `keiko support analyze --clusters`
+// pass needs to find.
 
 import type { IncomingMessage } from "node:http";
 
 import type {
+  ClientBindingIngestRequest,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
+  ClientSessionRepairIngestRequest,
+  ClientStageId,
+  ClientStageIngestRequest,
+  ClientStageSettledIngestRequest,
+  ClientStageStartedIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
+  isClientBindingIngestRequest,
+  isClientDiagnosticIngestRequest,
+  isClientSessionRepairIngestRequest,
+  isClientStageIngestRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -68,7 +94,14 @@ const MAX_CLIENT_DIAGNOSTIC_BODY_BYTES = 4_096;
 // rolling minute is generous for genuine crash/error reporting and bounds a flooding or hostile
 // page. `minIntervalMs: 0` disables the limiter's own burst/cooldown gate, so only the sliding
 // window cap below applies.
-const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY = "client-diagnostics";
+//
+// Two sliding windows (#3557): routine evidence (a stage, a binding that resolved, a session repair
+// that recovered) spends its own budget, so a page load's dozen stage reports can never use up the
+// budget a failure report needs.
+const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS = {
+  failure: "client-diagnostics",
+  routine: "client-diagnostics-routine",
+} as const;
 
 const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -79,6 +112,14 @@ const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.noticeRateLimitedDrop",
   fields: {
     suppressedDrops: { type: "integer", dataClass: "count", required: false },
+    // Which budget overflowed, so a dropped failure report is never hidden behind routine
+    // evidence (#3557 review).
+    budget: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["failure", "routine"],
+    },
     trigger: {
       type: "string",
       dataClass: "closed-enum",
@@ -367,6 +408,352 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// Kebab-case persisted vocabulary for the `stage` field below. The registration generator's closed
+// value pattern refuses the space-separated wire ids (`ClientStageId`, e.g. "chat window chunk")
+// outright, and every other closed-enum field this module persists is already kebab-case
+// (`clientKind`, `action`, `disposition`, `outcome`). The `satisfies` clause keeps this map
+// exhaustive: a new `ClientStageId` the contracts leaf adds without a matching entry here fails
+// typecheck, not a gate.
+const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
+  "window-chunk",
+  "chat-window-chunk",
+  "editor-widget-chunk",
+  "files-widget-chunk",
+  "chat-bind",
+] as const;
+
+const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
+  "window chunk": "window-chunk",
+  "chat window chunk": "chat-window-chunk",
+  "editor widget chunk": "editor-widget-chunk",
+  "files widget chunk": "files-widget-chunk",
+  "chat bind": "chat-bind",
+} as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
+
+// KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
+// own lifecycle operations instead of the failure-shaped `CLIENT_DIAGNOSTIC_OPERATION` above — a
+// stage that starts and settles is the ordinary case, not a warning. Modelled on the non-failure
+// `coding-app-session.channel.opened`/`.closed` pair (codingAppSessionRoutes.ts): `start`/`end`
+// lifecycle, `timeline` projection, no `errorKind`, at level info.
+const CLIENT_STAGE_FIELDS = {
+  stage: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: CLIENT_STAGE_ACTIVITY_LOG_IDS,
+  },
+  ordinal: { type: "integer", dataClass: "count", required: true },
+} as const;
+
+const CLIENT_STAGE_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.stage.started",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientStageStarted",
+  fields: CLIENT_STAGE_FIELDS,
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-stage"],
+  proofIds: ["client.stage.started.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.stage.settled",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientStageSettled",
+  fields: CLIENT_STAGE_FIELDS,
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-stage"],
+  proofIds: ["client.stage.settled.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review: a restored window's binding outcome, with the closed shape of its persisted
+// reference. `resolved` is the ordinary case at info; `target-missing` is the failure at warn,
+// so a reference lost at persistence (`redacted`) and a target that is really gone (`uuid`) are
+// told apart in the log instead of collapsing into one message digest with an unknown error kind.
+// Literal here, as the registry generator requires; the assignment in `clientBindingFields` fails
+// typecheck if the contracts leaf ever adds a surface or shape these do not list.
+const CLIENT_BINDING_ACTIVITY_LOG_SURFACES = ["chat-window"] as const;
+const CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES = [
+  "uuid",
+  "opaque",
+  "redacted",
+  "fingerprint",
+  "user-selected",
+] as const;
+
+const CLIENT_BINDING_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: CLIENT_BINDING_ACTIVITY_LOG_SURFACES,
+  },
+  referenceShape: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES,
+  },
+  // The chat id trips the card-number heuristic: a raw UUID, or one found again after persistence
+  // redacted it (through its fingerprint, or chosen by the person).
+  heuristicFlagged: { type: "boolean", dataClass: "closed-enum", required: true },
+  // The digest of the window's own persisted id, computed here from the validated reference: two
+  // windows restored from one list answer stay apart, and a later failure of the same window
+  // carries the same digest (#3557 review).
+  bindingDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  // How many list loads decided the outcome, when more than the line names; the line is then
+  // `partial` with `loss: event-location-unknown`, never silently complete.
+  decidingLoadCount: { type: "integer", dataClass: "count", required: false },
+  // The other list loads a legacy binding's verdict depended on, beyond the line's correlation id.
+  relatedCorrelationIds: {
+    type: "string-array",
+    dataClass: "opaque-id",
+    required: false,
+    maxLength: 128,
+    maxItems: 63,
+  },
+} as const;
+
+const CLIENT_BINDING_TARGET_MISSING_FIELDS = {
+  ...CLIENT_BINDING_FIELDS,
+  // A window whose fingerprint names no listed chat any more: that fingerprint, so a chat the
+  // lookup found gone is told apart from a reference that never named one (#3557 review).
+  targetFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+} as const;
+
+const CLIENT_BINDING_RESOLVED_FIELDS = {
+  ...CLIENT_BINDING_FIELDS,
+  // A binding found again after redaction (through its fingerprint, or chosen by the person): the
+  // fingerprint of the chat it bound to, the one the window persists, so two choices from one list
+  // answer stay apart (#3557 review).
+  targetFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+} as const;
+
+const CLIENT_BINDING_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.resolved",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingResolved",
+  fields: CLIENT_BINDING_RESOLVED_FIELDS,
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.resolved.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.target-missing",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingTargetMissing",
+  fields: CLIENT_BINDING_TARGET_MISSING_FIELDS,
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.target-missing.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review: a window whose chat id persistence redacted without a fingerprint listed the chats
+// it may have shown, for the person to choose from. The line names the list loads that answered, how
+// many chats were offered and how many of those read alike and show a fingerprint reference, zero
+// included, so the recovery state the person saw is reconstructable.
+const CLIENT_BINDING_CANDIDATES_OFFERED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.candidates-offered",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingCandidatesOffered",
+  fields: {
+    ...CLIENT_BINDING_FIELDS,
+    candidateCount: { type: "integer", dataClass: "count", required: true },
+    disambiguatedCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.candidates-offered.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_BINDING_CHOICE_FIELDS = {
+  ...CLIENT_BINDING_FIELDS,
+  // The chat the person decided about, by the fingerprint the window persists, never its id.
+  targetFingerprint: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+} as const;
+
+// #3557 review: the chat a person chose for such a window stays a choice until they keep it; they
+// can withdraw it and choose again. Each decision is a state on the binding's timeline and names the
+// chat it concerns, so which conversation the window ended with is reconstructable.
+const CLIENT_BINDING_CHOICE_KEPT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.choice-kept",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingChoiceKept",
+  fields: CLIENT_BINDING_CHOICE_FIELDS,
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.choice-kept.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_BINDING_CHOICE_WITHDRAWN_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.choice-withdrawn",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingChoiceWithdrawn",
+  fields: CLIENT_BINDING_CHOICE_FIELDS,
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.choice-withdrawn.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review: a read a restarted BFF denied is repaired and replayed once (keiko-ui http.ts). The
+// line sits on the denied request's timeline (the replay reuses its id) and names the repair request,
+// so the self-heal, or the reason it did not happen, is reconstructable from the log alone.
+const CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES = [
+  "replay-failed",
+  "replay-skipped",
+  "repair-failed",
+] as const;
+const CLIENT_SESSION_REPAIR_ACTIVITY_LOG_RECOVERIES = ["replayed", "stream-repaired"] as const;
+const CLIENT_SESSION_REPAIR_ACTIVITY_LOG_STREAMS = ["run-events", "shared-event-source"] as const;
+
+const CLIENT_SESSION_REPAIR_RECOVERED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.session-repair.recovered",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSessionRepairRecovered",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_RECOVERIES,
+    },
+    // The stream whose failure streak asked for the repair; a stream has no readable request id.
+    stream: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_STREAMS,
+    },
+    repairCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 128,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-session-repair"],
+  proofIds: ["client.session-repair.recovered.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review: a stream's repair request was acknowledged. The endpoint acknowledges whether or
+// not it issued a cookie, so this is a state, not the recovery: the stream reports
+// `stream-repaired` once it opens again, and a streak that keeps failing after this line shows a
+// repair that did not restore it.
+const CLIENT_SESSION_REPAIR_ACKNOWLEDGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.session-repair.acknowledged",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSessionRepairAcknowledged",
+  fields: {
+    stream: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_STREAMS,
+    },
+    repairCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 128,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-session-repair"],
+  proofIds: ["client.session-repair.acknowledged.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_SESSION_REPAIR_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.session-repair.failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSessionRepairFailed",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES,
+    },
+    stream: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_STREAMS,
+    },
+    repairCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 128,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-session-repair"],
+  proofIds: ["client.session-repair.failed.line"],
+  releaseImpact: "patch",
+});
+
 // One declaration for production and the test reset below — duplicating these three literals let
 // them drift, so the test reset silently exercised a limiter with different bounds than production.
 const CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG = {
@@ -408,13 +795,20 @@ function quietRejectionThrottles(): Map<ClientDiagnosticRejection, NoticeThrottl
   return new Map(CLIENT_DIAGNOSTIC_REJECTIONS.map((rejection) => [rejection, quietThrottle()]));
 }
 
-let dropNotice = quietThrottle();
+type ClientReportBudget = "failure" | "routine";
+
+// One notice throttle per budget: routine overflow never suppresses the notice of a dropped
+// failure report, which then keeps its own correlation id and budget class.
+let dropNotices: Record<ClientReportBudget, NoticeThrottle> = {
+  failure: quietThrottle(),
+  routine: quietThrottle(),
+};
 let rejectionNotices = quietRejectionThrottles();
 
 /** Test-only: puts the shared rate limiter and notice counters back to a clean start. */
 export function resetClientDiagnosticsIngestStateForTests(): void {
   rateLimiter = createInlineCompletionRateLimiter(CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG);
-  dropNotice = quietThrottle();
+  dropNotices = { failure: quietThrottle(), routine: quietThrottle() };
   rejectionNotices = quietRejectionThrottles();
 }
 
@@ -449,6 +843,7 @@ function openThrottleWindow(throttle: NoticeThrottle, now: number | null): numbe
 
 function writeRateLimitedNotice(
   correlationId: string | undefined,
+  budget: ClientReportBudget,
   suppressed: number,
   trigger: "window" | "shutdown-flush",
 ): void {
@@ -458,6 +853,7 @@ function writeRateLimitedNotice(
       { correlationId: correlationIdOrUnknown(correlationId), errorKind: "rate-limited" },
       {
         ...(suppressed > 0 ? { suppressedDrops: suppressed } : {}),
+        budget,
         trigger,
         completeness: "complete",
         loss: "event-dropped",
@@ -468,10 +864,15 @@ function writeRateLimitedNotice(
 
 // Reports a rate-limited drop exactly once per window, carrying how many further drops that same
 // window suppressed — never the report content, which was never admitted past the limiter.
-function noticeRateLimitedDrop(now: number, correlationId: string | undefined): void {
+function noticeRateLimitedDrop(
+  budget: ClientReportBudget,
+  now: number,
+  correlationId: string | undefined,
+): void {
   recordActivityLogLoss("client-rate-suppressed");
-  if (suppressedByThrottle(dropNotice, now)) return;
-  writeRateLimitedNotice(correlationId, openThrottleWindow(dropNotice, now), "window");
+  const throttle = dropNotices[budget];
+  if (suppressedByThrottle(throttle, now)) return;
+  writeRateLimitedNotice(correlationId, budget, openThrottleWindow(throttle, now), "window");
 }
 
 function writeRejectedNotice(
@@ -514,8 +915,10 @@ function noticeRejectedReport(
  * process: the trailing counts reach the log instead of waiting for a next window that never comes.
  */
 export function flushClientDiagnosticsIngestCounts(): void {
-  const drops = openThrottleWindow(dropNotice, null);
-  if (drops > 0) writeRateLimitedNotice(undefined, drops, "shutdown-flush");
+  for (const budget of ["failure", "routine"] as const) {
+    const drops = openThrottleWindow(dropNotices[budget], null);
+    if (drops > 0) writeRateLimitedNotice(undefined, budget, drops, "shutdown-flush");
+  }
   for (const [rejection, throttle] of rejectionNotices) {
     const suppressed = openThrottleWindow(throttle, null);
     if (suppressed > 0) writeRejectedNotice(undefined, rejection, suppressed, "shutdown-flush");
@@ -655,7 +1058,10 @@ function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId
 
 // Projects the validated request onto the activity log. `message` is admitted only as a digest;
 // `readyState`/`kind` ride along as bounded, closed-shape fields.
+// The class the page classified wins (a refused connection is `unavailable`, #3557); otherwise the
+// server derives one from the report's closed context.
 function requestDiagnosticErrorKind(request: ClientDiagnosticIngestRequest): ActivityLogErrorKind {
+  if (request.errorKind !== undefined) return request.errorKind;
   if (request.moduleLoadFailure !== undefined) {
     const errorClass = request.errorEvidence?.errorClass;
     return errorClass === "ChunkLoadError" || errorClass === "NetworkError"
@@ -726,6 +1132,424 @@ function logClientDiagnostic(
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );
+}
+
+function logClientStageStarted(
+  request: ClientStageStartedIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_STAGE_STARTED_OPERATION,
+      { correlationId },
+      {
+        stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
+        ordinal: request.ordinal,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function logClientStageSettled(
+  request: ClientStageSettledIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_STAGE_SETTLED_OPERATION,
+      { correlationId, durationMs: request.durationMs },
+      {
+        stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
+        ordinal: request.ordinal,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+// A client-supplied id when it is a safe correlation id, else the ingest POST's own.
+function reportCorrelationId(
+  clientCorrelationId: string | undefined,
+  ingestCorrelationId: string | undefined,
+): string {
+  return clientCorrelationId !== undefined && isValidCorrelationId(clientCorrelationId)
+    ? clientCorrelationId
+    : correlationIdOrUnknown(ingestCorrelationId);
+}
+
+// Projects a validated stage report onto its own lifecycle operation — never the failure-shaped
+// `client.diagnostic` above. Root cause of KEIKO-3557: 416 of 449 `client.diagnostic` lines in a
+// live log were exactly this routine evidence, all persisted as warn/unknown and burying the rare
+// real failures. Both phases of one mounted stage carry the same client-minted correlation id, so the
+// pair joins in the log even when another tab reuses the stage and ordinal (#3557 review).
+function logClientStage(
+  request: ClientStageIngestRequest,
+  ingestCorrelationId: string | undefined,
+): void {
+  const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
+  if (request.phase === "started") {
+    logClientStageStarted(request, correlationId);
+    return;
+  }
+  logClientStageSettled(request, correlationId);
+}
+
+// The fields every binding line shares; a target fingerprint is added only where a line carries one.
+type ClientBindingFields = Omit<
+  ActivityLogFields<typeof CLIENT_BINDING_TARGET_MISSING_OPERATION>,
+  "targetFingerprint"
+>;
+
+// The deciding list loads the line can name: the primary id when it is a safe correlation id, and
+// each distinct safe related id besides it. An id the server refuses, or one named twice, never
+// counts as named; a malformed one is dropped rather than refusing the line (#3557 review).
+function namedDecidingLoads(request: ClientBindingIngestRequest): {
+  readonly primary: string | undefined;
+  readonly related: readonly string[];
+} {
+  const { correlationId } = request;
+  const primary =
+    correlationId !== undefined && isValidCorrelationId(correlationId) ? correlationId : undefined;
+  const related = [...new Set(request.relatedCorrelationIds ?? [])].filter(
+    (id) => id !== primary && isValidCorrelationId(id),
+  );
+  return { primary, related };
+}
+
+// How many loads decided the outcome: the reported total, or else every distinct id the report
+// declared, valid or not.
+function decidingLoadTotal(request: ClientBindingIngestRequest): number {
+  if (request.decidingLoadCount !== undefined) return request.decidingLoadCount;
+  return new Set([
+    ...(request.correlationId === undefined ? [] : [request.correlationId]),
+    ...(request.relatedCorrelationIds ?? []),
+  ]).size;
+}
+
+export function clientBindingDigest(windowRef: string): string {
+  return sha256Hex(`keiko-client-binding-v1\0${windowRef}`);
+}
+
+// Every deciding list load is named when the line can hold it (up to 64). When more loads decided
+// the outcome than the line names, the missing ones are classified loss, not a quiet count: the
+// line is `partial` with `loss: event-location-unknown`, and the total is kept (#3557 review).
+function clientBindingFields(request: ClientBindingIngestRequest): ClientBindingFields {
+  const { primary, related } = namedDecidingLoads(request);
+  const named = (primary === undefined ? 0 : 1) + related.length;
+  const deciding = decidingLoadTotal(request);
+  const unnamed = deciding > named;
+  return {
+    surface: request.surface,
+    referenceShape: request.referenceShape,
+    heuristicFlagged: request.heuristicFlagged,
+    bindingDigest: clientBindingDigest(request.windowRef),
+    ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+    ...(unnamed ? { decidingLoadCount: deciding } : {}),
+    completeness: unnamed ? "partial" : "complete",
+    loss: unnamed ? "event-location-unknown" : "none",
+  };
+}
+
+// The chat a restored binding names, only by its fingerprint and only when the report carries one.
+function targetFingerprintField(request: ClientBindingIngestRequest): {
+  readonly targetFingerprint?: string;
+} {
+  return request.targetFingerprint === undefined
+    ? {}
+    : { targetFingerprint: request.targetFingerprint };
+}
+
+function logClientBindingResolved(
+  request: ClientBindingIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_BINDING_RESOLVED_OPERATION,
+      { correlationId },
+      { ...clientBindingFields(request), ...targetFingerprintField(request) },
+    ),
+  );
+}
+
+// The ingest contract holds these fields to their outcome; the guards below only let the compiler
+// see what it already proved.
+type ClientBindingOffer = ClientBindingIngestRequest & {
+  readonly candidateCount: number;
+  readonly disambiguatedCount: number;
+};
+
+type ClientBindingChoiceDecision = ClientBindingIngestRequest & {
+  readonly outcome: "choice-kept" | "choice-withdrawn";
+  readonly targetFingerprint: string;
+};
+
+function isClientBindingOffer(request: ClientBindingIngestRequest): request is ClientBindingOffer {
+  return (
+    request.outcome === "candidates-offered" &&
+    request.candidateCount !== undefined &&
+    request.disambiguatedCount !== undefined
+  );
+}
+
+function isClientBindingChoiceDecision(
+  request: ClientBindingIngestRequest,
+): request is ClientBindingChoiceDecision {
+  return (
+    (request.outcome === "choice-kept" || request.outcome === "choice-withdrawn") &&
+    request.targetFingerprint !== undefined
+  );
+}
+
+function logClientBindingCandidatesOffered(
+  request: ClientBindingOffer,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_BINDING_CANDIDATES_OFFERED_OPERATION,
+      { correlationId },
+      {
+        ...clientBindingFields(request),
+        candidateCount: request.candidateCount,
+        disambiguatedCount: request.disambiguatedCount,
+      },
+    ),
+  );
+}
+
+function logClientBindingChoiceKept(
+  request: ClientBindingChoiceDecision,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_BINDING_CHOICE_KEPT_OPERATION,
+      { correlationId },
+      { ...clientBindingFields(request), targetFingerprint: request.targetFingerprint },
+    ),
+  );
+}
+
+function logClientBindingChoiceWithdrawn(
+  request: ClientBindingChoiceDecision,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_BINDING_CHOICE_WITHDRAWN_OPERATION,
+      { correlationId },
+      { ...clientBindingFields(request), targetFingerprint: request.targetFingerprint },
+    ),
+  );
+}
+
+function logClientBindingChoiceDecision(
+  request: ClientBindingChoiceDecision,
+  correlationId: string,
+): void {
+  if (request.outcome === "choice-kept") {
+    logClientBindingChoiceKept(request, correlationId);
+    return;
+  }
+  logClientBindingChoiceWithdrawn(request, correlationId);
+}
+
+function logClientBindingTargetMissing(
+  request: ClientBindingIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_BINDING_TARGET_MISSING_OPERATION,
+      { correlationId, errorKind: "unavailable" },
+      { ...clientBindingFields(request), ...targetFingerprintField(request) },
+    ),
+  );
+}
+
+// The binding line carries the correlation id of the request whose answer decided it (the target
+// list load), so `keiko support analyze --correlation-id` reads that load and the outcome as one
+// timeline. Without a valid one, the ingest POST's own id applies.
+function logClientBinding(
+  request: ClientBindingIngestRequest,
+  ingestCorrelationId: string | undefined,
+): void {
+  const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
+  if (request.outcome === "resolved") {
+    logClientBindingResolved(request, correlationId);
+    return;
+  }
+  if (isClientBindingOffer(request)) {
+    logClientBindingCandidatesOffered(request, correlationId);
+    return;
+  }
+  if (isClientBindingChoiceDecision(request)) {
+    logClientBindingChoiceDecision(request, correlationId);
+    return;
+  }
+  logClientBindingTargetMissing(request, correlationId);
+}
+
+// Every repair report names its repair request (the ingest contract refuses one that does not), so
+// the line always links the repair attempt it describes (#3557 review).
+function sessionRepairCorrelation(request: ClientSessionRepairIngestRequest): {
+  readonly repairCorrelationId: string;
+  readonly stream?: NonNullable<ClientSessionRepairIngestRequest["stream"]>;
+} {
+  return {
+    repairCorrelationId: request.repairCorrelationId,
+    ...(request.stream === undefined ? {} : { stream: request.stream }),
+  };
+}
+
+function logClientSessionRepairRecovered(
+  request: ClientSessionRepairIngestRequest & {
+    readonly outcome: (typeof CLIENT_SESSION_REPAIR_ACTIVITY_LOG_RECOVERIES)[number];
+  },
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SESSION_REPAIR_RECOVERED_OPERATION,
+      { correlationId },
+      {
+        outcome: request.outcome,
+        ...sessionRepairCorrelation(request),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function logClientSessionRepairAcknowledged(
+  request: ClientSessionRepairIngestRequest & {
+    readonly stream: NonNullable<ClientSessionRepairIngestRequest["stream"]>;
+  },
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SESSION_REPAIR_ACKNOWLEDGED_OPERATION,
+      { correlationId },
+      {
+        ...sessionRepairCorrelation(request),
+        stream: request.stream,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+// The class of the step that actually failed, as the browser classified it. A skipped replay
+// leaves the original refusal in place, an authority denial; any other outcome without a class is
+// unknown rather than guessed (#3557 review).
+function sessionRepairErrorKind(request: ClientSessionRepairIngestRequest): ActivityLogErrorKind {
+  if (request.errorKind !== undefined) return request.errorKind;
+  return request.outcome === "replay-skipped" ? "authority-denied" : "unknown";
+}
+
+function logClientSessionRepairFailed(
+  request: ClientSessionRepairIngestRequest & {
+    readonly outcome: (typeof CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES)[number];
+  },
+  correlationId: string,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_SESSION_REPAIR_FAILED_OPERATION,
+      { correlationId, errorKind: sessionRepairErrorKind(request) },
+      {
+        outcome: request.outcome,
+        ...sessionRepairCorrelation(request),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+// The line joins the denied request's own timeline (the replay reused its id), or a stream's
+// failure streak.
+function logClientSessionRepair(
+  request: ClientSessionRepairIngestRequest,
+  ingestCorrelationId: string | undefined,
+): void {
+  const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
+  const { outcome, stream } = request;
+  if (outcome === "replayed" || outcome === "stream-repaired") {
+    logClientSessionRepairRecovered({ ...request, outcome }, correlationId);
+    return;
+  }
+  if (outcome === "repair-acknowledged") {
+    // The contract guard refuses an acknowledged repair that names no stream.
+    if (stream !== undefined)
+      logClientSessionRepairAcknowledged({ ...request, stream }, correlationId);
+    return;
+  }
+  logClientSessionRepairFailed({ ...request, outcome }, correlationId);
+}
+
+// The closed report shapes this route accepts. They are mutually exclusive by construction: only
+// the message shape carries `message`, and every other shape declares its own `kind` literal,
+// which the message shape's closed `kind` vocabulary never contains.
+type ClassifiedClientReport =
+  | { readonly shape: "stage"; readonly report: ClientStageIngestRequest }
+  | { readonly shape: "binding"; readonly report: ClientBindingIngestRequest }
+  | { readonly shape: "session-repair"; readonly report: ClientSessionRepairIngestRequest }
+  | { readonly shape: "message"; readonly report: ClientDiagnosticIngestRequest };
+
+function classifyClientReport(value: unknown): ClassifiedClientReport | undefined {
+  if (isClientStageIngestRequest(value)) return { shape: "stage", report: value };
+  if (isClientBindingIngestRequest(value)) return { shape: "binding", report: value };
+  if (isClientSessionRepairIngestRequest(value)) {
+    // The repair id becomes a line field, so it meets the server's own correlation rule or the
+    // report is refused like any other malformed one (#3557 review).
+    return isValidCorrelationId(value.repairCorrelationId)
+      ? { shape: "session-repair", report: value }
+      : undefined;
+  }
+  if (isClientDiagnosticIngestRequest(value)) return { shape: "message", report: value };
+  return undefined;
+}
+
+function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
+  switch (classified.shape) {
+    case "stage":
+      return "routine";
+    case "binding":
+      return CLIENT_BINDING_FAILURE_OUTCOMES.has(classified.report.outcome) ? "failure" : "routine";
+    case "session-repair":
+      return CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES.has(classified.report.outcome)
+        ? "routine"
+        : "failure";
+    case "message":
+      return "failure";
+  }
+}
+
+function logClientReport(
+  classified: ClassifiedClientReport,
+  ingestCorrelationId: string | undefined,
+): void {
+  switch (classified.shape) {
+    case "stage":
+      logClientStage(classified.report, ingestCorrelationId);
+      return;
+    case "binding":
+      logClientBinding(classified.report, ingestCorrelationId);
+      return;
+    case "session-repair":
+      logClientSessionRepair(classified.report, ingestCorrelationId);
+      return;
+    case "message":
+      logClientDiagnostic(classified.report, ingestCorrelationId);
+  }
 }
 
 // Discriminates a rejected read (already a fully-formed `RouteResult`) from a successfully parsed
@@ -800,16 +1624,19 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     noticeRejectedReport(outcome.rejection, ctx.correlationId);
     return outcome.result;
   }
-  const parsed = outcome.value;
-  if (!isClientDiagnosticIngestRequest(parsed)) {
+  // Every shape shares the same size bound and rejection/loss accounting below; routine evidence
+  // and failure reports each spend their own rate-limit budget.
+  const classified = classifyClientReport(outcome.value);
+  if (classified === undefined) {
     noticeRejectedReport("invalid-shape", ctx.correlationId);
     return badRequest("Request body is not a valid diagnostic report.", ctx.correlationId);
   }
   const now = Date.now();
-  if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY, now)) {
-    noticeRateLimitedDrop(now, ctx.correlationId);
+  const budget = reportBudget(classified);
+  if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS[budget], now)) {
+    noticeRateLimitedDrop(budget, now, ctx.correlationId);
     return { status: 204, body: null };
   }
-  logClientDiagnostic(parsed, ctx.correlationId);
+  logClientReport(classified, ctx.correlationId);
   return { status: 204, body: null };
 }

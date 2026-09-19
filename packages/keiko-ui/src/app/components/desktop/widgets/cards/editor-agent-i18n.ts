@@ -15,6 +15,19 @@ const EN_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.opening": "Opening chat...",
   "chat.restoration.notFoundTitle": "Chat not found",
   "chat.restoration.notFoundBody": "This conversation was deleted or is no longer available.",
+  "chat.restoration.chooseLabel": "Conversations this window may have shown",
+  "chat.restoration.chooseBody":
+    "This window's saved conversation cannot be identified. If it is one of these, open it here:",
+  "chat.restoration.chooseOpen": "Open {title}, last active {updated}",
+  "chat.restoration.chooseOpenReference": "{label}, reference {reference}",
+  "chat.restoration.choiceNotice":
+    "You chose this conversation for this window. Keep it, or choose another if it is not the one this window showed.",
+  "chat.restoration.choicePendingNotice":
+    "You chose this conversation for this window. Check it once it opens, or choose another.",
+  "chat.restoration.choiceMissingNotice":
+    "The conversation you chose for this window is no longer available.",
+  "chat.restoration.choiceKeep": "Keep",
+  "chat.restoration.choiceAnother": "Choose another",
   "editor.askSelection.selectText": "Select text in the active editor before asking Keiko.",
   "editor.askSelection.chatUnavailable": "Chat is unavailable for this workspace.",
   "editor.askSelection.openFailed": "Could not open chat for this selection.",
@@ -110,6 +123,19 @@ const DE_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.notFoundTitle": "Chat nicht gefunden",
   "chat.restoration.notFoundBody":
     "Diese Unterhaltung wurde gelöscht oder ist nicht mehr verfügbar.",
+  "chat.restoration.chooseLabel": "Unterhaltungen, die dieses Fenster gezeigt haben könnte",
+  "chat.restoration.chooseBody":
+    "Die gespeicherte Unterhaltung dieses Fensters lässt sich nicht bestimmen. Falls es eine dieser ist, öffne sie hier:",
+  "chat.restoration.chooseOpen": "{title} öffnen, zuletzt aktiv am {updated}",
+  "chat.restoration.chooseOpenReference": "{label}, Referenz {reference}",
+  "chat.restoration.choiceNotice":
+    "Du hast diese Unterhaltung für dieses Fenster gewählt. Behalte sie, oder wähle eine andere, falls es nicht die ist, die dieses Fenster gezeigt hat.",
+  "chat.restoration.choicePendingNotice":
+    "Du hast diese Unterhaltung für dieses Fenster gewählt. Prüfe sie, sobald sie geöffnet ist, oder wähle eine andere.",
+  "chat.restoration.choiceMissingNotice":
+    "Die Unterhaltung, die du für dieses Fenster gewählt hast, ist nicht mehr verfügbar.",
+  "chat.restoration.choiceKeep": "Behalten",
+  "chat.restoration.choiceAnother": "Andere wählen",
   "editor.askSelection.selectText": "Wähle Text im aktiven Editor aus, bevor du Keiko fragst.",
   "editor.askSelection.chatUnavailable": "Der Chat ist für diesen Arbeitsbereich nicht verfügbar.",
   "editor.askSelection.openFailed": "Der Chat für diese Auswahl konnte nicht geöffnet werden.",

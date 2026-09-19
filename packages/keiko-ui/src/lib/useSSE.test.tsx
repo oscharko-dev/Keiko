@@ -1,7 +1,31 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "./client-diagnostics";
 import { useSSE } from "./useSSE";
+
+interface StreamRepair {
+  readonly acknowledged: boolean;
+  readonly repairCorrelationId: string;
+}
+const ACKNOWLEDGED: StreamRepair = { acknowledged: true, repairCorrelationId: "ui_repair-0001" };
+const REFUSED: StreamRepair = { acknowledged: false, repairCorrelationId: "ui_repair-0002" };
+const ensureLocalSession = vi.hoisted(() =>
+  vi.fn((_stream: string, _streakCorrelationId: string): Promise<StreamRepair> =>
+    Promise.resolve({ acknowledged: false, repairCorrelationId: "ui_repair-0000" }),
+  ),
+);
+const reportRecovered = vi.hoisted(() =>
+  vi.fn((_stream: string, _streakCorrelationId: string, _repairCorrelationId: string) => undefined),
+);
+
+vi.mock("./coding-app-session-client", () => ({
+  repairLocalCodingAppSessionForStream: ensureLocalSession,
+  reportStreamSessionRecovered: reportRecovered,
+}));
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -66,6 +90,8 @@ describe("useSSE", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     resetClientDiagnosticWriter();
+    ensureLocalSession.mockClear();
+    reportRecovered.mockClear();
   });
 
   it("opens encoded run streams, recovers after transient errors, ignores malformed frames, and closes on terminal events", async () => {
@@ -506,6 +532,295 @@ describe("useSSE", () => {
     expect(reported).toEqual([
       "[keiko] run-events sse stream error (kind=sse-error, readyState=2, reason=closed)",
     ]);
+    view.unmount();
+  });
+
+  // A restarted BFF invalidates its in-memory app session (ADR-0141 D5), so every reconnect after
+  // that was denied again forever, with nothing ever re-establishing one (the defect a live dev
+  // Activity Log caught: 35 `workspace.root.denied` warn lines, one per backoff attempt). The
+  // repair must run before the reconnect timer opens a new stream, at most once IN FLIGHT per
+  // failure streak — not on every error, or a persistent outage would hammer the local pairing
+  // endpoint — and a SUCCESSFUL repair must not be repeated again until a fresh streak starts. See
+  // the next two tests for what happens when the repair itself fails (#3557 review).
+  it("repairs the app session once per failure streak once the repair succeeds", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    ensureLocalSession.mockResolvedValueOnce(ACKNOWLEDGED);
+    const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 9" },
+    });
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    // Start this test from a clean failure streak regardless of what an earlier test in this file
+    // left behind: reconnectAttempts/the repair flag live at module scope and only a successful
+    // open resets them.
+    act(() => {
+      first.onopen?.(new Event("open"));
+    });
+
+    await act(async () => {
+      first.onerror?.(new Event("error"));
+      // Let the mocked repair's promise settle before the next assertion — the streak's attempt
+      // is only re-armed or consumed once it resolves.
+      await Promise.resolve();
+    });
+    // Repaired synchronously inside the onerror handler, strictly before the reconnect timer
+    // (whose minimum delay is 1s) has any chance to fire.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(1);
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+
+    await act(async () => {
+      second.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    // Same failure streak (no successful open landed between the two errors), and the first
+    // repair SUCCEEDED above: no second repair.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const third = FakeEventSource.instances[2];
+    if (third === undefined) throw new Error("Expected second reconnected stream.");
+
+    act(() => {
+      third.onopen?.(new Event("open"));
+    });
+    act(() => {
+      third.onerror?.(new Event("error"));
+    });
+    // The successful open on `third` started a new streak, so this failure repairs again.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(2);
+    // Each repair reports under its own streak's id, for this stream (#3557 review).
+    const calls = ensureLocalSession.mock.calls;
+    expect(calls.map(([stream]) => stream)).toEqual(["run-events", "run-events"]);
+    expect(calls[1]?.[1]).not.toBe(calls[0]?.[1]);
+
+    view.unmount();
+  });
+
+  // #3557 review: an acknowledged repair is not yet a recovery (the endpoint acknowledges whether
+  // or not it issued a cookie); only the stream opening again reports it, under the streak.
+  it("reports a recovered stream only once it opens again after an acknowledged repair", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => reported.push(meta));
+    ensureLocalSession.mockResolvedValueOnce(ACKNOWLEDGED);
+    const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 12" },
+    });
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+    act(() => {
+      first.onopen?.(new Event("open"));
+    });
+
+    await act(async () => {
+      first.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    // Acknowledged, but the stream is still down: nothing is recovered yet.
+    expect(reportRecovered).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+    act(() => {
+      second.onopen?.(new Event("open"));
+    });
+
+    const streak = reported[0]?.correlationId;
+    expect(reportRecovered.mock.calls).toEqual([["run-events", streak, "ui_repair-0001"]]);
+    view.unmount();
+  });
+
+  // #3557 review: a suspension ends the streak. A stream hidden after an acknowledged repair, before
+  // any successful reopen, repairs again when it is shown and denied, under a new streak.
+  it("forgets an acknowledged repair when the document hides the stream", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    ensureLocalSession.mockResolvedValue(ACKNOWLEDGED);
+    const setVisibility = (state: DocumentVisibilityState): void => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: (): DocumentVisibilityState => state,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    try {
+      const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+        initialProps: { runId: "run 15" },
+      });
+      const first = FakeEventSource.instances[0];
+      if (first === undefined) throw new Error("Expected stream.");
+      act(() => {
+        first.onopen?.(new Event("open"));
+      });
+      await act(async () => {
+        first.onerror?.(new Event("error"));
+        await Promise.resolve();
+      });
+
+      act(() => {
+        setVisibility("hidden");
+        setVisibility("visible");
+      });
+      const resumed = FakeEventSource.instances.at(-1);
+      if (resumed === undefined || resumed === first) throw new Error("Expected a resumed stream.");
+      await act(async () => {
+        resumed.onerror?.(new Event("error"));
+        await Promise.resolve();
+      });
+
+      const calls = ensureLocalSession.mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.[1]).not.toBe(calls[0]?.[1]);
+      view.unmount();
+    } finally {
+      Reflect.deleteProperty(document, "visibilityState");
+      ensureLocalSession.mockReset();
+      ensureLocalSession.mockResolvedValue({
+        acknowledged: false,
+        repairCorrelationId: "ui_repair-0000",
+      });
+    }
+  });
+
+  // #3557 review: the repair latch and the streak belong to one session. After the last subscriber
+  // left, a new subscriber whose stream is denied repairs again, under its own streak.
+  it("forgets an acknowledged repair when the last subscriber leaves", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    ensureLocalSession.mockResolvedValue(ACKNOWLEDGED);
+    const first = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 13" },
+    });
+    const streamA = FakeEventSource.instances[0];
+    if (streamA === undefined) throw new Error("Expected stream.");
+    act(() => {
+      streamA.onopen?.(new Event("open"));
+    });
+    await act(async () => {
+      streamA.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    first.unmount();
+
+    const second = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 14" },
+    });
+    const streamB = FakeEventSource.instances.at(-1);
+    if (streamB === undefined || streamB === streamA) throw new Error("Expected a new stream.");
+    await act(async () => {
+      streamB.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+
+    const calls = ensureLocalSession.mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.[1]).not.toBe(calls[0]?.[1]);
+    expect(reportRecovered).not.toHaveBeenCalled();
+    ensureLocalSession.mockReset();
+    ensureLocalSession.mockResolvedValue({
+      acknowledged: false,
+      repairCorrelationId: "ui_repair-0000",
+    });
+    second.unmount();
+  });
+
+  // #3557 review: the streak's error diagnostics and its repair share the streak's id, so the log
+  // reads the retry sequence as one timeline even though an EventSource exposes no request id.
+  it("carries the failure streak's id on every stream error of the streak and on its repair", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => reported.push(meta));
+    const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 11" },
+    });
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+    act(() => {
+      first.onopen?.(new Event("open"));
+    });
+
+    await act(async () => {
+      first.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+    await act(async () => {
+      second.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+
+    const streaks = reported.map((meta) => meta?.correlationId);
+    expect(streaks).toHaveLength(2);
+    expect(streaks[0]).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    expect(streaks[1]).toBe(streaks[0]);
+    for (const [stream, streak] of ensureLocalSession.mock.calls) {
+      expect([stream, streak]).toEqual(["run-events", streaks[0]]);
+    }
+    view.unmount();
+  });
+
+  // #3557 review (P1): a failed repair used to permanently consume the streak's only repair
+  // attempt — `sessionRepairAttempted` was set unconditionally and reset only by a successful
+  // open, so a repair that raced a restarting BFF and legitimately returned `false` left every
+  // later reconnect in the same streak receiving 403 with no further repair ever attempted, stuck
+  // until a full page reload. Without the fix this assertion sees only ONE call, not two.
+  it("retries the app session repair on the next onerror after a failed repair in the same streak", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    ensureLocalSession.mockResolvedValueOnce(REFUSED);
+    const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 10" },
+    });
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    act(() => {
+      first.onopen?.(new Event("open"));
+    });
+
+    await act(async () => {
+      first.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    expect(ensureLocalSession).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+
+    await act(async () => {
+      second.onerror?.(new Event("error"));
+      await Promise.resolve();
+    });
+    // The first repair FAILED, so this onerror — still inside the same failure streak, no
+    // successful open landed in between — must retry it rather than being permanently locked out
+    // for the rest of the streak.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(2);
+    // Both attempts belong to the one streak, so both report under its id.
+    const calls = ensureLocalSession.mock.calls;
+    expect(calls[1]?.[1]).toBe(calls[0]?.[1]);
+
     view.unmount();
   });
 });

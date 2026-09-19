@@ -19,6 +19,7 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import {
+  clientBindingDigest,
   flushClientDiagnosticsIngestCounts,
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
@@ -27,6 +28,9 @@ import { resetServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 
 const CORRELATION_ID = "client-loss-route-test";
+// Two chats' fingerprints, the one-way form a chat window persists for an id persistence redacts.
+const FINGERPRINT_A = "a1".repeat(32);
+const FINGERPRINT_B = "b2".repeat(32);
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
 function context(rawBody: string): RouteContext {
@@ -205,5 +209,398 @@ describe("client diagnostics loss evidence", () => {
     });
     expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
     expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  // KEIKO-3557: proves the new lifecycle operations reach the production file sink with a complete
+  // v2 identity, exactly like every other registered operation — not merely a buffered test event.
+  it("persists a started stage report as client.stage.started", async () => {
+    const body = JSON.stringify({
+      kind: "stage",
+      stage: "editor widget chunk",
+      phase: "started",
+      ordinal: 2,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.stage.started");
+    expect(expectActivityLogProof("client.stage.started.line", line ?? "")).toMatchObject({
+      correlationId: CORRELATION_ID,
+      stage: "editor-widget-chunk",
+      ordinal: 2,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  // #3557 review: both binding outcomes reach the production file sink with the complete identity.
+  it("persists a missing binding target as client.binding.target-missing", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-1",
+      outcome: "target-missing",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      correlationId: "ui_chat-list-load-0002",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.target-missing");
+    expect(expectActivityLogProof("client.binding.target-missing.line", line ?? "")).toMatchObject({
+      correlationId: "ui_chat-list-load-0002",
+      errorKind: "unavailable",
+      surface: "chat-window",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-1"),
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  // #3557 review: a fingerprint that names no listed chat any more persists as that fingerprint, so
+  // the failure never reads like a marker that named nothing.
+  it("persists a missing fingerprint reference with the fingerprint it no longer finds", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-9",
+      outcome: "target-missing",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      correlationId: "ui_list-gone-0002",
+      targetFingerprint: FINGERPRINT_A,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.target-missing");
+    expect(expectActivityLogProof("client.binding.target-missing.line", line ?? "")).toMatchObject({
+      correlationId: "ui_list-gone-0002",
+      errorKind: "unavailable",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
+      completeness: "complete",
+    });
+  });
+
+  it("persists a resolved binding whose reference the heuristic flags as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-1",
+      outcome: "resolved",
+      referenceShape: "uuid",
+      heuristicFlagged: true,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    const record = expectActivityLogProof("client.binding.resolved.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: CORRELATION_ID,
+      referenceShape: "uuid",
+      heuristicFlagged: true,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: both session-repair outcomes reach the production file sink with full identity.
+  it("persists a recovered session repair as client.session-repair.recovered", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "replayed",
+      correlationId: "ui_denied-read-0002",
+      repairCorrelationId: "ui_session-repair-0002",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.recovered");
+    const record = expectActivityLogProof("client.session-repair.recovered.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_denied-read-0002",
+      repairCorrelationId: "ui_session-repair-0002",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: a stream repair persists under its failure streak, naming the stream.
+  it("persists a stream repair as client.session-repair.recovered with its stream", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "stream-repaired",
+      stream: "shared-event-source",
+      correlationId: "ui_stream-streak-0001",
+      repairCorrelationId: "ui_session-repair-0004",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.recovered");
+    const record = expectActivityLogProof("client.session-repair.recovered.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_stream-streak-0001",
+      outcome: "stream-repaired",
+      stream: "shared-event-source",
+      repairCorrelationId: "ui_session-repair-0004",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // #3557 review: an acknowledged stream repair persists as its own state line.
+  it("persists an acknowledged stream repair as client.session-repair.acknowledged", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "repair-acknowledged",
+      stream: "run-events",
+      correlationId: "ui_stream-streak-0005",
+      repairCorrelationId: "ui_session-repair-0005",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.acknowledged");
+    const record = expectActivityLogProof("client.session-repair.acknowledged.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_stream-streak-0005",
+      stream: "run-events",
+      repairCorrelationId: "ui_session-repair-0005",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: a chat restored through its id's fingerprint reports that shape, and names the
+  // chat it bound to by that fingerprint.
+  it("persists a binding restored through a fingerprint as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-3",
+      outcome: "resolved",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    expect(expectActivityLogProof("client.binding.resolved.line", line ?? "")).toMatchObject({
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
+    });
+  });
+
+  // #3557 review: one window offered chats A and B from one list answer. Whichever the person
+  // chose, the line used to be identical; each now names the chat it bound to.
+  it("keeps two choices from one list answer apart by the chat each bound to", async () => {
+    for (const targetFingerprint of [FINGERPRINT_A, FINGERPRINT_B]) {
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "chat-mfr3k2x1-5",
+        outcome: "resolved",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+        correlationId: "ui_list-choice-0001",
+        decidingLoadCount: 1,
+        targetFingerprint,
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    }
+
+    const records = lines("client.binding.resolved").map((line) =>
+      expectActivityLogProof("client.binding.resolved.line", line),
+    );
+    expect(records.map((record) => record.targetFingerprint)).toEqual([
+      FINGERPRINT_A,
+      FINGERPRINT_B,
+    ]);
+    for (const record of records) {
+      expect(record).toMatchObject({
+        correlationId: "ui_list-choice-0001",
+        referenceShape: "user-selected",
+        bindingDigest: clientBindingDigest("chat-mfr3k2x1-5"),
+      });
+    }
+  });
+
+  // #3557 review: the chats a window without a fingerprint offered, zero included, are reported
+  // under the list loads that decided the offer, so the recovery state is reconstructable.
+  it("persists an offer as client.binding.candidates-offered with its count, zero included", async () => {
+    for (const offer of [
+      {
+        windowRef: "chat-mfr3k2x1-6",
+        candidateCount: 0,
+        disambiguatedCount: 0,
+        correlationId: "ui_list-offer-0001",
+      },
+      {
+        windowRef: "chat-mfr3k2x1-7",
+        candidateCount: 2,
+        disambiguatedCount: 2,
+        correlationId: "ui_list-offer-0002",
+        relatedCorrelationIds: ["ui_list-offer-0003"],
+        decidingLoadCount: 2,
+      },
+    ]) {
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        ...offer,
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    }
+
+    const [empty, offered] = lines("client.binding.candidates-offered").map((line) =>
+      expectActivityLogProof("client.binding.candidates-offered.line", line),
+    );
+    expect(empty).toMatchObject({
+      correlationId: "ui_list-offer-0001",
+      referenceShape: "redacted",
+      candidateCount: 0,
+      disambiguatedCount: 0,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-6"),
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(offered).toMatchObject({
+      correlationId: "ui_list-offer-0002",
+      relatedCorrelationIds: ["ui_list-offer-0003"],
+      candidateCount: 2,
+      disambiguatedCount: 2,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-7"),
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(empty?.errorKind).toBeUndefined();
+    expect(lines("client.binding.target-missing")).toEqual([]);
+  });
+
+  // #3557 review: a chat the person chose stays a choice until they keep it or withdraw it. Each
+  // decision persists on the binding's timeline and names the chat by its fingerprint.
+  async function postChoiceDecision(
+    outcome: "choice-kept" | "choice-withdrawn",
+    referenceShape: "fingerprint" | "user-selected",
+    targetFingerprint: string,
+  ): Promise<void> {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-8",
+      outcome,
+      referenceShape,
+      heuristicFlagged: true,
+      correlationId: "ui_list-choice-0004",
+      targetFingerprint,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+  }
+
+  const DECISION_LINE = {
+    correlationId: "ui_list-choice-0004",
+    heuristicFlagged: true,
+    bindingDigest: clientBindingDigest("chat-mfr3k2x1-8"),
+    completeness: "complete",
+    loss: "none",
+  } as const;
+
+  it("persists a kept choice as client.binding.choice-kept", async () => {
+    await postChoiceDecision("choice-kept", "user-selected", FINGERPRINT_A);
+
+    const [line] = lines("client.binding.choice-kept");
+    const record = expectActivityLogProof("client.binding.choice-kept.line", line ?? "");
+    expect(record).toMatchObject({
+      ...DECISION_LINE,
+      referenceShape: "user-selected",
+      targetFingerprint: FINGERPRINT_A,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  it("persists a withdrawn choice as client.binding.choice-withdrawn", async () => {
+    await postChoiceDecision("choice-withdrawn", "fingerprint", FINGERPRINT_B);
+
+    const [line] = lines("client.binding.choice-withdrawn");
+    const record = expectActivityLogProof("client.binding.choice-withdrawn.line", line ?? "");
+    expect(record).toMatchObject({
+      ...DECISION_LINE,
+      referenceShape: "fingerprint",
+      targetFingerprint: FINGERPRINT_B,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: a window whose redacted id carries no fingerprint, bound to the chat the person
+  // chose, under the chat list load that offered it.
+  it("persists a binding the person chose as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-5",
+      outcome: "resolved",
+      referenceShape: "user-selected",
+      heuristicFlagged: true,
+      correlationId: "ui_list-choice-0001",
+      decidingLoadCount: 1,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    expect(expectActivityLogProof("client.binding.resolved.line", line ?? "")).toMatchObject({
+      correlationId: "ui_list-choice-0001",
+      referenceShape: "user-selected",
+      heuristicFlagged: true,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("persists a failed session repair as client.session-repair.failed", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "repair-failed",
+      correlationId: "ui_denied-read-0003",
+      repairCorrelationId: "ui_session-repair-0003",
+      errorKind: "unavailable",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.failed");
+    expect(expectActivityLogProof("client.session-repair.failed.line", line ?? "")).toMatchObject({
+      correlationId: "ui_denied-read-0003",
+      errorKind: "unavailable",
+      outcome: "repair-failed",
+      repairCorrelationId: "ui_session-repair-0003",
+    });
+  });
+
+  it("persists a settled stage report as client.stage.settled, with durationMs on the envelope", async () => {
+    const body = JSON.stringify({
+      kind: "stage",
+      stage: "editor widget chunk",
+      phase: "settled",
+      ordinal: 2,
+      durationMs: 17,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.stage.settled");
+    const record = expectActivityLogProof("client.stage.settled.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: CORRELATION_ID,
+      durationMs: 17,
+      stage: "editor-widget-chunk",
+      ordinal: 2,
+    });
+    expect(record.errorKind).toBeUndefined();
   });
 });

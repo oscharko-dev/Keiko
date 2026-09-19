@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c3defabe64d722801279bd49e6bb06d417e817efdf413810156c9a5e8951f1ee"
+    "catalogDigest": "c41e9854b0d1bf52d620a40b562f8b3bfbd17b32aa9cf6d8b25e966c0fed9731"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 430,
-    "proofCount": 438,
-    "resolvedProofCount": 438,
-    "failureClassCount": 312,
+    "operationCount": 444,
+    "proofCount": 452,
+    "resolvedProofCount": 452,
+    "failureClassCount": 316,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -96,6 +96,8 @@
         "pr-description.chat.turn.admitted",
         "pr-description.chat.turn.denied",
         "project.workspace.reconnect",
+        "reference-id.exhausted",
+        "reference-id.issued",
         "request",
         "server.diagnostic.failure",
         "sse.run-events.resume",
@@ -110,10 +112,20 @@
       "owners": ["keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
+        "client.binding.candidates-offered",
+        "client.binding.choice-kept",
+        "client.binding.choice-withdrawn",
+        "client.binding.resolved",
+        "client.binding.target-missing",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
         "client.markdown.layout",
+        "client.session-repair.acknowledged",
+        "client.session-repair.failed",
+        "client.session-repair.recovered",
+        "client.stage.settled",
+        "client.stage.started",
         "voice.dialogue.stage"
       ],
       "scenarios": ["client-diagnostics.dependency-failure", "client-diagnostics.loss"]
@@ -159,6 +171,8 @@
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
+        "gateway.readiness.completed",
+        "gateway.readiness.started",
         "gateway.retry.budget-exhausted",
         "gateway.retry.exhausted",
         "gateway.retry.scheduled",
@@ -615,9 +629,12 @@
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
+    "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
+    "client-session-repair": ["client-diagnostics.dependency-failure"],
+    "client-stage": ["client-diagnostics.dependency-failure"],
     "coding-app-session-channel": ["tools-workflows.dependency-failure"],
     "coding-app-session-pairing": ["tools-workflows.dependency-failure"],
     "coding-app-session-rotation": ["tools-workflows.dependency-failure"],
@@ -840,6 +857,7 @@
     "process-startup": ["ui.dependency-failure"],
     "read-only-child-run": ["tools-workflows.dependency-failure"],
     "read-only-child-runner": ["tools-workflows.dependency-failure"],
+    "reference-id": ["bff.dependency-failure"],
     "repository-fingerprint-diff": ["memory-knowledge.dependency-failure"],
     "rerank-degradation": ["memory-knowledge.dependency-failure"],
     "runtime-confinement": ["tools-workflows.dependency-failure"],
@@ -994,6 +1012,19 @@
     "cli.uninstall.started.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
+    "client.binding.candidates-offered.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.binding.choice-kept.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.binding.choice-withdrawn.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.binding.resolved.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.binding.target-missing.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
     "client.diagnostic.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.diagnostic.rate-limited.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
@@ -1005,6 +1036,17 @@
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
     "client.markdown.layout.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.session-repair.acknowledged.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.session-repair.failed.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.session-repair.recovered.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.stage.settled.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.stage.started.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "coding-app-session.channel.closed.duration": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
     ],
@@ -1403,6 +1445,8 @@
     "gateway.readiness.automatic.started.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
+    "gateway.readiness.completed.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
+    "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
     "gateway.retry.budget-exhausted.emitted-line": [
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
@@ -1827,6 +1871,8 @@
     "process.started.runtime": ["packages/keiko-cli/src/ui.activity-log-proof.test.ts"],
     "process.started.configuration": ["packages/keiko-cli/src/ui.activity-log-proof.test.ts"],
     "project.workspace.reconnect.outcome": ["packages/keiko-server/src/store-handlers.test.ts"],
+    "reference-id.exhausted.line": ["packages/keiko-server/src/reference-id.test.ts"],
+    "reference-id.issued.line": ["packages/keiko-server/src/reference-id.test.ts"],
     "repository.fingerprint-diff.completed.counts": [
       "packages/keiko-local-knowledge/src/repository-pod.test.ts"
     ],

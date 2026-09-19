@@ -18,8 +18,10 @@ import {
 
 import {
   ACTIVITY_LOG_POLICY_SETTINGS,
+  applyActivityLogRetention,
   isSoleActivityLogWriter,
   readActivityLogPolicyRecord,
+  resolveActivityLogStorageConfig,
   resolveActivityLogStorePolicy,
   writeActivityLogPolicyRecord,
   type ActivityLogFileEntry,
@@ -308,5 +310,88 @@ describe("resolveActivityLogStorePolicy (#3554)", () => {
       );
     }).not.toThrow();
     expect(outcome).toStrictEqual({ ...VALUES_A, conflict: undefined });
+  });
+});
+
+// #3557 review: a writer rotating make-before-break holds, for a moment, its full segment and its next
+// one, created empty and admitted by its own re-check before it writes a byte. A peer must count that
+// writer once: at the minimum budget two writers fit, and no event is dropped.
+describe("applyActivityLogRetention active reservations (#3557)", () => {
+  const segmentBytes = 32 * 1024;
+  const config = resolveActivityLogStorageConfig({
+    KEIKO_LOG_RETENTION_BYTES: String(64 * 1024),
+    KEIKO_LOG_SEGMENT_BYTES: String(segmentBytes),
+  });
+
+  function active(instanceId: string, index: number, sizeBytes: number): ActivityLogFileEntry {
+    const name = activityLogSegmentFileName(
+      { startMs: Date.now(), pid: 4242, instanceId, index },
+      "active",
+    );
+    const file = parseActivityLogFileName(name);
+    if (file === undefined) throw new Error("expected a parseable segment name");
+    return { file, path: name, sizeBytes, mtimeMs: Date.now() };
+  }
+
+  function admitsAnotherSegment(files: readonly ActivityLogFileEntry[]): boolean {
+    return applyActivityLogRetention(
+      {
+        files,
+        pins: [],
+        pinRecordBytes: 0,
+        config,
+        nowMs: Date.now(),
+        reserveBytes: segmentBytes,
+        skipNames: new Set(),
+      },
+      () => true,
+    ).admitted;
+  }
+
+  it("pins the fixture: the minimum budget holds exactly two segments", () => {
+    expect(config).toMatchObject({ retentionBytes: 64 * 1024, segmentBytes });
+  });
+
+  it("counts a rotating writer once while its next segment is still empty", () => {
+    expect(
+      admitsAnotherSegment([active("0a0b0c0d", 1, segmentBytes - 512), active("0a0b0c0d", 2, 0)]),
+    ).toBe(true);
+  });
+
+  it("reserves a rotating writer's next segment in full once it holds bytes", () => {
+    expect(
+      admitsAnotherSegment([active("0a0b0c0d", 1, segmentBytes - 512), active("0a0b0c0d", 2, 100)]),
+    ).toBe(false);
+  });
+
+  // #3557 review: for the rotating writer itself this pass is the re-check a peer relies on. If its
+  // full segment could not be sealed or recovered, it still holds its active name, and the next one
+  // is admitted only if both fit beside the peer's segment.
+  it("never discounts the checking writer's own successor while its full segment is stranded", () => {
+    const outcome = applyActivityLogRetention(
+      {
+        files: [
+          active("0a0b0c0d", 1, segmentBytes - 512),
+          active("0a0b0c0d", 2, 0),
+          active("0e0e0e0e", 1, segmentBytes - 1024),
+        ],
+        pins: [],
+        pinRecordBytes: 0,
+        config,
+        nowMs: Date.now(),
+        reserveBytes: 0,
+        skipNames: new Set(),
+        ownInstanceId: "0a0b0c0d",
+      },
+      () => true,
+    );
+
+    expect(outcome.admitted).toBe(false);
+  });
+
+  it("reserves another writer's empty segment in full", () => {
+    expect(
+      admitsAnotherSegment([active("0a0b0c0d", 1, segmentBytes - 512), active("0e0e0e0e", 1, 0)]),
+    ).toBe(false);
   });
 });

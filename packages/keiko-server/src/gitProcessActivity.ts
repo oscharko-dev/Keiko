@@ -308,6 +308,30 @@ function gitOutcomeFields(subcommand: string, result: GitProcessResult): GitOutc
   };
 }
 
+// True when a TRUNCATED result's termination is fully explained by Keiko's own byte cap — the
+// ordinary case (the runner's SIGTERM/SIGKILL escalation actually ended the process, so it closes
+// via a signal with `exitCode: null`) or the rarer race where `git` had already finished writing
+// everything and exited 0 right as the cap tripped (see the comment on `isSuccessfulGitOutcome`
+// below). `timedOut`/`aborted` are excluded here even though the runner sets `truncated` for both
+// of those too, because those are Keiko's OTHER two stops, not the byte cap; every caller of this
+// predicate ranks them itself.
+//
+// `exitCode` and `signal` are mutually exclusive on every real result (Node's `child_process`
+// contract: a process either calls `exit()` itself or is torn down by a signal, never both), and
+// the only thing that ever signals this runner's child is its own cap/timeout/abort escalation in
+// `terminateWithEscalation` (keiko-git's `runner.ts`) — so a NON-null, non-zero `exitCode` can only
+// mean `git` chose that exit status itself. A `cat-file` that streams past the byte cap and THEN
+// fails on its own (a corrupt or unreadable object closing at exit 128, say) must never be read as
+// the cap's own successful stop merely because the run also crossed the cap on the way there — the
+// P1 this predicate exists to close: `isSuccessfulGitOutcome` used to return `true` from `truncated`
+// alone, so a genuine git failure produced no `git.process.failed` line and a caller reading a
+// bounded prefix on purpose (`gitChangeSnapshotReader.ts`'s `allowTruncation`) could consume the
+// failed partial output as if it were a deliberate prefix (#3557).
+export function isCapTerminatedTruncation(result: GitProcessResult): boolean {
+  if (!result.truncated || result.timedOut === true || result.aborted === true) return false;
+  return result.exitCode === null || result.exitCode === 0;
+}
+
 // NOT a bare `exitCode === 0`. Two things make that wrong:
 //
 //   * Keiko's byte cap sets `truncated` and terminates the child independently of the exit status,
@@ -320,14 +344,30 @@ function gitOutcomeFields(subcommand: string, result: GitProcessResult): GitOutc
 //     failures would put a `warn` line under every healthy untracked-file diff and make the log
 //     contradict the response it exists to explain. Only the call site knows this, so it says so
 //     through `expectedExitCodes` rather than the observer guessing.
+//
+// A call site that reads a bounded prefix on purpose says so through `expectedTruncation`: for it,
+// hitting the byte cap is the success — PROVIDED the byte cap is actually what the run ended on
+// (`isCapTerminatedTruncation` above). A timeout or an abort also sets `truncated` and stays a
+// failure there too, and so does `git` failing on its own after streaming past the cap: that is a
+// real git failure, not a degraded-but-successful bounded read, however much output it produced.
 function isSuccessfulGitOutcome(
   result: GitProcessResult,
-  expectedExitCodes: readonly number[] | undefined,
+  expectations: GitOutcomeExpectations,
 ): boolean {
-  if (result.truncated) return false;
+  if (result.truncated) {
+    return expectations.expectedTruncation === true && isCapTerminatedTruncation(result);
+  }
   if (result.exitCode === 0) return true;
-  return result.exitCode !== null && (expectedExitCodes?.includes(result.exitCode) ?? false);
+  return (
+    result.exitCode !== null && (expectations.expectedExitCodes?.includes(result.exitCode) ?? false)
+  );
 }
+
+/** What only the call site knows about its own outcomes; see `GitProcessOptions`. */
+export type GitOutcomeExpectations = Pick<
+  GitProcessOptions,
+  "expectedExitCodes" | "expectedTruncation" | "classifyFailure"
+>;
 
 /**
  * Writes at most one body-free line for one finished git invocation. A successful run emits
@@ -341,15 +381,14 @@ export function logGitProcessOutcome(
   args: readonly string[],
   result: GitProcessResult,
   durationMs: number,
-  expectedExitCodes?: readonly number[],
-  classifyFailure?: (result: GitProcessResult) => string | undefined,
+  expectations: GitOutcomeExpectations = {},
 ): void {
-  if (isSuccessfulGitOutcome(result, expectedExitCodes)) return;
+  if (isSuccessfulGitOutcome(result, expectations)) return;
   const id = correlationIdOrUnknown(correlationId);
   const subcommand = gitSubcommand(args) ?? UNNAMED_SUBCOMMAND;
   const fields = gitOutcomeFields(subcommand, result);
   const failureKind = boundedGitFailureKind(
-    gitFailureErrorKind(result, subcommand, classifyFailure),
+    gitFailureErrorKind(result, subcommand, expectations.classifyFailure),
   );
   if (result.refusal !== undefined) {
     writeGitRefusal(log, id, durationMs, fields, failureKind, result.refusal);
@@ -437,15 +476,7 @@ export function observedGitRunner(
     // very reconstruction evidence this line exists to provide.
     const elapsed = startLogTimer();
     const result = await runner(args, options);
-    logGitProcessOutcome(
-      log,
-      correlationId,
-      args,
-      result,
-      elapsed(),
-      options.expectedExitCodes,
-      options.classifyFailure,
-    );
+    logGitProcessOutcome(log, correlationId, args, result, elapsed(), options);
     return result;
   };
 }

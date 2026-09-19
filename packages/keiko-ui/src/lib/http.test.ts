@@ -5,8 +5,22 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { bffFetchJson } from "./http";
+import { bffFetchJson, bffRequestErrorKind } from "./http";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+
+// bffFetchJson loads this primitive through a dynamic import() (http.ts documents why: a static
+// import would cycle back through ./coding-app-session-client, which imports bffFetchJson FROM
+// here). vi.mock intercepts the module regardless of how it is imported, so the dynamic import
+// resolves to this stub exactly like a static one would.
+const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+const REPAIR_CORRELATION_ID = "ui_session-repair-0001";
+
+vi.mock("./coding-app-session-client", () => ({
+  repairLocalCodingAppSessionWithEvidence: async (): Promise<{
+    readonly repaired: boolean;
+    readonly correlationId: string;
+  }> => ({ repaired: await ensureLocalSession(), correlationId: REPAIR_CORRELATION_ID }),
+}));
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -23,6 +37,8 @@ function lastInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
 afterEach(() => {
   vi.unstubAllGlobals();
   resetClientDiagnosticWriter();
+  ensureLocalSession.mockReset();
+  ensureLocalSession.mockResolvedValue(false);
 });
 
 describe("bffFetchJson — header union", () => {
@@ -262,5 +278,251 @@ describe("bffFetchJson — error handling", () => {
       ApiError,
     );
     expect(enrichError).toHaveBeenCalledWith(expect.any(ApiError), undefined);
+  });
+});
+
+// A restarted BFF invalidates its in-memory app session (ADR-0141 D5); a managed-task-workspace
+// read denied only for that reason must self-heal instead of failing forever — the client-side
+// defect a live dev Activity Log caught (35 `workspace.root.denied` /
+// `managed-root-session-authority-missing` warn lines after every restart, with no recovery). These
+// pin the exact repair-and-retry contract: ONE repair, ONE retry, and precise gating on the DENIED
+// 403 shape `resolveRequestRoot` actually throws — never a broader 403 or a repeated repair.
+describe("bffFetchJson — session-denied 403 self-heal (ADR-0141 D5)", () => {
+  function deniedResponse(): Response {
+    return jsonResponse({ error: { code: "DENIED", message: "no" } }, 403);
+  }
+
+  it("repairs a stale app session once and retries a DENIED request", async () => {
+    ensureLocalSession.mockResolvedValueOnce(true);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(deniedResponse())
+      .mockResolvedValueOnce(jsonResponse({ value: 7 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson<{ value: number }>("/api/x")).resolves.toEqual({ value: 7 });
+    expect(ensureLocalSession).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns the second DENIED unchanged without looping", async () => {
+    ensureLocalSession.mockResolvedValueOnce(true);
+    // A fresh Response per call: a Response body can only be read once, and the retry must hit a
+    // real, unconsumed 403 rather than a second read of the first attempt's already-drained body.
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(deniedResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson("/api/x")).rejects.toMatchObject({ code: "DENIED", status: 403 });
+    // Exactly one repair attempt: the retry's own DENIED is surfaced as-is, never chased further.
+    expect(ensureLocalSession).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns the original error when the repair itself fails", async () => {
+    ensureLocalSession.mockResolvedValueOnce(false);
+    const fetchMock = vi.fn().mockResolvedValue(deniedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson("/api/x")).rejects.toMatchObject({ code: "DENIED", status: 403 });
+    expect(ensureLocalSession).toHaveBeenCalledOnce();
+    // A failed repair never retries the request.
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not repair on a 403 that is not DENIED", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ error: { code: "PATH_ESCAPE", message: "no" } }, 403));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson("/api/x")).rejects.toMatchObject({
+      code: "PATH_ESCAPE",
+      status: 403,
+    });
+    expect(ensureLocalSession).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  // A DENIED is also a genuine refusal (an EACCES file, a denied sensitive path) that the client
+  // cannot tell apart from a stale session, and a write may have started before it was refused, so a
+  // write is never replayed. The repair still runs, so the user's next attempt carries a session.
+  it.each(["POST", "PUT", "PATCH", "DELETE"])(
+    "repairs the session but never replays a denied %s",
+    async (method) => {
+      ensureLocalSession.mockResolvedValueOnce(true);
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(deniedResponse()));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(bffFetchJson("/api/x", { method, body: "{}" })).rejects.toMatchObject({
+        code: "DENIED",
+        status: 403,
+      });
+      expect(ensureLocalSession).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("replays a denied HEAD like a GET, both being safe reads", async () => {
+    ensureLocalSession.mockResolvedValueOnce(true);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(deniedResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson("/api/x", { method: "head" })).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // The app-session requests themselves opt out: a repair that ran through the repair would join
+  // its own attempt in flight and never settle.
+  it("never starts a repair for a request that opts out of it", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(deniedResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      bffFetchJson("/api/x", { method: "POST" }, { repairSession: false }),
+    ).rejects.toMatchObject({ code: "DENIED", status: 403 });
+    expect(ensureLocalSession).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not repair on a non-403 error, even with code DENIED", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ error: { code: "DENIED", message: "no" } }, 409));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson("/api/x")).rejects.toMatchObject({ code: "DENIED", status: 409 });
+    expect(ensureLocalSession).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+// #3557 review: the denied request, the repair and the replay are three requests; the evidence links
+// them on the denied request's timeline and names the outcome, whatever it was.
+describe("bffFetchJson — session repair evidence", () => {
+  function deniedResponse(): Response {
+    return jsonResponse({ error: { code: "DENIED", message: "no" } }, 403);
+  }
+
+  function sentCorrelationId(fetchMock: ReturnType<typeof vi.fn>, index: number): string {
+    const init = (fetchMock.mock.calls[index] as [string, RequestInit])[1];
+    return (init.headers as Record<string, string>)["X-Keiko-Correlation-Id"] ?? "";
+  }
+
+  function captureReports(): { message: string; meta: unknown }[] {
+    const reports: { message: string; meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
+    return reports;
+  }
+
+  it("replays under the denied request's id and reports the recovery with the repair's id", async () => {
+    const reports = captureReports();
+    ensureLocalSession.mockResolvedValueOnce(true);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(deniedResponse())
+      .mockResolvedValueOnce(jsonResponse({ value: 1 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson("/api/x")).resolves.toEqual({ value: 1 });
+
+    const deniedId = sentCorrelationId(fetchMock, 0);
+    expect(deniedId).not.toBe("");
+    expect(sentCorrelationId(fetchMock, 1)).toBe(deniedId);
+    expect(reports).toEqual([
+      {
+        message: "[keiko] stale session repair: replayed",
+        meta: {
+          correlationId: deniedId,
+          sessionRepairReport: { outcome: "replayed", repairCorrelationId: REPAIR_CORRELATION_ID },
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    ["repair-failed", false, "GET", 1, undefined],
+    ["replay-skipped", true, "POST", 1, "authority-denied"],
+    ["replay-failed", true, "GET", 2, "authority-denied"],
+  ] as const)(
+    "reports %s on the denied request's timeline",
+    async (outcome, repaired, method, requests, errorKind) => {
+      const reports = captureReports();
+      ensureLocalSession.mockResolvedValueOnce(repaired);
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(deniedResponse()));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(bffFetchJson("/api/x", { method })).rejects.toMatchObject({ code: "DENIED" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(requests);
+      expect(reports).toEqual([
+        {
+          message: `[keiko] stale session repair: ${outcome}`,
+          meta: {
+            correlationId: sentCorrelationId(fetchMock, 0),
+            sessionRepairReport: {
+              outcome,
+              repairCorrelationId: REPAIR_CORRELATION_ID,
+              ...(errorKind === undefined ? {} : { errorKind }),
+            },
+          },
+        },
+      ]);
+    },
+  );
+
+  // #3557 review: a replay that fails for another reason must not read as an authority denial.
+  it("classifies a replay that fails with a 502 as unavailable", async () => {
+    const reports = captureReports();
+    ensureLocalSession.mockResolvedValueOnce(true);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(deniedResponse())
+        .mockResolvedValueOnce(jsonResponse({ error: { code: "UPSTREAM", message: "no" } }, 502)),
+    );
+
+    await expect(bffFetchJson("/api/x")).rejects.toMatchObject({ status: 502 });
+
+    expect(reports[0]?.meta).toMatchObject({
+      sessionRepairReport: { outcome: "replay-failed", errorKind: "unavailable" },
+    });
+  });
+
+  it("reports nothing for a request that opts out of the repair", async () => {
+    const reports = captureReports();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => Promise.resolve(deniedResponse())),
+    );
+
+    await expect(bffFetchJson("/api/x", undefined, { repairSession: false })).rejects.toMatchObject(
+      { code: "DENIED" },
+    );
+    expect(reports).toEqual([]);
+  });
+});
+
+// #3557 review: the closed class a failed BFF request contributes to evidence.
+describe("bffRequestErrorKind", () => {
+  it.each([
+    [new ApiError("DENIED", "no", 403), "authority-denied"],
+    [new ApiError("UNAUTHORIZED", "no", 401), "authority-denied"],
+    [new ApiError("CONFLICT", "no", 409), "conflict"],
+    [new ApiError("RATE", "no", 429), "rate-limited"],
+    [new ApiError("CANCELLED", "no", 499), "cancelled"],
+    [new ApiError("INTERNAL", "no", 500), "internal"],
+    [new ApiError("UPSTREAM", "no", 502), "unavailable"],
+    [new ApiError("NOT_FOUND", "no", 404), "invalid-request"],
+    [new DOMException("aborted", "AbortError"), "cancelled"],
+    [new TypeError("Failed to fetch"), "unavailable"],
+    [new Error("other"), "unknown"],
+  ] as const)("classifies %s as %s", (error, kind) => {
+    expect(bffRequestErrorKind(error)).toBe(kind);
   });
 });

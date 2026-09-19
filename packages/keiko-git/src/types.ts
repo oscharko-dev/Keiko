@@ -85,6 +85,26 @@ export interface GitProcessOptions {
    */
   readonly expectedExitCodes?: readonly number[] | undefined;
   /**
+   * This call site reads a bounded prefix on purpose, so reaching `maxBytes` is its successful
+   * outcome and an observer must not report it as a failure. The motivating case is the binary
+   * check in `gitChangeSnapshotBinary.ts`: `git cat-file blob` capped at git's own 8,000-byte
+   * binary-sniff prefix, which nearly every ordinary source file exceeds, so one snapshot of a real
+   * diff logged hundreds of `git.process.failed` lines for reads that all succeeded.
+   *
+   * That success reading applies only when the byte cap is actually what the run ended on — an
+   * `exitCode: null` signal kill (the runner's own SIGTERM/SIGKILL escalation), or the rarer race
+   * where `git` had already exited 0 right as the cap tripped. A run that streamed past the cap and
+   * THEN failed on its own, with a real nonzero exit `git` chose independently (a corrupt or
+   * unreadable object, say), is a genuine failure and must be reported as one even though
+   * `truncated` is also set — see `isCapTerminatedTruncation` in keiko-server's
+   * `gitProcessActivity.ts`, the observer-side half of this contract (#3557).
+   *
+   * The runner does not read this or change any process behaviour because of it, the same contract
+   * as `expectedExitCodes`. It covers only the byte cap: a timeout or an abort also leaves
+   * `truncated` set, and those are still reported.
+   */
+  readonly expectedTruncation?: boolean | undefined;
+  /**
    * A call-site override for `errorKind` classification when a caller already owns a more precise
    * taxonomy than the generic one an observer would pick. `gitDelivery/syncExecution.ts` is the
    * motivating case: it classifies a failed pull's `stderr` into `not-fast-forward` /

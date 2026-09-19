@@ -824,42 +824,61 @@ describe("bounded coding safe-activity projection", () => {
     expect(priorWorkspaceListener).toHaveBeenCalledOnce();
   });
 
-  it("records a content-free diagnostic for explicit purge reasons", () => {
-    const records: ServerDiagnosticRecord[] = [];
+  it.each(["stop", "takeover", "shutdown", "workspace-switch"] as const)(
+    "records a routine %s purge as a purged line, never as a failure diagnostic",
+    (reason) => {
+      // A routine purge clears an in-memory UI projection and loses nothing. Reported as an
+      // error-level server.diagnostic.failure, every server shutdown opened a false support
+      // incident. The one fault reason keeps its content-free diagnostic, pinned in
+      // codingSafeActivityProjection.invariantPurge.test.ts.
+      const records: ServerDiagnosticRecord[] = [];
+      const activityLog = createBufferedServerLogSink();
+      const projection = createCodingSafeActivityProjection({
+        now: () => 1_721_323_200_000,
+        diagnostics: { record: (record) => void records.push(record) },
+        activityLog,
+      });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+
+      projection.purge(RUN_ID, reason);
+
+      expect(records).toEqual([]);
+      expect(activityLog.events).toEqual([
+        {
+          category: "process",
+          op: "coding-runtime.safe-activity",
+          correlationId: RUN_ID,
+          extra: { completeness: "complete", event: "purged", loss: "none", reason },
+        },
+      ]);
+      expect(
+        validateRegisteredActivityLogEvent(
+          activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+        ),
+      ).toMatchObject({ op: "coding-runtime.safe-activity" });
+    },
+  );
+
+  it("carries the shutdown's correlation id when no run is left to tie the purge to", () => {
     const activityLog = createBufferedServerLogSink();
-    const projection = createCodingSafeActivityProjection({
-      now: () => 1_721_323_200_000,
-      diagnostics: { record: (record) => void records.push(record) },
-      activityLog,
-    });
-    projection.open({
-      runId: RUN_ID,
-      workspaceId: WORKSPACE_ID,
-      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
-      workspaceIsCurrent: () => true,
-    });
+    const projection = createCodingSafeActivityProjection({ activityLog });
+    // A UI subscription opened while no run was active keeps the purge retained without a run id.
+    projection.subscribeContent(() => undefined);
 
-    projection.purge(RUN_ID, "takeover");
+    projection.purgeAll("shutdown", "shutdown-correlation-0001");
 
-    expect(records).toContainEqual(
+    expect(activityLog.events).toEqual([
       expect.objectContaining({
-        code: "CODING_SAFE_ACTIVITY_PURGED",
-        correlationId: RUN_ID,
-        errorClass: "SafeActivityProjectionPurge",
+        op: "coding-runtime.safe-activity",
+        correlationId: "shutdown-correlation-0001",
+        extra: expect.objectContaining({ event: "purged", reason: "shutdown" }) as unknown,
       }),
-    );
-    expect(JSON.stringify(records)).toContain("takeover");
-    expect(activityLog.events).toContainEqual({
-      category: "process",
-      op: "coding-runtime.safe-activity",
-      correlationId: RUN_ID,
-      extra: { completeness: "complete", event: "purged", loss: "none", reason: "takeover" },
-    });
-    expect(
-      validateRegisteredActivityLogEvent(
-        activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
-    ).toMatchObject({ op: "coding-runtime.safe-activity" });
+    ]);
   });
 
   it("replaces the plan snapshot with monotonic revisions and purges it with the feed", () => {

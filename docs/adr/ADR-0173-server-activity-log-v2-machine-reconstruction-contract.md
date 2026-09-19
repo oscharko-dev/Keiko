@@ -567,8 +567,9 @@ available fields (node/platform/arch/product version, install mode, host, port, 
 provider count) ride directly on `process.started` itself — there is no separate `process.config`
 op — while the gateway-specific fields that are only knowable once a `GatewayConfig` has been
 assembled ride on their own `gateway.config.resolved` line (emitted once per `Gateway`
-construction: per-provider `modelId`, `endpointHost`, `timeoutMs`, `maxRetries`,
-`retryBaseDelayMs` — never `baseUrl` or `apiKey`). Folding the cheap fields into `process.started`
+construction: `providerCount` and `providerConfigDigest`, a digest over the per-provider
+`modelId`, `endpointHost`, `timeoutMs`, `maxRetries` and `retryBaseDelayMs` — never `baseUrl`
+or `apiKey`). Folding the cheap fields into `process.started`
 rather than a separate `process.config` line avoids a second, always-co-occurring event for data
 that is knowable at the exact same instant `process.started` already fires. Feature flags remain an
 explicitly named, out-of-scope-for-this-epic follow-up.
@@ -872,8 +873,8 @@ request":
   Shared on-demand readiness work retains each waiting request's causality. The first caller owns
   the probe's start and completion; every concurrent caller emits `gateway.readiness.automatic.joined`
   with its request correlation and the probe correlation as its parent (omitted for an identical
-  correlation). Model and configuration-generation fields identify the shared work without making
-  another provider call. Both successful and failed probes remain traceable from create, send and
+  correlation). The model's digest and the configuration generation identify the shared work
+  without making another provider call. Both successful and failed probes remain traceable from create, send and
   regeneration requests. Assistant-response links accept only validated correlation identities;
   malformed response bodies and invalid identities produce no fabricated link.
   Known browser prerequisite failures use closed structured fields: a Git-sync validator chunk
@@ -907,10 +908,118 @@ request":
   structurally have no id (native `EventSource`, message-only notices) say so in their doc comments
   rather than inventing one.
 
+- **Routine browser evidence is not a failure, and every browser report is a closed shape**
+  (#3557). A live dev log showed 416 of 449 `client.diagnostic` lines were a window's routine
+  stage evidence, all at `warn` with `errorKind: unknown`, burying the real failures. The route
+  now accepts four closed shapes, each with its own operations:
+  - a message: `client.diagnostic`, a failure at `warn`, as above;
+  - a window stage: `client.stage.started` / `client.stage.settled` at `info`. One
+    client-minted correlation id per mount joins both phases, and the duration is monotonic and
+    bounded to the contract's ceiling. A window chunk that has not arrived 10 seconds after its
+    stage started is reported as stalled, a `client.diagnostic` with `errorKind: timeout` under
+    that stage's id, and the window offers the reload that requests it fresh: a chunk request the
+    browser loses never settles, and the bundler keeps it pending, so nothing inside the page can
+    request it again (dev CI run 35438847738, a WebKit network process crash);
+  - a restored window's binding: `client.binding.resolved` at `info`,
+    `client.binding.candidates-offered`, `client.binding.choice-kept` and
+    `client.binding.choice-withdrawn` at `info`, or `client.binding.target-missing` at `warn`
+    with `errorKind: unavailable`. It carries the
+    persisted reference's closed shape (`uuid`, `opaque`, `redacted`, `fingerprint`,
+    `user-selected`) and whether the card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
+    reference itself. No reference is exempt from that heuristic, and no stored form works around
+    it. The server issues every reference a window persists (chat, PR description proposal,
+    Figma snapshot, QI run and agent run ids) through `newReferenceId`, which never draws an id
+    the heuristic flags. Every issued id is `reference-id.issued` with the number of draws the
+    heuristic flagged first, zero included, so a clean first draw is told apart from a path that
+    never ran the check; an exhausted draw is `reference-id.exhausted`. Both sit under the
+    requesting operation's correlation id. An older chat can still carry a flagged id: its window
+    records a one-way SHA-256 fingerprint of the id, computed synchronously in the commit that
+    shows the id, so persistence never stores the redaction marker without it. On restore the
+    window finds its chat again by comparing that fingerprint with the chats the server lists
+    (reference shape `fingerprint`). A snapshot an older build wrote holds the redaction marker
+    without a fingerprint, which identifies nothing: no listed chat can be proven to be the one it
+    named, so that window is never rebound on its own. It reports its chat missing and offers the
+    chats it may have shown: the listed chats whose ids persistence redacts, the most recently
+    active first, each named by its title and when it was last active, to the second. Two offers
+    that would still read alike (one title, one second) also show the shortest start of their
+    chat's fingerprint, six hex digits or more, that tells them apart, so no two offers ever read
+    alike. The offer is `client.binding.candidates-offered` with `candidateCount` and
+    `disambiguatedCount` (how many offers show such a reference), zero included, under the list
+    loads that decided it. Only the person's choice binds the window, recorded as reference shape
+    `user-selected` under the list load that offered the chat. Nothing proves that choice right,
+    so it stays a choice, across reloads (the closed `chatIdChosen` marker), until the person
+    keeps it: the window shows the conversation, so the person can check it, and offers to keep
+    it (`client.binding.choice-kept`) or to withdraw it and choose again
+    (`client.binding.choice-withdrawn`, which returns the window to the chats it may have shown).
+    Keeping needs the chosen chat on screen: while it opens, while its lookup failed, and once it
+    is missing, while the window shows it or after a reload, the choice can only be withdrawn,
+    and the withdrawal names the chat by the fingerprint the window persisted, under the list
+    loads that found it gone. A fingerprint that no listed chat has any more is reported missing
+    as that fingerprint (`referenceShape: fingerprint`, `targetFingerprint`) under the lookup's
+    own loads, never like a marker that named nothing. The browser and
+    the server budget binding reports by one rule (`CLIENT_BINDING_FAILURE_OUTCOMES`): only a
+    missing target spends the failure budget.
+    A binding found again after redaction (`fingerprint`, `user-selected`) and each decision
+    name the chat by its fingerprint (`targetFingerprint`, the form the window persists), never
+    by its id, so two choices from one list answer stay apart. While the project catalog loads, the
+    window waits; when the catalog failed, or it lacks the window's project, the window shows that
+    the way it does for any chat, and the lookup runs as soon as the catalog changes. A list that
+    cannot be read decides nothing: the fingerprint lookup, the candidate scan, and the legacy scan
+    of a window without a project run again after a bounded backoff. A list that failed is reported
+    under the id its load was sent with and its closed `errorKind`, even when the transport
+    failed before any response. A binding found again this way names the chat list load of its
+    own lookup, never a later load of the active project. The window's own persisted id, which
+    persistence holds to a closed safe shape, reaches the server whole and is logged only as its
+    digest (`bindingDigest`), so two windows never share one. Its correlation id is that of the
+    chat list load that decided the outcome; a missing legacy binding names every list its scan
+    read, with the ids those loads carried, in `relatedCorrelationIds`. When more loads decided
+    the outcome than the line names, `decidingLoadCount` states the total and the line is
+    `partial` with `loss: event-location-unknown`;
+  - a stale-session repair: `client.session-repair.recovered` at `info` (outcome `replayed`
+    or `stream-repaired`), or `client.session-repair.failed` at `warn` with outcome
+    `replay-failed`, `replay-skipped` or `repair-failed`. A repaired read sits on the denied
+    request's timeline, because the replay reuses that request's correlation id. A stream
+    (`EventSource`) exposes no request id, so its repair sits on the stream's failure streak: a
+    client-minted id that the streak's `sse-error` diagnostics carry too, with the closed
+    `stream` name. The local-session endpoint acknowledges whether or not it issued a cookie, so
+    an acknowledged repair is its own state, `client.session-repair.acknowledged`, and a stream
+    reports `stream-repaired` only when it opens again after it. A streak that keeps failing after
+    the acknowledgement shows a repair that did not restore the stream. A suspension (a hidden
+    page, reserved capacity) ends the streak, so a resumed stream repairs again.
+    Every repair report names the repair request's id, and a failed repair its closed failure
+    class: the ingest contract refuses a report without that id, or with one outside the server's
+    correlation rule, as malformed, so no line claims a complete repair it cannot link. The
+    repair request itself (the local-session ensure) mints its id before it is sent, so
+    a failure that never reached the server is still recorded under that id with its closed
+    class, which a message report may now carry as `errorKind`.
+  Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
+  budget in the browser (60 per minute, failures 20) and on the server (a separate 60-per-minute
+  sliding window), so it can never starve a failure report. Every drop is still counted as loss.
+
 The agent-reading step this adds: **for a failed request**, read `routeTemplate`,
 `queryParamNames`, `responseBytes`, `aborted` and — for a stream — the `sse.stream.closed` line's
 `reason`, then look for a `client.diagnostic` line sharing the `correlationId` to learn what the
 browser saw. Everything on these lines is a count, a closed label, a template, or an id.
+**For a restored window that shows "not found"**, read its `client.binding.target-missing` line.
+`referenceShape: redacted` means the reference was lost at persistence. `uuid` means the target
+is really gone. The line's correlation id, and `relatedCorrelationIds`, name the list loads the
+verdict came from; a `partial` line says how many it could not name. A window restored from a
+snapshot without a fingerprint also logs `client.binding.candidates-offered`: `candidateCount`
+says how many chats it offered and `disambiguatedCount` how many of those showed a fingerprint
+reference. A later `client.binding.resolved` with `referenceShape: user-selected` names the chat
+the person chose by its `targetFingerprint`, and `client.binding.choice-kept` or
+`client.binding.choice-withdrawn` says whether they kept it. **For a conversation
+refused as not ready**, read `readinessObservation` on the rejection. `unobserved` means no check
+ran in that process. `not-ready` means a check ran and failed. Then read that check's lines: the
+on-demand probe a conversation entry point runs logs `gateway.readiness.automatic.started` /
+`.completed` (a request that joined a probe already running logs
+`gateway.readiness.automatic.joined`, with the probe's correlation id as its parent), and a check
+run from the settings dialog logs `gateway.readiness.started` / `.completed` with
+`trigger: settings`. A refused or checked model appears
+on these lines only as the 16-hex `modelIdDigest` of the whole id, never as the id itself: a model
+id is caller content or operator-chosen text that no check proves body-free. Two refused
+candidates stay apart, a retried one reads as the same, and a reader who holds the configuration
+recomputes the digest to name the model.
 
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 
@@ -952,6 +1061,21 @@ Sealing writes a final `activity-log.segment.sealed` line and fsyncs. The line c
 **Trust boundary** and makes the file read-only. A seal that fails leaves the file under its active
 name; the writer never appends to it again, and the next maintenance pass recovers it. Lines over
 8 KiB are still replaced by `server-log.line-dropped`.
+
+A write that finds its segment full or expired rotates make-before-break (#3557): the next segment's
+file is created under its active name before the full one is sealed, and the admission re-check
+then runs with that new, still empty segment at its full reservation, so the byte bound is
+unchanged. A peer that lists the directory in that moment counts the writer once: an empty active
+segment whose instance still holds an older active segment counts only its actual size, because
+its writer re-checks admission before it writes a byte into it. At the minimum budget two writers
+therefore still fit, and no peer drops an event while another rotates. The writer's own re-check
+never discounts its own segments: when its full segment could be neither sealed nor recovered, it
+keeps its active name, and the next segment is admitted only if both fit. A process that keeps writing is therefore never without an active segment, which is the
+one sign of a live writer a starting peer can see before it decides whether it may replace the
+store policy. Sealing first and opening the next segment only after a maintenance pass had left a
+busy writer invisible for that whole pass, and a peer starting then replaced a running writer's
+policy. Only the idle-segment timer, shutdown and a pin request seal without opening the next
+segment.
 
 **Recovery.** At startup and before every new segment, the writer seals orphaned active segments. A
 segment is orphaned when:

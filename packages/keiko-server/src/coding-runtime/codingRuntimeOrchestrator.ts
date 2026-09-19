@@ -2758,10 +2758,10 @@ export class CodingRuntimeOrchestrator {
    * for an ending that never happened, and the troubleshooting entry told the operator to read it as
    * confirmation (owner review, PR #3452).
    */
-  async shutdown(): Promise<CodingRuntimeOrchestratorResult> {
+  async shutdown(correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
     if (current === undefined) {
-      this.deps.safeActivityProjection?.purgeAll("shutdown");
+      this.deps.safeActivityProjection?.purgeAll("shutdown", correlationId);
       return { ok: true, snapshot: this.projection.idle() };
     }
     const result = await this.end("stop", current.runId, { requestId: current.runId });

@@ -46,6 +46,10 @@ import {
 } from "./gateway-tool-calling-probe.js";
 import { reconcileGatewayToolCallingReadiness } from "./gateway-setup.js";
 import { processServerLogSink } from "./process-log-sink.js";
+// #3557 review finding A: the one owning projection from a candidate model id to Activity Log
+// evidence — reused here so a readiness line never carries a value that would fail
+// `activityLogEvent`'s own opaque-id validation and silently drop the whole line.
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
 const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
   "chat",
@@ -86,6 +90,12 @@ const RED_PIXEL_PNG_DATA_URL =
 const MINI_PDF_DATA_URL =
   "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMTQ0XSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MSA+PgpzdHJlYW0KQlQKL0YxIDE4IFRmCjUwIDgwIFRkCihLRUlLTyBQREYgUkVBRElORVNTIFBST0JFKSBUagpFVApzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNjIgMDAwMDAgbiAKMDAwMDAwMDM3MyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9Sb290IDEgMCBSIC9TaXplIDYgPj4Kc3RhcnR4cmVmCjQ0MgolJUVPRgo=";
 
+// The checked model, only ever as the digest `observability/model-id-evidence.ts` projects: a
+// model id is operator-chosen text that no check proves body-free (#3557 review).
+const GATEWAY_READINESS_MODEL_ID_FIELDS = {
+  modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+} as const;
+
 const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -94,7 +104,7 @@ const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation
   owner: "keiko-server",
   emitter: "gateway-readiness.logAutomaticReadinessStarted",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
@@ -113,7 +123,7 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
   owner: "keiko-server",
   emitter: "gateway-readiness.logAutomaticReadinessCompleted",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     overallStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -130,6 +140,69 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
+// Every readiness check a person starts in the settings dialog. The Coding Workbench's automatic
+// run and the on-demand probe a conversation entry point runs keep the automatic operations
+// (`gateway.readiness.automatic.*`). Only the automatic run used to leave a line, so a check run
+// from the settings dialog left no evidence at all (#3557).
+const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.started",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logReadinessStarted",
+  fields: {
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    trigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settings"],
+    },
+    probeCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.started.line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.completed",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logReadinessCompleted",
+  fields: {
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    trigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settings"],
+    },
+    overallStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready", "partial", "failed"],
+    },
+    probeCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.completed.line"],
+  releaseImpact: "patch",
+});
+
+// A conversation request that finds an on-demand probe already running for its model awaits that
+// probe instead of starting its own. Its own timeline still links to the evidence that decided its
+// outcome: this line, under its own correlation id, with the probe's as its parent (#3557, #3559).
 const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -138,7 +211,7 @@ const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation(
   owner: "keiko-server",
   emitter: "gateway-readiness.logAutomaticReadinessJoined",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    ...GATEWAY_READINESS_MODEL_ID_FIELDS,
     generation: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -150,6 +223,9 @@ const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation(
   proofIds: ["gateway.readiness.automatic.joined.line"],
   releaseImpact: "patch",
 });
+
+/** Who started a non-automatic readiness check: the settings dialog. */
+type GatewayReadinessTrigger = "settings";
 
 type ProbeStatus = GatewayReadinessProbeResult["status"];
 
@@ -327,7 +403,7 @@ function logAutomaticReadinessStarted(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
       { correlationId },
-      { modelId: boundedReadinessModelId(modelId), probeCount },
+      { ...modelIdEvidence(modelId), probeCount },
     ),
   );
 }
@@ -363,7 +439,7 @@ function logAutomaticReadinessJoined(
           : { parentCorrelationId: probeCorrelationId }),
       },
       {
-        modelId: boundedReadinessModelId(modelId),
+        ...modelIdEvidence(modelId),
         generation,
         completeness: "complete",
         loss: "none",
@@ -384,7 +460,7 @@ function logAutomaticReadinessOutcome(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
       { correlationId },
       {
-        modelId: boundedReadinessModelId(modelId),
+        ...modelIdEvidence(modelId),
         overallStatus,
         probeCount,
       },
@@ -392,11 +468,78 @@ function logAutomaticReadinessOutcome(
   );
 }
 
-// Configured model ids do not originate at this route's bounded request parser. Keep the full id
-// for provider selection and the response, but project only the operation contract's opaque-id
-// bound into reconstruction evidence.
-function boundedReadinessModelId(modelId: string): string {
-  return modelId.slice(0, MAX_MODEL_ID_CHARS);
+function logReadinessStarted(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  trigger: GatewayReadinessTrigger,
+  modelId: string,
+  probeCount: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_STARTED_OPERATION,
+      { correlationId },
+      { ...modelIdEvidence(modelId), trigger, probeCount },
+    ),
+  );
+}
+
+function logReadinessCompleted(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  trigger: GatewayReadinessTrigger,
+  report: GatewayReadinessReport,
+  durationMs: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_COMPLETED_OPERATION,
+      { correlationId, durationMs },
+      {
+        ...modelIdEvidence(report.modelId),
+        trigger,
+        overallStatus: report.overallStatus,
+        probeCount: report.probes.length,
+      },
+    ),
+  );
+}
+
+// One run's start line: the Coding Workbench's automatic run keeps its own operation, and a run
+// without a trigger is recorded by its caller (the on-demand probe logs the automatic operations
+// around it, so nothing here may log it twice).
+function logReadinessRunStarted(
+  deps: UiHandlerDeps,
+  run: ReadinessRunEvidence,
+  modelId: string,
+  probeCount: number,
+): void {
+  if (run.automatic) {
+    logAutomaticReadinessStarted(deps, run.correlationId, modelId, probeCount);
+    return;
+  }
+  if (run.trigger === undefined) return;
+  logReadinessStarted(deps, run.correlationId, run.trigger, modelId, probeCount);
+}
+
+function logReadinessRunCompleted(
+  deps: UiHandlerDeps,
+  run: ReadinessRunEvidence,
+  report: GatewayReadinessReport,
+): void {
+  if (run.automatic) {
+    logAutomaticReadinessCompleted(deps, run.correlationId, report);
+    return;
+  }
+  if (run.trigger === undefined) return;
+  logReadinessCompleted(deps, run.correlationId, run.trigger, report, Date.now() - run.startedAtMs);
+}
+
+interface ReadinessRunEvidence {
+  readonly correlationId: string;
+  readonly automatic: boolean;
+  readonly trigger: GatewayReadinessTrigger | undefined;
+  readonly startedAtMs: number;
 }
 
 async function providerRequest(
@@ -1490,6 +1633,8 @@ export async function runGatewayReadiness(
   // one id. A caller without a request context (a scheduled/CLI run) gets a freshly minted id rather
   // than an id-less record.
   requestCorrelationId?: string,
+  // Who started the run. Without one, the caller records the run's lifecycle itself.
+  trigger?: GatewayReadinessTrigger,
 ): Promise<GatewayReadinessReport | RouteResult> {
   const selection = chooseProvider(currentGatewayConfig(deps), request.modelId, request.options);
   if ("status" in selection) return selection;
@@ -1498,9 +1643,13 @@ export async function runGatewayReadiness(
   const observedGeneration = deps.gatewayConfig?.generation();
   const correlationId = requestCorrelationId ?? newCorrelationId();
   const names = requestedProbeNames(request.options);
-  if (request.options?.purpose === "coding-workbench-auto") {
-    logAutomaticReadinessStarted(deps, correlationId, selection.provider.modelId, names.length);
-  }
+  const run: ReadinessRunEvidence = {
+    correlationId,
+    automatic: request.options?.purpose === "coding-workbench-auto",
+    trigger,
+    startedAtMs: Date.now(),
+  };
+  logReadinessRunStarted(deps, run, selection.provider.modelId, names.length);
   const probes: GatewayReadinessProbeResult[] = [];
   const chat = await runProbe("chat", deps, selection, request.options, correlationId);
   probes.push(chat);
@@ -1530,9 +1679,7 @@ export async function runGatewayReadiness(
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
   recordReadinessObservation(deps, report, observedGeneration);
   reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
-  if (request.options?.purpose === "coding-workbench-auto") {
-    logAutomaticReadinessCompleted(deps, correlationId, report);
-  }
+  logReadinessRunCompleted(deps, run, report);
   return report;
 }
 
@@ -1542,10 +1689,17 @@ export async function runGatewayReadiness(
 // When a conversation guard finds no CURRENT-GENERATION observation for the model, verify on
 // demand with the minimal chat probe. The admission stays honest — the probe must actually
 // pass. Concurrent callers share one in-flight probe per model.
-const onDemandReadinessProbes = new Map<
-  string,
-  { readonly promise: Promise<void>; readonly correlationId: string }
->();
+//
+// `correlationId` is the FIRST caller's: the one the probe's `gateway.readiness.automatic.started`/
+// `.completed` lines carry. Every LATER caller that joins it instead of starting its own logs a
+// `gateway.readiness.automatic.joined` line under its OWN correlation id, with the probe's as its
+// parent (#3557, #3559), so a joiner's timeline can still reconstruct the check it awaited.
+interface OnDemandReadinessProbe {
+  readonly promise: Promise<void>;
+  readonly correlationId: string;
+}
+
+const onDemandReadinessProbes = new Map<string, OnDemandReadinessProbe>();
 
 // A failed probe must not pin the model for the whole configuration generation: a transient
 // gateway outage would brick every chat surface until a manual re-probe or restart (the
@@ -1572,6 +1726,8 @@ function withinNotReadyCooldown(
   return ageMs >= 0 && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
 }
 
+// `correlationId` is the conversation request that needed the answer: the probe's lines carry it,
+// so that request's timeline shows the check it waited for.
 export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
@@ -1723,7 +1879,7 @@ export async function handleGatewayReadiness(
 ): Promise<RouteResult> {
   const body = await readJsonBody(ctx.req, ctx.correlationId);
   if ("status" in body) return body;
-  const report = await runGatewayReadiness(body.parsed, deps, ctx.correlationId);
+  const report = await runGatewayReadiness(body.parsed, deps, ctx.correlationId, "settings");
   if ("status" in report) return report;
   return { status: 200, body: report };
 }

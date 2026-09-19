@@ -8,8 +8,6 @@ import { basename } from "node:path";
 import {
   GatewayError,
   ContextOverflowError,
-  findCapability,
-  findConfiguredCapability,
   listCapabilities,
   listConfiguredCapabilities,
   type ModelCapability,
@@ -171,10 +169,15 @@ import {
   logGitChangeApply,
   logGitChangeDescriptionTargetDenied,
   logGitChangeTurnAuthorityEvent,
+  type ChatReadinessObservation,
   type ChatRejectionReason,
   type GitChangeDescriptionTargetDenial,
   type GitChangeDescriptionTurnDenial,
 } from "./chat-activity.js";
+// #3557 review finding A: the one owning projection from a candidate model id to Activity Log
+// evidence. `chatCapability` below delegates its resolution here too, so the "is this configured"
+// answer a 400 response relies on and the answer the log line relies on can never drift apart.
+import { modelIdEvidence, resolvedModelCapability } from "./observability/model-id-evidence.js";
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
@@ -283,8 +286,7 @@ function asParsedOrRouteResult<T>(value: T | RouteResult): T | RouteResult {
 }
 
 function chatCapability(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
-  const config = currentGatewayConfig(deps);
-  return config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
+  return resolvedModelCapability(deps, modelId);
 }
 
 function defaultChatModelId(deps: UiHandlerDeps): string {
@@ -898,6 +900,17 @@ function unreadyChatModelResult(): RouteResult {
   return conversationModelNotReadyResult();
 }
 
+// Which readiness state refused the model: no current observation in this process, or a check that
+// ran and failed. A model observed as ready yields none, since then readiness did not refuse it.
+function readinessObservationOf(
+  deps: UiHandlerDeps,
+  modelId: string,
+): ChatReadinessObservation | undefined {
+  const observed = currentConversationReadinessObservation(deps, modelId);
+  if (observed === undefined) return "unobserved";
+  return observed ? undefined : "not-ready";
+}
+
 function logChatCreationRejection(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -911,6 +924,8 @@ function logChatCreationRejection(
     status,
     reason: readinessFailure ? "readiness" : "configuration",
     modelKind,
+    ...modelIdEvidence(modelId),
+    readinessObservation: readinessFailure ? readinessObservationOf(deps, modelId) : undefined,
   });
 }
 
@@ -927,6 +942,9 @@ export function logChatRejection(
     status,
     reason,
     modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
+    ...modelIdEvidence(modelId),
+    readinessObservation:
+      reason === "readiness" ? readinessObservationOf(deps, modelId) : undefined,
   });
 }
 
@@ -2572,7 +2590,9 @@ export async function handleCreateDesktopChat(
       typeof body.title === "string" && body.title.trim().length > 0
         ? body.title.trim()
         : DEFAULT_CHAT_TITLE;
-    const chat = deps.store.createChat(project.path, title, modelId);
+    const chat = deps.store.createChat(project.path, title, modelId, {
+      correlationId: ctx.correlationId,
+    });
     return { status: 201, body: chatEnvelope(deps, project, chat) };
   } catch (error) {
     if (error instanceof UiStoreError) {

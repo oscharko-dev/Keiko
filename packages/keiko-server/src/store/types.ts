@@ -28,6 +28,12 @@ import type {
   StoredPdfCitationPreviewCitation,
   WorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts";
+
+// The store's own chat creation options: the wire options plus the creating operation's correlation
+// id, which the evidence of the chat's reference id joins (#3557 review). Never on the wire.
+export interface StoreCreateChatOptions extends CreateChatOptions {
+  readonly correlationId?: string | undefined;
+}
 export type {
   Project,
   Chat,
@@ -114,7 +120,7 @@ export interface UiStore {
     projectPath: string,
     title: string,
     selectedModel: string,
-    opts?: CreateChatOptions,
+    opts?: StoreCreateChatOptions,
   ) => Chat;
   readonly updateChat: (id: string, patch: UpdateChatPatch, options?: UpdateChatOptions) => Chat;
   /**

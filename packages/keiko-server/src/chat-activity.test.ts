@@ -278,3 +278,74 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
     });
   });
 });
+
+// #3557: a readiness refusal names the refused model and the state that refused it, so a refusal
+// without any check in this process is never mistaken for a failed live check.
+describe("chat rejection readiness evidence (#3557)", () => {
+  it.each(["unobserved", "not-ready"] as const)(
+    "chat.regeneration.rejected — persists the %s readiness observation with the model digest",
+    (readinessObservation) => {
+      const sink = captureServerLog();
+
+      logChatRejectionEvent("chat.regeneration.rejected", {
+        correlationId: "corr-chat-regen-readiness-01",
+        status: 400,
+        reason: "readiness",
+        modelKind: "chat",
+        modelIdDigest: "0123456789abcdef",
+        readinessObservation,
+      });
+
+      const [event] = sink.events;
+      const persisted = expectActivityLogProof(
+        "chat.regeneration.rejected.reason",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(persisted).toMatchObject({
+        correlationId: "corr-chat-regen-readiness-01",
+        errorKind: "unavailable",
+        reason: "readiness",
+        modelIdDigest: "0123456789abcdef",
+        readinessObservation,
+      });
+    },
+  );
+
+  // #3557 review: a model id is operator-chosen text that no check proves body-free, so a rejection
+  // carries it only as a digest. `model-id-evidence.test.ts` proves the projection; this proves
+  // chat-activity.ts emits what it is handed and never a raw id.
+  it("chat.creation.rejected — persists the model only as its digest", () => {
+    const sink = captureServerLog();
+
+    logChatCreationRejectionEvent({
+      correlationId: "corr-chat-create-model-digest",
+      status: 400,
+      reason: "configuration",
+      modelKind: "unknown",
+      modelIdDigest: "0123456789abcdef",
+    });
+
+    const [event] = sink.events;
+    const persisted = expectActivityLogProof(
+      "chat.creation.rejected.reason",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ modelIdDigest: "0123456789abcdef" });
+    expect(persisted).not.toHaveProperty("modelId");
+  });
+
+  it("chat.creation.rejected — bounds an overlong modelIdDigest to the operation's 16 characters", () => {
+    const sink = captureServerLog();
+
+    logChatCreationRejectionEvent({
+      correlationId: "corr-chat-create-digest-long",
+      status: 400,
+      reason: "configuration",
+      modelKind: "unknown",
+      modelIdDigest: "a".repeat(30),
+    });
+
+    const [event] = sink.events;
+    expect(event?.extra?.modelIdDigest).toBe("a".repeat(16));
+  });
+});

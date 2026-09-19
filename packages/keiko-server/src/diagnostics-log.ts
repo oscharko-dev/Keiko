@@ -581,10 +581,6 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "safe-activity-dropped-redactor-collapsed",
   "safe-activity-dropped-projection-rejected",
   "safe-activity-dropped-subscriber-rejected",
-  "safe-activity-purged-stop",
-  "safe-activity-purged-takeover",
-  "safe-activity-purged-shutdown",
-  "safe-activity-purged-workspace-switch",
   // #2906 round 3: replaces the former "safe-activity-purged-expiry" -- that code was only ever
   // used by codingSafeActivityProjection.ts's KEIKO-0878 invariant-violation branch (real TTL
   // expiry purges silently via expireCurrent(), with no diagnostic at all), so the label

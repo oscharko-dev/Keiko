@@ -12,6 +12,7 @@
 // Playwright; the executable AC coverage that runs in `ci` lives in the keiko-ui vitest suites.
 
 import { expect, test, type Page } from "@playwright/test";
+import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
 import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
@@ -47,19 +48,12 @@ const FULL_VOICE_CAPABILITY = {
   },
 };
 
-async function openComposer(page: Page): Promise<void> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Chat History", exact: true }).click();
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
-}
-
 // Each flow is a top-level helper so the test wiring stays well under the max-lines-per-function gate.
 async function noVoiceFlow(page: Page): Promise<void> {
   await page.route("**/api/voice/capability", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(NO_VOICE_CAPABILITY) }),
   );
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -77,7 +71,7 @@ async function dictateInsertFlow(page: Page): Promise<void> {
       body: JSON.stringify({ transcript: "dictated hello from the smoke test", confidence: 0.9 }),
     }),
   );
-  await openComposer(page);
+  await openChatComposer(page);
 
   const mic = page.getByRole("button", { name: "Dictate a message" });
   await expect(mic).toBeVisible();
@@ -106,7 +100,7 @@ async function deniedPermissionFlow(page: Page): Promise<void> {
   await page.route("**/api/voice/capability", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(STT_CAPABILITY) }),
   );
-  await openComposer(page);
+  await openChatComposer(page);
 
   await page.getByRole("button", { name: "Dictate a message" }).click();
   // Scope to the dictation error text — Next.js also renders an empty role="alert" route announcer.

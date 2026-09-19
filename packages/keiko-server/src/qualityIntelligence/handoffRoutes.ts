@@ -27,7 +27,6 @@
 // with sibling QI epic work (e.g. #280) — the dispatcher in `routes.ts` only needs to spread
 // the group.
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -43,6 +42,7 @@ import { containsForbiddenSecretShape } from "./connectorErrors.js";
 import { executeQiRun } from "./runExecution.js";
 import { qiRunRegistry } from "./runRegistry.js";
 import { buildQiModelRoutingForRun } from "./modelPolicyRoutes.js";
+import { newReferenceId } from "../reference-id.js";
 
 // ─── Body reading ──────────────────────────────────────────────────────────────
 
@@ -333,8 +333,13 @@ const buildHandoffMessage = (
 // to a user-selected SUBSET of the connected context; until that resolver exists the run faithfully
 // ingests the chat's whole connected workspace context, so an empty (or any) id list is honoured by
 // using the connected scopes.
-const startHandoffRun = (deps: UiHandlerDeps, roots: readonly string[]): string => {
-  const runId = `qi-run-${randomUUID()}`;
+const startHandoffRun = (
+  deps: UiHandlerDeps,
+  roots: readonly string[],
+  correlationId: string | undefined,
+): string => {
+  // A QI run window persists it as a reference (#3557 review).
+  const runId = newReferenceId({ kind: "qi-run", prefix: "qi-run-", correlationId });
   const registeredAt = new Date().toISOString();
   const controller = qiRunRegistry.register(runId, registeredAt);
   const totals = { candidates: 0, findings: 0, exports: 0 };
@@ -402,11 +407,12 @@ const resolveHandoffRunId = (
   deps: UiHandlerDeps,
   envelope: QualityIntelligence.QualityIntelligenceConversationCenterHandoff,
   chatId: string,
+  correlationId: string | undefined,
 ): string | undefined => {
   if (envelope.promptedAction !== "design-tests") return envelope.runId;
   const chat = deps.store.findChatById(chatId);
   const roots = collectConnectedRoots(chat);
-  if (roots.length > 0) return startHandoffRun(deps, roots);
+  if (roots.length > 0) return startHandoffRun(deps, roots, correlationId);
   return envelope.runId;
 };
 
@@ -452,7 +458,7 @@ export const createHandleQiHandoff = (
       return errResult(404, "QI_HANDOFF_UNKNOWN_CHAT_MESSAGE");
     }
 
-    const linkedRunId = resolveHandoffRunId(deps, envelope, resolved.chatId);
+    const linkedRunId = resolveHandoffRunId(deps, envelope, resolved.chatId, ctx.correlationId);
     const persisted = deps.store.createMessage(
       buildHandoffMessage(resolved, envelope, now, linkedRunId),
     );

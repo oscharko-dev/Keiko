@@ -8,6 +8,8 @@ import {
 } from "./gateway-readiness.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -17,6 +19,8 @@ import {
 // production module, so these tests freeze Date.now to a fixed epoch instead of deriving
 // timestamps from the wall clock — a clock jump or a slow run can never move a "fresh"
 // observation across the 30 s boundary (review finding on #3221).
+// A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.
+const CHAT_MODEL_DIGEST = modelIdEvidence("chat-model").modelIdDigest;
 const NOW = 1_700_000_000_000;
 function freezeNow(): void {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -293,7 +297,12 @@ describe("on-demand readiness correlation", () => {
             "gateway.readiness.automatic.joined.line",
             formatActivityLogProofLine(event),
           ),
-        ).toMatchObject({ parentCorrelationId: "create-request", modelId: "chat-model" });
+        ).toMatchObject({
+          parentCorrelationId: "create-request",
+          modelIdDigest: CHAT_MODEL_DIGEST,
+        });
+        // A model id reaches a readiness line only as its digest (#3557 review).
+        expect(event.extra).not.toHaveProperty("modelId");
       }
       expect(
         events.find((event) => event.op === "gateway.readiness.automatic.completed"),
@@ -361,5 +370,27 @@ describe("on-demand readiness correlation", () => {
     expect(
       events.find((event) => event.op === "gateway.readiness.automatic.completed")?.extra,
     ).toMatchObject({ overallStatus: "failed" });
+  });
+
+  // #3557: a joiner without a request context still gets its own id, never the probe's or the
+  // unknown fallback, so its line never merges into another request's timeline.
+  it("mints its own correlation id for a joiner that supplied none", async () => {
+    const { deps } = probeableDeps("not-a-timestamp");
+    const events: ServerLogEvent[] = [];
+    const logged = {
+      ...deps,
+      activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+    } as UiHandlerDeps;
+
+    const first = ensureOnDemandConversationReadiness(logged, "chat-model", "corr-probe-only");
+    const second = ensureOnDemandConversationReadiness(logged, "chat-model");
+    await Promise.all([first, second]);
+
+    const joined = events.filter((event) => event.op === "gateway.readiness.automatic.joined");
+    expect(joined).toHaveLength(1);
+    expect(typeof joined[0]?.correlationId).toBe("string");
+    expect(joined[0]?.correlationId).not.toBe("corr-probe-only");
+    expect(joined[0]?.correlationId).not.toBe(UNKNOWN_CORRELATION_ID);
+    expect(joined[0]?.parentCorrelationId).toBe("corr-probe-only");
   });
 });
