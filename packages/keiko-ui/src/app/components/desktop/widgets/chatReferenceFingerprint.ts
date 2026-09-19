@@ -62,7 +62,11 @@ export type ChatReferenceLookup =
       // The chat list load whose answer decided the match.
       readonly correlationId: string;
     }
-  | { readonly status: "absent" }
+  | {
+      readonly status: "absent";
+      // The chat list loads whose answers held no such chat.
+      readonly correlationIds: readonly string[];
+    }
   | { readonly status: "unavailable" };
 
 // A failed load is reported under the id it was sent with and its closed class, so its failure
@@ -101,7 +105,9 @@ export async function findChatByFingerprint(
       return { status: "found", chat, correlationId: listing.correlationId };
     }
   }
-  return read.includes(undefined) ? { status: "unavailable" } : { status: "absent" };
+  const listings = read.filter((listing): listing is ChatListLoad => listing !== undefined);
+  if (listings.length !== read.length) return { status: "unavailable" };
+  return { status: "absent", correlationIds: listings.map((listing) => listing.correlationId) };
 }
 
 function cfgString(cfg: Record<string, unknown>, key: string): string | undefined {
@@ -135,11 +141,19 @@ export interface ChatReferenceRestoration {
   readonly correlationId: string;
 }
 
+/** A persisted fingerprint that names no listed chat any more, and the loads that said so. */
+interface ChatReferenceMissing {
+  readonly fingerprint: string;
+  readonly correlationIds: readonly string[];
+}
+
 export interface ChatReferenceRebind {
   // A redacted chat id whose lookup has not settled yet.
   readonly pending: boolean;
   // Set while the window stays bound to the chat it found again.
   readonly restored: ChatReferenceRestoration | undefined;
+  // Set while the window's fingerprint names no listed chat.
+  readonly missing: ChatReferenceMissing | undefined;
 }
 
 interface ChatReferenceRebindSession {
@@ -262,6 +276,7 @@ export function useChatReferenceRebind(
   const projectPath = cfgString(cfg, "projectPath");
   const [settled, setSettled] = useState<string | undefined>(undefined);
   const [restored, setRestored] = useState<RestoredBinding | undefined>(undefined);
+  const [missing, setMissing] = useState<ChatReferenceMissing | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
   const { error, loading, projects } = session;
   useEffect((): (() => void) | undefined => {
@@ -275,6 +290,11 @@ export function useChatReferenceRebind(
         const binding = fingerprintBinding(lookup);
         if (binding !== undefined) updateCfg({ chatId: binding.chatId });
         setRestored(binding);
+        setMissing(
+          lookup.status === "absent"
+            ? { fingerprint, correlationIds: lookup.correlationIds }
+            : undefined,
+        );
         setSettled(fingerprint);
       },
       onRetry: (): void => {
@@ -287,6 +307,7 @@ export function useChatReferenceRebind(
     pending: fingerprint !== undefined && settled !== fingerprint && !handedOver,
     restored:
       restored !== undefined && restored.chatId === chatId ? restored.restoration : undefined,
+    missing: missing !== undefined && missing.fingerprint === fingerprint ? missing : undefined,
   };
 }
 
@@ -528,10 +549,48 @@ export function useRedactedChatChoice(
   };
 }
 
-/** What the person can do while the window shows a chat they chose and have not kept yet. */
+/** What the person can do while the chat they chose is not kept yet. */
 export interface ChatChoiceDecision {
-  readonly keep: () => void;
+  // Keeping needs the chosen chat on screen; a choice whose chat is gone can only be withdrawn.
+  readonly keep: (() => void) | undefined;
   readonly chooseAnother: () => void;
+}
+
+// The chat an open choice concerns, as the evidence names it.
+interface ChoiceTarget {
+  readonly targetFingerprint: string;
+  readonly heuristicFlagged: boolean;
+  readonly shape: ChatReferenceRestoration["shape"];
+  readonly correlationIds: readonly string[];
+  // The window shows the chosen chat, so the person can inspect it.
+  readonly shown: boolean;
+}
+
+// The chat the window shows, or, when its fingerprint names no listed chat any more (the chosen
+// chat was closed or deleted before a reload), the chat it chose before that happened.
+function choiceTarget(
+  chatId: string | undefined,
+  restoration: ChatReferenceRestoration | undefined,
+  missing: ChatReferenceMissing | undefined,
+): ChoiceTarget | undefined {
+  if (restoration !== undefined && chatId !== undefined) {
+    return {
+      targetFingerprint: chatReferenceFingerprint(chatId),
+      heuristicFlagged: persistedReferenceEvidence(chatId).heuristicFlagged,
+      shape: restoration.shape,
+      correlationIds: [restoration.correlationId],
+      shown: true,
+    };
+  }
+  if (missing === undefined) return undefined;
+  // Only an id the heuristic flags is ever persisted as a fingerprint.
+  return {
+    targetFingerprint: missing.fingerprint,
+    heuristicFlagged: true,
+    shape: "fingerprint",
+    correlationIds: missing.correlationIds,
+    shown: false,
+  };
 }
 
 type ChatChoiceDecisionOutcome = "choice-kept" | "choice-withdrawn";
@@ -553,52 +612,64 @@ const WITHDRAWN_CHOICE_PATCH = {
 // binding, so which conversation the window ended with is reconstructable (#3557 review).
 function reportChoiceDecision(
   outcome: ChatChoiceDecisionOutcome,
-  chatId: string,
-  restoration: ChatReferenceRestoration,
+  target: ChoiceTarget,
   windowId: string,
 ): void {
+  const [correlationId, ...related] = target.correlationIds;
+  const loads = target.correlationIds.length;
   reportClientDiagnostic(CHOICE_DECISION_DIAGNOSTICS[outcome], {
-    correlationId: restoration.correlationId,
+    correlationId,
     bindingReport: {
       surface: "chat-window",
       outcome,
-      referenceShape: restoration.shape,
-      heuristicFlagged: persistedReferenceEvidence(chatId).heuristicFlagged,
+      referenceShape: target.shape,
+      heuristicFlagged: target.heuristicFlagged,
       windowRef: windowId,
-      targetFingerprint: chatReferenceFingerprint(chatId),
+      targetFingerprint: target.targetFingerprint,
+      ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+      ...(loads === 0 ? {} : { decidingLoadCount: loads }),
     },
   });
 }
 
+interface ChoiceRebinding {
+  readonly restoration: ChatReferenceRestoration | undefined;
+  readonly missing: ChatReferenceMissing | undefined;
+}
+
 /**
- * While the window shows a chat the person chose for a redacted snapshot and has not kept yet, the
- * person can keep it, or withdraw it and return the window to the chats it may have shown (#3557
- * review). A choice made without proof stays open, across reloads, until the person keeps it.
+ * While the chat a person chose for a redacted snapshot is not kept yet, the person can keep it, or
+ * withdraw it and return the window to the chats it may have shown (#3557 review). A choice made
+ * without proof stays open, across reloads, until the person keeps it; a choice whose chat is gone
+ * can only be withdrawn.
  */
 export function useChatChoiceDecision(
   cfg: Record<string, unknown>,
-  restoration: ChatReferenceRestoration | undefined,
+  { restoration, missing }: ChoiceRebinding,
   ctx: Pick<WindowRenderContext, "updateCfg" | "windowId">,
 ): ChatChoiceDecision | undefined {
   const chatId = cfgString(cfg, "chatId");
   const open = cfg[CHAT_ID_CHOSEN_CFG_KEY] === true;
   const { updateCfg, windowId } = ctx;
   return useMemo((): ChatChoiceDecision | undefined => {
-    if (!open || chatId === undefined || restoration === undefined) return undefined;
+    const target = open ? choiceTarget(chatId, restoration, missing) : undefined;
+    if (target === undefined) return undefined;
     const decide = (
       outcome: ChatChoiceDecisionOutcome,
       patch: Parameters<WindowRenderContext["updateCfg"]>[0],
     ): void => {
-      reportChoiceDecision(outcome, chatId, restoration, windowId);
+      reportChoiceDecision(outcome, target, windowId);
       updateCfg(patch);
     };
     return {
-      keep: (): void => {
-        decide("choice-kept", { [CHAT_ID_CHOSEN_CFG_KEY]: false });
-      },
+      keep: target.shown
+        ? (): void => {
+            decide("choice-kept", { [CHAT_ID_CHOSEN_CFG_KEY]: false });
+          }
+        : undefined,
       chooseAnother: (): void => {
         decide("choice-withdrawn", WITHDRAWN_CHOICE_PATCH);
       },
     };
-  }, [chatId, open, restoration, updateCfg, windowId]);
+  }, [chatId, missing, open, restoration, updateCfg, windowId]);
 }

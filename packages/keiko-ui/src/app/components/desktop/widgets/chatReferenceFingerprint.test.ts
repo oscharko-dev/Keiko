@@ -163,6 +163,7 @@ describe("findChatByFingerprint", () => {
 
     await expect(findChatByFingerprint(fingerprint, [project("/repo")])).resolves.toEqual({
       status: "absent",
+      correlationIds: ["ui_list-0001"],
     });
   });
 
@@ -260,6 +261,7 @@ describe("useChatReferenceRebind", () => {
     expect(view.result.current).toEqual({
       pending: false,
       restored: { shape: "fingerprint", correlationId: "ui_list-c1" },
+      missing: undefined,
     });
     view.rerender({ cfg: { ...redacted, chatId: "chat-elsewhere" }, session });
     expect(view.result.current.restored).toBeUndefined();
@@ -274,12 +276,16 @@ describe("useChatReferenceRebind", () => {
 
     const view = renderRebind({ chatId: "[REDACTED]", projectPath: "/repo" }, session, updateCfg);
 
-    expect(view.result.current).toEqual({ pending: false, restored: undefined });
+    expect(view.result.current).toEqual({
+      pending: false,
+      restored: undefined,
+      missing: undefined,
+    });
     expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
     expect(updateCfg).not.toHaveBeenCalled();
   });
 
-  it("settles without a binding when no listed chat has the fingerprint", async () => {
+  it("settles without a binding when no listed chat has the fingerprint, naming its loads", async () => {
     const updateCfg = vi.fn();
 
     const view = renderRebind(
@@ -289,7 +295,11 @@ describe("useChatReferenceRebind", () => {
     );
 
     await waitFor(() =>
-      expect(view.result.current).toEqual({ pending: false, restored: undefined }),
+      expect(view.result.current).toEqual({
+        pending: false,
+        restored: undefined,
+        missing: { fingerprint: "a".repeat(64), correlationIds: ["ui_list-0001"] },
+      }),
     );
     expect(updateCfg).not.toHaveBeenCalled();
   });
@@ -347,7 +357,11 @@ describe("useChatReferenceRebind", () => {
     const view = renderRebind(redacted, failedCatalog, updateCfg);
     await act(async () => Promise.resolve());
 
-    expect(view.result.current).toEqual({ pending: false, restored: undefined });
+    expect(view.result.current).toEqual({
+      pending: false,
+      restored: undefined,
+      missing: undefined,
+    });
     expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
     view.rerender({ cfg: redacted, session });
     await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID }));
@@ -364,7 +378,11 @@ describe("useChatReferenceRebind", () => {
     );
     await act(async () => Promise.resolve());
 
-    expect(view.result.current).toEqual({ pending: false, restored: undefined });
+    expect(view.result.current).toEqual({
+      pending: false,
+      restored: undefined,
+      missing: undefined,
+    });
     expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
     view.rerender({
       cfg: redacted,
@@ -670,9 +688,15 @@ describe("useChatChoiceDecision", () => {
     const window = { updateCfg: vi.fn(), windowId: "window-legacy" };
 
     const kept = renderHook(() =>
-      useChatChoiceDecision({ ...chosen, chatIdChosen: false }, restoration, window),
+      useChatChoiceDecision(
+        { ...chosen, chatIdChosen: false },
+        { restoration, missing: undefined },
+        window,
+      ),
     );
-    const unrestored = renderHook(() => useChatChoiceDecision(chosen, undefined, window));
+    const unrestored = renderHook(() =>
+      useChatChoiceDecision(chosen, { restoration: undefined, missing: undefined }, window),
+    );
 
     expect(kept.result.current).toBeUndefined();
     expect(unrestored.result.current).toBeUndefined();
@@ -681,11 +705,15 @@ describe("useChatChoiceDecision", () => {
   it("keeps the chosen chat, and names it by its fingerprint", () => {
     const updateCfg = vi.fn();
     const view = renderHook(() =>
-      useChatChoiceDecision(chosen, restoration, { updateCfg, windowId: "window-legacy" }),
+      useChatChoiceDecision(
+        chosen,
+        { restoration, missing: undefined },
+        { updateCfg, windowId: "window-legacy" },
+      ),
     );
 
     act(() => {
-      view.result.current?.keep();
+      view.result.current?.keep?.();
     });
 
     expect(updateCfg).toHaveBeenCalledWith({ chatIdChosen: false });
@@ -701,6 +729,7 @@ describe("useChatChoiceDecision", () => {
             heuristicFlagged: true,
             windowRef: "window-legacy",
             targetFingerprint: chatReferenceFingerprint(FLAGGED_ID),
+            decidingLoadCount: 1,
           },
         },
       ],
@@ -711,7 +740,11 @@ describe("useChatChoiceDecision", () => {
     const updateCfg = vi.fn();
     const afterReload = { shape: "fingerprint", correlationId: "ui_list-rebind-0003" } as const;
     const view = renderHook(() =>
-      useChatChoiceDecision(chosen, afterReload, { updateCfg, windowId: "window-legacy" }),
+      useChatChoiceDecision(
+        chosen,
+        { restoration: afterReload, missing: undefined },
+        { updateCfg, windowId: "window-legacy" },
+      ),
     );
 
     act(() => {
@@ -737,5 +770,50 @@ describe("useChatChoiceDecision", () => {
       ],
     ]);
     expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(FLAGGED_ID);
+  });
+
+  // #3557 review: the chosen chat was closed or deleted before a reload, so the window's fingerprint
+  // names no listed chat. The choice can no longer be kept, only withdrawn, and the withdrawal names
+  // the chat by the fingerprint the window persisted, under the loads that found it gone.
+  it("offers only withdrawal for a chosen chat that is gone after a reload", () => {
+    const updateCfg = vi.fn();
+    const fingerprint = chatReferenceFingerprint(FLAGGED_ID);
+    const gone = { chatId: "[REDACTED]", chatIdFingerprint: fingerprint, chatIdChosen: true };
+    const missing = { fingerprint, correlationIds: ["ui_list-gone-0001"] };
+    const view = renderHook(() =>
+      useChatChoiceDecision(
+        gone,
+        { restoration: undefined, missing },
+        { updateCfg, windowId: "window-legacy" },
+      ),
+    );
+
+    expect(view.result.current?.keep).toBeUndefined();
+    act(() => {
+      view.result.current?.chooseAnother();
+    });
+
+    expect(updateCfg).toHaveBeenCalledWith({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: undefined,
+      chatIdChosen: false,
+    });
+    expect(decisionReports()).toEqual([
+      [
+        "[keiko] chat window withdrew the conversation the person chose",
+        {
+          correlationId: "ui_list-gone-0001",
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "choice-withdrawn",
+            referenceShape: "fingerprint",
+            heuristicFlagged: true,
+            windowRef: "window-legacy",
+            targetFingerprint: fingerprint,
+            decidingLoadCount: 1,
+          },
+        },
+      ],
+    ]);
   });
 });

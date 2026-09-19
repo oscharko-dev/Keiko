@@ -1940,6 +1940,7 @@ describe("ChatWindowSessionHost target missing", () => {
   function restoreChatWindow(window: AppWindow): {
     readonly restoredCfg: Record<string, unknown>;
     readonly ctx: WindowRenderContext;
+    readonly rerender: () => void;
   } {
     const restored = parsePersistedWindows(JSON.stringify(sanitizePersistedWindows([window])));
     const restoredCfg = restored?.[0]?.cfg ?? {};
@@ -1952,12 +1953,19 @@ describe("ChatWindowSessionHost target missing", () => {
       }, []);
       return <ChatWindowSessionHost cfg={cfg} ctx={{ ...ctx, updateCfg }} />;
     }
-    render(
+    const view = render(
       <I18nProvider>
         <RestoredWindow />
       </I18nProvider>,
     );
-    return { restoredCfg, ctx };
+    const rerender = (): void => {
+      view.rerender(
+        <I18nProvider>
+          <RestoredWindow />
+        </I18nProvider>,
+      );
+    };
+    return { restoredCfg, ctx, rerender };
   }
 
   function flaggedChatWindow(cfg: AppWindow["cfg"]): AppWindow {
@@ -2161,6 +2169,7 @@ describe("ChatWindowSessionHost target missing", () => {
         heuristicFlagged: true,
         windowRef: "window-1",
         targetFingerprint: chatReferenceFingerprint(chatA),
+        decidingLoadCount: 1,
       },
     ]);
   });
@@ -2206,6 +2215,73 @@ describe("ChatWindowSessionHost target missing", () => {
     await userEvent.click(await screen.findByRole("button", openA));
 
     await waitFor((): void => expect(decisionReports("resolved")).toHaveLength(2));
+  });
+
+  // #3557 review: once the chosen chat goes missing while the window shows it, the person can no
+  // longer keep it, only choose another.
+  it("offers only withdrawal once the chosen chat goes missing", async (): Promise<void> => {
+    const { chatA } = offerChatsAandB();
+    const { rerender } = restoreChatWindow(
+      flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    );
+    await screen.findByText(CHOICE_NOTICE);
+    expect(screen.getByRole("button", { name: "Keep" })).toBeInTheDocument();
+
+    const liveB = chatSessionState.chats.find((chat) => chat.id !== chatA);
+    chatSessionState.chats = liveB === undefined ? [] : [liveB];
+    chatSessionState.activeChat = undefined;
+    rerender();
+
+    expect(
+      await screen.findByText("The conversation you chose for this window is no longer available."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Choose another" })).toBeInTheDocument();
+  });
+
+  // #3557 review: the chosen chat was closed or deleted before a reload. Its fingerprint names no
+  // listed chat, so the window shows it missing and offers only withdrawal, which returns the window
+  // to the chats it may have shown.
+  it("returns a reloaded window whose chosen chat is gone to the offered chats", async (): Promise<void> => {
+    const { chatA, chatB } = offerChatsAandB();
+    const liveB = chatSessionState.chats.find((chat) => chat.id === chatB);
+    chatSessionState.chats = liveB === undefined ? [] : [liveB];
+    chatSessionState.activeChat = undefined;
+    fetchChatsMock.mockResolvedValue({ chats: liveB === undefined ? [] : [liveB] });
+
+    const { ctx } = restoreChatWindow(
+      flaggedChatWindow({
+        chatId: chatA,
+        chatIdFingerprint: chatReferenceFingerprint(chatA),
+        chatIdChosen: true,
+        projectPath: "/repo",
+      }),
+    );
+
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    expect(
+      await screen.findByText("The conversation you chose for this window is no longer available."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Choose another" }));
+
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: undefined,
+      chatIdChosen: false,
+    });
+    expect(decisionReports("choice-withdrawn")).toEqual([
+      expect.objectContaining({
+        referenceShape: "fingerprint",
+        targetFingerprint: chatReferenceFingerprint(chatA),
+      }),
+    ]);
+    expect(
+      await screen.findByRole("button", { name: /^Open Release notes, last active /u }),
+    ).toBeInTheDocument();
   });
 
   // After a reload the chosen chat is found again through its fingerprint, and the choice is still

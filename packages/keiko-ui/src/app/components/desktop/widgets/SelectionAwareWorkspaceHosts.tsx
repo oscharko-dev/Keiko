@@ -1318,15 +1318,33 @@ function ChatChoice({ choice }: { readonly choice: RedactedChatChoice }): ReactN
 
 // The chat a person chose for a redacted snapshot stays a choice until they keep it: they can check
 // the conversation the window now shows, and withdraw it to choose again (#3557 review).
-function ChatChoiceNotice({ decision }: { readonly decision: ChatChoiceDecision }): ReactNode {
+// Keep needs the chosen chat on screen: once it is missing, only withdrawal is offered, so no one
+// keeps a conversation they cannot inspect.
+function ChatChoiceNotice({
+  decision,
+  targetMissing,
+}: {
+  readonly decision: ChatChoiceDecision | undefined;
+  readonly targetMissing: boolean;
+}): ReactNode {
   const agentT = useEditorAgentTranslate();
+  if (decision === undefined) return null;
+  const keep = targetMissing ? undefined : decision.keep;
   return (
     <div className={styles.cmpNotice} role="status">
-      <p className={styles.cmpNoticeText}>{agentT("chat.restoration.choiceNotice")}</p>
+      <p className={styles.cmpNoticeText}>
+        {agentT(
+          keep === undefined
+            ? "chat.restoration.choiceMissingNotice"
+            : "chat.restoration.choiceNotice",
+        )}
+      </p>
       <div className={styles.cmpNoticeActions}>
-        <button type="button" className="lk-btn lk-btn-ghost" onClick={decision.keep}>
-          {agentT("chat.restoration.choiceKeep")}
-        </button>
+        {keep === undefined ? null : (
+          <button type="button" className="lk-btn lk-btn-ghost" onClick={keep}>
+            {agentT("chat.restoration.choiceKeep")}
+          </button>
+        )}
         <button type="button" className="lk-btn lk-btn-ghost" onClick={decision.chooseAnother}>
           {agentT("chat.restoration.choiceAnother")}
         </button>
@@ -1521,7 +1539,7 @@ export function ChatWindowSessionHost({
   const rebind = useChatReferenceRebind(cfg, session, ctx.updateCfg);
   const redacted = useRedactedChatChoice(cfg, session, ctx);
   const restoration = rebind.restored ?? redacted.restored;
-  const decision = useChatChoiceDecision(cfg, restoration, ctx);
+  const decision = useChatChoiceDecision(cfg, { restoration, missing: rebind.missing }, ctx);
   if (rebind.pending) return <ChatBindPending />;
   return (
     <BoundChatWindowSessionHost
@@ -1671,7 +1689,7 @@ function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): Rea
         lookupFailed={targetLookupFailed}
         sessionError={session.error}
       />
-      {props.decision === undefined ? null : <ChatChoiceNotice decision={props.decision} />}
+      <ChatChoiceNotice decision={props.decision} targetMissing={routing.targetMissing} />
       <BoundChatBody
         activeProjectPath={session.activeProject?.path}
         choice={props.choice}

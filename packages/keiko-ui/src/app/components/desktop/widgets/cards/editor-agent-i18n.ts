@@ -22,6 +22,8 @@ const EN_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.chooseOpenReference": "{label}, reference {reference}",
   "chat.restoration.choiceNotice":
     "You chose this conversation for this window. Keep it, or choose another if it is not the one this window showed.",
+  "chat.restoration.choiceMissingNotice":
+    "The conversation you chose for this window is no longer available.",
   "chat.restoration.choiceKeep": "Keep",
   "chat.restoration.choiceAnother": "Choose another",
   "editor.askSelection.selectText": "Select text in the active editor before asking Keiko.",
@@ -126,6 +128,8 @@ const DE_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.chooseOpenReference": "{label}, Referenz {reference}",
   "chat.restoration.choiceNotice":
     "Sie haben diese Unterhaltung für dieses Fenster gewählt. Behalten Sie sie, oder wählen Sie eine andere, falls es nicht die ist, die dieses Fenster gezeigt hat.",
+  "chat.restoration.choiceMissingNotice":
+    "Die Unterhaltung, die Sie für dieses Fenster gewählt haben, ist nicht mehr verfügbar.",
   "chat.restoration.choiceKeep": "Behalten",
   "chat.restoration.choiceAnother": "Andere wählen",
   "editor.askSelection.selectText": "Wähle Text im aktiven Editor aus, bevor du Keiko fragst.",
