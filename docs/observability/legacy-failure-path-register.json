@@ -8553,12 +8553,6 @@
     },
     {
       "path": "packages/keiko-verification/src/dependencies.ts",
-      "owner": "runDependencyBootstrap",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-verification/src/dependencies.ts",
       "owner": "statOrUndefined",
       "kind": "unregistered-catch",
       "count": 1

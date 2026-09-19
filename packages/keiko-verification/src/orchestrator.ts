@@ -82,6 +82,7 @@ export interface VerificationDeps {
   // keiko-tools exec.ts): wired once by the composing server so a timed-out or aborted step's
   // Windows tree-kill disposition is reconstructable (PR #3354 review, comment 3887021650).
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
+  readonly onDependencyBootstrapFailure?: DependencyBootstrapDeps["onFailure"];
   // ADR-0043 D17: "auto" installs the manifest's declared dependencies before the first script step
   // when the installed tree is not current (dependencies.ts). Default "off" keeps every SDK caller's
   // behaviour unchanged; the server's verification runner turns it on.
@@ -614,6 +615,9 @@ function bootstrapDeps(
     ...(deps.signal === undefined ? {} : { signal: deps.signal }),
     ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
     ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
+    ...(deps.onDependencyBootstrapFailure === undefined
+      ? {}
+      : { onFailure: deps.onDependencyBootstrapFailure }),
     ...(deps.sandboxAvailability === undefined
       ? {}
       : { sandboxAvailability: deps.sandboxAvailability }),

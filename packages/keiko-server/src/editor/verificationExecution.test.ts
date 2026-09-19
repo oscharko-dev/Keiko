@@ -13,7 +13,7 @@
 import { mkdtemp, rm, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { VerificationReport } from "@oscharko-dev/keiko-contracts";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import {
@@ -26,6 +26,7 @@ import type { ServerLogEvent } from "../observability/server-log.js";
 import {
   executeVerificationEnforced,
   probeNetworkIsolation,
+  verificationDependencyFailureHandler,
   verificationTerminationHandler,
   type NetworkIsolationProbe,
 } from "./verificationExecution.js";
@@ -167,4 +168,25 @@ describe("verificationTerminationHandler — correlation-id wiring for the runCo
     handler({ reason: "timeout", childPid: 4242, windowsTreeKill: "not-attempted" });
     expect(log.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
   });
+});
+
+it("records dependency bootstrap failure stages without leaking the error message", () => {
+  const diagnostics = { record: vi.fn() };
+  verificationDependencyFailureHandler(
+    diagnostics,
+    "verify-run-correlation-9",
+  )({
+    stage: "proxy-start",
+    error: new Error("private registry credential"),
+  });
+  expect(diagnostics.record).toHaveBeenCalledWith(
+    expect.objectContaining({
+      correlationId: "verify-run-correlation-9",
+      source: "verification.dependency-bootstrap.proxy-start",
+      errorClass: "Error",
+    }),
+  );
+  expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(
+    "private registry credential",
+  );
 });

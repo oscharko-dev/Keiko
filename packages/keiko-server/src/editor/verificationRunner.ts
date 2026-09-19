@@ -531,6 +531,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       workspace: resolved.workspace,
       signal: entry.controller.signal,
       correlationId: entry.correlationId,
+      diagnostics: this.diagnostics,
       fs: resolved.access.fs,
       dependencyBootstrap: "auto",
     };

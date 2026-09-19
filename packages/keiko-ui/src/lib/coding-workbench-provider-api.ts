@@ -307,7 +307,7 @@ async function probeAutomaticReadinessCandidates(
   candidates: readonly ModelCapability[],
 ): Promise<boolean> {
   let verified = false;
-  let failures = 0;
+  let failureReported = false;
   for (const candidate of candidates) {
     try {
       const report = await bffFetchJson<GatewayReadinessReport>(
@@ -326,11 +326,11 @@ async function probeAutomaticReadinessCandidates(
       );
       verified = reportVerifiedToolCalling(report) || verified;
     } catch {
-      failures += 1;
+      if (!failureReported) {
+        reportClientDiagnostic("At least one coding model readiness check failed.");
+        failureReported = true;
+      }
     }
-  }
-  if (failures > 0) {
-    reportClientDiagnostic(`Coding model readiness checks failed: ${String(failures)}.`);
   }
   return verified;
 }

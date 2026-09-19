@@ -17,10 +17,16 @@ import {
   type VerificationPlan,
   type VerificationReport,
   type VerificationStepOutput,
+  type VerificationDeps,
 } from "@oscharko-dev/keiko-verification";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 
@@ -61,6 +67,7 @@ export interface ExecuteVerificationArgs {
   // processServerLogSink() so production logging needs no wiring; tests inject a capture sink —
   // without this seam the evidence line was unobservable to any test in this file.
   readonly activityLog?: ServerLogSink | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly fs?: WorkspaceFs | undefined;
   // ADR-0043 D17: install the manifest's declared dependencies before the first script step when
   // the installed tree is not current. Off unless the caller asks, exactly like the orchestrator.
@@ -90,6 +97,24 @@ export function verificationTerminationHandler(
   };
 }
 
+export function verificationDependencyFailureHandler(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+): NonNullable<VerificationDeps["onDependencyBootstrapFailure"]> {
+  return ({ stage, error }): void => {
+    emitServerDiagnostic(
+      diagnostics,
+      serverDiagnosticFromError({
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        operation: "verification.dependency-bootstrap",
+        source: `verification.dependency-bootstrap.${stage}`,
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
+  };
+}
+
 // Probe, then run the plan under enforced, fail-closed egress isolation. Behavior is identical to the
 // composition postApplyVerification.ts performed inline before this extraction.
 export async function executeVerificationEnforced(
@@ -106,6 +131,10 @@ export async function executeVerificationEnforced(
     // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification step's
     // timeout/abort leaves its verified Windows tree-kill disposition in the log.
     onTerminated: verificationTerminationHandler(activityLog, args.correlationId),
+    onDependencyBootstrapFailure: verificationDependencyFailureHandler(
+      args.diagnostics,
+      args.correlationId,
+    ),
     ...(args.dependencyBootstrap === undefined
       ? {}
       : { dependencyBootstrap: args.dependencyBootstrap }),

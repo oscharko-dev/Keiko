@@ -931,10 +931,12 @@ describe("runDependencyBootstrap — registry egress", () => {
     const root = tempRoot();
     const plan = installPlan(root);
     const rec = recordingSpawn();
+    const onFailure = vi.fn();
 
     const outcome = await runDependencyBootstrap(plan, {
       ...bootstrapDepsFor(root, rec.fn),
       startEgressProxy: () => Promise.reject(new Error("listen EADDRINUSE")),
+      onFailure,
     });
 
     expect(rec.calls()).toHaveLength(0);
@@ -944,6 +946,10 @@ describe("runDependencyBootstrap — registry egress", () => {
       detail: expect.stringContaining("egress proxy could not start") as string,
     });
     expect(outcome.summary).not.toHaveProperty("egress");
+    expect(onFailure).toHaveBeenCalledWith({
+      stage: "proxy-start",
+      error: expect.any(Error) as Error,
+    });
   });
 
   it("cancels an install whose run went away before npm started, without spawning it", async () => {

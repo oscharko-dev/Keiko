@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b8a85e7b4d5e8f7659a9d8f59684e2d8739da0bf7195a582729bd91623f24aaf",
+    "catalogDigest": "c3defabe64d722801279bd49e6bb06d417e817efdf413810156c9a5e8951f1ee",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -7414,7 +7414,7 @@
         "proofIds": ["editor.verification.dependencies.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:181",
-        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:756"]
+        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:757"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -7557,9 +7557,9 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:82",
         "emitterSites": [
-          "packages/keiko-server/src/editor/verificationRunner.ts:735",
-          "packages/keiko-server/src/editor/verificationRunner.ts:782",
-          "packages/keiko-server/src/editor/verificationRunner.ts:810"
+          "packages/keiko-server/src/editor/verificationRunner.ts:736",
+          "packages/keiko-server/src/editor/verificationRunner.ts:783",
+          "packages/keiko-server/src/editor/verificationRunner.ts:811"
         ]
       },
       {
@@ -12584,7 +12584,7 @@
           "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:227",
           "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.ts:474",
           "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:45",
-          "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:202"
+          "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.ts:203"
         ]
       },
       {
@@ -70186,14 +70186,14 @@
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:915",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:916",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.subscriber",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1119",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1120",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -71751,6 +71751,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "verification.dependency-bootstrap",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:109",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "voice.dialogue.stage",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/client-diagnostics-routes.ts:134",
@@ -72397,6 +72404,7 @@
     "update.session.activity-log",
     "update.session.lifecycle",
     "update.session.portable-handoff-shutdown",
+    "verification.dependency-bootstrap",
     "voice.dialogue.stage",
     "voice.live-dictation.capacity-rejected",
     "voice.live-dictation.initial-frame-timeout",

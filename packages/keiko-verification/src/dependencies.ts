@@ -143,6 +143,17 @@ export interface DependencyBootstrapDeps {
   readonly platform?: RunCommandDeps["platform"] | undefined;
   // Starts the registry egress proxy the install runs behind; tests inject their own.
   readonly startEgressProxy?: (() => Promise<RegistryEgressProxy>) | undefined;
+  readonly onFailure?:
+    | ((failure: { readonly stage: "proxy-start" | "post-proxy"; readonly error: unknown }) => void)
+    | undefined;
+}
+
+function reportDependencyBootstrapFailure(
+  deps: DependencyBootstrapDeps,
+  stage: "proxy-start" | "post-proxy",
+  error: unknown,
+): void {
+  deps.onFailure?.({ stage, error });
 }
 
 export interface DependencyBootstrapOutcome {
@@ -566,8 +577,9 @@ export async function runDependencyBootstrap(
   let proxy: RegistryEgressProxy;
   try {
     proxy = await (deps.startEgressProxy ?? startApprovedRegistryProxy)();
-  } catch {
+  } catch (error) {
     // No proxy, no install: npm never runs with an unconfined network.
+    reportDependencyBootstrapFailure(deps, "proxy-start", error);
     return {
       summary: {
         state: "failed",
@@ -584,7 +596,8 @@ export async function runDependencyBootstrap(
     const checked = withEgress(outcome, proxy.counts(), proxy.fault());
     if (checked.summary.state === "installed") recordCompletedInstall(deps.workspace.root);
     return checked;
-  } catch {
+  } catch (error) {
+    reportDependencyBootstrapFailure(deps, "post-proxy", error);
     return {
       summary: {
         state: "failed",
