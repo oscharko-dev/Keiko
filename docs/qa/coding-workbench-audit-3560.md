@@ -6,27 +6,24 @@ live coding exercises target the owner's disposable `oscharko/Wegwerf-Repo-Final
 
 ## Runtime and upstream boundary
 
-The approved runtime is OpenCode 1.18.30 (`scripts/portable-runtime-approvals.mjs` and
-`packages/keiko-tool-catalog/src/dialect.ts`). Upstream
-[1.18.31](https://github.com/anomalyco/opencode/releases/tag/v1.18.31) includes ACP session-option
-restoration and startup error reporting fixes. These release notes alone do not qualify a
-replacement of Keiko's pinned, verified sidecar.
+The approved runtime is OpenCode 2.0.10 (`scripts/portable-runtime-approvals.mjs` and
+`packages/keiko-tool-catalog/src/dialect.ts`). The runtime, server protocol, plugin registration,
+question forms, portable staging, and approval fixtures now use V2. V1 archives and adapter
+identities are rejected; this is a clean-cut migration without a compatibility fallback.
 
-The supplied [V2 migration guide](https://opencode.ai/v2/docs/migrate-v1/) explicitly changes the
-server and plugin APIs. V2 also accepts LSP configuration without running language servers or
-producing their diagnostics. Treat V2 as an integration migration with contract and confinement
-qualification, not an interchangeable binary upgrade.
+The [V2 migration guide](https://opencode.ai/v2/docs/migrate-v1/) describes the changed server and
+plugin APIs. A successful protocol handshake does not replace real task, confinement, restart,
+and provider qualification. Those checks remain part of this audit.
 
 ## Capability comparison
 
-The [V1 server reference](https://opencode.ai/docs/server/) documents session/message persistence,
-abort, todo lists, compaction, forks, reversions, commands, file lookup, and event streams.
-Keiko's product authority remains the owner of all effects.
+The integration uses the pinned V2 protocol and native question forms. Keiko's product authority
+remains the owner of workspace effects; unsupported V1 endpoints and tools are not emulated.
 
 | Capability                                         | Keiko implementation / audit disposition                                                                                                                                                                                                                                          |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Conversation continuity                            | This PR adds local Coding History using the existing chat/message store, a separate rail window, rename, completion, reopening, and default continuation. Each turn still starts a fresh runtime with bounded historical context; this is not native OpenCode session resumption. |
-| Planning and questions                             | Native todo/question activity is already projected into the governed Workbench. The new status bar distinguishes active work from a pending decision and can focus that decision.                                                                                                 |
+| Planning and questions                             | Native V2 questions are projected into the Workbench and answered through OpenCode forms. V1 todowrite is removed from the catalog and history adapter; planning is ordinary agent conversation.                                                                                  |
 | Workspace reads, search, edits and verification    | Existing governed tools replace native direct filesystem/shell access. Preserve that boundary; enabling native tools is not a safe feature shortcut.                                                                                                                              |
 | Git and delivery                                   | Existing proposal/execution tools and review surfaces own stage, commit, push and draft PR operations. The audit still needs a complete successful live edit/build/delivery journey.                                                                                              |
 | Context compaction                                 | The fixed launch profile supplies an explicit compaction policy and task-preservation prompt. Cross-turn History context is bounded separately to 24,000 characters. Long-history qualification remains open.                                                                     |
@@ -60,8 +57,16 @@ same task correctly recalled the test label and build command without another re
 completion, reopening, New task, and reload were exercised through the browser. After New task
 and reload the prior conversation remained in Completed history without appearing in the new task.
 
-A separate earlier multi-file edit produced a malformed review preview and was rejected before
-application. This remains an open audit finding; no successful application is claimed for it.
+The V2 question exercise reproduced an adapter rejection of the native `question` history item.
+After correcting admission against the canonical tool inventory, the model presented Navigation
+and FAQ options, accepted the FAQ selection, and completed successfully. A following turn in the
+same task recalled FAQ without a tool call. Both tasks ran through the browser and configured
+gateway, without an issue or delivery operation.
+
+A larger test-generation task applied an approved four-file patch, then failed on repeated later
+patches and exhausted its prompt budget. It is not a successful verification result. Improving
+that failure remains part of the next task cycle. A stale browser pairing after a BFF restart also
+required a page reload; restarting alone must not leave the composer falsely ready.
 
 ## Remaining qualification
 

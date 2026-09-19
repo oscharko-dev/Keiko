@@ -49,13 +49,10 @@ function managedInputSchema(schema: CatalogJsonObject): CatalogJsonObject {
       catalogArray(schema.required).length === Object.keys(properties).length,
       "unrepresentable-projection",
     );
-    // The pinned runtime supplies a restrictive object boundary in its provider projection.
-    requireCatalog(schema.additionalProperties === true, "unrepresentable-projection");
-    const projected = { ...schema };
-    delete projected.additionalProperties;
+    // V2 supplies a closed boundary; accepting an open declaration would silently narrow it.
+    requireCatalog(schema.additionalProperties === false, "unrepresentable-projection");
     return {
-      ...projected,
-      additionalProperties: false,
+      ...schema,
       properties: Object.fromEntries(
         Object.entries(properties).map(([key, value]) => [
           key,

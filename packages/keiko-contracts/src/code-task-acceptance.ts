@@ -580,7 +580,7 @@ export const CODE_TASK_QUALIFICATION_MANIFEST_KIND = "code-task-qualification-ma
 
 export const CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION = 1;
 
-/** Exact model-visible inventory required by the controlled #3390 journey rubric. */
+/** Exact model-visible inventory required by the controlled journey rubric on OpenCode V2. */
 export const CODE_TASK_QUALIFICATION_REQUIRED_TOOLS = Object.freeze([
   "question",
   "keiko_repository_search",
@@ -596,7 +596,6 @@ export const CODE_TASK_QUALIFICATION_REQUIRED_TOOLS = Object.freeze([
   "keiko_git_push",
   "keiko_pull_request",
   "keiko_ci_status",
-  "todowrite",
 ] as const satisfies readonly string[]);
 
 export const CODE_TASK_QUALIFICATION_PROVENANCES = Object.freeze([

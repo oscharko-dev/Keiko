@@ -2,7 +2,7 @@
 // sixteen managed-OpenCode canonical identities below (the original seven workspace/verification
 // tools, the eight Git status/diff/stage/commit, push/pull-request and CI-observation tools, plus
 // #3386's H1 local repository-search handler projected as `keiko.repo.search@1` / alias
-// `keiko_repository_search` -- see `repositorySearchSpec` below) plus the two exhaustively-declared
+// `keiko_repository_search` -- see `repositorySearchSpec` below) plus the exhaustively-declared
 // native extension (`question` -- adapter-native, never a Keiko tool descriptor, per
 // D2's explicit "not Keiko tools or compatibility exceptions").
 // packages/keiko-server/src/coding-sidecar-gateway.ts uses this set to build the `toolCatalog`
@@ -134,18 +134,15 @@ function managedObjectSchema(
   properties: CatalogJsonObject,
   required: readonly string[],
 ): CatalogJsonObject {
-  // The managed-runtime dialect (dialect.ts `managedInputSchema`) requires every object-typed
-  // schema in the tree to declare `additionalProperties: true` (stripped on projection, since the
-  // pinned OpenCode runtime does not support declaring it restrictively) and every property to be
-  // required (the runtime declares every custom-tool argument required in its provider
-  // projection). `required` is intentionally alphabetical: `compileCatalogSchema` (schema.ts)
-  // re-sorts it, so an unsorted literal here would silently diverge from the compiled descriptor.
+  // V2 custom tools use closed object boundaries and require every declared argument.
+  // The descriptor already owns those constraints; projection must not rewrite them.
+  // Canonical compilation sorts required keys, so declare them in that order here too.
   const sortedRequired = [...required].sort(compareStrings);
   return {
     type: "object",
     properties,
     required: sortedRequired,
-    additionalProperties: true,
+    additionalProperties: false,
   };
 }
 
@@ -336,16 +333,9 @@ function repositorySearchSpec(): OpenCodeToolSpec {
 }
 
 function changesetEditSpec(): OpenCodeToolSpec {
-  // The real wire form (opencodeToolSchemas.ts CHANGESET_EDIT_SCHEMA) declares `selectedFiles`
-  // optional and `additionalProperties: false` at two nested levels; the managed-runtime dialect
-  // requires every property required and every object's additionalProperties stripped-as-true, so
-  // this projected schema is a strictly LOOSER, structurally-equivalent shape (every file must now
-  // be listed under `selectedFiles`, unknown extra keys are ignored rather than rejected). This is
-  // safe here: this schema is only ever advisory input to the underlying LLM's function-calling
-  // interface (packages/keiko-model-gateway forwards it to the provider, which performs no
-  // server-side schema enforcement of its own), never the dispatch-time enforcement boundary --
-  // the OpenCode-generated adapter source (OPENCODE_TOOL_SOURCE_DEFINITIONS, unchanged) and the
-  // real changeset handler keep their own independent, stricter validation.
+  // The provider descriptor requires selectedFiles explicitly; the runtime source also accepts
+  // omission. Both preserve the closed nested objects. Dispatch-time changeset validation
+  // remains authoritative and never gains permissions from this advisory model projection.
   const fileEntry = managedObjectSchema(
     {
       file: { type: "string", minLength: 1, maxLength: 512 },
