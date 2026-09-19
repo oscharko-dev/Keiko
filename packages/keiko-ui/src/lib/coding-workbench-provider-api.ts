@@ -26,7 +26,10 @@ import type {
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { listCodingWorkbenchReadinessCandidates } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isCodingWorkbenchModel,
+  listCodingWorkbenchReadinessCandidates,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { isGatewayVerificationState } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   validateCodingWorkbenchCodexAuthSetupPlan,
@@ -37,6 +40,7 @@ import {
   notifyGatewayModelReadinessUpdated,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import { ApiError, resetModelRequestCache } from "./api";
+import { reportClientDiagnostic } from "./client-diagnostics";
 import { bffFetchJson } from "./http";
 
 // Match the `withReadDeadline` behaviour in api.ts: a GET/HEAD read that stalls past this
@@ -302,24 +306,42 @@ function validateReadinessReportResponse(
 async function probeAutomaticReadinessCandidates(
   candidates: readonly ModelCapability[],
 ): Promise<boolean> {
+  let verified = false;
+  let failures = 0;
   for (const candidate of candidates) {
-    const report = await bffFetchJson<GatewayReadinessReport>(
-      "/api/gateway/readiness",
-      {
-        method: "POST",
-        cache: "no-store",
-        body: JSON.stringify({
-          modelId: candidate.id,
-          options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
-        }),
-      },
-      {
-        validator: contractValidator<GatewayReadinessReport>(validateReadinessReportResponse),
-      },
-    );
-    if (reportVerifiedToolCalling(report)) return true;
+    try {
+      const report = await bffFetchJson<GatewayReadinessReport>(
+        "/api/gateway/readiness",
+        {
+          method: "POST",
+          cache: "no-store",
+          body: JSON.stringify({
+            modelId: candidate.id,
+            options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+          }),
+        },
+        {
+          validator: contractValidator<GatewayReadinessReport>(validateReadinessReportResponse),
+        },
+      );
+      verified = reportVerifiedToolCalling(report) || verified;
+    } catch {
+      failures += 1;
+    }
   }
-  return false;
+  if (failures > 0) {
+    reportClientDiagnostic(`Coding model readiness checks failed: ${String(failures)}.`);
+  }
+  return verified;
+}
+
+/** Check each unproven configured coding model without delaying Workbench startup. */
+export function verifyConfiguredCodingModels(models: readonly ModelCapability[]): Promise<boolean> {
+  const candidates = listCodingWorkbenchReadinessCandidates(models).filter(
+    (model) =>
+      !isCodingWorkbenchModel(model) && model.toolCallingVerification?.status !== "unsupported",
+  );
+  return candidates.length > 0 ? requestAutomaticReadiness(candidates) : Promise.resolve(false);
 }
 
 function requestAutomaticReadiness(candidates: readonly ModelCapability[]): Promise<boolean> {
@@ -336,15 +358,10 @@ function requestAutomaticReadiness(candidates: readonly ModelCapability[]): Prom
     .then((ready): boolean => {
       if (generation !== automaticReadinessGeneration) return false;
       if (ready) {
-        automaticReadinessRetryAt.delete(requestKey);
         resetModelRequestCache();
         notifyGatewayModelReadinessUpdated();
-      } else {
-        automaticReadinessRetryAt.set(
-          requestKey,
-          Date.now() + AUTOMATIC_READINESS_RETRY_COOLDOWN_MS,
-        );
       }
+      automaticReadinessRetryAt.set(requestKey, Date.now() + AUTOMATIC_READINESS_RETRY_COOLDOWN_MS);
       return ready;
     })
     .catch((): boolean => {
@@ -387,11 +404,9 @@ async function recoverUnverifiedGatewayProfile(
   } catch {
     return profile;
   }
-  const candidates = listCodingWorkbenchReadinessCandidates(response.models);
-  if (candidates.length === 0) return profile;
   let ready = false;
   try {
-    ready = await requestAutomaticReadiness(candidates);
+    ready = await verifyConfiguredCodingModels(response.models);
   } catch {
     return profile;
   }

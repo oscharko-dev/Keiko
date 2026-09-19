@@ -3,7 +3,9 @@ import {
   fetchCodingWorkbenchSidecarGatewayProfile,
   fetchCodingWorkbenchCodexSubscriptionProfile,
   prepareCodingWorkbenchCodexSubscriptionSetup,
+  verifyConfiguredCodingModels,
 } from "./coding-workbench-provider-api";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
@@ -215,6 +217,43 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     expect(readinessBodies.map((body) => body.modelId)).toEqual(["coding-low", "coding-high"]);
     expect(readinessUpdated).toHaveBeenCalledOnce();
     window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
+  });
+
+  it("checks every unproven coding model even when an earlier model succeeds", async () => {
+    const capability = (id: string): ModelCapability => ({
+      id,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "configured gateway",
+      preferredUseCases: ["Coding"],
+      knownLimitations: [],
+    });
+    const probed: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_path: string, init: RequestInit) => {
+        const request = JSON.parse(String(init.body)) as { modelId: string };
+        probed.push(request.modelId);
+        return jsonResponse({
+          verifiedCapabilities: { toolCalling: true },
+          probes: [{ name: "tool_calling", status: "passed" }],
+        });
+      }),
+    );
+
+    await expect(
+      verifyConfiguredCodingModels([capability("qwen-coder"), capability("gpt-oss-120b")]),
+    ).resolves.toBe(true);
+    expect(probed).toEqual(["qwen-coder", "gpt-oss-120b"]);
   });
 
   // #3506 review — `recoverUnverifiedGatewayProfile` now wraps each best-effort recovery step
