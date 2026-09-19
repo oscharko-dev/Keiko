@@ -303,7 +303,6 @@ const CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES = [
   "opaque",
   "redacted",
   "fingerprint",
-  "sole-candidate",
 ] as const;
 
 const CLIENT_BINDING_FIELDS = {
@@ -319,8 +318,8 @@ const CLIENT_BINDING_FIELDS = {
     required: true,
     values: CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES,
   },
-  // The chat id trips the card-number heuristic: a raw UUID, or one found again after persistence
-  // redacted it (through its fingerprint, or as the sole candidate).
+  // The chat id trips the card-number heuristic: a raw UUID, or one found again through its
+  // fingerprint after persistence redacted it.
   heuristicFlagged: { type: "boolean", dataClass: "closed-enum", required: true },
   // The digest of the window's own persisted id, computed here from the validated reference: two
   // windows restored from one list answer stay apart, and a later failure of the same window

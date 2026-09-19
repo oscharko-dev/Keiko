@@ -461,19 +461,6 @@ describe("isClientBindingIngestRequest", () => {
     ).toBe(true);
   });
 
-  // #3557 review (P0): a snapshot an older build wrote has no fingerprint; its chat was found again
-  // as the only listed chat whose id persistence redacts.
-  it("accepts a resolved, flagged binding found again as the sole candidate", () => {
-    expect(
-      isClientBindingIngestRequest({
-        ...bindingRequest(),
-        outcome: "resolved",
-        referenceShape: "sole-candidate",
-        heuristicFlagged: true,
-      }),
-    ).toBe(true);
-  });
-
   it("accepts a heuristic flag only for a server-issued UUID", () => {
     expect(
       isClientBindingIngestRequest({

@@ -310,31 +310,6 @@ describe("client diagnostics loss evidence", () => {
     });
   });
 
-  // #3557 review (P0): a snapshot an older build wrote, found again as the sole candidate, under the
-  // correlation of the chat list load that decided it.
-  it("persists a binding found again as the sole candidate as client.binding.resolved", async () => {
-    const body = JSON.stringify({
-      kind: "binding",
-      surface: "chat-window",
-      windowRef: "chat-mfr3k2x1-4",
-      outcome: "resolved",
-      referenceShape: "sole-candidate",
-      heuristicFlagged: true,
-      correlationId: "ui_list-lookup-0001",
-      decidingLoadCount: 1,
-    });
-    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
-
-    const [line] = lines("client.binding.resolved");
-    expect(expectActivityLogProof("client.binding.resolved.line", line ?? "")).toMatchObject({
-      correlationId: "ui_list-lookup-0001",
-      referenceShape: "sole-candidate",
-      heuristicFlagged: true,
-      completeness: "complete",
-      loss: "none",
-    });
-  });
-
   it("persists a failed session repair as client.session-repair.failed", async () => {
     const body = JSON.stringify({
       kind: "session-repair",
