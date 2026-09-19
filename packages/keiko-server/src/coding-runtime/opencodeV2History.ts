@@ -108,7 +108,12 @@ function assertMessageShape(message: Readonly<Record<string, unknown>>): void {
   const extra = Object.keys(message).filter((key) => !allowed.includes(key));
   if (extra.length === 0) return;
   throw new OpenCodeV2HistoryError(
-    `reason=event-unknown:eventSha256=${digest(message).slice(0, 16)}:role=${role}:extraCount=${String(extra.length)}:extraKeySha256=${digest(extra.slice().sort((a, b) => a.localeCompare(b))).slice(0, 16)}:missing=none`,
+    `reason=event-unknown:eventSha256=${digest(message).slice(0, 16)}:role=${role}:extraCount=${String(extra.length)}:extraKeySha256=${digest(
+      extra.slice().sort((left, right) => {
+        if (left === right) return 0;
+        return left < right ? -1 : 1;
+      }),
+    ).slice(0, 16)}:missing=none`,
   );
 }
 
@@ -122,7 +127,7 @@ function assertToolInput(
   const inputBytes = valid ? Buffer.byteLength(JSON.stringify(input), "utf8") : 0;
   if (valid && inputBytes <= TOOL_CATALOG_LIMITS.maxArgumentBytes) return;
   throw new OpenCodeV2HistoryError(
-    `reason=event-unknown:eventSha256=${digest(part).slice(0, 16)}:part=tool:tool=${String(part.name)}:status=${String(state.status)}:partBytes=${String(Buffer.byteLength(JSON.stringify(part), "utf8"))}:gate=argument-bound`,
+    `reason=event-unknown:eventSha256=${digest(part).slice(0, 16)}:part=tool:toolSha256=${digest(part.name).slice(0, 16)}:statusSha256=${digest(state.status ?? null).slice(0, 16)}:partBytes=${String(Buffer.byteLength(JSON.stringify(part), "utf8"))}:gate=argument-bound`,
   );
 }
 

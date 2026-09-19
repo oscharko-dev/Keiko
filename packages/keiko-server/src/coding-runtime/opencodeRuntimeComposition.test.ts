@@ -1520,6 +1520,42 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  it.each(["list", "answer", "reject"] as const)(
+    "propagates V2 %s transport failures with redacted run evidence",
+    async (operation) => {
+      const records: ServerDiagnosticRecord[] = [];
+      const fixture = await startBridgeFixture(facade, undefined, {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        runControl: {
+          promptBodies: [],
+          abortSessions: [],
+          statusResponses: [{}],
+          questionResponses: [{ privateContent: "PRIVATE_FORM_CONTENT" }],
+        },
+      });
+      try {
+        const port = fixture.runtime.runPort;
+        const request =
+          operation === "list"
+            ? port.listQuestions(FIXTURE_RUN_ID)
+            : operation === "answer"
+              ? port.answerQuestion(FIXTURE_RUN_ID, "que_fixed", [["Approve"]])
+              : port.rejectQuestion(FIXTURE_RUN_ID, "que_fixed");
+        await expect(request).rejects.toThrow();
+        expect(records).toEqual([
+          expect.objectContaining({ correlationId: FIXTURE_RUN_ID, source: "opencode.turn" }),
+        ]);
+        expect(JSON.stringify(records)).not.toContain("PRIVATE_FORM_CONTENT");
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
   // Pins the post-await readiness re-check in answerQuestion (opencodeRuntimeComposition.ts):
   // `readyRun` hands back a live reference into the SAME mutable run record kept in the
   // composition's internal map, so a concurrent dispose that completes while the run's own
@@ -1792,13 +1828,13 @@ describe("private OpenCode tool bridge", () => {
   it("records a body-free structural diagnostic for an unknown history message shape", async () => {
     const records: ServerDiagnosticRecord[] = [];
     const sentinel = "SENTINEL_PRIVATE_HISTORY_BODY";
-    const sentinelKey = "sentinelPrivateHistoryKey";
+    const sentinelKey = "ÄpfelPrivateHistoryKey";
     const history = completedTurnHistory();
     const assistant = history.at(-2);
     if (assistant === undefined) throw new Error("assistant history fixture missing");
     const malformed = [
       ...history.slice(0, -2),
-      { ...assistant, [sentinelKey]: sentinel },
+      { ...assistant, [sentinelKey]: sentinel, zebra: sentinel },
       history.at(-1),
     ];
     const fixture = await startBridgeFixture(
@@ -1828,10 +1864,15 @@ describe("private OpenCode tool bridge", () => {
       message: "runtime-handshake-failed",
     });
     expect(records[0]?.code).toMatch(
-      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:role=assistant:extraCount=1:extraKeySha256=[a-f0-9]{16}:missing=none$/u,
+      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:role=assistant:extraCount=2:extraKeySha256=[a-f0-9]{16}:missing=none$/u,
     );
     expect(JSON.stringify(records)).not.toContain(sentinel);
     expect(JSON.stringify(records)).not.toContain(sentinelKey);
+    const keysDigest = createHash("sha256")
+      .update(JSON.stringify(["zebra", sentinelKey]))
+      .digest("hex")
+      .slice(0, 16);
+    expect(records[0]?.code).toContain(`extraKeySha256=${keysDigest}`);
     await fixture.stop();
   });
 
@@ -1884,54 +1925,70 @@ describe("private OpenCode tool bridge", () => {
     await fixture.stop();
   });
 
-  it("records a body-free structural diagnostic for a refused history part shape", async () => {
-    const records: ServerDiagnosticRecord[] = [];
-    const sentinel = "SENTINEL_PRIVATE_ARGUMENT_BODY";
-    const fixture = await startBridgeFixture(
-      { execute: vi.fn(() => Promise.resolve(completed)) },
-      undefined,
-      {
-        diagnostics: {
-          record: (record): void => {
-            records.push(record);
+  it.each(["streaming", "SENTINEL_PRIVATE_STATUS"])(
+    "records a body-free diagnostic for a refused history part with status %s",
+    async (status) => {
+      const records: ServerDiagnosticRecord[] = [];
+      const sentinel = "SENTINEL_PRIVATE_ARGUMENT_BODY";
+      const fixture = await startBridgeFixture(
+        { execute: vi.fn(() => Promise.resolve(completed)) },
+        undefined,
+        {
+          diagnostics: {
+            record: (record): void => {
+              records.push(record);
+            },
+          },
+          historyResponse: Promise.resolve(
+            v2Envelope(
+              [
+                ...completedTurnHistory().slice(0, -1),
+                {
+                  ...editPartRow(3, {}),
+                  content: [
+                    {
+                      type: "tool",
+                      id: "call_private",
+                      name: "keiko_PRIVATE_EMPLOYEE_A123",
+                      time: { created: 3 },
+                      state: {
+                        status,
+                        input: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
+                      },
+                    },
+                  ],
+                },
+                completedTurnHistory().at(-1),
+              ]
+                .slice()
+                .reverse(),
+            ),
+          ),
+          expectedStart: {
+            ok: false,
+            failureCode: "protocol-schema-mismatch",
+            retryable: false,
           },
         },
-        historyResponse: Promise.resolve(
-          v2Envelope(
-            [
-              ...completedTurnHistory().slice(0, -1),
-              editPartRow(3, {
-                status: "streaming",
-                input: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
-              }),
-              completedTurnHistory().at(-1),
-            ]
-              .slice()
-              .reverse(),
-          ),
-        ),
-        expectedStart: {
-          ok: false,
-          failureCode: "protocol-schema-mismatch",
-          retryable: false,
-        },
-      },
-    );
+      );
 
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      correlationId: FIXTURE_RUN_ID,
-      operation: "coding-runtime.handshake",
-      source: "opencode.history",
-      errorClass: "OpenCodeHistoryFailure",
-      message: "runtime-handshake-failed",
-    });
-    expect(records[0]?.code).toMatch(
-      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:part=tool:tool=keiko_changeset_edit:status=streaming:partBytes=[1-9][0-9]*:gate=argument-bound$/u,
-    );
-    expect(JSON.stringify(records)).not.toContain(sentinel);
-    await fixture.stop();
-  });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        correlationId: FIXTURE_RUN_ID,
+        operation: "coding-runtime.handshake",
+        source: "opencode.history",
+        errorClass: "OpenCodeHistoryFailure",
+        message: "runtime-handshake-failed",
+      });
+      expect(records[0]?.code).toMatch(
+        /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:part=tool:toolSha256=[a-f0-9]{16}:statusSha256=[a-f0-9]{16}:partBytes=[1-9][0-9]*:gate=argument-bound$/u,
+      );
+      expect(JSON.stringify(records)).not.toContain(sentinel);
+      expect(JSON.stringify(records)).not.toContain("PRIVATE_EMPLOYEE_A123");
+      expect(JSON.stringify(records)).not.toContain("SENTINEL_PRIVATE_STATUS");
+      await fixture.stop();
+    },
+  );
 
   // Before 2026-09-10 a pull that failed before any row was parsed -- refused, oversized, not a JSON
   // array -- reached the lifecycle failure with no line of its own. The closed reason and, for an

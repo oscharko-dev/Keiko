@@ -525,7 +525,7 @@ function createQuestionRunPort(
           .map(projectOpenCodeV2Form);
       } catch (error) {
         recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-        return [];
+        throw error;
       }
     },
     answerQuestion: async (runId, requestId, answers): Promise<boolean> => {
@@ -549,7 +549,7 @@ function createQuestionRunPort(
       } catch (error) {
         if (error instanceof CodingRuntimeQuestionAnswerRejectedError) throw error;
         recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-        return false;
+        throw error;
       }
     },
     rejectQuestion: createRejectQuestion(readyRun, diagnostics),
@@ -573,7 +573,7 @@ function createRejectQuestion(
       return run.ready;
     } catch (error) {
       recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-      return false;
+      throw error;
     }
   };
 }
