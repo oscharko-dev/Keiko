@@ -17,6 +17,8 @@ import {
   resolveCorrelationId,
 } from "./correlation.js";
 import { ProviderError, RateLimitError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { resetServerLogFailureNotices } from "./observability/server-log.js";
 
 const identity = (message: string): string => message;
 
@@ -386,7 +388,7 @@ describe("emitServerDiagnostic (RB-6)", () => {
     expect(captured?.timestamp).toBe("1970-01-01T00:00:00.000Z");
   });
 
-  it("never throws when the sink itself throws", () => {
+  it("never throws when the sink itself throws, and counts and reports the dropped record", () => {
     const record = serverDiagnosticFromError({
       correlationId: "cid-2",
       operation: "op",
@@ -399,9 +401,31 @@ describe("emitServerDiagnostic (RB-6)", () => {
         throw new Error("sink is broken");
       },
     };
-    expect(() => {
-      emitServerDiagnostic(brokenSink, record);
-    }).not.toThrow();
+    const droppedBefore = activityLogLossCounters()["diagnostic-sink-failed"];
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let notices: string[];
+    try {
+      // The notice throttle is process-wide: start from a clean slate, and drop the reset's own
+      // flush of anything an earlier test suppressed, so only this record's notice is inspected.
+      resetServerLogFailureNotices();
+      stderrWrite.mockClear();
+      expect(() => {
+        emitServerDiagnostic(brokenSink, record);
+      }).not.toThrow();
+      notices = stderrWrite.mock.calls.map(([chunk]) => String(chunk));
+    } finally {
+      stderrWrite.mockRestore();
+    }
+    // #3532: the drop is no longer silent. It is counted in the loss ledger and announced on the
+    // independent stderr channel, body-free.
+    expect(activityLogLossCounters()["diagnostic-sink-failed"]).toBe(droppedBefore + 1);
+    expect(notices).toHaveLength(1);
+    expect(JSON.parse(notices[0] ?? "{}")).toMatchObject({
+      op: "server-log.write-failed",
+      failedOp: "server.diagnostic.failure",
+      loss: "event-dropped",
+    });
+    expect(notices[0]).not.toContain("sink is broken");
   });
 
   it("sanitizes an out-of-shape parentCorrelationId before ANY sink sees it, so a CRLF-bearing value never reaches the stderr line", () => {

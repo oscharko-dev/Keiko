@@ -629,13 +629,30 @@ function startWriterWorker(
   return worker;
 }
 
+// An exited process nobody has reaped yet (a zombie) no longer runs. Inside a container without an
+// init process nothing reaps an orphan, so `kill(pid, 0)` alone would report a writer that stopped
+// by itself as still alive.
 function processIsRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+  return !processIsZombie(pid);
+}
+
+// /proc/<pid>/stat is "pid (comm) state ..."; comm may itself contain spaces and parentheses, so the
+// state is the first field after the last ")". Without procfs (macOS, Windows) the system init
+// reaps an orphan, and `kill(pid, 0)` is already exact there.
+function processIsZombie(pid: number): boolean {
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${String(pid)}/stat`, "utf8");
+  } catch {
+    return false;
+  }
+  const afterComm = stat.lastIndexOf(")");
+  return stat.slice(afterComm + 2, afterComm + 3) === "Z";
 }
 
 // Spawns a forever writer through a short-lived relay process that exits at once, which leaves the
@@ -689,10 +706,12 @@ describe("server activity log", () => {
     // Hermetic: the suite must not observe the developer's or the runner's own threshold.
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
     resetFsKnobs();
+    // Spy first: the reset below flushes whatever an earlier test's throttle suppressed, and that
+    // last-resort notice belongs in the spy, not in the runner's output.
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
     // The failure notice is throttled process-wide, so a test that asserts on it must start from a
     // slate no earlier test can have used up.
     resetServerLogFailureNotices();
-    vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -1715,8 +1734,8 @@ describe("activity log segment lifecycle", () => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-segments-"));
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
     resetFsKnobs();
-    resetServerLogFailureNotices();
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
   });
 
   afterEach(async () => {
@@ -1985,8 +2004,8 @@ describe("activity log retention", () => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-retention-"));
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
     resetFsKnobs();
-    resetServerLogFailureNotices();
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
   });
 
   afterEach(() => {
@@ -2408,8 +2427,8 @@ describe("activity log retention pins", () => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-pins-"));
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
     resetFsKnobs();
-    resetServerLogFailureNotices();
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
   });
 
   afterEach(async () => {
@@ -3088,8 +3107,8 @@ describe("activity log durable batches", () => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-durable-"));
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
     resetFsKnobs();
-    resetServerLogFailureNotices();
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
   });
 
   afterEach(() => {
@@ -3269,9 +3288,9 @@ describe("activity log loss ledger", () => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-loss-"));
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
     resetFsKnobs();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
     resetServerLogFailureNotices();
     resetActivityLogLossCountersForTests();
-    vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
 
   afterEach(() => {
