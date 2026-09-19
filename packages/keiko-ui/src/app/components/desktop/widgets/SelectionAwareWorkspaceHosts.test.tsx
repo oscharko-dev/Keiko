@@ -2031,17 +2031,16 @@ describe("ChatWindowSessionHost target missing", () => {
             heuristicFlagged: true,
             windowRef: "window-1",
             decidingLoadCount: 1,
+            targetFingerprint: chatReferenceFingerprint(flaggedId),
           },
         },
       ),
     );
     expectNoMissingReport();
+    // The chat it bound to is named only by its fingerprint, never by its id.
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(flaggedId);
   });
 
-  // #3557 review: the snapshot an older build actually wrote holds only the redaction marker, with no
-  // fingerprint, and that marker identifies nothing. The chat it named may be gone while another
-  // flagged chat is the only one left, so the window must never guess: it stays unbound and reports
-  // its chat as missing, with the redacted reference's typed evidence.
   // #3557 review (P0): the snapshot an older build actually wrote holds only the redaction marker,
   // with no fingerprint. Its chat A still exists and must reopen, but nothing in the snapshot proves
   // which chat it named: another flagged chat B is listed beside it. So the window never guesses. It
@@ -2060,11 +2059,33 @@ describe("ChatWindowSessionHost target missing", () => {
 
     expect(restoredCfg).toEqual({ chatId: "[REDACTED]", projectPath: "/repo" });
     expect(await screen.findByText("Chat not found")).toBeInTheDocument();
-    const reopenA = await screen.findByRole("button", { name: "Open Deploy status" });
-    expect(screen.getByRole("button", { name: "Open Release notes" })).toBeInTheDocument();
+    const reopenA = await screen.findByRole("button", {
+      name: /^Open Deploy status, last active /u,
+    });
+    expect(
+      screen.getByRole("button", { name: /^Open Release notes, last active /u }),
+    ).toBeInTheDocument();
     // Never on its own.
     expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: chatA });
     expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: chatB });
+    // The offer itself is evidence: the load that decided it, and how many chats it holds.
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window offered conversations to choose from (candidates=2)",
+        {
+          correlationId: lookupLoadId(),
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "candidates-offered",
+            referenceShape: "redacted",
+            heuristicFlagged: false,
+            windowRef: "window-1",
+            candidateCount: 2,
+            decidingLoadCount: 1,
+          },
+        },
+      ),
+    );
 
     await userEvent.click(reopenA);
 
@@ -2081,11 +2102,51 @@ describe("ChatWindowSessionHost target missing", () => {
             heuristicFlagged: true,
             windowRef: "window-1",
             decidingLoadCount: 1,
+            targetFingerprint: chatReferenceFingerprint(chatA),
           },
         },
       ),
     );
     expect(screen.queryByText("Chat not found")).toBeNull();
+    const reported = JSON.stringify(reportClientDiagnosticMock.mock.calls);
+    expect(reported).not.toContain(chatA);
+    expect(reported).not.toContain(chatB);
+  });
+
+  // #3557 review: every chat starts as "New chat", so two offered chats can share a title. Each offer
+  // names when its chat was last active, so the person can tell them apart, and the chat they choose
+  // is the one the window binds to and the evidence names.
+  it("tells two offered chats with one title apart by when each was last active", async (): Promise<void> => {
+    const older = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const newer = "2404206d-9ab6-4bca-8853-813867352087";
+    const olderChat = chatFixture(older, "New chat", Date.UTC(2025, 0, 15, 12));
+    const newerChat = chatFixture(newer, "New chat", Date.UTC(2026, 5, 15, 12));
+    chatSessionState.chats = [olderChat, newerChat];
+    fetchChatsMock.mockResolvedValue({ chats: [olderChat, newerChat] });
+
+    const { ctx } = restoreChatWindow(flaggedChatWindow({ chatId: older, projectPath: "/repo" }));
+
+    const offers = await screen.findAllByRole("button", { name: /^Open New chat, last active /u });
+    expect(offers).toHaveLength(2);
+    expect(new Set(offers.map((offer) => offer.textContent)).size).toBe(2);
+    // The most recently active first.
+    expect(offers[0]).toHaveTextContent("2026");
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Open New chat, last active .*2025/u }),
+    );
+
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: older }));
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: newer });
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=user-selected, heuristic-flagged)",
+        expect.objectContaining({
+          bindingReport: expect.objectContaining({
+            targetFingerprint: chatReferenceFingerprint(older),
+          }) as unknown,
+        }),
+      ),
+    );
   });
 
   // #3557 review: a failed project catalog is no answer about the chat; a fingerprinted window shows
@@ -2112,6 +2173,10 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(missing).toEqual([]);
   });
 
+  // #3557 review: the snapshot an older build actually wrote holds only the redaction marker, with no
+  // fingerprint, and that marker identifies nothing. The chat it named may be gone while another
+  // flagged chat is the only one left, so the window must never guess: it stays unbound and reports
+  // its chat as missing, with the redacted reference's typed evidence.
   it("keeps a snapshot an older build wrote unbound, never guessing the only flagged chat", async (): Promise<void> => {
     const onlyFlagged = listFlaggedChat("2404206d-9ab6-4bca-8853-813867352087");
     const window = flaggedChatWindow({
@@ -2135,7 +2200,9 @@ describe("ChatWindowSessionHost target missing", () => {
       ),
     );
     // It is offered to the person, never bound on its own.
-    expect(await screen.findByRole("button", { name: "Open Deploy status" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    ).toBeInTheDocument();
     expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: onlyFlagged });
     const resolved = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
       String(message).startsWith("[keiko] chat window binding resolved"),

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 
 import { ChatListLoadError, type ChatListLoad } from "../hooks/useChatSession";
+import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import {
   chatReferenceFingerprint,
   findChatByFingerprint,
@@ -14,6 +15,7 @@ import {
 } from "./chatReferenceFingerprint";
 
 type RebindSession = Parameters<typeof useChatReferenceRebind>[1];
+type ChoiceWindow = Parameters<typeof useRedactedChatChoice>[2];
 
 interface RebindProps {
   readonly cfg: Record<string, unknown>;
@@ -44,8 +46,13 @@ function project(path: string): ProjectWithAvailability {
   return { path, name: path, favorite: false, createdAt: 1, lastOpenedAt: 1, available: true };
 }
 
-function chat(id: string, projectPath: string, status: Chat["status"] = "open"): Chat {
-  return { id, projectPath, status, title: "Deploy status" } as unknown as Chat;
+function chat(
+  id: string,
+  projectPath: string,
+  status: Chat["status"] = "open",
+  updatedAt = 1,
+): Chat {
+  return { id, projectPath, status, title: "Deploy status", updatedAt } as unknown as Chat;
 }
 
 function listed(chats: readonly Chat[], correlationId = "ui_list-0001"): ChatListLoad {
@@ -353,13 +360,23 @@ describe("useRedactedChatChoice", () => {
   const session = { loading: false, projects: [project("/repo")] };
   const legacy = { chatId: "[REDACTED]", projectPath: "/repo" };
 
+  function windowOf(updateCfg: WindowRenderContext["updateCfg"]): ChoiceWindow {
+    return { updateCfg, windowId: "window-legacy" };
+  }
+
+  function offerReports(): readonly unknown[][] {
+    return reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).startsWith("[keiko] chat window offered conversations"),
+    );
+  }
+
   it("offers the listed chats whose ids persistence redacts, and binds none on its own", async () => {
     sharedFetchChatsWithEvidenceMock.mockResolvedValue(
       listed([chat(FLAGGED_ID, "/repo"), chat(OTHER_FLAGGED_ID, "/repo"), chat(CLEAN_ID, "/repo")]),
     );
     const updateCfg = vi.fn();
 
-    const view = renderHook(() => useRedactedChatChoice(legacy, session, updateCfg));
+    const view = renderHook(() => useRedactedChatChoice(legacy, session, windowOf(updateCfg)));
 
     await waitFor(() =>
       expect(view.result.current.choice?.candidates.map((candidate) => candidate.id)).toEqual([
@@ -377,7 +394,8 @@ describe("useRedactedChatChoice", () => {
     );
     const updateCfg = vi.fn();
     const view = renderHook(
-      ({ cfg }: { cfg: Record<string, unknown> }) => useRedactedChatChoice(cfg, session, updateCfg),
+      ({ cfg }: { cfg: Record<string, unknown> }) =>
+        useRedactedChatChoice(cfg, session, windowOf(updateCfg)),
       { initialProps: { cfg: legacy as Record<string, unknown> } },
     );
     await waitFor(() => expect(view.result.current.choice).toBeDefined());
@@ -403,15 +421,139 @@ describe("useRedactedChatChoice", () => {
       useRedactedChatChoice(
         { ...legacy, chatIdFingerprint: chatReferenceFingerprint(FLAGGED_ID) },
         session,
-        updateCfg,
+        windowOf(updateCfg),
       ),
     );
     const live = renderHook(() =>
-      useRedactedChatChoice({ chatId: FLAGGED_ID, projectPath: "/repo" }, session, updateCfg),
+      useRedactedChatChoice(
+        { chatId: FLAGGED_ID, projectPath: "/repo" },
+        session,
+        windowOf(updateCfg),
+      ),
     );
 
     expect(fingerprinted.result.current.choice).toBeUndefined();
     expect(live.result.current.choice).toBeUndefined();
     expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
+    expect(offerReports()).toEqual([]);
+  });
+
+  it("offers the most recently active chat first", async () => {
+    sharedFetchChatsWithEvidenceMock.mockResolvedValue(
+      listed([chat(FLAGGED_ID, "/repo", "open", 10), chat(OTHER_FLAGGED_ID, "/repo", "open", 20)]),
+    );
+
+    const view = renderHook(() => useRedactedChatChoice(legacy, session, windowOf(vi.fn())));
+
+    await waitFor(() =>
+      expect(view.result.current.choice?.candidates.map((candidate) => candidate.id)).toEqual([
+        OTHER_FLAGGED_ID,
+        FLAGGED_ID,
+      ]),
+    );
+  });
+
+  // #3557 review: the offer is reconstructable from the log, under the list load that decided it,
+  // with its count and the window's own reference, and never a chat id.
+  it("reports each offer once under the load that decided it, with its count", async () => {
+    sharedFetchChatsWithEvidenceMock.mockResolvedValue(
+      listed([chat(FLAGGED_ID, "/repo"), chat(OTHER_FLAGGED_ID, "/repo")], "ui_list-offer-0001"),
+    );
+    const view = renderHook(() => useRedactedChatChoice(legacy, session, windowOf(vi.fn())));
+    await waitFor(() => expect(view.result.current.choice).toBeDefined());
+    view.rerender();
+    view.rerender();
+
+    expect(offerReports()).toEqual([
+      [
+        "[keiko] chat window offered conversations to choose from (candidates=2)",
+        {
+          correlationId: "ui_list-offer-0001",
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "candidates-offered",
+            referenceShape: "redacted",
+            heuristicFlagged: false,
+            windowRef: "window-legacy",
+            candidateCount: 2,
+            decidingLoadCount: 1,
+          },
+        },
+      ],
+    ]);
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(FLAGGED_ID);
+  });
+
+  it("reports an empty offer, and names every load a window without a project read", async () => {
+    sharedFetchChatsWithEvidenceMock.mockImplementation((path) =>
+      Promise.resolve(listed([chat(CLEAN_ID, path)], `ui_list-${path.slice(1)}`)),
+    );
+    const everywhere = { loading: false, projects: [project("/repo-a"), project("/repo-b")] };
+
+    const view = renderHook(() =>
+      useRedactedChatChoice({ chatId: "[REDACTED]" }, everywhere, windowOf(vi.fn())),
+    );
+
+    await waitFor(() => expect(offerReports()).toHaveLength(1));
+    expect(offerReports()[0]?.[1]).toEqual({
+      correlationId: "ui_list-repo-a",
+      bindingReport: expect.objectContaining({
+        candidateCount: 0,
+        relatedCorrelationIds: ["ui_list-repo-b"],
+        decidingLoadCount: 2,
+      }) as unknown,
+    });
+    expect(view.result.current.choice).toBeUndefined();
+  });
+
+  // #3557 review: a list that could not be read is no empty offer. The scan stays undecided, offers
+  // and reports nothing, and runs again after a backoff until the person can choose.
+  it("scans again after a backoff when a list could not be read", async () => {
+    vi.useFakeTimers();
+    try {
+      sharedFetchChatsWithEvidenceMock
+        .mockRejectedValueOnce(unreadable())
+        .mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")], "ui_list-offer-0002"));
+
+      const view = renderHook(() => useRedactedChatChoice(legacy, session, windowOf(vi.fn())));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(view.result.current.choice).toBeUndefined();
+      expect(offerReports()).toEqual([]);
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat reference lookup failed: TypeError",
+        { correlationId: "ui_list-failed-0001", errorKind: "unavailable" },
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(view.result.current.choice?.candidates.map((candidate) => candidate.id)).toEqual([
+        FLAGGED_ID,
+      ]);
+      expect(offerReports()).toHaveLength(1);
+      expect(offerReports()[0]?.[1]).toMatchObject({ correlationId: "ui_list-offer-0002" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("scans again at once when the listed projects change after a list could not be read", async () => {
+    sharedFetchChatsWithEvidenceMock
+      .mockRejectedValueOnce(unreadable())
+      .mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")]));
+    const view = renderHook(
+      ({ current }: { current: typeof session }) =>
+        useRedactedChatChoice(legacy, current, windowOf(vi.fn())),
+      { initialProps: { current: session } },
+    );
+    await waitFor(() => expect(sharedFetchChatsWithEvidenceMock).toHaveBeenCalledTimes(1));
+    await act(async () => Promise.resolve());
+    expect(view.result.current.choice).toBeUndefined();
+
+    view.rerender({ current: { loading: false, projects: [project("/repo")] } });
+
+    await waitFor(() => expect(view.result.current.choice).toBeDefined());
   });
 });

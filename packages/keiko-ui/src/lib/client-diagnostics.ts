@@ -81,6 +81,10 @@ export interface ClientDiagnosticBindingReport {
   readonly relatedCorrelationIds?: readonly string[] | undefined;
   // How many list loads decided the outcome in total, named or not.
   readonly decidingLoadCount?: number | undefined;
+  // `candidates-offered` only: how many chats the window offered the person, zero included.
+  readonly candidateCount?: number | undefined;
+  // A binding found again after redaction only: the fingerprint of the chat it bound to, never its id.
+  readonly targetFingerprint?: string | undefined;
 }
 
 // The outcome of repairing and replaying a read a restarted BFF denied (#3557). `meta.correlationId`

@@ -557,6 +557,59 @@ describe("fanOutClientDiagnostic binding evidence", () => {
     });
     expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 2 });
   });
+
+  // #3557 review: an offer carries its count, zero included, and a binding found again after
+  // redaction the fingerprint of the chat it bound to, so two choices from one list stay apart.
+  it("posts an offer's count, zero included, and a restored binding's target fingerprint", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const binding = {
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-3",
+      decidingLoadCount: 1,
+    } as const;
+
+    fanOutClientDiagnostic("[keiko] chat window offered conversations to choose from", {
+      correlationId: "ui_chat-list-load-0005",
+      bindingReport: {
+        ...binding,
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        candidateCount: 0,
+      },
+    });
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "binding",
+      ...binding,
+      outcome: "candidates-offered",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      correlationId: "ui_chat-list-load-0005",
+      candidateCount: 0,
+    });
+
+    fanOutClientDiagnostic("[keiko] chat window binding resolved (reference=user-selected)", {
+      correlationId: "ui_chat-list-load-0005",
+      bindingReport: {
+        ...binding,
+        outcome: "resolved",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+        targetFingerprint: "a1".repeat(32),
+      },
+    });
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "binding",
+      ...binding,
+      outcome: "resolved",
+      referenceShape: "user-selected",
+      heuristicFlagged: true,
+      correlationId: "ui_chat-list-load-0005",
+      targetFingerprint: "a1".repeat(32),
+    });
+  });
 });
 
 // #3557 review: a stage's two phases share one id, and a session repair joins the denied request.

@@ -7,7 +7,7 @@ import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/
 import { updateChat } from "@/lib/api";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId } from "@/lib/http";
-import { useTranslate } from "@/lib/i18n";
+import { useLocale, useTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
@@ -34,6 +34,7 @@ import {
 import {
   type ChatReferenceRestoration,
   type RedactedChatChoice,
+  chatReferenceFingerprint,
   useChatReferenceFingerprint,
   useChatReferenceRebind,
   useRedactedChatChoice,
@@ -1223,6 +1224,8 @@ interface ChatBindingEvidenceArgs {
 // heuristic flags it, never the id; the window's own id (the server logs only its digest), so two
 // windows restored from one list answer stay apart; the correlation ids of the chat list loads whose
 // answer decided it, and how many loads that was, so the server records any it cannot name as loss.
+// A binding found again after redaction also names the chat it bound to, by the fingerprint the
+// window persists and never by its id, so two choices from one list answer stay apart.
 function useChatBindingEvidence({
   routing,
   chatId,
@@ -1250,15 +1253,24 @@ function useChatBindingEvidence({
         windowRef: windowId,
         ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
         ...(count === 0 ? {} : { decidingLoadCount: count }),
+        ...(outcome === "resolved" && restoration !== undefined
+          ? { targetFingerprint: chatReferenceFingerprint(chatId) }
+          : {}),
       },
     });
   }, [chatId, count, idsKey, outcome, restoration, windowId]);
 }
 
 // A window whose redacted chat id carries no fingerprint offers the chats it may have shown; only
-// the person's choice binds it (#3557 review).
+// the person's choice binds it (#3557 review). Each offer names when its chat was last active, so
+// two chats with one title (every chat starts as "New chat") stay apart.
 function ChatChoice({ choice }: { readonly choice: RedactedChatChoice }): ReactNode {
   const agentT = useEditorAgentTranslate();
+  const locale = useLocale();
+  const lastActive = useMemo(
+    () => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }),
+    [locale],
+  );
   return (
     <div role="group" aria-label={agentT("chat.restoration.chooseLabel")}>
       <p className="lk-empty-body">{agentT("chat.restoration.chooseBody")}</p>
@@ -1271,7 +1283,10 @@ function ChatChoice({ choice }: { readonly choice: RedactedChatChoice }): ReactN
             choice.choose(chat);
           }}
         >
-          {agentT("chat.restoration.chooseOpen", { title: chat.title })}
+          {agentT("chat.restoration.chooseOpen", {
+            title: chat.title,
+            updated: lastActive.format(new Date(chat.updatedAt)),
+          })}
         </button>
       ))}
     </div>
@@ -1462,7 +1477,7 @@ export function ChatWindowSessionHost({
   // A chat id persistence redacted is found again before the window binds: through its
   // fingerprint, or, without one, only through the person's choice.
   const rebind = useChatReferenceRebind(cfg, session, ctx.updateCfg);
-  const redacted = useRedactedChatChoice(cfg, session, ctx.updateCfg);
+  const redacted = useRedactedChatChoice(cfg, session, ctx);
   if (rebind.pending) return <ChatBindPending />;
   return (
     <BoundChatWindowSessionHost
