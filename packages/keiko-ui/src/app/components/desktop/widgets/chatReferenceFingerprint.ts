@@ -35,6 +35,8 @@ import {
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
+const SHA256_HEX_LENGTH = 64;
+const MIN_CHOICE_REFERENCE_LENGTH = 6;
 const MAX_REBIND_RETRY_DELAY_MS = 30_000;
 const FINGERPRINT_DOMAIN = "keiko-chat-reference-v1";
 const FINGERPRINT_SEPARATOR = String.fromCharCode(0);
@@ -393,6 +395,43 @@ function useCandidatesOfferedEvidence(
     reportedRef.current.add(scan);
     reportCandidatesOffered(scan, windowId);
   }, [scan, windowId]);
+}
+
+/** An offered chat and the label its button shows. */
+export interface ChatChoiceOffer {
+  readonly chat: Chat;
+  readonly label: string;
+}
+
+// The shortest prefixes, six characters or more, that tell these fingerprints apart. Two distinct
+// chat ids never share a fingerprint, so the whole fingerprint always does.
+function distinctPrefixes(fingerprints: readonly string[]): readonly string[] {
+  const prefixes = (length: number): readonly string[] =>
+    fingerprints.map((fingerprint) => fingerprint.slice(0, length));
+  let length = MIN_CHOICE_REFERENCE_LENGTH;
+  while (length < SHA256_HEX_LENGTH && new Set(prefixes(length)).size < fingerprints.length) {
+    length += 1;
+  }
+  return prefixes(length);
+}
+
+/**
+ * The reference each offer shows beside its label (#3557 review). An offer whose label reads like
+ * another's (one title, last active in one second) shows the start of its chat's fingerprint, the
+ * one-way form the window persists, long enough to tell the two apart; any other offer shows none.
+ * No two offers ever read alike, and none shows a chat id.
+ */
+export function chatChoiceReferences(
+  offers: readonly ChatChoiceOffer[],
+): readonly (string | undefined)[] {
+  const alike = offers.filter((offer) =>
+    offers.some((other) => other !== offer && other.label === offer.label),
+  );
+  const prefixes = distinctPrefixes(alike.map((offer) => chatReferenceFingerprint(offer.chat.id)));
+  return offers.map((offer) => {
+    const index = alike.indexOf(offer);
+    return index === -1 ? undefined : prefixes[index];
+  });
 }
 
 /** The chats a window whose redacted id carries no fingerprint may have shown, to choose from. */

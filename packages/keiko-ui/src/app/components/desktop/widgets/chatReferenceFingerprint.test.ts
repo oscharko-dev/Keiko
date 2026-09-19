@@ -5,7 +5,9 @@ import type { Chat, ProjectWithAvailability } from "@/lib/types";
 
 import { ChatListLoadError, type ChatListLoad } from "../hooks/useChatSession";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import { persistedReferenceEvidence } from "../hooks/workspace-persistence";
 import {
+  chatChoiceReferences,
   chatReferenceFingerprint,
   findChatByFingerprint,
   useChatReferenceFingerprint,
@@ -78,6 +80,56 @@ describe("chatReferenceFingerprint", () => {
     expect(chatReferenceFingerprint(FLAGGED_ID)).toBe(fingerprint);
     expect(chatReferenceFingerprint(CLEAN_ID)).not.toBe(fingerprint);
     expect(fingerprint).not.toContain("8853");
+  });
+});
+
+// #3557 review: two offers can share a title and a last-active second. Each then shows the start of
+// its chat's fingerprint, long enough to tell them apart, so no two offers ever read alike.
+describe("chatChoiceReferences", () => {
+  // Two flagged ids found by search whose fingerprints share their first six hex digits.
+  const PREFIX_TWIN_A = "a0001280-9ab6-4bca-8853-813867352087";
+  const PREFIX_TWIN_B = "a0001aee-9ab6-4bca-8853-813867352087";
+
+  function offer(id: string, label: string): { readonly chat: Chat; readonly label: string } {
+    return { chat: chat(id, "/repo"), label };
+  }
+
+  it("gives an offer whose label is its own no reference", () => {
+    expect(chatChoiceReferences([offer(FLAGGED_ID, "Open A"), offer(CLEAN_ID, "Open B")])).toEqual([
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("tells offers that read alike apart by the start of their fingerprints", () => {
+    const references = chatChoiceReferences([
+      offer(FLAGGED_ID, "Open New chat"),
+      offer(CLEAN_ID, "Open Deploy status"),
+      offer(PREFIX_TWIN_A, "Open New chat"),
+    ]);
+
+    expect(references[1]).toBeUndefined();
+    expect(references[0]).toBe(chatReferenceFingerprint(FLAGGED_ID).slice(0, 6));
+    expect(references[2]).toBe(chatReferenceFingerprint(PREFIX_TWIN_A).slice(0, 6));
+    expect(references[0]).not.toBe(references[2]);
+  });
+
+  it("lengthens the references until fingerprints that share a prefix differ", () => {
+    const twinA = chatReferenceFingerprint(PREFIX_TWIN_A);
+    const twinB = chatReferenceFingerprint(PREFIX_TWIN_B);
+    // The fixture's premise, derived from the production fingerprint.
+    expect(twinA.slice(0, 6)).toBe(twinB.slice(0, 6));
+    expect(twinA.slice(0, 7)).not.toBe(twinB.slice(0, 7));
+    expect(persistedReferenceEvidence(PREFIX_TWIN_A).heuristicFlagged).toBe(true);
+    expect(persistedReferenceEvidence(PREFIX_TWIN_B).heuristicFlagged).toBe(true);
+
+    const references = chatChoiceReferences([
+      offer(PREFIX_TWIN_A, "Open New chat"),
+      offer(PREFIX_TWIN_B, "Open New chat"),
+    ]);
+
+    expect(references).toEqual([twinA.slice(0, 7), twinB.slice(0, 7)]);
+    expect(references.join()).not.toContain("9ab6");
   });
 });
 

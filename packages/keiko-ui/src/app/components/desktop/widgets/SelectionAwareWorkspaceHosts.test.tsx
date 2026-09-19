@@ -2116,6 +2116,50 @@ describe("ChatWindowSessionHost target missing", () => {
   // #3557 review: every chat starts as "New chat", so two offered chats can share a title. Each offer
   // names when its chat was last active, so the person can tell them apart, and the chat they choose
   // is the one the window binds to and the evidence names.
+  // #3557 review: two "New chat" offers last active within one minute read apart by their seconds.
+  it("tells two offered chats with one title apart within one minute by their seconds", async (): Promise<void> => {
+    const first = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const second = "2404206d-9ab6-4bca-8853-813867352087";
+    const firstChat = chatFixture(first, "New chat", Date.parse("2026-06-15T12:00:01.001Z"));
+    const secondChat = chatFixture(second, "New chat", Date.parse("2026-06-15T12:00:59.999Z"));
+    chatSessionState.chats = [firstChat, secondChat];
+    fetchChatsMock.mockResolvedValue({ chats: [firstChat, secondChat] });
+
+    restoreChatWindow(flaggedChatWindow({ chatId: first, projectPath: "/repo" }));
+
+    const offers = await screen.findAllByRole("button", { name: /^Open New chat, last active /u });
+    const names = offers.map((offer) => offer.textContent ?? "");
+    expect(new Set(names).size).toBe(2);
+    expect(names.join()).not.toContain("reference");
+  });
+
+  // #3557 review: two "New chat" offers last active in one second would read alike. Each then shows
+  // the start of its chat's fingerprint, never the id, and the one chosen is the one bound.
+  it("tells two offered chats with one title apart within one second by a fingerprint reference", async (): Promise<void> => {
+    const first = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const second = "2404206d-9ab6-4bca-8853-813867352087";
+    const sameSecond = Date.parse("2026-06-15T12:00:30.000Z");
+    const firstChat = chatFixture(first, "New chat", sameSecond);
+    const secondChat = chatFixture(second, "New chat", sameSecond);
+    chatSessionState.chats = [firstChat, secondChat];
+    fetchChatsMock.mockResolvedValue({ chats: [firstChat, secondChat] });
+
+    const { ctx } = restoreChatWindow(flaggedChatWindow({ chatId: first, projectPath: "/repo" }));
+
+    const offers = await screen.findAllByRole("button", { name: /^Open New chat, last active /u });
+    const names = offers.map((offer) => offer.textContent ?? "");
+    expect(new Set(names).size).toBe(2);
+    expect(names.join()).not.toContain(first);
+    expect(names.join()).not.toContain(second);
+    const firstReference = `reference ${chatReferenceFingerprint(first).slice(0, 6)}`;
+    const pick = offers.find((offer) => offer.textContent?.endsWith(firstReference) === true);
+    if (pick === undefined) throw new Error("the first chat's offer names no reference");
+    await userEvent.click(pick);
+
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: first }));
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: second });
+  });
+
   it("tells two offered chats with one title apart by when each was last active", async (): Promise<void> => {
     const older = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
     const newer = "2404206d-9ab6-4bca-8853-813867352087";

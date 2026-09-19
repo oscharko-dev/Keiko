@@ -19,6 +19,7 @@ const EN_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.chooseBody":
     "This window's saved conversation cannot be identified. If it is one of these, open it here:",
   "chat.restoration.chooseOpen": "Open {title}, last active {updated}",
+  "chat.restoration.chooseOpenReference": "{label}, reference {reference}",
   "editor.askSelection.selectText": "Select text in the active editor before asking Keiko.",
   "editor.askSelection.chatUnavailable": "Chat is unavailable for this workspace.",
   "editor.askSelection.openFailed": "Could not open chat for this selection.",
@@ -118,6 +119,7 @@ const DE_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.chooseBody":
     "Die gespeicherte Unterhaltung dieses Fensters lässt sich nicht bestimmen. Falls es eine dieser ist, öffne sie hier:",
   "chat.restoration.chooseOpen": "{title} öffnen, zuletzt aktiv am {updated}",
+  "chat.restoration.chooseOpenReference": "{label}, Referenz {reference}",
   "editor.askSelection.selectText": "Wähle Text im aktiven Editor aus, bevor du Keiko fragst.",
   "editor.askSelection.chatUnavailable": "Der Chat ist für diesen Arbeitsbereich nicht verfügbar.",
   "editor.askSelection.openFailed": "Der Chat für diese Auswahl konnte nicht geöffnet werden.",

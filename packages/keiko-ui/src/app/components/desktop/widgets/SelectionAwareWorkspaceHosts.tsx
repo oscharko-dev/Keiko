@@ -34,6 +34,7 @@ import {
 import {
   type ChatReferenceRestoration,
   type RedactedChatChoice,
+  chatChoiceReferences,
   chatReferenceFingerprint,
   useChatReferenceFingerprint,
   useChatReferenceRebind,
@@ -1262,33 +1263,44 @@ function useChatBindingEvidence({
 }
 
 // A window whose redacted chat id carries no fingerprint offers the chats it may have shown; only
-// the person's choice binds it (#3557 review). Each offer names when its chat was last active, so
-// two chats with one title (every chat starts as "New chat") stay apart.
+// the person's choice binds it (#3557 review). Each offer names when its chat was last active, to
+// the second, so two chats with one title (every chat starts as "New chat") stay apart; two that
+// would still read alike also show a reference from their fingerprints.
 function ChatChoice({ choice }: { readonly choice: RedactedChatChoice }): ReactNode {
   const agentT = useEditorAgentTranslate();
   const locale = useLocale();
   const lastActive = useMemo(
-    () => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }),
+    () => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" }),
     [locale],
   );
+  const offers = choice.candidates.map((chat) => ({
+    chat,
+    label: agentT("chat.restoration.chooseOpen", {
+      title: chat.title,
+      updated: lastActive.format(new Date(chat.updatedAt)),
+    }),
+  }));
+  const references = chatChoiceReferences(offers);
   return (
     <div role="group" aria-label={agentT("chat.restoration.chooseLabel")}>
       <p className="lk-empty-body">{agentT("chat.restoration.chooseBody")}</p>
-      {choice.candidates.map((chat): ReactNode => (
-        <button
-          key={chat.id}
-          type="button"
-          className="lk-btn lk-btn-ghost"
-          onClick={(): void => {
-            choice.choose(chat);
-          }}
-        >
-          {agentT("chat.restoration.chooseOpen", {
-            title: chat.title,
-            updated: lastActive.format(new Date(chat.updatedAt)),
-          })}
-        </button>
-      ))}
+      {offers.map(({ chat, label }, index): ReactNode => {
+        const reference = references[index];
+        return (
+          <button
+            key={chat.id}
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            onClick={(): void => {
+              choice.choose(chat);
+            }}
+          >
+            {reference === undefined
+              ? label
+              : agentT("chat.restoration.chooseOpenReference", { label, reference })}
+          </button>
+        );
+      })}
     </div>
   );
 }
