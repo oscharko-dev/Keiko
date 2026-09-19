@@ -613,7 +613,7 @@ describe("isClientSessionRepairIngestRequest", () => {
     for (const outcome of CLIENT_SESSION_REPAIR_OUTCOMES) {
       const streamOnly = outcome === "stream-repaired" || outcome === "repair-acknowledged";
       const stream = streamOnly ? { stream: "run-events" } : {};
-      const report = { ...repairRequest(), outcome, ...stream };
+      const report: Record<string, unknown> = { ...repairRequest(), outcome, ...stream };
       expect(
         isClientSessionRepairIngestRequest({ ...report, repairCorrelationId: undefined }),
       ).toBe(false);
