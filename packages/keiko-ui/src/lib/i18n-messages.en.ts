@@ -202,6 +202,7 @@ export const EN_MESSAGES = {
   "rail.settings": "Settings",
   "common.optional": "optional",
   "common.loading": "Loading...",
+  "window.chunkStalled": "This window did not finish loading.",
   "common.cancel": "Cancel",
   "common.retry": "Retry",
   "common.dismissError": "Dismiss error",

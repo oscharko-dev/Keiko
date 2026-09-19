@@ -30,6 +30,20 @@ export type WindowStage =
 
 let nextStageSequence = 0;
 
+// A stage that watches for a stall and has not settled this long after it started is reported as
+// stalled, under its own correlation id, so the log names the stall instead of leaving only a
+// `started` line behind (dev CI run 35438847738: a WebKit network process crash lost a window
+// chunk's request, and the window waited on "Loading…" until the journey timed out).
+export const WINDOW_STAGE_STALL_MS = 10_000;
+
+function reportStageStall(stage: WindowStage, token: number, correlationId: string): void {
+  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+  reportClientDiagnostic(
+    `desktop ${stage} #${String(token)}: stalled after ${String(WINDOW_STAGE_STALL_MS)}ms`,
+    { correlationId, errorKind: "timeout" },
+  );
+}
+
 // Monotonic, so a wall-clock step between mount and cleanup can never yield a negative duration,
 // and bounded to the contract's ceiling, so a tab left open for days still settles its stage
 // instead of sending a report the server must refuse, which would leave a false stall (#3557 review).
@@ -38,7 +52,14 @@ function elapsedStageMs(startedAt: number): number {
   return Math.min(Math.max(elapsed, 0), CLIENT_STAGE_DURATION_MS_MAX);
 }
 
-export function useWindowStageEvidence(stage: WindowStage): void {
+/**
+ * Reports a stage's start and settlement. A caller that passes `onStall` also learns when the stage
+ * has not settled after WINDOW_STAGE_STALL_MS; the stall is reported once, under the stage's id.
+ */
+export function useWindowStageEvidence(
+  stage: WindowStage,
+  onStall?: (stalled: boolean) => void,
+): void {
   const sequence = useRef<number | undefined>(undefined);
   useEffect((): (() => void) => {
     nextStageSequence += 1;
@@ -53,7 +74,15 @@ export function useWindowStageEvidence(stage: WindowStage): void {
       correlationId,
       stageReport: { stage, phase: "started", ordinal: token },
     });
+    const stall =
+      onStall === undefined
+        ? undefined
+        : setTimeout((): void => {
+            reportStageStall(stage, token, correlationId);
+            onStall(true);
+          }, WINDOW_STAGE_STALL_MS);
     return (): void => {
+      if (stall !== undefined) clearTimeout(stall);
       const durationMs = elapsedStageMs(startedAt);
       // i18n-exempt: body-free diagnostic message for the activity log, never rendered
       reportClientDiagnostic(
@@ -64,5 +93,5 @@ export function useWindowStageEvidence(stage: WindowStage): void {
         },
       );
     };
-  }, [stage]);
+  }, [onStall, stage]);
 }
