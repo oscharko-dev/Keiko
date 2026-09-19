@@ -756,18 +756,68 @@ describe("workspace-persistence", () => {
     // conversation as deleted. The heuristic must still misread it, or this test proves nothing.
     const id = "1404206d-9ab6-4bca-8853-813867352087";
     expect(isSecretShapedString(id)).toBe(true);
+    const digest = "a".repeat(64);
     const persisted = sanitizePersistedWindows([
       win({ id: "chat-1", type: "chat", cfg: { chatId: id, title: "Deploy status" } }),
+      // governedPullRequest.descriptionProposalId is the other field the app itself sets from a
+      // real server randomUUID() (gitDelivery/prDescriptionService.ts) and a user can never type
+      // (WIN_TYPES.governedPullRequest.config exposes only projectPath/headBranchName).
+      win({
+        id: "pr-1",
+        type: "governedPullRequest",
+        cfg: {
+          projectPath: "/repo",
+          descriptionOwnerAndRepo: "owner/repo",
+          descriptionPrNumber: 42,
+          descriptionProposalId: id,
+          descriptionSnapshotDigest: digest,
+        },
+      }),
+      // #3557 review (P1): review.runId and qiRun.runId are user-editable text fields
+      // (WIN_TYPES.review.config / WIN_TYPES.qiRun.config, both "text"), and figma.snapshotRunId
+      // is app-written but never in this bare shape (the server issues `fs-${randomUUID()}`).
+      // None of the three is a proven server-issued reference, so none gets the UUID exemption —
+      // even though this particular value IS one.
       win({ id: "review-1", type: "review", cfg: { runId: id } }),
+      win({ id: "qi-run-1", type: "qiRun", cfg: { runId: id } }),
       win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: id } }),
     ]);
 
     expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
       ["chat-1", { chatId: id, title: "Deploy status" }],
-      ["review-1", { runId: id }],
-      ["figma-1", { snapshotRunId: id }],
+      [
+        "pr-1",
+        {
+          projectPath: "/repo",
+          descriptionOwnerAndRepo: "owner/repo",
+          descriptionPrNumber: 42,
+          descriptionProposalId: id,
+          descriptionSnapshotDigest: digest,
+        },
+      ],
+      ["review-1", {}],
+      ["qi-run-1", {}],
+      ["figma-1", {}],
     ]);
     expect(parsePersistedWindows(JSON.stringify(persisted))).toEqual(persisted);
+  });
+
+  // #3557 review (P1): isSafeOpaqueReference used to accept ANY v4-shaped value outright,
+  // regardless of which field it was checked for. review.runId is a plain user-editable text field
+  // (the New Window dialog's "Run ID" text input AND ReviewWidget's own inline input both write it
+  // directly from what the user types), so a user could type this v4-shaped, Luhn-valid-tail value
+  // straight in and have it persist verbatim, unredacted — even though isSecretShapedString
+  // correctly flags it. The prior regression test only covered an invalid-v4 lookalike, which never
+  // reached the exemption branch at all and so proved nothing about this path.
+  it("never persists a v4-shaped PAN lookalike typed into the editable review.runId field", () => {
+    const typedByUser = "deadbeef-cafe-4abe-8853-813867352087";
+    expect(isSecretShapedString(typedByUser)).toBe(true);
+    const persisted = sanitizePersistedWindows([
+      win({ id: "review-1", type: "review", cfg: { runId: typedByUser } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([["review-1", {}]]);
+    expect(JSON.stringify(persisted)).not.toContain(typedByUser);
   });
 
   it("still redacts a card number that is not a canonical UUID", () => {

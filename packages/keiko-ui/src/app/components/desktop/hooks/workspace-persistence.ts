@@ -23,8 +23,15 @@ import {
 type JsonScalar = string | number | boolean;
 
 const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
-// Server-issued identifiers (chat, run and snapshot ids) come from `randomUUID()`: RFC 9562
-// version-4 UUIDs, with the version and variant nibbles fixed.
+// #3557 review (P1): a v4-shaped value is NOT proof of server issuance — anyone can type one into
+// a user-editable reference field. This pattern (RFC 9562 v4 UUID, bare, no prefix/suffix) is used
+// ONLY inside the couple of per-field closed sanitizers below that first prove the field can never
+// be user-typed and then prove the app always writes it from a real server `randomUUID()`:
+// `chat.chatId` and `governedPullRequest.descriptionProposalId`. It is never used as a generic
+// "looks like a UUID, so trust it" shortcut — isSafeOpaqueReference below carries no such shortcut,
+// so every OTHER opaque-reference field (including the user-editable review/qiRun "Run ID" text
+// fields) judges a value on its content alone, exactly like free text (see the comment on
+// isServerIssuedUuidReference below for why this exemption exists at all).
 const SERVER_ISSUED_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_REFERENCE_VALUE_LENGTH = 256;
@@ -166,7 +173,7 @@ const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueS
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
   "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,
   "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
-  "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
+  "governedPullRequest:descriptionProposalId": sanitizeDescriptionProposalIdReference,
   "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
   "chat:chatId": sanitizeChatIdReference,
 };
@@ -259,8 +266,11 @@ function isAllowedReferenceChar(char: string): boolean {
 // The shared secret heuristic's payment-card rule reads the digits across a UUID's last hyphen as a
 // Luhn-valid card number for about 2 in 10,000 random ids. A persisted id redacted or dropped for
 // that reason can never reopen its target after a reload: a chat window then reports its live
-// conversation as deleted. So a reference FIELD holding exactly a server-issued UUID is exempt from
-// the heuristic. Free text never is: a title that merely looks like a UUID stays subject to it.
+// conversation as deleted. So a reference field that the APP ITSELF sets from a real server-issued
+// UUID — never from anything a user can type — is exempt from the heuristic, through its own closed
+// sanitizer (sanitizeChatIdReference, sanitizeDescriptionProposalIdReference). Everything else,
+// including free text and every user-editable reference field, stays fully subject to it: this
+// predicate only reports the SHAPE, and shape alone is never proof of origin (#3557 review).
 function isServerIssuedUuidReference(value: string): boolean {
   return SERVER_ISSUED_UUID_PATTERN.test(value);
 }
@@ -277,7 +287,8 @@ export function persistedReferenceShape(value: string): "redacted" | "uuid" | "o
 /**
  * The body-free evidence of a restored reference (#3557): its closed shape, and whether it is a
  * server-issued UUID the shared secret heuristic reads as a card number, i.e. one that survived
- * persistence only through the reference-field exemption. Never the value.
+ * persistence only through chatId's own UUID exemption (sanitizeChatIdReference — this evidence
+ * function is called with a chat window's chatId only). Never the value.
  */
 export function persistedReferenceEvidence(value: string): {
   readonly referenceShape: "redacted" | "uuid" | "opaque";
@@ -290,8 +301,16 @@ export function persistedReferenceEvidence(value: string): {
   };
 }
 
+// The generic opaque-reference check for every evidence-reference field with no dedicated
+// sanitizer — review.runId, qiRun.runId, figma*.snapshotRunId, and any future one. Deliberately
+// carries NO UUID shortcut: #3557 review found that a v4-shaped value was accepted outright here
+// regardless of field, so a user could type a v4-shaped, Luhn-valid-tail lookalike straight into
+// the editable review.runId field and have it persist unredacted. A value that merely has a server
+// UUID's shape is judged on its content like any other reference from here on; only the couple of
+// fields the app itself proves it sets from a real server id get a shortcut, and they get it
+// through their OWN closed sanitizer (sanitizeChatIdReference, sanitizeDescriptionProposalIdReference),
+// never through this shared function.
 function isSafeOpaqueReference(value: string): boolean {
-  if (isServerIssuedUuidReference(value)) return true;
   if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH || value.startsWith("."))
     return false;
   if (value.trim() !== value || isSecretShapedString(value)) return false;
@@ -345,6 +364,11 @@ function isSafeFigmaImageSrc(value: string): boolean {
 
 function sanitizeFigmaConfigValue(key: string, value: unknown): JsonScalar | undefined {
   if (typeof value !== "string") return undefined;
+  // snapshotRunId is app-written-only (updateCfg from a server build/list response in
+  // FigmaSnapshotWindow.tsx) and absent from every figma* WIN_TYPES.config, so it is never
+  // user-typed — but the server issues it as `fs-${randomUUID()}` (figmaSnapshotRoutes.ts), which
+  // never matches SERVER_ISSUED_UUID_PATTERN's bare shape. No dedicated UUID-exempt sanitizer is
+  // needed here: the plain check below already validates every real value this field ever holds.
   if (key === "snapshotRunId") return isSafeOpaqueReference(value) ? value : undefined;
   if (key === "screenId") return isSafeFigmaScreenId(value) ? value : undefined;
   if (key === "imageSrc") return isSafeFigmaImageSrc(value) ? value : undefined;
@@ -707,6 +731,18 @@ function sanitizeGenericConfigValue(
 function sanitizeChatIdReference(value: unknown): AppWindow["cfg"][string] {
   if (typeof value === "string" && isServerIssuedUuidReference(value)) return value;
   return sanitizeGenericConfigValue("chat", "chatId", value);
+}
+
+// governedPullRequest's `descriptionProposalId` is the other field that qualifies (#3557 review):
+// WIN_TYPES.governedPullRequest.config exposes only projectPath/headBranchName — never this key —
+// so a user can never type it, and every write site (GitChangeScopePill.tsx, widgets/index.tsx)
+// sources it from a server PrDescriptionApplicationResultWire response whose proposalId is a bare
+// `randomUUID()` (gitDelivery/prDescriptionService.ts, gitDelivery/prDescriptionPreparation.ts).
+// Any other value — including one that merely looks like a UUID — keeps the generic, non-exempt
+// evidence-reference rule.
+function sanitizeDescriptionProposalIdReference(value: unknown): AppWindow["cfg"][string] {
+  if (typeof value === "string" && isServerIssuedUuidReference(value)) return value;
+  return sanitizeOpaqueReferenceValue(value);
 }
 
 function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["cfg"] {
