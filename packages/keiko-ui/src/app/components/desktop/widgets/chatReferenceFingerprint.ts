@@ -11,11 +11,12 @@
 // server lists: the server is the proof that the id is real, and the id never reaches storage.
 //
 // A redaction marker without a fingerprint identifies nothing: no listed chat can be proven to be
-// the one it named, so such a window is never rebound and reports its chat as missing.
+// the one it named, so such a window is never rebound on its own. It reports its chat as missing and
+// offers the chats it may have named, those whose ids persistence redacts; only the person chooses.
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary } from "@/lib/client-error-summary";
@@ -119,8 +120,12 @@ export function useChatReferenceFingerprint(
   }, [chatId, recorded, updateCfg]);
 }
 
-/** A window found its chat again through the fingerprint, decided by this chat list load. */
+/**
+ * How a window found its chat again after persistence redacted its id (through the fingerprint, or
+ * because the person chose it), and the chat list load that decided it.
+ */
 export interface ChatReferenceRestoration {
+  readonly shape: "fingerprint" | "user-selected";
   readonly correlationId: string;
 }
 
@@ -146,17 +151,24 @@ function rebindFingerprint(cfg: Record<string, unknown>): string | undefined {
   return fingerprint !== undefined && SHA256_HEX.test(fingerprint) ? fingerprint : undefined;
 }
 
-// The projects a lookup searches, or undefined while their answer could still change: the project
-// catalog is loading or failed to load, or the window's own project is not listed (#3557 review).
-function lookupProjects(
+// What the project catalog lets a lookup do (#3557 review). While it loads, the window waits. When
+// it failed, or it lacks the window's own project, the window shows that the way it does for any
+// chat (the session error, or its missing project) instead of waiting forever, and nothing is
+// settled: the lookup runs as soon as the catalog changes.
+type LookupScope =
+  | { readonly kind: "wait" }
+  | { readonly kind: "handover" }
+  | { readonly kind: "lookup"; readonly projects: readonly ProjectWithAvailability[] };
+
+function lookupScope(
   session: ChatReferenceRebindSession,
   projectPath: string | undefined,
-): readonly ProjectWithAvailability[] | undefined {
-  if (session.loading) return undefined;
-  if (session.projects.length === 0 && session.error !== undefined) return undefined;
-  if (projectPath === undefined) return session.projects;
+): LookupScope {
+  if (session.loading) return { kind: "wait" };
+  if (session.projects.length === 0 && session.error !== undefined) return { kind: "handover" };
+  if (projectPath === undefined) return { kind: "lookup", projects: session.projects };
   const own = session.projects.filter((entry) => entry.path === projectPath);
-  return own.length === 0 ? undefined : own;
+  return own.length === 0 ? { kind: "handover" } : { kind: "lookup", projects: own };
 }
 
 function retryDelayMs(attempt: number): number {
@@ -207,7 +219,7 @@ function runRebindLookup(args: RebindLookupArgs): () => void {
       args.updateCfg({ chatId: lookup.chat.id });
       args.onSettled({
         chatId: lookup.chat.id,
-        restoration: { correlationId: lookup.correlationId },
+        restoration: { shape: "fingerprint", correlationId: lookup.correlationId },
       });
     },
     (error: unknown): void => {
@@ -242,11 +254,11 @@ export function useChatReferenceRebind(
   const { error, loading, projects } = session;
   useEffect((): (() => void) | undefined => {
     if (fingerprint === undefined || settled === fingerprint) return undefined;
-    const searched = lookupProjects({ error, loading, projects }, projectPath);
-    if (searched === undefined) return undefined;
+    const scope = lookupScope({ error, loading, projects }, projectPath);
+    if (scope.kind !== "lookup") return undefined;
     return runRebindLookup({
       fingerprint,
-      projects: searched,
+      projects: scope.projects,
       attempt,
       updateCfg,
       onSettled: (binding): void => {
@@ -258,9 +270,98 @@ export function useChatReferenceRebind(
       },
     });
   }, [attempt, error, fingerprint, loading, projectPath, projects, settled, updateCfg]);
+  const handedOver = lookupScope({ error, loading, projects }, projectPath).kind === "handover";
   return {
-    pending: fingerprint !== undefined && settled !== fingerprint,
+    pending: fingerprint !== undefined && settled !== fingerprint && !handedOver,
     restored:
       restored !== undefined && restored.chatId === chatId ? restored.restoration : undefined,
+  };
+}
+
+interface ListedChat {
+  readonly chat: Chat;
+  readonly correlationId: string;
+}
+
+// Open chats whose ids persistence redacts, among the lists that could be read: the only chats a
+// redaction marker without a fingerprint can have named.
+async function findRedactedChatCandidates(
+  projects: readonly ProjectWithAvailability[],
+): Promise<readonly ListedChat[]> {
+  const read = await Promise.all(projects.map(projectListing));
+  return read.flatMap((listing) =>
+    listing === undefined
+      ? []
+      : listing.chats
+          .filter(
+            (chat) =>
+              chat.status !== "closed" && persistedReferenceEvidence(chat.id).heuristicFlagged,
+          )
+          .map((chat) => ({ chat, correlationId: listing.correlationId })),
+  );
+}
+
+function unidentifiedReference(cfg: Record<string, unknown>): boolean {
+  const chatId = cfgString(cfg, "chatId");
+  if (chatId === undefined || persistedReferenceShape(chatId) !== "redacted") return false;
+  return cfgString(cfg, CHAT_ID_FINGERPRINT_CFG_KEY) === undefined;
+}
+
+/** The chats a window whose redacted id carries no fingerprint may have shown, to choose from. */
+export interface RedactedChatChoice {
+  readonly candidates: readonly Chat[];
+  readonly choose: (chat: Chat) => void;
+}
+
+export interface RedactedChatChoiceState {
+  readonly choice: RedactedChatChoice | undefined;
+  // Set while the window stays bound to the chat the person chose.
+  readonly restored: ChatReferenceRestoration | undefined;
+}
+
+/**
+ * Offers a window whose chat id persistence redacted without a fingerprint (a snapshot an older
+ * build wrote) the listed chats it may have named, and binds it only to the one the person chooses
+ * (#3557 review): nothing in such a snapshot proves which chat it was, so the window never guesses.
+ */
+export function useRedactedChatChoice(
+  cfg: Record<string, unknown>,
+  session: ChatReferenceRebindSession,
+  updateCfg: WindowRenderContext["updateCfg"],
+): RedactedChatChoiceState {
+  const unidentified = unidentifiedReference(cfg);
+  const chatId = cfgString(cfg, "chatId");
+  const projectPath = cfgString(cfg, "projectPath");
+  const [candidates, setCandidates] = useState<readonly ListedChat[]>([]);
+  const [chosen, setChosen] = useState<RestoredBinding | undefined>(undefined);
+  const { error, loading, projects } = session;
+  useEffect((): (() => void) | undefined => {
+    if (!unidentified) return undefined;
+    const scope = lookupScope({ error, loading, projects }, projectPath);
+    if (scope.kind !== "lookup") return undefined;
+    let active = true;
+    findRedactedChatCandidates(scope.projects).then((found): void => {
+      if (active) setCandidates(found);
+    }, reportRebindFailure);
+    return (): void => {
+      active = false;
+    };
+  }, [error, loading, projectPath, projects, unidentified]);
+  const choose = useCallback(
+    (chat: Chat): void => {
+      const listed = candidates.find((candidate) => candidate.chat.id === chat.id);
+      if (listed === undefined) return;
+      const restoration = { shape: "user-selected", correlationId: listed.correlationId } as const;
+      setChosen({ chatId: chat.id, restoration });
+      updateCfg({ chatId: chat.id });
+    },
+    [candidates, updateCfg],
+  );
+  return {
+    choice:
+      unidentified && candidates.length > 0
+        ? { candidates: candidates.map((candidate) => candidate.chat), choose }
+        : undefined,
+    restored: chosen !== undefined && chosen.chatId === chatId ? chosen.restoration : undefined,
   };
 }

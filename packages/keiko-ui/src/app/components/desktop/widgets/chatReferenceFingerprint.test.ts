@@ -9,6 +9,7 @@ import {
   findChatByFingerprint,
   useChatReferenceFingerprint,
   useChatReferenceRebind,
+  useRedactedChatChoice,
   type ChatReferenceRebind,
 } from "./chatReferenceFingerprint";
 
@@ -197,7 +198,7 @@ describe("useChatReferenceRebind", () => {
     // The binding carries the load that decided it, never a later one.
     expect(view.result.current).toEqual({
       pending: false,
-      restored: { correlationId: "ui_list-c1" },
+      restored: { shape: "fingerprint", correlationId: "ui_list-c1" },
     });
     view.rerender({ cfg: { ...redacted, chatId: "chat-elsewhere" }, session });
     expect(view.result.current.restored).toBeUndefined();
@@ -274,8 +275,10 @@ describe("useChatReferenceRebind", () => {
     }
   });
 
-  // #3557 review: a failed project catalog leaves the projects empty; that is no answer at all.
-  it("stays undecided while the project catalog failed, and binds once it loads", async () => {
+  // #3557 review: a failed project catalog is no answer about the chat, and neither is a catalog that
+  // lacks the window's project. The window stops waiting and shows that state the way it does for
+  // any chat; nothing is settled, and the lookup runs once the catalog changes.
+  it("hands a failed catalog to the window, and binds once the catalog loads", async () => {
     sharedFetchChatsWithEvidenceMock.mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")]));
     const updateCfg = vi.fn();
     const failedCatalog = { loading: false, error: "Projects could not be loaded", projects: [] };
@@ -283,13 +286,13 @@ describe("useChatReferenceRebind", () => {
     const view = renderRebind(redacted, failedCatalog, updateCfg);
     await act(async () => Promise.resolve());
 
-    expect(view.result.current.pending).toBe(true);
+    expect(view.result.current).toEqual({ pending: false, restored: undefined });
     expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
     view.rerender({ cfg: redacted, session });
     await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID }));
   });
 
-  it("stays undecided while the window's own project is not listed", async () => {
+  it("hands a catalog without the window's project to the window, and binds once it is listed", async () => {
     sharedFetchChatsWithEvidenceMock.mockResolvedValue(listed([chat(FLAGGED_ID, "/repo")]));
     const updateCfg = vi.fn();
 
@@ -300,13 +303,20 @@ describe("useChatReferenceRebind", () => {
     );
     await act(async () => Promise.resolve());
 
-    expect(view.result.current.pending).toBe(true);
+    expect(view.result.current).toEqual({ pending: false, restored: undefined });
     expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
     view.rerender({
       cfg: redacted,
       session: { loading: false, projects: [project("/other"), ...repo] },
     });
     await waitFor(() => expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID }));
+  });
+
+  it("waits while the project catalog is loading", () => {
+    const view = renderRebind(redacted, { loading: true, projects: [] }, vi.fn());
+
+    expect(view.result.current.pending).toBe(true);
+    expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
   });
 
   it("never rebinds a live id, a malformed fingerprint, or before the session loaded", () => {
@@ -331,6 +341,77 @@ describe("useChatReferenceRebind", () => {
     expect(live.result.current.pending).toBe(false);
     expect(malformed.result.current.pending).toBe(false);
     expect(loading.result.current.pending).toBe(true);
+    expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
+  });
+});
+
+// #3557 review (P0): a snapshot an older build wrote holds the redaction marker without a
+// fingerprint. Nothing in it proves which chat it named, so the window never guesses: it offers the
+// chats whose ids persistence redacts, and binds only to the one the person chooses.
+describe("useRedactedChatChoice", () => {
+  const OTHER_FLAGGED_ID = "2404206d-9ab6-4bca-8853-813867352087";
+  const session = { loading: false, projects: [project("/repo")] };
+  const legacy = { chatId: "[REDACTED]", projectPath: "/repo" };
+
+  it("offers the listed chats whose ids persistence redacts, and binds none on its own", async () => {
+    sharedFetchChatsWithEvidenceMock.mockResolvedValue(
+      listed([chat(FLAGGED_ID, "/repo"), chat(OTHER_FLAGGED_ID, "/repo"), chat(CLEAN_ID, "/repo")]),
+    );
+    const updateCfg = vi.fn();
+
+    const view = renderHook(() => useRedactedChatChoice(legacy, session, updateCfg));
+
+    await waitFor(() =>
+      expect(view.result.current.choice?.candidates.map((candidate) => candidate.id)).toEqual([
+        FLAGGED_ID,
+        OTHER_FLAGGED_ID,
+      ]),
+    );
+    expect(updateCfg).not.toHaveBeenCalled();
+    expect(view.result.current.restored).toBeUndefined();
+  });
+
+  it("binds the window to the chat the person chooses, named by the load that listed it", async () => {
+    sharedFetchChatsWithEvidenceMock.mockResolvedValue(
+      listed([chat(FLAGGED_ID, "/repo"), chat(OTHER_FLAGGED_ID, "/repo")], "ui_list-choice-0001"),
+    );
+    const updateCfg = vi.fn();
+    const view = renderHook(
+      ({ cfg }: { cfg: Record<string, unknown> }) => useRedactedChatChoice(cfg, session, updateCfg),
+      { initialProps: { cfg: legacy as Record<string, unknown> } },
+    );
+    await waitFor(() => expect(view.result.current.choice).toBeDefined());
+    const target = view.result.current.choice?.candidates.find((c) => c.id === FLAGGED_ID);
+    if (target === undefined) throw new Error("candidate missing");
+
+    act(() => {
+      view.result.current.choice?.choose(target);
+    });
+    view.rerender({ cfg: { ...legacy, chatId: FLAGGED_ID } });
+
+    expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID });
+    expect(view.result.current.restored).toEqual({
+      shape: "user-selected",
+      correlationId: "ui_list-choice-0001",
+    });
+  });
+
+  it("offers nothing for a window with a fingerprint or a live id", () => {
+    const updateCfg = vi.fn();
+
+    const fingerprinted = renderHook(() =>
+      useRedactedChatChoice(
+        { ...legacy, chatIdFingerprint: chatReferenceFingerprint(FLAGGED_ID) },
+        session,
+        updateCfg,
+      ),
+    );
+    const live = renderHook(() =>
+      useRedactedChatChoice({ chatId: FLAGGED_ID, projectPath: "/repo" }, session, updateCfg),
+    );
+
+    expect(fingerprinted.result.current.choice).toBeUndefined();
+    expect(live.result.current.choice).toBeUndefined();
     expect(sharedFetchChatsWithEvidenceMock).not.toHaveBeenCalled();
   });
 });

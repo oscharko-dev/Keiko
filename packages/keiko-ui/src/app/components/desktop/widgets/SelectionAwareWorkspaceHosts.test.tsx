@@ -2042,6 +2042,76 @@ describe("ChatWindowSessionHost target missing", () => {
   // fingerprint, and that marker identifies nothing. The chat it named may be gone while another
   // flagged chat is the only one left, so the window must never guess: it stays unbound and reports
   // its chat as missing, with the redacted reference's typed evidence.
+  // #3557 review (P0): the snapshot an older build actually wrote holds only the redaction marker,
+  // with no fingerprint. Its chat A still exists and must reopen, but nothing in the snapshot proves
+  // which chat it named: another flagged chat B is listed beside it. So the window never guesses. It
+  // reports its chat as missing, offers the chats it may have shown, and reopens A once the person
+  // chooses it, recording that choice as the binding's reference shape.
+  it("reopens chat A from a snapshot an older build wrote once the person chooses it", async (): Promise<void> => {
+    const chatA = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const chatB = "2404206d-9ab6-4bca-8853-813867352087";
+    const liveA = chatFixture(chatA, "Deploy status", 3);
+    const liveB = chatFixture(chatB, "Release notes", 2);
+    chatSessionState.chats = [liveA, liveB];
+    fetchChatsMock.mockResolvedValue({ chats: [liveA, liveB] });
+    const window = flaggedChatWindow({ chatId: chatA, projectPath: "/repo" });
+
+    const { restoredCfg, ctx } = restoreChatWindow(window);
+
+    expect(restoredCfg).toEqual({ chatId: "[REDACTED]", projectPath: "/repo" });
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    const reopenA = await screen.findByRole("button", { name: "Open Deploy status" });
+    expect(screen.getByRole("button", { name: "Open Release notes" })).toBeInTheDocument();
+    // Never on its own.
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: chatA });
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: chatB });
+
+    await userEvent.click(reopenA);
+
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: chatA }));
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=user-selected, heuristic-flagged)",
+        {
+          correlationId: lookupLoadId(),
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "resolved",
+            referenceShape: "user-selected",
+            heuristicFlagged: true,
+            windowRef: "window-1",
+            decidingLoadCount: 1,
+          },
+        },
+      ),
+    );
+    expect(screen.queryByText("Chat not found")).toBeNull();
+  });
+
+  // #3557 review: a failed project catalog is no answer about the chat; a fingerprinted window shows
+  // the failure instead of waiting forever, and records no missing verdict.
+  it("shows a failed project catalog instead of waiting forever", async (): Promise<void> => {
+    const flaggedId = "1404206d-9ab6-4bca-8853-813867352087";
+    chatSessionState.error = "Projects could not be loaded";
+    chatSessionState.projects = [];
+    chatSessionState.loading = false;
+    const window = flaggedChatWindow({
+      chatId: flaggedId,
+      chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+      projectPath: "/repo",
+    });
+
+    restoreChatWindow(window);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("Opening chat...")).toBeNull();
+    expect(screen.queryByText("Chat not found")).toBeNull();
+    const missing = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).includes("restore target not found"),
+    );
+    expect(missing).toEqual([]);
+  });
+
   it("keeps a snapshot an older build wrote unbound, never guessing the only flagged chat", async (): Promise<void> => {
     const onlyFlagged = listFlaggedChat("2404206d-9ab6-4bca-8853-813867352087");
     const window = flaggedChatWindow({
@@ -2064,6 +2134,8 @@ describe("ChatWindowSessionHost target missing", () => {
         }),
       ),
     );
+    // It is offered to the person, never bound on its own.
+    expect(await screen.findByRole("button", { name: "Open Deploy status" })).toBeInTheDocument();
     expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: onlyFlagged });
     const resolved = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
       String(message).startsWith("[keiko] chat window binding resolved"),
@@ -2272,6 +2344,44 @@ describe("ChatWindowSessionHost target missing", () => {
     });
     await waitFor((): void => expect(screen.getAllByText("Chat not found")).toHaveLength(2));
     expect(fetchChatsMock).toHaveBeenCalledTimes(2);
+  });
+
+  // #3557 review: a legacy scan that could not read every project decides nothing, so it runs again
+  // after a bounded backoff instead of leaving the window failed until it is remounted.
+  it("recovers a legacy window once a list that failed can be read again", async () => {
+    vi.stubGlobal("reportError", vi.fn());
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const legacy = { ...chatFixture("legacy-chat", "Legacy chat", 1), projectPath: projectA.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [];
+    let failures = 1;
+    fetchChatsMock.mockImplementation(async (path) => {
+      if (path === projectA.path && failures > 0) {
+        failures -= 1;
+        throw new TypeError("temporary lookup failure");
+      }
+      return { chats: path === projectA.path ? [legacy] : [] };
+    });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-chat" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    await waitFor((): void => expect(chatSessionState.openProject).toHaveBeenCalledWith(projectA), {
+      timeout: 4_000,
+    });
   });
 
   it("surfaces a legacy project lookup failure without caching it as deletion", async () => {

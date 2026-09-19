@@ -15,6 +15,10 @@ const EN_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.opening": "Opening chat...",
   "chat.restoration.notFoundTitle": "Chat not found",
   "chat.restoration.notFoundBody": "This conversation was deleted or is no longer available.",
+  "chat.restoration.chooseLabel": "Conversations this window may have shown",
+  "chat.restoration.chooseBody":
+    "This window's saved conversation cannot be identified. If it is one of these, open it here:",
+  "chat.restoration.chooseOpen": "Open {title}",
   "editor.askSelection.selectText": "Select text in the active editor before asking Keiko.",
   "editor.askSelection.chatUnavailable": "Chat is unavailable for this workspace.",
   "editor.askSelection.openFailed": "Could not open chat for this selection.",
@@ -110,6 +114,10 @@ const DE_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.notFoundTitle": "Chat nicht gefunden",
   "chat.restoration.notFoundBody":
     "Diese Unterhaltung wurde gelöscht oder ist nicht mehr verfügbar.",
+  "chat.restoration.chooseLabel": "Unterhaltungen, die dieses Fenster gezeigt haben könnte",
+  "chat.restoration.chooseBody":
+    "Die gespeicherte Unterhaltung dieses Fensters lässt sich nicht bestimmen. Falls es eine dieser ist, öffne sie hier:",
+  "chat.restoration.chooseOpen": "{title} öffnen",
   "editor.askSelection.selectText": "Wähle Text im aktiven Editor aus, bevor du Keiko fragst.",
   "editor.askSelection.chatUnavailable": "Der Chat ist für diesen Arbeitsbereich nicht verfügbar.",
   "editor.askSelection.openFailed": "Der Chat für diese Auswahl konnte nicht geöffnet werden.",
