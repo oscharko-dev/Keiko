@@ -474,6 +474,7 @@
         ".sm-inline-code",
         ".sm-p",
         ".sm-root",
+        ".win-body",
         ".window"
       ],
       "unprefixedLocalClasses": [
@@ -578,7 +579,6 @@
         "timelineBody",
         "timelineDetail",
         "timelineItem",
-        "timelineMarker",
         "timelineSpacer",
         "timelineTitle",
         "toolCard",

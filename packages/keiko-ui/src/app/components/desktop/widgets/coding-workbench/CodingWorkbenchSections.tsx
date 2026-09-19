@@ -547,7 +547,7 @@ function ComposerControls({ input, controller, t }: ComposerViewProps): ReactNod
 function StopControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): ReactNode {
   return (
     <button
-      className={`cmp-icon ui-tip ${styles.runStop}`}
+      className={`cmp-icon ui-tip ${styles.cmpRunStop}`}
       type="button"
       data-tip={t("codingWorkbench.controls.stop")}
       aria-label={t("codingWorkbench.controls.stop")}

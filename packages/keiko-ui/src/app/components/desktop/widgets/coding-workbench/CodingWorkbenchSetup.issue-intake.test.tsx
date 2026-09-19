@@ -415,7 +415,7 @@ describe("Coding Workbench prompt issue intake", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
   });
 
-  it("restores the server-owned issue as a collapsed disclosure after reload", () => {
+  it("restores the server-owned issue in the information popover after reload", async () => {
     const state = liveState();
     renderWorkbench(workspaceApi(boundWorkspace("generic-task")), {
       ...state,
@@ -436,10 +436,14 @@ describe("Coding Workbench prompt issue intake", () => {
         },
       },
     });
-    const disclosure = screen.getByTestId("coding-workbench-composer-issue");
-    expect(disclosure).not.toHaveAttribute("open");
-    expect(disclosure).toHaveTextContent("GitHub issue #42");
-    expect(disclosure).not.toHaveTextContent(HOSTILE_BODY);
-    expect(disclosure).not.toHaveTextContent(previewResponse().binding.bindingDigest);
+    expect(screen.queryByRole("dialog", { name: "Coding Workbench information" })).toBeNull();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Open Coding Workbench information" }));
+    const information = screen.getByRole("dialog", { name: "Coding Workbench information" });
+    expect(information).toHaveTextContent("GitHub issue");
+    expect(information).toHaveTextContent("Issue #42");
+    expect(information).not.toHaveTextContent(HOSTILE_BODY);
+    expect(information).not.toHaveTextContent(previewResponse().binding.bindingDigest);
   });
 });

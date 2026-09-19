@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -122,6 +122,13 @@ function renderChanges(
   );
 }
 
+async function expandChanges(): Promise<void> {
+  const summary = await screen.findByText(/^(?:\d+ changed files|Changes)$/u, {
+    selector: "summary",
+  });
+  fireEvent.click(summary);
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -131,6 +138,7 @@ describe("CodingWorkbenchChanges", () => {
   it("renders the bound run's real per-file diff with an honest head and escaped text", async () => {
     const changesClient = client();
     const view = renderChanges(changesClient);
+    await expandChanges();
 
     expect(await screen.findByText("As of aaaaaaaa")).toBeVisible();
     expect(screen.getByRole("button", { name: /src\/file-000\.ts/u })).toHaveAttribute(
@@ -153,10 +161,9 @@ describe("CodingWorkbenchChanges", () => {
     const changesClient = client({ getStatus: vi.fn(async () => status([])) });
     renderChanges(changesClient);
 
-    expect(
-      await screen.findByText("This run has no workspace changes at this revision."),
-    ).toBeVisible();
-    expect(screen.getByText("As of aaaaaaaa")).toBeVisible();
+    await waitFor(() => expect(changesClient.getHistory).toHaveBeenCalledOnce());
+    expect(screen.queryByText("This run has no workspace changes at this revision.")).toBeNull();
+    expect(screen.queryByText("As of aaaaaaaa")).toBeNull();
     expect(changesClient.getDiff).not.toHaveBeenCalled();
   });
 
@@ -165,6 +172,7 @@ describe("CodingWorkbenchChanges", () => {
       getStatus: vi.fn(() => Promise.reject(new Error("redacted transport failure"))),
     });
     renderChanges(changesClient);
+    await expandChanges();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("could not be refreshed");
     expect(screen.getByRole("button", { name: "Refresh changes" })).toBeVisible();
@@ -203,6 +211,7 @@ describe("CodingWorkbenchChanges", () => {
       getHistory: vi.fn(async () => history(false)),
     });
     renderChanges(changesClient, { pairing: "unpaired" });
+    await expandChanges();
 
     expect(await screen.findByText(/Browser window not paired/u)).toBeVisible();
     expect(screen.queryByText(/may need to be paired/u)).not.toBeInTheDocument();
@@ -219,6 +228,7 @@ describe("CodingWorkbenchChanges", () => {
       getStatus: vi.fn(() => Promise.reject(new Error("redacted transport failure"))),
     });
     renderChanges(changesClient, { pairing: "unpaired" });
+    await expandChanges();
 
     expect(await screen.findByText(/could not be refreshed/u)).toBeVisible();
     expect(screen.getByRole("button", { name: "Refresh changes" })).toBeVisible();
@@ -228,6 +238,7 @@ describe("CodingWorkbenchChanges", () => {
   it("does not retarget one run to a different workspace root", async () => {
     const changesClient = client();
     const view = renderChanges(changesClient);
+    await expandChanges();
     expect(await screen.findByText("As of aaaaaaaa")).toBeVisible();
 
     view.rerender(
@@ -250,8 +261,9 @@ describe("CodingWorkbenchChanges", () => {
   it("virtualizes a 500-file change set to a bounded 24 rendered file buttons", async () => {
     const files = Array.from({ length: 500 }, (_, index) => changedFile(index));
     renderChanges(client({ getStatus: vi.fn(async () => status(files)) }));
+    await expandChanges();
 
-    expect(await screen.findByText("Changed files (500)")).toBeVisible();
+    expect(screen.getByText("500 changed files", { selector: "summary" })).toBeVisible();
     const fileButtons = screen
       .getAllByRole("button")
       .filter((button) => button.textContent?.includes("src/file-"));

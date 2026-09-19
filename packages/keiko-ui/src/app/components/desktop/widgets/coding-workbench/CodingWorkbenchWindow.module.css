@@ -1870,7 +1870,7 @@ details[open] > .cmpActivitySummary::after {
   padding: 0;
 }
 
-.runStop:hover:not(:disabled) {
+.cmpRunStop:hover:not(:disabled) {
   border-color: color-mix(in oklch, var(--feedback-danger) 42%, transparent);
   color: var(--feedback-danger);
   background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
