@@ -168,6 +168,17 @@ Content-bearing live prompt, response, diff, and diagnostic events are transient
 access-controlled. Durable operational events and evidence are a separate content-free projection;
 they carry only ids, digests, counts, booleans, closed states/codes, and safe labels.
 
+The owner-requested Coding History workflow (#3560) retains user intent and the redacted
+user/assistant safe projection in the existing local UI conversation store. Dedicated relation
+tables bind those messages to coding tasks, runs, workspaces, and the local operator. This is
+conversation content, never runtime evidence or a durable bearer/session credential. Ordinary
+chat routes exclude these records; the dedicated History routes authenticate the paired app
+session before lookup and return a bounded transcript. Tool payloads, raw diagnostics, hidden
+reasoning, and authority credentials are not captured. History cannot reconstruct already-purged
+legacy transcripts. A resumed task supplies bounded, explicitly untrusted historical context to a
+fresh runtime launch, which revalidates current workspace identity and authority. Completing a task
+retains its conversation; New task provisions a distinct managed task workspace.
+
 Delivery approval, one rule for D3 and D4. In `governed-assist` and `supervised-coding`, commit,
 push and pull-request create/update each require their own action-bound, one-use human approval in
 addition to runtime authority; no connector scope or earlier start confirmation pre-approves them.

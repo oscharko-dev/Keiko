@@ -275,6 +275,10 @@ describe("Workspace shell accessibility", () => {
     await user.keyboard("{Enter}");
     expect(onTool).toHaveBeenCalledWith("chatHistory");
 
+    await tabTo(screen.getByRole("button", { name: "Coding History" }));
+    await user.keyboard("{Enter}");
+    expect(onTool).toHaveBeenCalledWith("codingHistory");
+
     await tabTo(screen.getByRole("button", { name: "MemoriaViva" }));
     await tabTo(screen.getByRole("button", { name: "Quality Intelligence" }));
     await tabTo(screen.getByRole("button", { name: "Prompt Enhancer" }));

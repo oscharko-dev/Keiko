@@ -1,3 +1,5 @@
+import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import type { UiStore } from "../store/types.js";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchContextUsage,
@@ -151,6 +153,7 @@ export interface CodingRuntimeToolFacadeBridge {
 }
 
 export interface CodingRuntimeControlPlaneInput {
+  readonly historyStore?: UiStore | undefined;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly snapshots: CodingRuntimeSnapshotStore;
@@ -237,6 +240,10 @@ function createControlPlaneOrchestrator(
   launchResolver: CodingRuntimeLaunchResolver,
 ): CodingRuntimeOrchestrator {
   return createCodingRuntimeOrchestrator({
+    history:
+      input.historyStore === undefined
+        ? undefined
+        : new CodingRuntimeHistory(input.historyStore, input.serverPrincipal, input.activityLog),
     issueIntake: input.issueIntake,
     deploymentCeiling: input.deploymentCeiling,
     manager,

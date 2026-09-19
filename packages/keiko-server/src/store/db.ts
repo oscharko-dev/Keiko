@@ -1,8 +1,10 @@
+import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
 // `node:sqlite` DatabaseSync drives both factories; the node adapter adds directory creation,
 // 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
 
 import { DatabaseSync } from "node:sqlite";
+import { createCodingHistoryStore } from "./codingHistory.js";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -660,7 +662,7 @@ function createMessageBatch(
 // eslint-disable-next-line max-lines-per-function
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
-  return {
+  const store: UiStore = {
     listProjects: () => sqlListProjects(db),
     createProject: (path: string, name?: string): Project =>
       createProjectRecord(db, options, path, name),
@@ -808,6 +810,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       db.close();
     },
   };
+  return isolateCodingHistory(store, createCodingHistoryStore(db, store, options.now));
 }
 
 function assertQuickCheckOk(db: DatabaseSync): void {

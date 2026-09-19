@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 34;
+export const SCHEMA_VERSION = 35;
 
 interface Migration {
   readonly version: number;
@@ -1224,6 +1224,30 @@ ALTER TABLE coding_runtime_snapshots ADD COLUMN pause_reason TEXT
 UPDATE coding_runtime_snapshots SET pause_reason = NULL WHERE state <> 'paused';
 `;
 
+// Coding History reuses chats/messages and adds only workspace, run and capture identities.
+const V35_SQL = `
+CREATE TABLE coding_history_tasks (
+  chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  operator_digest TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'completed'))
+) STRICT;
+CREATE INDEX idx_coding_history_operator ON coding_history_tasks(operator_digest);
+CREATE TABLE coding_history_runs (
+  run_id TEXT PRIMARY KEY,
+  chat_id TEXT NOT NULL REFERENCES coding_history_tasks(chat_id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL
+) STRICT;
+CREATE INDEX idx_coding_history_runs_chat ON coding_history_runs(chat_id, sequence DESC);
+CREATE TABLE coding_history_message_bindings (
+  run_id TEXT NOT NULL REFERENCES coding_history_runs(run_id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL,
+  message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  PRIMARY KEY (run_id, source_id)
+) STRICT;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -1262,6 +1286,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 32, sql: "", apply: migrateJourneyOutcomeProjection },
   { version: 33, sql: V33_SQL },
   { version: 34, sql: V34_SQL },
+  { version: 35, sql: V35_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

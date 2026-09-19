@@ -6,6 +6,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-history-persistence",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["coding-runtime.history"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-runtime.history"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-runtime.history"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["coding-runtime.history"],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "loss-state",
+      "opaque-id",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "activity-log-contract",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

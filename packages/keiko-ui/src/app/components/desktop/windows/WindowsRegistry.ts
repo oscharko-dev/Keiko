@@ -17,6 +17,7 @@ import type { AppWindow, WindowCfgValue } from "./types";
 export type WindowType =
   | "chat"
   | "chatHistory"
+  | "codingHistory"
   | "memoria"
   | "files"
   | "editor"
@@ -338,6 +339,17 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
         placeholderKey: "window.placeholder.chatTitle",
       },
     ],
+  },
+  codingHistory: {
+    titleKey: "window.type.codingHistory.title",
+    icon: "codingHistory",
+    descKey: "window.type.codingHistory.desc",
+    w: 400,
+    h: 580,
+    min: { w: 300, h: 320 },
+    tiny: { w: 260, h: 220 },
+    tool: true,
+    singleton: true,
   },
   chatHistory: {
     titleKey: "window.type.chatHistory.title",
@@ -1020,6 +1032,7 @@ export function localizedWindowConfigFields(
 export const TYPE_ORDER: readonly WindowType[] = [
   "chat",
   "chatHistory",
+  "codingHistory",
   "memoria",
   "connector",
   "localKnowledge",

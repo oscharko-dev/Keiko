@@ -26,7 +26,10 @@ interface RailTool {
   readonly img?: string;
 }
 
-const PRIMARY: readonly RailTool[] = [{ id: "chatHistory", icon: "archive" }];
+const PRIMARY: readonly RailTool[] = [
+  { id: "chatHistory", icon: "archive" },
+  { id: "codingHistory", icon: "codingHistory" },
+];
 
 function RailButton({
   tool,
@@ -95,7 +98,7 @@ function LeftRailImpl({
           <RailButton
             key={tool.id}
             tool={tool}
-            label={t("rail.chatHistory")}
+            label={t(tool.id === "codingHistory" ? "rail.codingHistory" : "rail.chatHistory")}
             active={openTools.has(tool.id)}
             onClick={() => onTool(tool.id)}
           />

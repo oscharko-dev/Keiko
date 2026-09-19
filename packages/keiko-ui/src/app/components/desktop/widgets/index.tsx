@@ -127,6 +127,10 @@ const RuntimeHubWidget = dynamic(
   () => import("./cards/RuntimeHubWidget").then((mod) => mod.RuntimeHubWidget),
   { ssr: false, loading: windowChunkFallback },
 );
+const CodingHistoryPanel = dynamic(
+  () => import("./coding-workbench/CodingHistoryPanel").then((mod) => mod.CodingHistoryPanel),
+  { ssr: false },
+);
 const CodingWorkbenchWindow = dynamic(
   () => import("./coding-workbench/CodingWorkbenchWindow").then((mod) => mod.CodingWorkbenchWindow),
   { ssr: false, loading: windowChunkFallback },
@@ -749,8 +753,18 @@ registerWindowRender("runtime", (cfg, ctx) => {
     </BoundRootSurface>
   );
 });
+registerWindowRender("codingHistory", (_cfg, ctx) => (
+  <CodingHistoryPanel
+    onOpen={(task) =>
+      ctx.openWindow("coding", { repositoryPath: task.projectPath, historySelection: task.id })
+    }
+    onNew={() => ctx.openWindow("coding", { historySelection: `new:${Date.now()}` })}
+  />
+));
 registerWindowRender("coding", (cfg, ctx) => (
   <CodingWorkbenchWindow
+    historySelection={str(cfg, "historySelection")}
+    onOpenHistory={() => ctx.openWindow("codingHistory")}
     selectedRoot={str(cfg, "repositoryPath") ?? ctx.selectedRoot ?? undefined}
     onOpenGit={({ root, binding, repositoryDialog, descriptionReview }) => {
       if (root !== null && descriptionReview !== undefined) {

@@ -362,7 +362,10 @@ the route. Failing closed to the byte-identical content-free projection removes 
 
 Rejected for this wave. A durable bearer store adds an exfiltration surface and defeats free restart
 expiry; the encrypted Code resume store is a deliberate Wave-3 deliverable, and the Wave-1 transient
-authority becomes its feed rather than being reworked.
+authority becomes its feed rather than being reworked. The separate owner-requested Coding
+History workflow (#3560, ADR-0137 D4) reuses the existing local conversation store; it does not
+persist the app-session cookie, runtime authority, or sidecar credentials. History reads and
+updates require a currently paired app session, including after a process restart.
 
 ### Enforce the boundary on the existing content routes in this ADR
 

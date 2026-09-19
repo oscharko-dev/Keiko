@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "05038467135c8934865ebbd8543bba327392c4ae7a5936d154c1d7ec9de0169f" as const;
+  "2c62933d5f16c018ba53f7d61dfa3d873668ca4b1b87e4d227ffce966d8d3efa" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3654,6 +3654,60 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["coding-runtime-follow-up-dispatch"],
     proofIds: ["coding-runtime.follow-up.dispatch-failed.emitted-line"],
     releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-runtime.history",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.codingRuntimeHistory.recordHistory",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      event: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["created", "continued", "captured", "read", "updated", "failed", "unavailable"],
+      },
+      conversationId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
+      runId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
+      messageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      truncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-history-persistence"],
+    proofIds: ["coding-runtime.history.emitted-line"],
+    releaseImpact: "minor",
   },
   {
     contractKind: "activity-log-operation",
@@ -25833,8 +25887,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 311,
-  completeClassCount: 311,
+  supportedClassCount: 312,
+  completeClassCount: 312,
   completeness: "complete",
   classes: [
     {
@@ -28961,6 +29015,86 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.editor-mutation.settled.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "coding-history-persistence",
+      requirementContract: "coding-history-persistence",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["coding-runtime.history"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "coding-runtime.history",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["coding-runtime.history"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "coding-runtime.history",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "conversationId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "event",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "messageCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "truncated",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.history.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -57463,6 +57597,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.editor-mutation.settled": "tools-workflows",
     "coding-runtime.event.dropped": "tools-workflows",
     "coding-runtime.follow-up.dispatch-failed": "tools-workflows",
+    "coding-runtime.history": "tools-workflows",
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
     "coding-runtime.operation.refused": "tools-workflows",

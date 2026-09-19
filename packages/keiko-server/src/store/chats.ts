@@ -522,7 +522,8 @@ const SELECT_COLUMNS =
   "connected_scope_paths, connected_scope_at, local_knowledge_scope_json, " +
   "git_change_scope_json, created_at, updated_at";
 
-const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ORDER BY created_at ASC`;
+const ORDINARY_CHAT = "NOT EXISTS (SELECT 1 FROM coding_history_tasks WHERE chat_id = chats.id)";
+const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? AND ${ORDINARY_CHAT} ORDER BY created_at ASC`;
 // 0.3.0 release audit — the LIMITED page decides which conversations the product can show and
 // which one a session resumes: every production reader passes a limit (Chat History, the chat
 // sidebar, and the create/send envelope). Reusing SQL_LIST's `created_at ASC` here returned the
@@ -532,7 +533,7 @@ const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ORD
 // created within the same millisecond) deterministically, newest first — a UUID primary key
 // would order the tie at random.
 const SQL_LIST_LIMITED =
-  `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ` +
+  `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? AND ${ORDINARY_CHAT} ` +
   "ORDER BY updated_at DESC, rowid DESC LIMIT ?";
 // Epic #177 audit: grounded-ask and chat PATCH paths used a project-scan + chat-scan helper that
 // fired O(projects × chats) row fetches per request. The chat id is unique across projects (the

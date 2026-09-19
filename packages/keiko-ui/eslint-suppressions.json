@@ -1250,11 +1250,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": {
     "complexity": {
       "count": 1

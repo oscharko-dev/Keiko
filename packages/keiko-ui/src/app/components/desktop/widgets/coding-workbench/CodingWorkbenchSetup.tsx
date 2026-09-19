@@ -22,6 +22,7 @@
 // exit in the product (2026-09-03 dev log). The target branch defaults to the repository's
 // checked-out branch: a checkout whose integration branch is `dev` must not be offered `main`.
 
+import { CodingWorkbenchBranchField } from "./CodingWorkbenchBranchField";
 import {
   useCallback,
   useEffect,
@@ -959,7 +960,12 @@ function SetupFields({
         onSettled={onRepositoryPathSettled}
       />
       {issue === null ? (
-        <TargetBranchField value={targetBranch} pending={pending} onChange={onTargetBranchChange} />
+        <CodingWorkbenchBranchField
+          root={repositoryPath}
+          value={targetBranch}
+          pending={pending}
+          onChange={onTargetBranchChange}
+        />
       ) : (
         <IssueBaseRef issue={issue} />
       )}
@@ -996,36 +1002,6 @@ function RepositoryPathField({
         }}
         onBlur={(event) => {
           onSettled(event.target.value);
-        }}
-      />
-    </>
-  );
-}
-
-function TargetBranchField({
-  value,
-  pending,
-  onChange,
-}: {
-  readonly value: string;
-  readonly pending: boolean;
-  readonly onChange: (value: string) => void;
-}): ReactNode {
-  const t = useCodingWorkbenchTranslate();
-  return (
-    <>
-      <label className={styles.fieldLabel} htmlFor="coding-workbench-setup-branch">
-        {t("codingWorkbench.setup.targetBranch")}
-      </label>
-      <input
-        id="coding-workbench-setup-branch"
-        className={styles.setupInput}
-        type="text"
-        value={value}
-        disabled={pending}
-        placeholder={t("codingWorkbench.setup.targetBranchPlaceholder")}
-        onChange={(event) => {
-          onChange(event.target.value);
         }}
       />
     </>
