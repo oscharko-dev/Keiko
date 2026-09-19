@@ -19,6 +19,7 @@ import {
 } from "../windows/chatWindowActivity";
 import { sharedFetchChats, useChatSession, type ChatSessionApi } from "../hooks/useChatSession";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
+import { persistedReferenceShape } from "../hooks/workspace-persistence";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
@@ -220,6 +221,7 @@ function chatCreationOwnerKey(owner: ChatCreationOwner): string {
 const CHAT_CREATION_REQUEST_DIAGNOSTIC = "Chat creation request failed.";
 const CHAT_TITLE_UPDATE_DIAGNOSTIC = "Chat title update failed.";
 const CHAT_PROJECT_LOOKUP_DIAGNOSTIC = "Chat project lookup failed.";
+const CHAT_TARGET_MISSING_DIAGNOSTIC = "[keiko] chat window restore target not found";
 
 class ChatCreationRequestFailure extends Error {
   public constructor(readonly correlationId: string) {
@@ -1033,6 +1035,21 @@ function useBoundChatTitle(args: {
   }, [args]);
 }
 
+// A restored chat window whose conversation cannot be resolved renders "Chat not found". Without
+// evidence, a lost binding (a persisted id that no longer names the chat) looked exactly like a
+// deleted conversation. Report it once per bound id, body-free: the closed shape of the persisted
+// reference only, never the id itself.
+function useChatTargetMissingEvidence(targetMissing: boolean, chatId: string | undefined): void {
+  const reportedRef = useRef<string | undefined>(undefined);
+  useEffect((): void => {
+    if (!targetMissing || chatId === undefined || reportedRef.current === chatId) return;
+    reportedRef.current = chatId;
+    reportClientDiagnostic(
+      `${CHAT_TARGET_MISSING_DIAGNOSTIC} (reference=${persistedReferenceShape(chatId)})`,
+    );
+  }, [chatId, targetMissing]);
+}
+
 function ChatNotFound(): ReactNode {
   const agentT = useEditorAgentTranslate();
   return (
@@ -1318,6 +1335,7 @@ function BoundChatWindowSessionHost({
     session,
     updateCfg: ctx.updateCfg,
   });
+  useChatTargetMissingEvidence(routing.targetMissing, configuration.chatId);
   useBoundChatWindowRuntime(configuration, ctx, routing, session);
   const memory = useBoundMemorySession({
     activeTarget: routing.activeTarget,

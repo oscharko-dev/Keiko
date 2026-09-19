@@ -4,6 +4,7 @@ import {
   MAX_PERSISTED_CONNECTION_SCAN,
   parsePersistedConnections,
   parsePersistedWindows,
+  persistedReferenceShape,
   sanitizePersistedConnections,
   sanitizePersistedWorkspace,
   sanitizePersistedWindows,
@@ -13,6 +14,7 @@ import {
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
 import { subText } from "../windows/connectionUtils";
+import { isSecretShapedString } from "./isSecretShapedString";
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -746,6 +748,45 @@ describe("workspace-persistence", () => {
     expect(JSON.stringify(persisted)).not.toContain(gitHubToken);
     expect(JSON.stringify(persisted)).not.toContain(slackToken);
     expect(JSON.stringify(persisted)).not.toContain(bearerToken);
+  });
+
+  it("keeps a server-issued UUID that the payment-card rule misreads as a card number", () => {
+    // The chat id from a real CI failure: the 16 digits across its last hyphen pass the Luhn check.
+    // Persisted as the redaction marker, it left the restored chat window reporting its live
+    // conversation as deleted. The heuristic must still misread it, or this test proves nothing.
+    const id = "1404206d-9ab6-4bca-8853-813867352087";
+    expect(isSecretShapedString(id)).toBe(true);
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: id, title: "Deploy status" } }),
+      win({ id: "review-1", type: "review", cfg: { runId: id } }),
+      win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: id } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { chatId: id, title: "Deploy status" }],
+      ["review-1", { runId: id }],
+      ["figma-1", { snapshotRunId: id }],
+    ]);
+    expect(parsePersistedWindows(JSON.stringify(persisted))).toEqual(persisted);
+  });
+
+  it("still redacts a card number that is not a canonical UUID", () => {
+    const pan = "4111 1111 1111 1111";
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: pan, title: pan } }),
+      win({ id: "review-1", type: "review", cfg: { runId: "4111-1111-1111-1111" } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { chatId: "[REDACTED]", title: "[REDACTED]" }],
+      ["review-1", {}],
+    ]);
+  });
+
+  it("classifies a restored reference by its closed shape only", () => {
+    expect(persistedReferenceShape("[REDACTED]")).toBe("redacted");
+    expect(persistedReferenceShape("1404206d-9ab6-4bca-8853-813867352087")).toBe("uuid");
+    expect(persistedReferenceShape("chat-a")).toBe("opaque");
   });
 
   it("scrubs secret-shaped config values during browser-local restore", () => {

@@ -1629,6 +1629,34 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(
       screen.getByText("This conversation was deleted or is no longer available."),
     ).toBeInTheDocument();
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window restore target not found (reference=opaque)",
+      ),
+    );
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain("chat-missing");
+  });
+
+  it("reports a binding lost to redaction once, as a redacted reference", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+    const host = (
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "[REDACTED]" }} ctx={context()} />
+      </I18nProvider>
+    );
+
+    const { rerender } = render(host);
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    rerender(host);
+
+    const reports = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).startsWith("[keiko] chat window restore target not found"),
+    );
+    expect(reports).toEqual([
+      ["[keiko] chat window restore target not found (reference=redacted)"],
+    ]);
   });
 
   it("never retargets a missing binding onto a sibling conversation", async (): Promise<void> => {
