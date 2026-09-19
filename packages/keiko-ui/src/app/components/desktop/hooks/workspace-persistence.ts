@@ -23,8 +23,10 @@ import {
 type JsonScalar = string | number | boolean;
 
 const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
-// Server-issued identifiers (chat, run and snapshot ids) are canonical UUIDs.
-const CANONICAL_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+// Server-issued identifiers (chat, run and snapshot ids) come from `randomUUID()`: RFC 9562
+// version-4 UUIDs, with the version and variant nibbles fixed.
+const SERVER_ISSUED_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_REFERENCE_VALUE_LENGTH = 256;
 const MAX_FIGMA_SELECTED_SCREEN_IDS = 16;
 const MAX_FIGMA_SCREEN_NAME_LENGTH = 256;
@@ -166,6 +168,7 @@ const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueS
   "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
   "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
   "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
+  "chat:chatId": sanitizeChatIdReference,
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -256,10 +259,10 @@ function isAllowedReferenceChar(char: string): boolean {
 // The shared secret heuristic's payment-card rule reads the digits across a UUID's last hyphen as a
 // Luhn-valid card number for about 2 in 10,000 random ids. A persisted id redacted or dropped for
 // that reason can never reopen its target after a reload: a chat window then reports its live
-// conversation as deleted. A canonical UUID cannot hold any shape the heuristic protects against
-// (hex digits and hyphens at fixed positions only), so it is exempt from it.
-function isSecretShapedConfigString(value: string): boolean {
-  return !CANONICAL_UUID_PATTERN.test(value) && isSecretShapedString(value);
+// conversation as deleted. So a reference FIELD holding exactly a server-issued UUID is exempt from
+// the heuristic. Free text never is: a title that merely looks like a UUID stays subject to it.
+function isServerIssuedUuidReference(value: string): boolean {
+  return SERVER_ISSUED_UUID_PATTERN.test(value);
 }
 
 /**
@@ -268,13 +271,14 @@ function isSecretShapedConfigString(value: string): boolean {
  */
 export function persistedReferenceShape(value: string): "redacted" | "uuid" | "opaque" {
   if (value === REDACTED_WORKSPACE_CONFIG_VALUE) return "redacted";
-  return CANONICAL_UUID_PATTERN.test(value) ? "uuid" : "opaque";
+  return isServerIssuedUuidReference(value) ? "uuid" : "opaque";
 }
 
 function isSafeOpaqueReference(value: string): boolean {
+  if (isServerIssuedUuidReference(value)) return true;
   if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH || value.startsWith("."))
     return false;
-  if (value.trim() !== value || isSecretShapedConfigString(value)) return false;
+  if (value.trim() !== value || isSecretShapedString(value)) return false;
   for (const char of value) {
     if (!isAllowedReferenceChar(char)) return false;
   }
@@ -678,8 +682,15 @@ function sanitizeGenericConfigValue(
   if (persistence === "evidence-reference") {
     return isSafeOpaqueReference(value) ? value : undefined;
   }
-  if (!isSecretShapedConfigString(value)) return value;
+  if (!isSecretShapedString(value)) return value;
   return persistence === "durable.ui" ? REDACTED_WORKSPACE_CONFIG_VALUE : undefined;
+}
+
+// A chat window's `chatId` is the one server-issued reference among the chat's free-text fields.
+// Any other value keeps the generic rule, including its redaction marker.
+function sanitizeChatIdReference(value: unknown): AppWindow["cfg"][string] {
+  if (typeof value === "string" && isServerIssuedUuidReference(value)) return value;
+  return sanitizeGenericConfigValue("chat", "chatId", value);
 }
 
 function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["cfg"] {

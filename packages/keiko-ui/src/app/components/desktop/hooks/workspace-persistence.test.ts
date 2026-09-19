@@ -783,10 +783,34 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  // The exemption belongs to reference fields only. A free-text value that merely has a UUID's
+  // shape (here with a Luhn-valid 4111… tail and neither the v4 version nor variant nibble) is
+  // still redacted, in the title and in the reference fields alike.
+  it("never exempts a UUID-shaped card number outside a server-issued reference", () => {
+    const lookalike = "deadbeef-cafe-babe-4111-111111111111";
+    const serverIssued = "1404206d-9ab6-4bca-8853-813867352087";
+    expect(isSecretShapedString(lookalike)).toBe(true);
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: lookalike, title: lookalike } }),
+      win({ id: "chat-2", type: "chat", cfg: { chatId: serverIssued, title: serverIssued } }),
+      win({ id: "review-1", type: "review", cfg: { runId: lookalike } }),
+      win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: lookalike } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { chatId: "[REDACTED]", title: "[REDACTED]" }],
+      ["chat-2", { chatId: serverIssued, title: "[REDACTED]" }],
+      ["review-1", {}],
+      ["figma-1", {}],
+    ]);
+    expect(JSON.stringify(persisted)).not.toContain("4111-111111111111");
+  });
+
   it("classifies a restored reference by its closed shape only", () => {
     expect(persistedReferenceShape("[REDACTED]")).toBe("redacted");
     expect(persistedReferenceShape("1404206d-9ab6-4bca-8853-813867352087")).toBe("uuid");
     expect(persistedReferenceShape("chat-a")).toBe("opaque");
+    expect(persistedReferenceShape("deadbeef-cafe-babe-4111-111111111111")).toBe("opaque");
   });
 
   it("scrubs secret-shaped config values during browser-local restore", () => {
