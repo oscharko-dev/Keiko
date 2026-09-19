@@ -80,7 +80,7 @@ Work in small read/edit/verify cycles, keep patches minimal, and never describe 
 
 export const OPENCODE_GOVERNED_V2_SYSTEM_PROMPT = OPENCODE_GOVERNED_SYSTEM_PROMPT.replace(
   "1. Plan: keep a short plan up to date with todowrite so the operator can follow your progress.",
-  "1. Plan: use todowrite for a short, current plan so the operator can follow your progress.",
+  "1. Plan: keep a short plan in your responses so the operator can follow your progress.",
 );
 export type OpenCodeLaunchProfileResult =
   | {
@@ -302,7 +302,6 @@ export function createFixedOpenCodeV2Config(
   const permissions = [
     { action: "*", resource: "*", effect: "deny" },
     { action: "question", resource: "*", effect: "allow" },
-    { action: "todowrite", resource: "*", effect: "allow" },
     ...OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(
       ({ name }) => !unavailable.has(name as OpenCodeOptionalToolName),
     ).map(({ name: action }) => ({ action, resource: "*", effect: "allow" })),

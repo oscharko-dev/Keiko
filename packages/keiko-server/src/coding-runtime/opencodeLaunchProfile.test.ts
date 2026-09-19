@@ -121,10 +121,9 @@ describe("OpenCode launch profile", () => {
     });
     expect(config.permissions[0]).toMatchObject({ action: "*", effect: "deny" });
     for (const tool of OPENCODE_PINNED_BUILT_IN_TOOLS) {
-      expect(finalPermissionAction(config.permissions, tool)).toBe(
-        tool === "todowrite" ? "allow" : "deny",
-      );
+      expect(finalPermissionAction(config.permissions, tool)).toBe("deny");
     }
+    expect(OPENCODE_GOVERNED_V2_SYSTEM_PROMPT).not.toContain("todowrite");
     for (const tool of OPENCODE_MODEL_VISIBLE_TOOL_NAMES) {
       expect(finalPermissionAction(config.permissions, tool)).toBe("allow");
     }
