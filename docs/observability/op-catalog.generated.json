@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7ebb20560601fceeb710651ff7b8f6cb1f5bc04ebe1dc63a31b8d1d412d67a83",
+    "catalogDigest": "f3c1cbfc0939db5f353acc014ae9a3980dcc83621353601c75fd9d9a18b3f8c5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -15544,7 +15544,7 @@
         "proofIds": ["git.process.failed.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:152",
-        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:415"]
+        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:437"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15627,7 +15627,7 @@
         "proofIds": ["git.process.refused.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:122",
-        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:387"]
+        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:409"]
       },
       {
         "contractKind": "activity-log-operation",
