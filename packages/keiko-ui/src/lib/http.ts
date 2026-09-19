@@ -26,9 +26,18 @@
  *    quality-intelligence, figma — is a safe-forward improvement).
  *  - On 2xx with a body: `res.json()`, optionally routed through `opts.validator` so Git routes keep
  *    contract-validating (throwing `ApiError('CONTRACT_VALIDATION_FAILED', …, 502)`).
+ *  - On a session-denied 403 (`ApiError.code === "DENIED"`, e.g. `resolveRequestRoot`'s
+ *    `FilesError(403, "DENIED", …)` in keiko-server/src/files.ts): a restarted BFF invalidates its
+ *    in-memory app session (ADR-0141 D5), so a managed-task-workspace read was previously denied
+ *    forever — the client never re-paired. The request is repaired and retried exactly once via
+ *    `ensureLocalCodingAppSession()` (a no-op on an already-valid cookie); a second denial, or a
+ *    failed repair, surfaces the original error unchanged — this never loops. Mirrors the one
+ *    existing consumer of that primitive, `fetchWorkspaceManifestAccess` (./workspace-manifest-api.ts).
  *
  * `ApiError` is imported FROM ./api (one-way): api.ts owns the canonical error class and MUST NOT
- * import this module (that would be a cycle).
+ * import this module (that would be a cycle). `ensureLocalCodingAppSession` is loaded with a dynamic
+ * `import()` inside the retry path below, for the same reason: `./coding-app-session-client` imports
+ * `bffFetchJson` FROM this module, so a static import back here would be a cycle.
  */
 
 import { ApiError } from "./api";
@@ -121,10 +130,10 @@ async function parseBffErrorBody<T>(
   }
 }
 
-export async function bffFetchJson<T>(
+async function performBffFetch<T>(
   path: string,
-  init?: RequestInit,
-  opts?: BffFetchOptions<T>,
+  init: RequestInit | undefined,
+  opts: BffFetchOptions<T> | undefined,
 ): Promise<T> {
   const correlationId = newClientCorrelationId();
   const res = await fetch(path, {
@@ -180,5 +189,40 @@ export async function bffFetchJson<T>(
       error.correlationId = res.headers.get(CORRELATION_HEADER) ?? correlationId;
     }
     throw error;
+  }
+}
+
+// The one class of 403 a stale local app session can cause (ADR-0141 D5): `resolveRequestRoot`
+// throws exactly `FilesError(403, "DENIED", …)` when a restarted BFF's in-memory session is gone
+// (packages/keiko-server/src/files.ts, workspace-root-denial-log.ts
+// `managed-root-session-authority-missing`). Every OTHER 403 (e.g. `PATH_ESCAPE`,
+// `HOT_EXIT_REF_MISMATCH`) names a real, non-session-related refusal that a repair cannot fix and
+// must not mask behind an extra round trip.
+function isSessionDeniedError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 403 && error.code === "DENIED";
+}
+
+/**
+ * `performBffFetch`, with exactly one self-heal retry on a session-denied 403: a restarted BFF
+ * invalidates its in-memory app session (ADR-0141 D5) and every managed-task-workspace read was
+ * previously denied forever, because nothing ever re-established one (the live Activity Log showed
+ * `workspace.root.denied` / `managed-root-session-authority-missing` on every reconnect attempt).
+ * `ensureLocalCodingAppSession()` mirrors the one existing consumer of that primitive
+ * (`fetchWorkspaceManifestAccess`, ./workspace-manifest-api.ts): a no-op on an already-valid cookie,
+ * and a fresh session for a launcher-started BFF otherwise. Never loops — the retry's own result
+ * (success or a second denial) is returned as-is, and a failed repair returns the original error.
+ */
+export async function bffFetchJson<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: BffFetchOptions<T>,
+): Promise<T> {
+  try {
+    return await performBffFetch(path, init, opts);
+  } catch (error) {
+    if (!isSessionDeniedError(error)) throw error;
+    const { ensureLocalCodingAppSession } = await import("./coding-app-session-client");
+    if (!(await ensureLocalCodingAppSession())) throw error;
+    return performBffFetch(path, init, opts);
   }
 }

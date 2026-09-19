@@ -9,6 +9,12 @@ import {
   subscribeSharedEventSource,
 } from "./sharedEventSource";
 
+const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+
+vi.mock("../../../../../lib/coding-app-session-client", () => ({
+  ensureLocalCodingAppSession: ensureLocalSession,
+}));
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
   static immediateEventType: string | undefined;
@@ -50,6 +56,7 @@ afterEach(() => {
   FakeEventSource.immediateEventType = undefined;
   vi.unstubAllGlobals();
   resetClientDiagnosticWriter();
+  ensureLocalSession.mockClear();
 });
 
 describe("subscribeSharedEventSource", () => {
@@ -255,6 +262,67 @@ describe("subscribeSharedEventSource", () => {
     expect(reported).toEqual([
       "[keiko] shared-event-source sse stream error (kind=sse-error, readyState=0, reason=connecting)",
     ]);
+    unsubscribe();
+    vi.useRealTimers();
+  });
+
+  // A restarted BFF invalidates its in-memory app session (ADR-0141 D5), so every reconnect after
+  // that was denied again forever, with nothing ever re-establishing one (the defect a live dev
+  // Activity Log caught: 35 `workspace.root.denied` warn lines, one per backoff attempt). The
+  // repair must run before the reconnect timer opens a new stream, and at most once per failure
+  // streak — not on every error, or a persistent outage would hammer the local pairing endpoint.
+  it("repairs the app session once per failure streak, before the reconnect timer fires", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/editor/workspace-watch/events?root=workspace-1",
+      ["editor-watch:changed"],
+      () => {},
+    );
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    first.onerror?.();
+    // Repaired synchronously inside the onerror handler, strictly before the reconnect timer (whose
+    // minimum delay is 1s) has any chance to fire.
+    expect(ensureLocalSession).toHaveBeenCalledOnce();
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    vi.advanceTimersByTime(1_500);
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+
+    second.onerror?.();
+    // Same failure streak (no successful open landed between the two errors): no second repair.
+    expect(ensureLocalSession).toHaveBeenCalledOnce();
+
+    unsubscribe();
+    vi.useRealTimers();
+  });
+
+  it("repairs again after a successful reconnect resets the failure streak", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/editor/workspace-watch/events?root=workspace-1",
+      ["editor-watch:changed"],
+      () => {},
+    );
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    first.onerror?.();
+    expect(ensureLocalSession).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1_500);
+
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+    second.onopen?.();
+    second.onerror?.();
+
+    // The successful open in between started a new streak, so this failure repairs again.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(2);
+
     unsubscribe();
     vi.useRealTimers();
   });

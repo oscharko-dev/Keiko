@@ -10,6 +10,7 @@ import {
   reportClientDiagnostic,
   sseStreamErrorDiagnostic,
 } from "../../../../../lib/client-diagnostics";
+import { ensureLocalCodingAppSession } from "../../../../../lib/coding-app-session-client";
 
 type SharedEventListener = (event: MessageEvent<string>) => void;
 
@@ -24,6 +25,11 @@ interface SharedEventSourceEntry {
   reconnectAttempts: number;
   reconnectTimer: number | undefined;
   sourceGeneration: number;
+  // Set once an `onerror` in the current failure streak has already asked for a session repair, so
+  // a streak of reconnect failures repairs at most once instead of hammering the local pairing
+  // endpoint on every attempt. Reset to `false` by a successful open (`onopen`), which starts a new
+  // streak.
+  sessionRepairAttempted: boolean;
 }
 
 const sourcesByUrl = new Map<string, SharedEventSourceEntry>();
@@ -125,6 +131,17 @@ function scheduleReconnect(entry: SharedEventSourceEntry): void {
   }, reconnectDelay(entry));
 }
 
+// Repairs a stale local app session at most once per failure streak (ADR-0141 D5): a restarted BFF
+// invalidates its in-memory session, so every reconnect after that was denied again forever, with
+// nothing ever re-establishing one. Fire-and-forget — the repair is a fast loopback POST that
+// normally completes well before the reconnect timer's minimum 1s delay elapses, so the next
+// attempt carries a valid cookie without slowing the existing backoff.
+function repairSessionOnce(entry: SharedEventSourceEntry): void {
+  if (entry.sessionRepairAttempted) return;
+  entry.sessionRepairAttempted = true;
+  void ensureLocalCodingAppSession();
+}
+
 function openEntrySource(entry: SharedEventSourceEntry): void {
   if (
     entry.refCount === 0 ||
@@ -142,10 +159,12 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   entry.source = source;
   source.onopen = () => {
     entry.reconnectAttempts = 0;
+    entry.sessionRepairAttempted = false;
   };
   source.onerror = () => {
     reportClientDiagnostic(sseStreamErrorDiagnostic("shared-event-source", source.readyState));
     closeEntrySource(entry);
+    repairSessionOnce(entry);
     scheduleReconnect(entry);
   };
   for (const type of entry.subscribersByType.keys()) {
@@ -210,6 +229,7 @@ function entryForUrl(url: string): SharedEventSourceEntry {
     reconnectAttempts: 0,
     reconnectTimer: undefined,
     sourceGeneration: 0,
+    sessionRepairAttempted: false,
   };
   sourcesByUrl.set(url, entry);
   ensureVisibilityListener();

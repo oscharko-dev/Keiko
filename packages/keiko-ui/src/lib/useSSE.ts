@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
+import { ensureLocalCodingAppSession } from "./coding-app-session-client";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -53,6 +54,10 @@ let sharedEventSource: EventSource | null = null;
 let sharedEventSourceLive = false;
 let reconnectTimer: number | undefined;
 let reconnectAttempts = 0;
+// Set once an `onerror` in the current failure streak has already asked for a session repair
+// (ADR-0141 D5 — a restarted BFF's in-memory session is gone and every reconnect was denied again
+// forever, with nothing re-establishing one). Reset by a successful open, which starts a new streak.
+let sessionRepairAttempted = false;
 let visibilityListenerInstalled = false;
 
 function subscriberCount(): number {
@@ -186,6 +191,15 @@ function runEventsUrl(): string {
   return `${RUN_EVENTS_URL}?resume=${cursors.join(",")}`;
 }
 
+// Repairs a stale local app session at most once per failure streak. Fire-and-forget — the repair
+// is a fast loopback POST that normally completes well before the reconnect timer's minimum 1s
+// delay elapses, so the next attempt carries a valid cookie without slowing the existing backoff.
+function repairSessionOnce(): void {
+  if (sessionRepairAttempted) return;
+  sessionRepairAttempted = true;
+  void ensureLocalCodingAppSession();
+}
+
 function openSharedEventSource(): void {
   if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) return;
   closeSharedEventSource();
@@ -194,12 +208,14 @@ function openSharedEventSource(): void {
 
   sharedEventSource.onopen = () => {
     reconnectAttempts = 0;
+    sessionRepairAttempted = false;
     sharedEventSourceLive = true;
     notifyAll("live", null);
   };
 
   sharedEventSource.addEventListener("ready", () => {
     reconnectAttempts = 0;
+    sessionRepairAttempted = false;
     sharedEventSourceLive = true;
     notifyAll("live", null);
   });
@@ -208,6 +224,7 @@ function openSharedEventSource(): void {
     reportClientDiagnostic(sseStreamErrorDiagnostic("run-events", sharedEventSource?.readyState));
     notifyAll("error", "Stream disconnected. Attempting to reconnect…");
     closeSharedEventSource();
+    repairSessionOnce();
     scheduleReconnect();
   };
 

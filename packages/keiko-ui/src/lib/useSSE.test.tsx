@@ -3,6 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import { useSSE } from "./useSSE";
 
+const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+
+vi.mock("./coding-app-session-client", () => ({
+  ensureLocalCodingAppSession: ensureLocalSession,
+}));
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -66,6 +72,7 @@ describe("useSSE", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     resetClientDiagnosticWriter();
+    ensureLocalSession.mockClear();
   });
 
   it("opens encoded run streams, recovers after transient errors, ignores malformed frames, and closes on terminal events", async () => {
@@ -506,6 +513,66 @@ describe("useSSE", () => {
     expect(reported).toEqual([
       "[keiko] run-events sse stream error (kind=sse-error, readyState=2, reason=closed)",
     ]);
+    view.unmount();
+  });
+
+  // A restarted BFF invalidates its in-memory app session (ADR-0141 D5), so every reconnect after
+  // that was denied again forever, with nothing ever re-establishing one (the defect a live dev
+  // Activity Log caught: 35 `workspace.root.denied` warn lines, one per backoff attempt). The
+  // repair must run before the reconnect timer opens a new stream, at most once per failure streak
+  // — not on every error, or a persistent outage would hammer the local pairing endpoint — and
+  // again once a successful reconnect starts a fresh streak.
+  it("repairs the app session once per failure streak, before the reconnect timer opens a new stream", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+      initialProps: { runId: "run 9" },
+    });
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    // Start this test from a clean failure streak regardless of what an earlier test in this file
+    // left behind: reconnectAttempts/the repair flag live at module scope and only a successful
+    // open resets them.
+    act(() => {
+      first.onopen?.(new Event("open"));
+    });
+
+    act(() => {
+      first.onerror?.(new Event("error"));
+    });
+    // Repaired synchronously inside the onerror handler, strictly before the reconnect timer
+    // (whose minimum delay is 1s) has any chance to fire.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(1);
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+
+    act(() => {
+      second.onerror?.(new Event("error"));
+    });
+    // Same failure streak (no successful open landed between the two errors): no second repair.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+    const third = FakeEventSource.instances[2];
+    if (third === undefined) throw new Error("Expected second reconnected stream.");
+
+    act(() => {
+      third.onopen?.(new Event("open"));
+    });
+    act(() => {
+      third.onerror?.(new Event("error"));
+    });
+    // The successful open on `third` started a new streak, so this failure repairs again.
+    expect(ensureLocalSession).toHaveBeenCalledTimes(2);
+
     view.unmount();
   });
 });
