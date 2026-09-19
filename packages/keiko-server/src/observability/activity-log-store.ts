@@ -798,15 +798,37 @@ function activeReservation(entry: ActivityLogFileEntry, segmentBytes: number): n
   return Math.max(entry.sizeBytes, segmentBytes);
 }
 
+// A writer rotating make-before-break holds, for a moment, two active segments: the full one it is
+// sealing, and its next one, created empty. It re-checks admission before it writes a byte into the
+// next one, so that one counts only its actual size while an older active segment of the same
+// instance exists, and a peer never reserves two segments for one writer (#3557 review). Once it
+// holds bytes, it is reserved in full again.
+function pendingSuccessorNames(files: readonly ActivityLogFileEntry[]): ReadonlySet<string> {
+  const oldestIndex = new Map<string, number>();
+  for (const { file } of files) {
+    if (file.kind !== "active") continue;
+    const instance = `${String(file.pid)}:${file.instanceId}`;
+    oldestIndex.set(instance, Math.min(oldestIndex.get(instance) ?? file.index, file.index));
+  }
+  const names = new Set<string>();
+  for (const { file, sizeBytes } of files) {
+    if (file.kind !== "active" || sizeBytes !== 0) continue;
+    const oldest = oldestIndex.get(`${String(file.pid)}:${file.instanceId}`) ?? file.index;
+    if (file.index > oldest) names.add(file.name);
+  }
+  return names;
+}
+
 function unprotectedUsage(
   input: ActivityLogRetentionInput,
   protectedNames: ReadonlySet<string>,
 ): number {
   let usage = input.pinRecordBytes + input.reserveBytes;
+  const successors = pendingSuccessorNames(input.files);
   for (const entry of input.files) {
     if (protectedNames.has(entry.file.name)) continue;
     usage +=
-      entry.file.kind === "active"
+      entry.file.kind === "active" && !successors.has(entry.file.name)
         ? activeReservation(entry, input.config.segmentBytes)
         : entry.sizeBytes;
   }

@@ -2041,6 +2041,30 @@ describe("activity log retention", () => {
 
   const retentionEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(SMALL_BUDGET) });
 
+  // #3557 review: a writer rotating make-before-break holds, for a moment, its full segment and its
+  // next one, still empty. A peer admitting its first event at the minimum budget counts that writer
+  // once: two writers fit, so the event is persisted, never dropped.
+  it("admits a peer at the minimum budget while another writer is between its two segments", () => {
+    const env = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(64 * 1024),
+      KEIKO_LOG_SEGMENT_BYTES: String(32 * 1024),
+    });
+    const writer = { startMs: Date.now(), pid: process.ppid, instanceId: "0a0b0c0d" };
+    seedSegment(stateDir, {
+      identity: { ...writer, index: 1 },
+      state: "active",
+      content: syntheticLines(32 * 1024 - 1024),
+    });
+    seedSegment(stateDir, { identity: { ...writer, index: 2 }, state: "active", content: "" });
+    const lostBefore = activityLogLossCounters()["persistence-failed"];
+
+    createFileServerLogSink(stateDir, { env }).write({ category: "http", op: "peer.first-event" });
+
+    expect(linesWithOp(stateDir, "peer.first-event")).toHaveLength(1);
+    expect(linesWithOp(stateDir, "activity-log.pressure")).toEqual([]);
+    expect(activityLogLossCounters()["persistence-failed"]).toBe(lostBefore);
+  });
+
   it("prunes the oldest files first until the byte budget holds the new segment's reservation", () => {
     const archive = seedLegacyFile(stateDir, "server-2026-09-01.log", 40 * 1024);
     const legacyCurrent = seedLegacyFile(stateDir, "server.log", 20 * 1024);

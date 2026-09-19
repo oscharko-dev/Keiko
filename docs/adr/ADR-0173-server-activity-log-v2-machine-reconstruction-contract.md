@@ -998,7 +998,10 @@ name; the writer never appends to it again, and the next maintenance pass recove
 A write that finds its segment full or expired rotates make-before-break (#3557): the next segment's
 file is created under its active name before the full one is sealed, and the admission re-check
 then runs with that new, still empty segment at its full reservation, so the byte bound is
-unchanged. A process that keeps writing is therefore never without an active segment, which is the
+unchanged. A peer that lists the directory in that moment counts the writer once: an empty active
+segment whose instance still holds an older active segment counts only its actual size, because
+its writer re-checks admission before it writes a byte into it. At the minimum budget two writers
+therefore still fit, and no peer drops an event while another rotates. A process that keeps writing is therefore never without an active segment, which is the
 one sign of a live writer a starting peer can see before it decides whether it may replace the
 store policy. Sealing first and opening the next segment only after a maintenance pass had left a
 busy writer invisible for that whole pass, and a peer starting then replaced a running writer's
