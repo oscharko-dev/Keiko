@@ -894,9 +894,13 @@ request":
     persisted reference's closed shape (`uuid`, `opaque`, `redacted`) and whether the
     card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
     reference itself. No reference is exempt from that heuristic, and no stored form works around
-    it. The server issues every reference a window persists (chat ids, PR description proposal
-    ids, Figma snapshot run ids) through `newReferenceId`, which never draws an id the heuristic
-    flags, so a restored window keeps its binding. The window's own persisted id, which
+    it. The server issues every reference a window persists (chat, PR description proposal,
+    Figma snapshot, QI run and agent run ids) through `newReferenceId`, which never draws an id
+    the heuristic flags; a re-draw is `reference-id.redrawn` and an exhausted draw
+    `reference-id.exhausted`, both under the requesting operation's correlation id. An older
+    chat can still carry a flagged id: its window persists the redaction marker plus a one-way
+    SHA-256 fingerprint of the id and, on restore, finds its chat again by comparing that
+    fingerprint with the chats the server lists (reference shape `fingerprint`). The window's own persisted id, which
     persistence holds to a closed safe shape, reaches the server whole and is logged only as its
     digest (`bindingDigest`), so two windows never share one. Its correlation id is that of the
     chat list load that decided the outcome; a missing legacy binding names every list its scan
@@ -910,7 +914,10 @@ request":
     (`EventSource`) exposes no request id, so its repair sits on the stream's failure streak: a
     client-minted id that the streak's `sse-error` diagnostics carry too, with the closed
     `stream` name. The local-session endpoint acknowledges whether or not it issued a cookie, so
-    a stream reports `stream-repaired` only when it opens again after an acknowledged repair.
+    an acknowledged repair is its own state, `client.session-repair.acknowledged`, and a stream
+    reports `stream-repaired` only when it opens again after it. A streak that keeps failing after
+    the acknowledgement shows a repair that did not restore the stream. A suspension (a hidden
+    page, reserved capacity) ends the streak, so a resumed stream repairs again.
     Both name the repair request's id, and a failed repair its closed failure class. The repair request itself (the local-session ensure) mints its id before it is sent, so
     a failure that never reached the server is still recorded under that id with its closed
     class, which a message report may now carry as `errorKind`.
