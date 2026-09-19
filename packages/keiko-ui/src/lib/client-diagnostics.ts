@@ -45,6 +45,7 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientStageId,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 // Routine desktop-window stage evidence (`useWindowStageEvidence`) rides `meta.stageReport` instead
 // of the `kind`/`gitChangeDescription`/`workspaceTrustBinding` fields above, which all describe a
@@ -68,10 +69,12 @@ export interface ClientDiagnosticBindingReport {
   readonly outcome: ClientBindingOutcome;
   readonly referenceShape: ClientBindingReferenceShape;
   readonly heuristicExempt: boolean;
-  // The window's own persisted id; the server logs only its digest.
-  readonly windowRef: string;
+  // SHA-256 of the window's own persisted id; the id itself never leaves the browser.
+  readonly windowDigest: string;
   // Further list loads the verdict depended on, beyond `meta.correlationId`.
   readonly relatedCorrelationIds?: readonly string[] | undefined;
+  // How many list loads decided the outcome in total.
+  readonly decidingLoadCount?: number | undefined;
 }
 
 // The outcome of repairing and replaying a read a restarted BFF denied (#3557). `meta.correlationId`
@@ -79,6 +82,8 @@ export interface ClientDiagnosticBindingReport {
 export interface ClientDiagnosticSessionRepairReport {
   readonly outcome: ClientSessionRepairOutcome;
   readonly repairCorrelationId?: string | undefined;
+  // The closed class of the step that failed: the repair request, or the replay.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
 }
 
 export interface ClientDiagnosticMeta {

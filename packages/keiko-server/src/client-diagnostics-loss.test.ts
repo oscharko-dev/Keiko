@@ -180,7 +180,7 @@ describe("client diagnostics loss evidence", () => {
     const body = JSON.stringify({
       kind: "binding",
       surface: "chat-window",
-      windowRef: "window-1",
+      windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       outcome: "target-missing",
       referenceShape: "redacted",
       heuristicExempt: false,
@@ -205,7 +205,7 @@ describe("client diagnostics loss evidence", () => {
     const body = JSON.stringify({
       kind: "binding",
       surface: "chat-window",
-      windowRef: "window-1",
+      windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       outcome: "resolved",
       referenceShape: "uuid",
       heuristicExempt: true,
@@ -249,13 +249,14 @@ describe("client diagnostics loss evidence", () => {
       outcome: "repair-failed",
       correlationId: "ui_denied-read-0003",
       repairCorrelationId: "ui_session-repair-0003",
+      errorKind: "unavailable",
     });
     expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
 
     const [line] = lines("client.session-repair.failed");
     expect(expectActivityLogProof("client.session-repair.failed.line", line ?? "")).toMatchObject({
       correlationId: "ui_denied-read-0003",
-      errorKind: "authority-denied",
+      errorKind: "unavailable",
       outcome: "repair-failed",
       repairCorrelationId: "ui_session-repair-0003",
     });

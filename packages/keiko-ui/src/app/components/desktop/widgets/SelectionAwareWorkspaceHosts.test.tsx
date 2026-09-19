@@ -25,6 +25,10 @@ import {
   useChatCreationCoordinator,
 } from "./SelectionAwareWorkspaceHosts";
 import { subText } from "../windows/connectionUtils";
+import { windowBindingDigest } from "../hooks/workspace-persistence";
+
+// The digest the binding evidence carries for the default test window, from the producer itself.
+const WINDOW_ONE_DIGEST = await windowBindingDigest("window-1");
 import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
 
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
@@ -1657,7 +1661,7 @@ describe("ChatWindowSessionHost target missing", () => {
             outcome: "target-missing",
             referenceShape: "opaque",
             heuristicExempt: false,
-            windowRef: "window-1",
+            windowDigest: WINDOW_ONE_DIGEST,
           },
         },
       ),
@@ -1784,6 +1788,11 @@ describe("ChatWindowSessionHost target missing", () => {
 
   // #3557 review: two windows restored from one list answer must stay apart in the evidence.
   it("names each window in its own binding report", async (): Promise<void> => {
+    const expectedDigests = [
+      await windowBindingDigest("window-1"),
+      await windowBindingDigest("window-2"),
+    ];
+    expect(new Set(expectedDigests).size).toBe(2);
     chatSessionState.activeChat = undefined;
     chatSessionState.chats = [];
     chatSessionState.loading = false;
@@ -1801,10 +1810,10 @@ describe("ChatWindowSessionHost target missing", () => {
     await waitFor((): void => {
       const windows = reportClientDiagnosticMock.mock.calls.flatMap(([message, meta]) =>
         String(message).includes("restore target not found")
-          ? [(meta as { bindingReport: { windowRef: string } }).bindingReport.windowRef]
+          ? [(meta as { bindingReport: { windowDigest: string } }).bindingReport.windowDigest]
           : [],
       );
-      expect([...windows].sort()).toEqual(["window-1", "window-2"]);
+      expect([...windows].sort()).toEqual([...expectedDigests].sort());
     });
   });
 
@@ -1833,7 +1842,7 @@ describe("ChatWindowSessionHost target missing", () => {
             outcome: "resolved",
             referenceShape: "uuid",
             heuristicExempt: true,
-            windowRef: "window-1",
+            windowDigest: WINDOW_ONE_DIGEST,
           },
         },
       ),
@@ -1874,7 +1883,7 @@ describe("ChatWindowSessionHost target missing", () => {
             outcome: "target-missing",
             referenceShape: "redacted",
             heuristicExempt: false,
-            windowRef: "window-1",
+            windowDigest: WINDOW_ONE_DIGEST,
           },
         },
       ],

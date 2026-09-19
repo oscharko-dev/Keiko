@@ -38,6 +38,7 @@
  * `bffFetchJson` FROM this module, so a static import back here would be a cycle.
  */
 
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ApiError } from "./api";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
@@ -218,17 +219,49 @@ function isReplayableRead(init: RequestInit | undefined): boolean {
   return method === "GET" || method === "HEAD";
 }
 
+const HTTP_STATUS_ERROR_KINDS: Readonly<Record<number, ActivityLogErrorKind>> = {
+  401: "authority-denied",
+  403: "authority-denied",
+  408: "timeout",
+  409: "conflict",
+  429: "rate-limited",
+  499: "cancelled",
+  500: "internal",
+};
+
+/**
+ * The closed error kind of a failed BFF request, for evidence (#3557 review): an HTTP refusal by its
+ * status, a cancellation, a transport failure. Never the error's message.
+ */
+export function bffRequestErrorKind(error: unknown): ActivityLogErrorKind {
+  if (error instanceof ApiError) {
+    const exact = HTTP_STATUS_ERROR_KINDS[error.status];
+    if (exact !== undefined) return exact;
+    if (error.status >= 500) return "unavailable";
+    return error.status >= 400 ? "invalid-request" : "unknown";
+  }
+  if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
+  // `fetch` rejects a transport failure (refused connection, lost network) with a TypeError.
+  return error instanceof TypeError ? "unavailable" : "unknown";
+}
+
 // The denied request, the repair and the replay are three requests; this report links them on the
-// denied request's timeline (the replay reuses its id) and names the outcome (#3557 review).
+// denied request's timeline (the replay reuses its id), names the outcome, and classifies the step
+// that failed (#3557 review).
 function reportSessionRepair(
   outcome: ClientDiagnosticSessionRepairReport["outcome"],
   deniedCorrelationId: string,
   repairCorrelationId: string,
+  errorKind?: ActivityLogErrorKind,
 ): void {
   // i18n-exempt: body-free diagnostic message for the activity log, never rendered
   reportClientDiagnostic(`[keiko] stale session repair: ${outcome}`, {
     correlationId: deniedCorrelationId,
-    sessionRepairReport: { outcome, repairCorrelationId },
+    sessionRepairReport: {
+      outcome,
+      repairCorrelationId,
+      ...(errorKind === undefined ? {} : { errorKind }),
+    },
   });
 }
 
@@ -241,11 +274,22 @@ async function repairAndReplay<T>(
   const { repairLocalCodingAppSessionWithEvidence } = await import("./coding-app-session-client");
   const repair = await repairLocalCodingAppSessionWithEvidence();
   const deniedCorrelationId = denied.correlationId ?? newClientCorrelationId();
-  if (!repair.repaired || !isReplayableRead(init)) {
+  if (!repair.repaired) {
     reportSessionRepair(
-      repair.repaired ? "replay-skipped" : "repair-failed",
+      "repair-failed",
       deniedCorrelationId,
       repair.correlationId,
+      repair.errorKind,
+    );
+    throw denied;
+  }
+  if (!isReplayableRead(init)) {
+    // The write stays refused as it was: the original denial is the failure.
+    reportSessionRepair(
+      "replay-skipped",
+      deniedCorrelationId,
+      repair.correlationId,
+      "authority-denied",
     );
     throw denied;
   }
@@ -257,7 +301,12 @@ async function repairAndReplay<T>(
     reportSessionRepair("replayed", deniedCorrelationId, repair.correlationId);
     return value;
   } catch (replayError) {
-    reportSessionRepair("replay-failed", deniedCorrelationId, repair.correlationId);
+    reportSessionRepair(
+      "replay-failed",
+      deniedCorrelationId,
+      repair.correlationId,
+      bffRequestErrorKind(replayError),
+    );
     throw replayError;
   }
 }

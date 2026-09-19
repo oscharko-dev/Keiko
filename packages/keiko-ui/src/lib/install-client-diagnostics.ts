@@ -46,7 +46,6 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
-  CLIENT_BINDING_WINDOW_REF_MAX_LENGTH,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
@@ -156,9 +155,13 @@ function clientBindingPostBody(
     outcome: report.outcome,
     referenceShape: report.referenceShape,
     heuristicExempt: report.heuristicExempt,
-    windowRef: report.windowRef.slice(0, CLIENT_BINDING_WINDOW_REF_MAX_LENGTH),
+    windowDigest: report.windowDigest,
     correlationId: validCorrelationId(correlationId),
     ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+    // The total stays even when the named list is cut, so the server marks the line partial.
+    ...(report.decidingLoadCount === undefined
+      ? {}
+      : { decidingLoadCount: report.decidingLoadCount }),
   };
 }
 
@@ -174,6 +177,7 @@ function clientSessionRepairPostBody(
     outcome: report.outcome,
     correlationId: id,
     repairCorrelationId: validCorrelationId(report.repairCorrelationId),
+    errorKind: report.errorKind,
   };
 }
 

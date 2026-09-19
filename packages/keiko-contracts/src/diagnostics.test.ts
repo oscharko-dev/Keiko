@@ -7,7 +7,7 @@ import {
   CLIENT_BINDING_OUTCOMES,
   CLIENT_BINDING_REFERENCE_SHAPES,
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
-  CLIENT_BINDING_WINDOW_REF_MAX_LENGTH,
+  CLIENT_BINDING_DECIDING_LOADS_MAX,
   CLIENT_SESSION_REPAIR_OUTCOMES,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
@@ -404,7 +404,7 @@ describe("isClientBindingIngestRequest", () => {
       outcome: "target-missing",
       referenceShape: "redacted",
       heuristicExempt: false,
-      windowRef: "window-1",
+      windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     };
   }
 
@@ -457,12 +457,13 @@ describe("isClientBindingIngestRequest", () => {
     }
   });
 
-  it("bounds the window reference and the related correlation ids", () => {
-    const longest = "w".repeat(CLIENT_BINDING_WINDOW_REF_MAX_LENGTH);
-    expect(isClientBindingIngestRequest({ ...bindingRequest(), windowRef: longest })).toBe(true);
-    expect(isClientBindingIngestRequest({ ...bindingRequest(), windowRef: `${longest}w` })).toBe(
-      false,
-    );
+  it("bounds the related correlation ids and the deciding load count", () => {
+    for (const decidingLoadCount of [1, CLIENT_BINDING_DECIDING_LOADS_MAX]) {
+      expect(isClientBindingIngestRequest({ ...bindingRequest(), decidingLoadCount })).toBe(true);
+    }
+    for (const decidingLoadCount of [0, CLIENT_BINDING_DECIDING_LOADS_MAX + 1, 1.5, "17"]) {
+      expect(isClientBindingIngestRequest({ ...bindingRequest(), decidingLoadCount })).toBe(false);
+    }
     const related = Array.from(
       { length: CLIENT_BINDING_RELATED_CORRELATIONS_MAX },
       (_value, index) => `ui_list-load-${String(index).padStart(4, "0")}`,
@@ -486,8 +487,12 @@ describe("isClientBindingIngestRequest", () => {
     ["an unknown reference shape", { referenceShape: "chat-123" }],
     ["a non-boolean exemption", { heuristicExempt: "false" }],
     ["a missing exemption", { heuristicExempt: undefined }],
-    ["a missing window reference", { windowRef: undefined }],
-    ["an empty window reference", { windowRef: "" }],
+    ["a missing window digest", { windowDigest: undefined }],
+    ["a raw window id instead of a digest", { windowDigest: "window-1" }],
+    [
+      "an uppercase digest",
+      { windowDigest: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+    ],
     ["an oversized correlation id", { correlationId: "c".repeat(129) }],
     ["a related id that is not a string", { relatedCorrelationIds: [7] }],
     ["related ids that are not a list", { relatedCorrelationIds: "ui_list-load-0001" }],
@@ -528,6 +533,13 @@ describe("isClientSessionRepairIngestRequest", () => {
     expect(
       isClientSessionRepairIngestRequest({ ...repairRequest(), repairCorrelationId: undefined }),
     ).toBe(true);
+    expect(
+      isClientSessionRepairIngestRequest({
+        ...repairRequest(),
+        outcome: "replay-failed",
+        errorKind: "unavailable",
+      }),
+    ).toBe(true);
   });
 
   it.each([
@@ -536,6 +548,7 @@ describe("isClientSessionRepairIngestRequest", () => {
     ["an unknown outcome", { outcome: "healed" }],
     ["a missing denied-request id", { correlationId: undefined }],
     ["a malformed repair id", { repairCorrelationId: "" }],
+    ["an error kind outside the closed vocabulary", { errorKind: "gateway-exploded" }],
     ["an undeclared field", { path: "/api/files" }],
   ])("refuses %s", (_label, patch) => {
     const value = typeof patch === "string" ? patch : { ...repairRequest(), ...patch };

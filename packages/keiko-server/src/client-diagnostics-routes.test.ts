@@ -3,7 +3,6 @@ import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  clientBindingDigest,
   clientDiagnosticNoteDigest,
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
@@ -372,7 +371,7 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowRef: "window-1",
+        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         outcome: "target-missing",
         referenceShape: "redacted",
         heuristicExempt: false,
@@ -401,7 +400,7 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowRef: "window-1",
+        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         outcome: "resolved",
         referenceShape: "uuid",
         heuristicExempt: true,
@@ -426,7 +425,7 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowRef: "window-1",
+        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         outcome: "target-missing",
         referenceShape: "uuid",
         heuristicExempt: false,
@@ -444,11 +443,14 @@ describe("POST /api/diagnostics/client", () => {
     // and a legacy verdict names every list load it depended on.
     it("gives each window its own digest and keeps the related list loads", async () => {
       const sink = captureServerLog();
-      for (const windowRef of ["window-1", "window-2"]) {
+      for (const windowDigest of [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      ]) {
         const body = JSON.stringify({
           kind: "binding",
           surface: "chat-window",
-          windowRef,
+          windowDigest,
           outcome: "resolved",
           referenceShape: "uuid",
           heuristicExempt: false,
@@ -460,12 +462,38 @@ describe("POST /api/diagnostics/client", () => {
 
       const events = bindingEvents(sink, "client.binding.resolved");
       expect(events.map((event) => event.extra?.bindingDigest)).toEqual([
-        clientBindingDigest("window-1"),
-        clientBindingDigest("window-2"),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       ]);
-      // Only the safe related id survives; the window reference itself never reaches the log.
+      // Only the safe related id survives, and a line naming its whole causal set is complete.
       expect(events[0]?.extra?.relatedCorrelationIds).toEqual(["ui_chat-list-load-0002"]);
-      expect(JSON.stringify(events)).not.toContain("window-1");
+      expect(events[0]?.extra?.completeness).toBe("complete");
+    });
+
+    // #3557 review: a causal set longer than the line can name must be explicitly partial.
+    it("marks a binding line partial when more list loads decided it than it names", async () => {
+      const sink = captureServerLog();
+      const related = Array.from(
+        { length: 15 },
+        (_value, index) => `ui_chat-list-load-${String(index + 2).padStart(4, "0")}`,
+      );
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        outcome: "target-missing",
+        referenceShape: "uuid",
+        heuristicExempt: false,
+        correlationId: "ui_chat-list-load-0001",
+        relatedCorrelationIds: related,
+        decidingLoadCount: 17,
+      });
+
+      await handleClientDiagnosticIngest(context(body));
+
+      const [event] = bindingEvents(sink, "client.binding.target-missing");
+      expect(event?.extra).toMatchObject({ completeness: "partial", decidingLoadCount: 17 });
+      expect(event?.extra?.relatedCorrelationIds).toHaveLength(15);
     });
 
     it("refuses a resolved binding for a redacted reference", async () => {
@@ -473,7 +501,7 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowRef: "window-1",
+        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         outcome: "resolved",
         referenceShape: "redacted",
         heuristicExempt: false,
@@ -488,7 +516,7 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
-        windowRef: "window-1",
+        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         outcome: "resolved",
         referenceShape: "opaque",
         heuristicExempt: true,
@@ -581,12 +609,62 @@ describe("POST /api/diagnostics/client", () => {
         correlationId: "ui_denied-read-0001",
         extra: { repairCorrelationId: "ui_session-repair-0001" },
       });
-      expect(events[0]?.errorKind).toBe(level === "warn" ? "authority-denied" : undefined);
+      expect(events[0]?.errorKind).toBe(
+        level === "info"
+          ? undefined
+          : outcome === "replay-skipped"
+            ? "authority-denied"
+            : "unknown",
+      );
       if (op === "client.session-repair.failed") {
         expect(events[0]?.extra?.outcome).toBe(outcome);
       }
       expect(clientDiagnosticEvents(sink)).toEqual([]);
     });
+  });
+
+  // #3557 review: a failed repair or replay keeps the class of the step that actually failed.
+  it("logs the browser-classified failure of the repair step, not a blanket authority denial", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "replay-failed",
+      correlationId: "ui_denied-read-0002",
+      repairCorrelationId: "ui_session-repair-0002",
+      errorKind: "unavailable",
+    });
+
+    await handleClientDiagnosticIngest(context(body));
+
+    const [event] = sink.events.filter((line) => line.op === "client.session-repair.failed");
+    expect(event).toMatchObject({ errorKind: "unavailable", extra: { outcome: "replay-failed" } });
+  });
+
+  // #3557 review: routine overflow must never hide a dropped failure report's own notice.
+  it("gives each budget its own rate-limit notice, under the first dropped report of each", async () => {
+    const sink = captureServerLog();
+    for (let ordinal = 1; ordinal <= 61; ordinal += 1) {
+      const stage = { kind: "stage", stage: "window chunk", phase: "started", ordinal };
+      await handleClientDiagnosticIngest(
+        context(JSON.stringify(stage), `ui_stage-${String(ordinal)}`),
+      );
+    }
+    for (let index = 1; index <= 61; index += 1) {
+      const failure = {
+        message: `boundary ${String(index)}`,
+        clientTs: CLIENT_TS,
+        kind: "boundary",
+      };
+      await handleClientDiagnosticIngest(
+        context(JSON.stringify(failure), `ui_failure-${String(index)}`),
+      );
+    }
+
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => [event.extra?.budget, event.correlationId])).toEqual([
+      ["routine", "ui_stage-61"],
+      ["failure", "ui_failure-61"],
+    ]);
   });
 
   // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`) must ride its own

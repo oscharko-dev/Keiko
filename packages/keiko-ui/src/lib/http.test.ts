@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { bffFetchJson } from "./http";
+import { bffFetchJson, bffRequestErrorKind } from "./http";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 // bffFetchJson loads this primitive through a dynamic import() (http.ts documents why: a static
@@ -445,12 +445,12 @@ describe("bffFetchJson — session repair evidence", () => {
   });
 
   it.each([
-    ["repair-failed", false, "GET", 1],
-    ["replay-skipped", true, "POST", 1],
-    ["replay-failed", true, "GET", 2],
+    ["repair-failed", false, "GET", 1, undefined],
+    ["replay-skipped", true, "POST", 1, "authority-denied"],
+    ["replay-failed", true, "GET", 2, "authority-denied"],
   ] as const)(
     "reports %s on the denied request's timeline",
-    async (outcome, repaired, method, requests) => {
+    async (outcome, repaired, method, requests, errorKind) => {
       const reports = captureReports();
       ensureLocalSession.mockResolvedValueOnce(repaired);
       const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(deniedResponse()));
@@ -464,12 +464,35 @@ describe("bffFetchJson — session repair evidence", () => {
           message: `[keiko] stale session repair: ${outcome}`,
           meta: {
             correlationId: sentCorrelationId(fetchMock, 0),
-            sessionRepairReport: { outcome, repairCorrelationId: REPAIR_CORRELATION_ID },
+            sessionRepairReport: {
+              outcome,
+              repairCorrelationId: REPAIR_CORRELATION_ID,
+              ...(errorKind === undefined ? {} : { errorKind }),
+            },
           },
         },
       ]);
     },
   );
+
+  // #3557 review: a replay that fails for another reason must not read as an authority denial.
+  it("classifies a replay that fails with a 502 as unavailable", async () => {
+    const reports = captureReports();
+    ensureLocalSession.mockResolvedValueOnce(true);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(deniedResponse())
+        .mockResolvedValueOnce(jsonResponse({ error: { code: "UPSTREAM", message: "no" } }, 502)),
+    );
+
+    await expect(bffFetchJson("/api/x")).rejects.toMatchObject({ status: 502 });
+
+    expect(reports[0]?.meta).toMatchObject({
+      sessionRepairReport: { outcome: "replay-failed", errorKind: "unavailable" },
+    });
+  });
 
   it("reports nothing for a request that opts out of the repair", async () => {
     const reports = captureReports();
@@ -482,5 +505,24 @@ describe("bffFetchJson — session repair evidence", () => {
       { code: "DENIED" },
     );
     expect(reports).toEqual([]);
+  });
+});
+
+// #3557 review: the closed class a failed BFF request contributes to evidence.
+describe("bffRequestErrorKind", () => {
+  it.each([
+    [new ApiError("DENIED", "no", 403), "authority-denied"],
+    [new ApiError("UNAUTHORIZED", "no", 401), "authority-denied"],
+    [new ApiError("CONFLICT", "no", 409), "conflict"],
+    [new ApiError("RATE", "no", 429), "rate-limited"],
+    [new ApiError("CANCELLED", "no", 499), "cancelled"],
+    [new ApiError("INTERNAL", "no", 500), "internal"],
+    [new ApiError("UPSTREAM", "no", 502), "unavailable"],
+    [new ApiError("NOT_FOUND", "no", 404), "invalid-request"],
+    [new DOMException("aborted", "AbortError"), "cancelled"],
+    [new TypeError("Failed to fetch"), "unavailable"],
+    [new Error("other"), "unknown"],
+  ] as const)("classifies %s as %s", (error, kind) => {
+    expect(bffRequestErrorKind(error)).toBe(kind);
   });
 });

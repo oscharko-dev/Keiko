@@ -24,7 +24,7 @@ import {
   type ChatSessionApi,
 } from "../hooks/useChatSession";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
-import { persistedReferenceEvidence } from "../hooks/workspace-persistence";
+import { persistedReferenceEvidence, windowBindingDigest } from "../hooks/workspace-persistence";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
@@ -1130,17 +1130,29 @@ function useChatBindingEvidence({
     if (reportedRef.current.has(key)) return;
     reportedRef.current.add(key);
     const evidence = persistedReferenceEvidence(chatId);
-    const [correlationId, ...related] = listCorrelationIds(projectKey.split("\u0000"));
-    reportClientDiagnostic(chatBindingMessage(outcome, evidence), {
-      correlationId,
-      bindingReport: {
-        surface: "chat-window",
-        outcome,
-        ...evidence,
-        windowRef: windowId,
-        ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+    const message = chatBindingMessage(outcome, evidence);
+    // Read now, while these are the loads that decided the outcome.
+    const ids = listCorrelationIds(projectKey.split("\u0000"));
+    const [correlationId, ...related] = ids;
+    windowBindingDigest(windowId).then(
+      (windowDigest): void => {
+        reportClientDiagnostic(message, {
+          correlationId,
+          bindingReport: {
+            surface: "chat-window",
+            outcome,
+            ...evidence,
+            windowDigest,
+            ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+            ...(ids.length > 1 ? { decidingLoadCount: ids.length } : {}),
+          },
+        });
       },
-    });
+      (): void => {
+        // The hashing runtime did not load: the outcome still reaches the log, as a message.
+        reportClientDiagnostic(`${message} (window digest unavailable)`, { correlationId });
+      },
+    );
   }, [chatId, outcome, projectKey, windowId]);
 }
 

@@ -31,6 +31,8 @@
 // `[redacted:key]` even though the value is already length-bounded here); the existing log-value
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
+import { isActivityLogErrorKind, type ActivityLogErrorKind } from "./observability.js";
+
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
 // or CLOSED (2). A closed vocabulary, not a raw number, so a future EventSource-shaped value can
 // never smuggle an out-of-range number onto the wire.
@@ -500,12 +502,14 @@ export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 export const CLIENT_BINDING_REFERENCE_SHAPES = ["uuid", "opaque", "redacted"] as const;
 export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPES)[number];
 
-// The window's own persisted id, so two windows restored from one list answer stay apart and a
-// later failure of the same window is recognisable. The server logs only its digest.
-export const CLIENT_BINDING_WINDOW_REF_MAX_LENGTH = 256;
 // A legacy binding (no persisted project) is decided by a scan over every project's list; the report
-// names each list load it depended on beyond `correlationId`.
+// names each list load it depended on beyond `correlationId`, up to this bound, and states how many
+// loads decided it in total, so a longer causal set is explicitly partial, never silently cut.
 export const CLIENT_BINDING_RELATED_CORRELATIONS_MAX = 15;
+export const CLIENT_BINDING_DECIDING_LOADS_MAX = 10_000;
+// The window's own persisted id reaches the report only as a SHA-256 digest computed in the
+// browser: injective for any id length, and the id itself never leaves the page.
+const WINDOW_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
 export interface ClientBindingIngestRequest {
   readonly kind: "binding";
@@ -515,10 +519,12 @@ export interface ClientBindingIngestRequest {
   // The persisted reference is a server-issued UUID that the shared secret heuristic reads as a
   // card number: it survived persistence only through the reference-field exemption.
   readonly heuristicExempt: boolean;
-  readonly windowRef: string;
+  readonly windowDigest: string;
   // The request whose answer decided the outcome (the target list load), when the client knows it.
   readonly correlationId?: string | undefined;
   readonly relatedCorrelationIds?: readonly string[] | undefined;
+  // How many list loads decided the outcome in total, when more than the named ones.
+  readonly decidingLoadCount?: number | undefined;
 }
 
 const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
@@ -527,9 +533,10 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "outcome",
   "referenceShape",
   "heuristicExempt",
-  "windowRef",
+  "windowDigest",
   "correlationId",
   "relatedCorrelationIds",
+  "decidingLoadCount",
 ]);
 
 function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
@@ -546,8 +553,13 @@ function hasConsistentBindingReference(value: Record<string, unknown>): boolean 
   return !value.heuristicExempt || value.referenceShape === "uuid";
 }
 
+function isDecidingLoadCount(value: unknown): boolean {
+  return isBoundedPositiveInteger(value, CLIENT_BINDING_DECIDING_LOADS_MAX);
+}
+
 function hasBindingCorrelations(value: Record<string, unknown>): boolean {
   if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
+  if (!isOptional(value.decidingLoadCount, isDecidingLoadCount)) return false;
   const related = value.relatedCorrelationIds;
   if (related === undefined) return true;
   return (
@@ -567,7 +579,9 @@ export function isClientBindingIngestRequest(value: unknown): value is ClientBin
   if (!isRecord(value) || value.kind !== "binding") return false;
   if (Object.keys(value).some((key) => !CLIENT_BINDING_INGEST_REQUEST_KEYS.has(key))) return false;
   if (!isOneOf(value.surface, CLIENT_BINDING_SURFACES)) return false;
-  if (!isBoundedString(value.windowRef, CLIENT_BINDING_WINDOW_REF_MAX_LENGTH)) return false;
+  if (typeof value.windowDigest !== "string" || !WINDOW_DIGEST_PATTERN.test(value.windowDigest)) {
+    return false;
+  }
   return hasConsistentBindingReference(value) && hasBindingCorrelations(value);
 }
 
@@ -593,6 +607,9 @@ export interface ClientSessionRepairIngestRequest {
   readonly correlationId: string;
   // The local-session repair request.
   readonly repairCorrelationId?: string | undefined;
+  // The closed class of the step that failed (the repair request or the replay), so a 502 or a
+  // transport failure is never recorded as an authority denial.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
 }
 
 const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
@@ -600,6 +617,7 @@ const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "outcome",
   "correlationId",
   "repairCorrelationId",
+  "errorKind",
 ]);
 
 export function isClientSessionRepairIngestRequest(
@@ -610,6 +628,7 @@ export function isClientSessionRepairIngestRequest(
     return false;
   }
   if (!isOneOf(value.outcome, CLIENT_SESSION_REPAIR_OUTCOMES)) return false;
+  if (!isOptional(value.errorKind, isActivityLogErrorKind)) return false;
   return (
     isCorrelationIdShape(value.correlationId) &&
     isOptional(value.repairCorrelationId, isCorrelationIdShape)

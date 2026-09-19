@@ -22,7 +22,8 @@ import {
   decodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { newClientCorrelationId } from "./bff-correlation";
-import { bffFetchJson } from "./http";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { bffFetchJson, bffRequestErrorKind } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
 const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
@@ -94,22 +95,35 @@ export async function redeemCodingAppSessionPairingFragment(
  * intentionally acknowledges without revealing whether a cookie was issued; subsequent channel reads
  * report the honest paired/unpaired state.
  */
+type LocalSessionOutcome =
+  | { readonly repaired: true }
+  | { readonly repaired: false; readonly errorKind: ActivityLogErrorKind };
+
+// The ensure request's outcome with the closed class of a failure, for the repair's evidence.
+async function localSessionOutcome(
+  seams: CodingAppSessionPairingSeams | undefined,
+): Promise<LocalSessionOutcome> {
+  if (seams?.postLocalSession === undefined) return { repaired: false, errorKind: "unavailable" };
+  try {
+    await seams.postLocalSession();
+    return { repaired: true };
+  } catch (error) {
+    return { repaired: false, errorKind: bffRequestErrorKind(error) };
+  }
+}
+
 export async function ensureLocalCodingAppSession(
   seams: CodingAppSessionPairingSeams | undefined = defaultSeams(),
 ): Promise<boolean> {
-  if (seams?.postLocalSession === undefined) return false;
-  try {
-    await seams.postLocalSession();
-    return true;
-  } catch {
-    return false;
-  }
+  return (await localSessionOutcome(seams)).repaired;
 }
 
 /** One shared repair attempt: whether it succeeded, and the id its local-session request carried. */
 export interface LocalCodingAppSessionRepair {
   readonly repaired: boolean;
   readonly correlationId: string;
+  // The closed class of the failed local-session request, when the repair failed.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
 }
 
 let localSessionRepair: Promise<LocalCodingAppSessionRepair> | undefined;
@@ -123,8 +137,12 @@ let localSessionRepair: Promise<LocalCodingAppSessionRepair> | undefined;
 export function repairLocalCodingAppSessionWithEvidence(): Promise<LocalCodingAppSessionRepair> {
   if (localSessionRepair === undefined) {
     const correlationId = newClientCorrelationId();
-    localSessionRepair = ensureLocalCodingAppSession(defaultSeams(correlationId))
-      .then((repaired): LocalCodingAppSessionRepair => ({ repaired, correlationId }))
+    localSessionRepair = localSessionOutcome(defaultSeams(correlationId))
+      .then((outcome): LocalCodingAppSessionRepair =>
+        outcome.repaired
+          ? { repaired: true, correlationId }
+          : { repaired: false, correlationId, errorKind: outcome.errorKind },
+      )
       .finally(() => {
         localSessionRepair = undefined;
       });

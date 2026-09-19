@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f3c1cbfc0939db5f353acc014ae9a3980dcc83621353601c75fd9d9a18b3f8c5" as const;
+  "83c7dbc74d602876780a280bc98b2c38f4d638e3e0255d4da4547ac1151899aa" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1761,6 +1761,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 64,
       },
+      decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       relatedCorrelationIds: {
         type: "string-array",
         dataClass: "opaque-id",
@@ -1816,6 +1821,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: true,
         maxLength: 64,
+      },
+      decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       relatedCorrelationIds: {
         type: "string-array",
@@ -1970,6 +1980,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      budget: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["failure", "routine"],
       },
       trigger: {
         type: "string",
@@ -28108,6 +28124,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "decidingLoadCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "heuristicExempt",
               type: "boolean",
               dataClass: "closed-enum",
@@ -28135,6 +28157,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           evidenceClasses: [
             "closed-enum",
             "completeness-state",
+            "count",
             "digest",
             "loss-state",
             "opaque-id",
@@ -28162,6 +28185,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "decidingLoadCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "heuristicExempt",
               type: "boolean",
               dataClass: "closed-enum",
@@ -28189,6 +28218,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           evidenceClasses: [
             "closed-enum",
             "completeness-state",
+            "count",
             "digest",
             "loss-state",
             "opaque-id",
@@ -28382,6 +28412,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "failure-cluster",
           safeContextFields: [
+            {
+              name: "budget",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
             {
               name: "suppressedDrops",
               type: "integer",

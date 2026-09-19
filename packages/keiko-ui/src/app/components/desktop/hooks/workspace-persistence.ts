@@ -310,6 +310,16 @@ export function persistedReferenceEvidence(value: string): {
 // fields the app itself proves it sets from a real server id get a shortcut, and they get it
 // through their OWN closed sanitizer (sanitizeChatIdReference, sanitizeDescriptionProposalIdReference),
 // never through this shared function.
+/**
+ * The digest a restored window's binding evidence carries for the window (#3557 review): SHA-256
+ * over a domain prefix and the window's own persisted id, injective for any id length. The id
+ * itself never leaves the browser. Loads the same lazy hashing runtime the voice hasher uses.
+ */
+export async function windowBindingDigest(windowId: string): Promise<string> {
+  const { sha256Hex } = await import("./canonical-voice-hasher-runtime");
+  return sha256Hex(`keiko-client-binding-v1\u0000${windowId}`);
+}
+
 function isSafeOpaqueReference(value: string): boolean {
   if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH || value.startsWith("."))
     return false;

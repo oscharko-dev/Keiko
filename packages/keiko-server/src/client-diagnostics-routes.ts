@@ -110,6 +110,14 @@ const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.noticeRateLimitedDrop",
   fields: {
     suppressedDrops: { type: "integer", dataClass: "count", required: false },
+    // Which budget overflowed, so a dropped failure report is never hidden behind routine
+    // evidence (#3557 review).
+    budget: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["failure", "routine"],
+    },
     trigger: {
       type: "string",
       dataClass: "closed-enum",
@@ -306,9 +314,13 @@ const CLIENT_BINDING_FIELDS = {
     values: CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES,
   },
   heuristicExempt: { type: "boolean", dataClass: "closed-enum", required: true },
-  // The digest of the window's own persisted id: two windows restored from one list answer stay
-  // apart, and a later failure of the same window carries the same digest (#3557 review).
+  // The digest of the window's own persisted id, computed in the browser: two windows restored
+  // from one list answer stay apart, and a later failure of the same window carries the same
+  // digest (#3557 review).
   bindingDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  // How many list loads decided the outcome, when more than the line names; the line is then
+  // `partial`, never silently complete.
+  decidingLoadCount: { type: "integer", dataClass: "count", required: false },
   // The other list loads a legacy binding's verdict depended on, beyond the line's correlation id.
   relatedCorrelationIds: {
     type: "string-array",
@@ -453,13 +465,20 @@ function quietRejectionThrottles(): Map<ClientDiagnosticRejection, NoticeThrottl
   return new Map(CLIENT_DIAGNOSTIC_REJECTIONS.map((rejection) => [rejection, quietThrottle()]));
 }
 
-let dropNotice = quietThrottle();
+type ClientReportBudget = "failure" | "routine";
+
+// One notice throttle per budget: routine overflow never suppresses the notice of a dropped
+// failure report, which then keeps its own correlation id and budget class.
+let dropNotices: Record<ClientReportBudget, NoticeThrottle> = {
+  failure: quietThrottle(),
+  routine: quietThrottle(),
+};
 let rejectionNotices = quietRejectionThrottles();
 
 /** Test-only: puts the shared rate limiter and notice counters back to a clean start. */
 export function resetClientDiagnosticsIngestStateForTests(): void {
   rateLimiter = createInlineCompletionRateLimiter(CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG);
-  dropNotice = quietThrottle();
+  dropNotices = { failure: quietThrottle(), routine: quietThrottle() };
   rejectionNotices = quietRejectionThrottles();
 }
 
@@ -494,6 +513,7 @@ function openThrottleWindow(throttle: NoticeThrottle, now: number | null): numbe
 
 function writeRateLimitedNotice(
   correlationId: string | undefined,
+  budget: ClientReportBudget,
   suppressed: number,
   trigger: "window" | "shutdown-flush",
 ): void {
@@ -503,6 +523,7 @@ function writeRateLimitedNotice(
       { correlationId: correlationIdOrUnknown(correlationId), errorKind: "rate-limited" },
       {
         ...(suppressed > 0 ? { suppressedDrops: suppressed } : {}),
+        budget,
         trigger,
         completeness: "complete",
         loss: "event-dropped",
@@ -513,10 +534,15 @@ function writeRateLimitedNotice(
 
 // Reports a rate-limited drop exactly once per window, carrying how many further drops that same
 // window suppressed — never the report content, which was never admitted past the limiter.
-function noticeRateLimitedDrop(now: number, correlationId: string | undefined): void {
+function noticeRateLimitedDrop(
+  budget: ClientReportBudget,
+  now: number,
+  correlationId: string | undefined,
+): void {
   recordActivityLogLoss("client-rate-suppressed");
-  if (suppressedByThrottle(dropNotice, now)) return;
-  writeRateLimitedNotice(correlationId, openThrottleWindow(dropNotice, now), "window");
+  const throttle = dropNotices[budget];
+  if (suppressedByThrottle(throttle, now)) return;
+  writeRateLimitedNotice(correlationId, budget, openThrottleWindow(throttle, now), "window");
 }
 
 function writeRejectedNotice(
@@ -559,8 +585,10 @@ function noticeRejectedReport(
  * process: the trailing counts reach the log instead of waiting for a next window that never comes.
  */
 export function flushClientDiagnosticsIngestCounts(): void {
-  const drops = openThrottleWindow(dropNotice, null);
-  if (drops > 0) writeRateLimitedNotice(undefined, drops, "shutdown-flush");
+  for (const budget of ["failure", "routine"] as const) {
+    const drops = openThrottleWindow(dropNotices[budget], null);
+    if (drops > 0) writeRateLimitedNotice(undefined, budget, drops, "shutdown-flush");
+  }
   for (const [rejection, throttle] of rejectionNotices) {
     const suppressed = openThrottleWindow(throttle, null);
     if (suppressed > 0) writeRejectedNotice(undefined, rejection, suppressed, "shutdown-flush");
@@ -718,24 +746,26 @@ function logClientStage(
 
 type ClientBindingFields = ActivityLogFields<typeof CLIENT_BINDING_RESOLVED_OPERATION>;
 
-export function clientBindingDigest(windowRef: string): string {
-  return sha256Hex(`keiko-client-binding-v1\0${windowRef}`);
-}
-
 // Only safe correlation ids are kept; a malformed one is dropped rather than refusing the line.
 function relatedCorrelationIds(request: ClientBindingIngestRequest): readonly string[] {
   return (request.relatedCorrelationIds ?? []).filter((id) => isValidCorrelationId(id));
 }
 
+// A causal set longer than the line can name stays explicit: the total count is kept and the line
+// is `partial` (#3557 review).
 function clientBindingFields(request: ClientBindingIngestRequest): ClientBindingFields {
   const related = relatedCorrelationIds(request);
+  const named = 1 + related.length;
+  const deciding = request.decidingLoadCount;
+  const partial = deciding !== undefined && deciding > named;
   return {
     surface: request.surface,
     referenceShape: request.referenceShape,
     heuristicExempt: request.heuristicExempt,
-    bindingDigest: clientBindingDigest(request.windowRef),
+    bindingDigest: request.windowDigest,
     ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
-    completeness: "complete",
+    ...(partial ? { decidingLoadCount: deciding } : {}),
+    completeness: partial ? "partial" : "complete",
     loss: "none",
   };
 }
@@ -801,6 +831,14 @@ function logClientSessionRepairRecovered(
   );
 }
 
+// The class of the step that actually failed, as the browser classified it. A skipped replay
+// leaves the original refusal in place, an authority denial; any other outcome without a class is
+// unknown rather than guessed (#3557 review).
+function sessionRepairErrorKind(request: ClientSessionRepairIngestRequest): ActivityLogErrorKind {
+  if (request.errorKind !== undefined) return request.errorKind;
+  return request.outcome === "replay-skipped" ? "authority-denied" : "unknown";
+}
+
 function logClientSessionRepairFailed(
   request: ClientSessionRepairIngestRequest & {
     readonly outcome: (typeof CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES)[number];
@@ -810,7 +848,7 @@ function logClientSessionRepairFailed(
   getServerLogger().warn(
     activityLogEvent(
       CLIENT_SESSION_REPAIR_FAILED_OPERATION,
-      { correlationId, errorKind: "authority-denied" },
+      { correlationId, errorKind: sessionRepairErrorKind(request) },
       {
         outcome: request.outcome,
         ...sessionRepairCorrelation(request),
@@ -855,7 +893,7 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
   return undefined;
 }
 
-function reportBudget(classified: ClassifiedClientReport): "failure" | "routine" {
+function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
   switch (classified.shape) {
     case "stage":
       return "routine";
@@ -967,8 +1005,9 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     return badRequest("Request body is not a valid diagnostic report.", ctx.correlationId);
   }
   const now = Date.now();
-  if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS[reportBudget(classified)], now)) {
-    noticeRateLimitedDrop(now, ctx.correlationId);
+  const budget = reportBudget(classified);
+  if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS[budget], now)) {
+    noticeRateLimitedDrop(budget, now, ctx.correlationId);
     return { status: 204, body: null };
   }
   logClientReport(classified, ctx.correlationId);

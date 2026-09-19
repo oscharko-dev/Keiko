@@ -467,7 +467,8 @@ describe("fanOutClientDiagnostic binding evidence", () => {
         outcome: "target-missing",
         referenceShape: "redacted",
         heuristicExempt: false,
-        windowRef: "window-1",
+        windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        decidingLoadCount: 17,
         relatedCorrelationIds: ["ui_chat-list-load-0004", "not a safe id"],
       },
     });
@@ -479,9 +480,10 @@ describe("fanOutClientDiagnostic binding evidence", () => {
       outcome: "target-missing",
       referenceShape: "redacted",
       heuristicExempt: false,
-      windowRef: "window-1",
+      windowDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       correlationId: "ui_chat-list-load-0003",
       relatedCorrelationIds: ["ui_chat-list-load-0004"],
+      decidingLoadCount: 17,
     });
     expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 2 });
   });
@@ -516,14 +518,19 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
 
     fanOutClientDiagnostic("[keiko] stale session repair: replayed", {
       correlationId: "ui_denied-read-0001",
-      sessionRepairReport: { outcome: "replayed", repairCorrelationId: "ui_session-repair-0001" },
+      sessionRepairReport: {
+        outcome: "replay-failed",
+        repairCorrelationId: "ui_session-repair-0001",
+        errorKind: "unavailable",
+      },
     });
 
     expect(lastPostedBody(fetchMock)).toEqual({
       kind: "session-repair",
-      outcome: "replayed",
+      outcome: "replay-failed",
       correlationId: "ui_denied-read-0001",
       repairCorrelationId: "ui_session-repair-0001",
+      errorKind: "unavailable",
     });
     expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 1 });
   });

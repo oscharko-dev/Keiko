@@ -340,3 +340,29 @@ describe("repairLocalCodingAppSessionWithEvidence", () => {
     expect(second.correlationId).toBe(first.correlationId);
   });
 });
+
+// #3557 review: a failed repair carries the class of its own failed request.
+describe("repairLocalCodingAppSessionWithEvidence failure class", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    [
+      "an unavailable BFF",
+      (): Promise<Response> => Promise.resolve(new Response("{}", { status: 503 })),
+      "unavailable",
+    ],
+    [
+      "a transport failure",
+      (): Promise<Response> => Promise.reject(new TypeError("Failed to fetch")),
+      "unavailable",
+    ],
+  ] as const)("classifies %s", async (_label, respond, errorKind) => {
+    vi.stubGlobal("fetch", vi.fn(respond));
+
+    const repair = await repairLocalCodingAppSessionWithEvidence();
+
+    expect(repair).toMatchObject({ repaired: false, errorKind });
+  });
+});
