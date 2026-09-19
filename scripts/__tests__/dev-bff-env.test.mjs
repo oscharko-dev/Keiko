@@ -134,6 +134,8 @@ describe("applyProcessWideEvidenceEnv", () => {
         KEIKO_LOG_LEVEL: "silent",
         KEIKO_LOG_RETENTION_DAYS: "3",
         KEIKO_OPENAI_API_KEY: "sk-test",
+        KEIKO_LOG_TOKEN: "log-token-test",
+        KEIKO_LOG_API_KEY: "log-key-test",
         FIGMA_ACCESS_TOKEN: "figd-test",
         KEIKO_UI_DATA_DIR: "/repo/.keiko/dev/ui",
         KEIKO_LOG_SEGMENT_BYTES: undefined,

@@ -77,10 +77,21 @@ export function buildDevBffEnv({ repoRoot, processEnv, stateDir }) {
  * explicit `env`: `KEIKO_STATE_DIR` and the `KEIKO_LOG_*` settings. Never copy a credential, which
  * would leak into every child process the BFF spawns.
  */
+// A closed list, never a prefix: a `.env` key such as KEIKO_LOG_TOKEN would otherwise be copied
+// into every child process the BFF spawns (#3557 review).
+const PROCESS_WIDE_EVIDENCE_KEYS = [
+  "KEIKO_STATE_DIR",
+  "KEIKO_LOG_LEVEL",
+  "KEIKO_LOG_SEGMENT_BYTES",
+  "KEIKO_LOG_SEGMENT_SECONDS",
+  "KEIKO_LOG_RETENTION_BYTES",
+  "KEIKO_LOG_RETENTION_DAYS",
+  "KEIKO_LOG_PIN_QUOTA_BYTES",
+];
+
 export function applyProcessWideEvidenceEnv(env, target) {
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) continue;
-    if (key !== "KEIKO_STATE_DIR" && !key.startsWith("KEIKO_LOG_")) continue;
-    target[key] = value;
+  for (const key of PROCESS_WIDE_EVIDENCE_KEYS) {
+    const value = env[key];
+    if (value !== undefined) target[key] = value;
   }
 }
