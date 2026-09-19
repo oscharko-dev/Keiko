@@ -323,6 +323,53 @@ describe("logGitProcessOutcome", () => {
     ]);
   });
 
+  it("logs a bounded read that also failed on its own, not just a successful cap stop (#3557 P1)", () => {
+    // `truncated` and a REAL git failure can both be true on the same result: a `cat-file blob`
+    // that streams past the byte cap before `git` independently fails (a corrupt or unreadable
+    // object closing at exit 128, say). Before this fix, `isSuccessfulGitOutcome` read `truncated`
+    // plus `expectedTruncation` alone as success, so this exact shape produced NO line — the failed
+    // run was silently readable as a deliberate, complete prefix by whatever consumed the result
+    // (`gitChangeSnapshotReader.ts`'s `allowTruncation` caller, concretely). `exitCode: null` (the
+    // runner's own SIGTERM/SIGKILL cap kill) and `exitCode: 0` (the exit-0 race) are the only two
+    // shapes that stay silent — see the "stays silent" case above — and neither is this one.
+    const log = captureActivityLog();
+    const catFile = ["cat-file", "blob", "deadbeef"];
+
+    logGitProcessOutcome(
+      log.sink,
+      "corr-cap-failed-0001",
+      catFile,
+      result({ exitCode: 128, stderr: "fatal: unable to read blob object", truncated: true }),
+      2,
+      { expectedTruncation: true },
+    );
+
+    const event = onlyEvent(log.events);
+    expect(event).toMatchObject({
+      level: "warn",
+      category: "diagnostic",
+      op: "git.process.failed",
+      correlationId: "corr-cap-failed-0001",
+      errorKind: "unavailable",
+      extra: {
+        subcommand: "cat-file",
+        endedBy: "exit",
+        exitCode: 128,
+        truncated: true,
+        failureKind: "output-truncated",
+      },
+    });
+    const persisted = expectActivityLogProof(
+      "git.process.failed.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({
+      correlationId: "corr-cap-failed-0001",
+      errorKind: "unavailable",
+      failureKind: "output-truncated",
+    });
+  });
+
   it("reports a byte-cap truncation even though the run exited 0", () => {
     // Keiko's byte cap sets `truncated` and terminates the child INDEPENDENTLY of the exit status,
     // so a read cut off while git was already finishing closes with 0. A bare `exitCode === 0`
