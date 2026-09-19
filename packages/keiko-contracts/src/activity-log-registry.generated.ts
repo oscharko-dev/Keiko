@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c13661d927bdb2155465495894620e2411615a4217a0c126590d2cc36fb52c63" as const;
+  "4ae0529389cdb106b1a97c5278d0717028a77bc4fc1acd8d4c68d90f0bda9c4e" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1749,6 +1749,72 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "client.binding.candidates-offered",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientBindingCandidatesOffered",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat-window"],
+      },
+      referenceShape: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["uuid", "opaque", "redacted", "fingerprint", "user-selected"],
+      },
+      heuristicFlagged: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      bindingDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      relatedCorrelationIds: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+        maxItems: 63,
+      },
+      candidateCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-binding"],
+    proofIds: ["client.binding.candidates-offered.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "client.binding.resolved",
     category: "diagnostic",
     owner: "keiko-server",
@@ -1798,6 +1864,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 128,
         maxItems: 63,
+      },
+      targetFingerprint: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
       },
     },
     causal: "correlation",
@@ -28612,15 +28684,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "client-binding",
       requirementContract: "client-binding",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end", "failure"],
+      lifecycleTransitions: ["end", "failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: [],
+        state: ["client.binding.candidates-offered"],
         end: ["client.binding.resolved"],
         failure: ["client.binding.target-missing"],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "client.binding.candidates-offered",
+          mode: "correlation",
+        },
         {
           op: "client.binding.resolved",
           mode: "correlation",
@@ -28631,9 +28707,76 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: [],
-      resourceSignals: ["client.binding.resolved"],
+      resourceSignals: ["client.binding.candidates-offered", "client.binding.resolved"],
       replayReferences: [],
       operations: [
+        {
+          op: "client.binding.candidates-offered",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "bindingDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "candidateCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "decidingLoadCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "heuristicFlagged",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "referenceShape",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "relatedCorrelationIds",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "surface",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.binding.candidates-offered.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "client.binding.resolved",
           owner: "keiko-server",
@@ -28677,6 +28820,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "targetFingerprint",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
           ],
           evidenceClasses: [
@@ -58566,6 +58715,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "cli.uninstall.completed": "runtime-packages",
     "cli.uninstall.failed": "runtime-packages",
     "cli.uninstall.started": "runtime-packages",
+    "client.binding.candidates-offered": "client-diagnostics",
     "client.binding.resolved": "client-diagnostics",
     "client.binding.target-missing": "client-diagnostics",
     "client.diagnostic": "client-diagnostics",
