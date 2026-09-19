@@ -301,7 +301,11 @@ export async function admitCodingRuntimeIssue(
     stage = "context";
     const context = await buildAttachment(input.intake, input, resolution.binding);
     if (!context.ok) return refused(input, stage, context.failure);
-    return { ok: true, binding: resolution.binding, attachment: context.attachment };
+    return {
+      ok: true,
+      ...(input.request.issuePurpose === "context" ? {} : { binding: resolution.binding }),
+      attachment: context.attachment,
+    };
   } catch (error) {
     return refused(input, stage, "issue-unavailable", error);
   }

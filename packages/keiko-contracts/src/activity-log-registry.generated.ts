@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "bfe7ac8b3190fcd147349cbf5411f8d61fc40eb419b140892d3a9e3327b70236" as const;
+  "b8a85e7b4d5e8f7659a9d8f59684e2d8739da0bf7195a582729bd91623f24aaf" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4931,6 +4931,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      issuePurpose: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["context", "delivery"],
       },
     },
     causal: "correlation",
@@ -30863,6 +30869,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "issuePurpose",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "itemCount",
               type: "integer",
               dataClass: "count",
@@ -30881,7 +30893,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["completeness-state", "count", "loss-state", "opaque-id"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

@@ -126,7 +126,7 @@ describe("createStartMutation", () => {
     );
     await mutation.run();
     expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
-      expect.objectContaining(issue),
+      expect.objectContaining({ ...issue, issuePurpose: "context" }),
     );
   });
 

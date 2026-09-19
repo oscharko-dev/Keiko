@@ -698,6 +698,12 @@ const CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION = defineActivityLogOperati
     itemCount: { type: "integer", dataClass: "count", required: true },
     linkedIssueCount: { type: "integer", dataClass: "count", required: true },
     byteCount: { type: "integer", dataClass: "count", required: true },
+    issuePurpose: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["context", "delivery"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -706,6 +712,10 @@ const CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION = defineActivityLogOperati
   proofIds: ["coding-runtime.run.issue-context-attached.emitted-line"],
   releaseImpact: "patch",
 });
+
+function issuePurposeOf(request: CodingWorkbenchRuntimeStartRequest): "context" | "delivery" {
+  return request.issuePurpose ?? "delivery";
+}
 
 const CODING_RUNTIME_DESCRIPTION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -3016,6 +3026,7 @@ export class CodingRuntimeOrchestrator {
             itemCount: attachment.itemCount,
             linkedIssueCount: attachment.linkedIssueCount,
             byteCount: attachment.byteCount,
+            issuePurpose: issuePurposeOf(request),
           },
         ),
       );

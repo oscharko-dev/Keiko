@@ -4192,6 +4192,7 @@ describe("issue-bound runs (#3385)", () => {
         itemCount: 1,
         linkedIssueCount: 0,
         byteCount: 96,
+        issuePurpose: "delivery",
       },
     });
     if (attached === undefined) throw new Error("expected issue-context-attached line");

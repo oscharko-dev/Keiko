@@ -36,6 +36,16 @@ describe("Coding Workbench runtime API contracts", () => {
       value: accepted,
     });
     expect(
+      parseCodingWorkbenchRuntimeStartRequest({ ...accepted, issuePurpose: "context" }),
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({ ...start, issuePurpose: "context" }),
+    ).toMatchObject({
+      ok: false,
+    });
+    expect(
       parseCodingWorkbenchRuntimeStartRequest({
         ...start,
         expectedIssueBindingDigest: accepted.expectedIssueBindingDigest,

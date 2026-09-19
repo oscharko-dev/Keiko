@@ -120,8 +120,11 @@ invocation's own lifetime, so the tool always answers with its own closed refusa
 opaque expiry; a decision that outlives a single tool call leaves the run to report a truthful
 failure rather than a silent success.
 
-**An issue-bound run may not report a delivery it cannot evidence.** A run accepted for a GitHub
-issue is the product's delivery flow. It settles `succeeded` only when durable server-owned evidence
+**An issue-bound delivery run may not report a delivery it cannot evidence.** A GitHub issue linked
+in a Workbench prompt supplies validated, untrusted task context but does not itself request a
+commit, push, or pull request. The server still checks the preview digest and active repository,
+then attaches the issue text without persisting a delivery binding. An explicitly requested issue
+delivery run retains the binding and settles `succeeded` only when durable server-owned evidence
 says something was delivered — a successful verified-commit receipt, or a draft delivery record in a
 phase that means an artifact exists. The record of an ATTEMPT is not evidence: a commit proposal
 refused for want of verification, a push still awaiting approval, and a delivery in recovery all

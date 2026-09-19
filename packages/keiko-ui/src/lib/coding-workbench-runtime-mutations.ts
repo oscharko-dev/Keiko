@@ -63,6 +63,7 @@ function startRequest(
     ...request,
     issueRef: options.issue.issueRef,
     expectedIssueBindingDigest: options.issue.expectedIssueBindingDigest,
+    issuePurpose: "context" as const,
   };
 }
 
