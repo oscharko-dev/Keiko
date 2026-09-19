@@ -62,8 +62,11 @@ import type { ConversationId, ProjectId, WorkspaceId } from "@oscharko-dev/keiko
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
 const CHAT_MODEL = "example-chat-model";
+// A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
+const CHAT_MODEL_DIGEST = modelIdEvidence(CHAT_MODEL).modelIdDigest;
 const ALTERNATE_CHAT_MODEL = "alternate-chat-model";
 
 let tmp: string;
@@ -1420,7 +1423,7 @@ describe("desktop chat SSE streaming handler", () => {
         // a failed live check (#3557, the live dev log after a BFF restart).
         extra: expect.objectContaining({
           reason: "readiness",
-          modelId: CHAT_MODEL,
+          modelIdDigest: CHAT_MODEL_DIGEST,
           readinessObservation: "unobserved",
         }) as unknown,
       }),
@@ -1507,7 +1510,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
-          modelId: "example-chat-model",
+          modelIdDigest: CHAT_MODEL_DIGEST,
           completeness: "complete",
           loss: "none",
         },
@@ -1703,7 +1706,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
-          modelId: "example-chat-model",
+          modelIdDigest: CHAT_MODEL_DIGEST,
           completeness: "complete",
           loss: "none",
         },
@@ -1986,7 +1989,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
-          modelId: "example-chat-model",
+          modelIdDigest: CHAT_MODEL_DIGEST,
           completeness: "complete",
           loss: "none",
         },
