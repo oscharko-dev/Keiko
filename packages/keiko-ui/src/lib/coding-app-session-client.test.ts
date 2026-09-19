@@ -18,6 +18,7 @@ import {
   useCodingAppSessionRedemptions,
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 const attestation = {
   requestId: "req_launcher-1",
@@ -364,5 +365,28 @@ describe("repairLocalCodingAppSessionWithEvidence failure class", () => {
     const repair = await repairLocalCodingAppSessionWithEvidence();
 
     expect(repair).toMatchObject({ repaired: false, errorKind });
+  });
+});
+
+// A failed ensure is recorded, not swallowed: the class of the error, never its message.
+describe("ensureLocalCodingAppSession failure evidence", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetClientDiagnosticWriter();
+  });
+
+  it("reports a failed ensure request with its error class", async () => {
+    const reports: string[] = [];
+    setClientDiagnosticWriter((message) => {
+      reports.push(message);
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => Promise.reject(new TypeError("Failed to fetch: secret-host"))),
+    );
+
+    await expect(ensureLocalCodingAppSession()).resolves.toBe(false);
+
+    expect(reports).toEqual(["[keiko] local app session ensure failed: TypeError"]);
   });
 });

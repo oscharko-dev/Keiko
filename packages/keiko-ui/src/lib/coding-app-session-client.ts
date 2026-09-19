@@ -23,6 +23,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { newClientCorrelationId } from "./bff-correlation";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { bffFetchJson, bffRequestErrorKind } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
@@ -99,7 +101,9 @@ type LocalSessionOutcome =
   | { readonly repaired: true }
   | { readonly repaired: false; readonly errorKind: ActivityLogErrorKind };
 
-// The ensure request's outcome with the closed class of a failure, for the repair's evidence.
+// The ensure request's outcome with the closed class of a failure, for the repair's evidence. The
+// endpoint acknowledges whether or not it issued a cookie, so a thrown error is a real failure
+// (transport, 5xx), recorded under the ensure request's own correlation id rather than swallowed.
 async function localSessionOutcome(
   seams: CodingAppSessionPairingSeams | undefined,
 ): Promise<LocalSessionOutcome> {
@@ -108,6 +112,13 @@ async function localSessionOutcome(
     await seams.postLocalSession();
     return { repaired: true };
   } catch (error) {
+    // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+    reportClientDiagnostic(
+      `[keiko] local app session ensure failed: ${clientErrorSummary(error)}`,
+      {
+        correlationId: correlationIdOf(error),
+      },
+    );
     return { repaired: false, errorKind: bffRequestErrorKind(error) };
   }
 }
