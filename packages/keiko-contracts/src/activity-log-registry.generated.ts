@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b0beba861202b91ea932d09c48ebe0bf44bc3aa41d45e5fcfb2588dece723e7f" as const;
+  "c7c32d29ed9c2c4b175faddd6a8eddf665dbdc5c5560b4c49951cc0b72c23b88" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1748,7 +1748,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["uuid", "opaque", "redacted", "fingerprint", "sole-candidate"],
+        values: ["uuid", "opaque", "redacted", "fingerprint"],
       },
       heuristicFlagged: {
         type: "boolean",
@@ -1809,7 +1809,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["uuid", "opaque", "redacted", "fingerprint", "sole-candidate"],
+        values: ["uuid", "opaque", "redacted", "fingerprint"],
       },
       heuristicFlagged: {
         type: "boolean",
