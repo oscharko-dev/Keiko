@@ -845,6 +845,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
         },
       },
       expect.any(AbortSignal),
+      undefined,
     );
     expect(ungroundedSpy).not.toHaveBeenCalled();
     expect(view.result.current.sendStatus).toBe("completed");
@@ -990,6 +991,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
         }),
       }),
       expect.any(AbortSignal),
+      undefined,
     );
     expect(fetchChatMessagesSpy).toHaveBeenLastCalledWith(groundedChat.id, canonicalChatPath);
     expect(fetchChatsSpy).toHaveBeenLastCalledWith(canonicalChatPath);

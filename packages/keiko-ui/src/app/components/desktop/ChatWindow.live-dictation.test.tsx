@@ -244,9 +244,12 @@ function renderWindow(session: ChatSessionApi = makeSession()): void {
 function latestDictationOptions(): { readonly realtime?: { readonly enabled: boolean } } {
   // Digital Twin also owns a dictation hook now. Select the Composer's hook by its realtime
   // configuration rather than whichever hook happened to render last.
-  const latest = dictationMock.options.findLast(
-    (options) => typeof options === "object" && options !== null && "realtime" in options,
-  );
+  let latest: unknown;
+  for (const options of dictationMock.options) {
+    if (typeof options === "object" && options !== null && "realtime" in options) {
+      latest = options;
+    }
+  }
   expect(latest).toBeDefined();
   return latest as { readonly realtime?: { readonly enabled: boolean } };
 }

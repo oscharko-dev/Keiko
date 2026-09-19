@@ -289,7 +289,7 @@ function VoiceEligibilityBadge({
     const issueLabel = t(issue);
     return (
       <output
-        className={`ml-elig ${styles.voiceSetupBadge}`}
+        className={`ml-elig ${styles.cmpVoiceSetupBadge}`}
         data-testid="voice-elig-setup"
         title={issueLabel}
       >

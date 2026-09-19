@@ -2811,7 +2811,7 @@ function BatchVoiceStatus({
   const error = dialogue.error ?? dialogue.dictation.error?.message;
   return (
     <>
-      <p className={styles.batchModeLabel}>{t("chat.voice.batchMode")}</p>
+      <p className={styles.cmpBatchModeLabel}>{t("chat.voice.batchMode")}</p>
       {error !== undefined ? (
         <div role="alert" className="cmp-voice-memory-error">
           {error}
@@ -2820,7 +2820,7 @@ function BatchVoiceStatus({
           </button>
           {dialogue.failedTranscript !== undefined ? (
             <>
-              <p className={styles.batchFailedTranscript}>{dialogue.failedTranscript}</p>
+              <p className={styles.cmpBatchFailedTranscript}>{dialogue.failedTranscript}</p>
               <button type="button" onClick={onUseFailedTranscript}>
                 {t("chat.voice.batchUseText")}
               </button>

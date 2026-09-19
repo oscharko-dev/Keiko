@@ -81,7 +81,7 @@ describe("API BFF boundary helpers", () => {
   });
 
   it("keeps a caller-supplied voice turn correlation on both chat transports", async () => {
-    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(okBody())));
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(okBody())));
     vi.stubGlobal("fetch", fetchMock);
     const correlationId = "voice-chat-request-0001";
 
@@ -96,8 +96,9 @@ describe("API BFF boundary helpers", () => {
       correlationId,
     );
 
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [, init] of fetchMock.mock.calls) {
-      expect(init.headers).toMatchObject({ "X-Keiko-Correlation-Id": correlationId });
+      expect(init?.headers).toMatchObject({ "X-Keiko-Correlation-Id": correlationId });
     }
   });
 

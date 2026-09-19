@@ -2,14 +2,14 @@
   min-width: 0;
 }
 
-.batchModeLabel {
+.cmpBatchModeLabel {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.4;
   text-align: center;
 }
 
-.batchFailedTranscript {
+.cmpBatchFailedTranscript {
   max-height: 7rem;
   overflow: auto;
   overflow-wrap: anywhere;

@@ -898,9 +898,10 @@ interface SendAttemptRequest {
 
 interface GroundedSendRequest extends Pick<
   SendAttemptRequest,
-  "chat" | "content" | "optimisticId" | "modelId" | "signal" | "clientTurnId" | "correlationId"
+  "chat" | "content" | "optimisticId" | "modelId" | "signal" | "clientTurnId"
 > {
   readonly memory: ConversationMemoryRequestWire;
+  readonly correlationId: SendAttemptRequest["correlationId"];
 }
 
 interface SendAttemptExecution {
