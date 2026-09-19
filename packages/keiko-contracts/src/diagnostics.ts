@@ -640,12 +640,15 @@ export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 
 // `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
 // `opaque`: any other opaque reference; `fingerprint`: persisted as the redaction marker plus the
-// id's one-way fingerprint, through which the window found its chat again.
+// id's one-way fingerprint, through which the window found its chat again; `user-selected`:
+// persisted as the redaction marker without a fingerprint, and bound to the chat the person chose
+// among the ones it may have shown.
 export const CLIENT_BINDING_REFERENCE_SHAPES = [
   "uuid",
   "opaque",
   "redacted",
   "fingerprint",
+  "user-selected",
 ] as const;
 export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPES)[number];
 
@@ -693,12 +696,13 @@ function isOneOf<T extends string>(value: unknown, values: readonly T[]): value 
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }
 
-// Only a server-issued UUID (raw, or found again through its fingerprint) can be flagged by the
-// heuristic, and a redaction marker can never have resolved to a live target; every other
-// impossible combination is refused as well.
+// Only a server-issued UUID (raw, found again through its fingerprint, or chosen by the person) can
+// be flagged by the heuristic, and a redaction marker can never have resolved to a live target;
+// every other impossible combination is refused as well.
 const HEURISTIC_FLAGGABLE_REFERENCE_SHAPES: ReadonlySet<ClientBindingReferenceShape> = new Set([
   "uuid",
   "fingerprint",
+  "user-selected",
 ]);
 
 function hasConsistentBindingReference(value: Record<string, unknown>): boolean {

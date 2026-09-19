@@ -364,6 +364,31 @@ describe("client diagnostics loss evidence", () => {
     });
   });
 
+  // #3557 review: a window whose redacted id carries no fingerprint, bound to the chat the person
+  // chose, under the chat list load that offered it.
+  it("persists a binding the person chose as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-5",
+      outcome: "resolved",
+      referenceShape: "user-selected",
+      heuristicFlagged: true,
+      correlationId: "ui_list-choice-0001",
+      decidingLoadCount: 1,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    expect(expectActivityLogProof("client.binding.resolved.line", line ?? "")).toMatchObject({
+      correlationId: "ui_list-choice-0001",
+      referenceShape: "user-selected",
+      heuristicFlagged: true,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
   it("persists a failed session repair as client.session-repair.failed", async () => {
     const body = JSON.stringify({
       kind: "session-repair",

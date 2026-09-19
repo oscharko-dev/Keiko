@@ -494,6 +494,19 @@ describe("isClientBindingIngestRequest", () => {
     ).toBe(true);
   });
 
+  // #3557 review: a window whose redacted id carries no fingerprint binds only to the chat the
+  // person chose; that chat's id was flagged.
+  it("accepts a resolved, flagged binding the person chose", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a heuristic flag only for a server-issued UUID", () => {
     expect(
       isClientBindingIngestRequest({
