@@ -1,3 +1,4 @@
+import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -2419,6 +2420,7 @@ export class CodingRuntimeOrchestrator {
     const current = this.current();
     if (current?.runId !== runId) return;
     if (await this.continueForDelivery(current, outcome)) return;
+    this.captureHistory(runId);
     const stopped = await this.stopForSettlement(runId, outcome);
     const live = this.current();
     if (live?.runId !== runId) return;
@@ -2787,6 +2789,10 @@ export class CodingRuntimeOrchestrator {
     }
   }
 
+  public getHistory(): CodingRuntimeHistory | undefined {
+    return this.deps.history;
+  }
+
   private async startFresh(
     input: unknown,
     predecessorRunId?: string,
@@ -2797,14 +2803,14 @@ export class CodingRuntimeOrchestrator {
       return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
-    const active = this.activeWorkspaceOrUndefined();
-    const principal = this.deps.serverPrincipal();
-    if (!active || !principal) return this.fail("authority-resolution-failed");
+    const scope = this.historyStartScope(parsed.value);
+    if (scope === undefined) return this.fail("authority-resolution-failed");
+    const { active, principal, request } = scope;
     const runId = this.newRunId();
-    const issue = await this.admitIssue(parsed.value, active, runId, predecessorRunId);
+    const issue = await this.admitIssue(request, active, runId, predecessorRunId);
     if (!issue.ok) return { ...issue, runId };
     const resolved = await this.resolveLaunch(
-      parsed.value,
+      request,
       active,
       principal,
       runId,
@@ -2814,7 +2820,7 @@ export class CodingRuntimeOrchestrator {
     if (!resolved.ok) return { ok: false, failureCode: resolved.failureCode, runId };
     const launch = resolved.launch;
     const initialSnapshot = this.buildStartSnapshot(
-      parsed.value,
+      request,
       active,
       principal,
       runId,
@@ -2832,9 +2838,56 @@ export class CodingRuntimeOrchestrator {
     recordRuntimeRunStarted(activityLog, snapshot, launch.effectiveMode, selection.reason);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
-    const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
+    if (!this.beginHistory(request, active, runId))
+      return this.transitionActive("failed", "runtime-failed");
+    const started = await this.startManagedRuntime(request, active, runId, launch);
     if (started !== undefined) return started;
-    return this.runInitialTurn(parsed.value, active, runId, issue.attachment);
+    return this.runInitialTurn(request, active, runId, issue.attachment);
+  }
+
+  private captureHistory(runId: string): void {
+    this.deps.history?.capture(runId, this.deps.safeActivityProjection?.currentContent());
+  }
+
+  private beginHistory(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+  ): boolean {
+    try {
+      this.deps.history?.begin(request, active, runId);
+      return true;
+    } catch {
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
+      return false;
+    }
+  }
+
+  private historyStartScope(request: CodingWorkbenchRuntimeStartRequest):
+    | {
+        readonly active: ActiveWorkspaceView;
+        readonly principal: string;
+        readonly request: CodingWorkbenchRuntimeStartRequest;
+      }
+    | undefined {
+    const active = this.activeWorkspaceOrUndefined();
+    const principal = this.deps.serverPrincipal();
+    if (!active || !principal) return undefined;
+    if (request.conversationId === undefined) return { active, principal, request };
+    if (!this.deps.history?.admits(request.conversationId, active)) return undefined;
+    const priorId = this.deps.history.previousRunId(request.conversationId);
+    const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
+    if (prior === undefined) return undefined;
+    const issue = prior.issueBinding;
+    const continued =
+      issue === undefined
+        ? request
+        : {
+            ...request,
+            issueRef: `#${String(issue.issueNumber)}`,
+            expectedIssueBindingDigest: issue.bindingDigest,
+          };
+    return { active, principal, request: continued };
   }
 
   private selectStartPredecessor(
@@ -2999,7 +3052,11 @@ export class CodingRuntimeOrchestrator {
     const issueContext =
       attachment === undefined ? undefined : renderInitialTurnContext(attachment);
     const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
-    return composeCodingRuntimeInitialContext([issueContext, memoryContext]);
+    return composeCodingRuntimeInitialContext([
+      issueContext,
+      memoryContext,
+      this.deps.history?.initialContext(runId),
+    ]);
   }
 
   private async projectMemoryInitialContext(
@@ -3174,6 +3231,7 @@ export class CodingRuntimeOrchestrator {
     if (!this.isEndRequestConsistent(parsed, runId, current)) return this.fail("invalid-intent");
     if (!current) return this.stopSettledRun(kind, runId);
     if (current.state === "recovery-required") return this.fail("recovery-required");
+    this.captureHistory(runId);
     this.deps.safeActivityProjection?.purge(runId, kind === "stop" ? "stop" : "takeover");
     const stopping = this.createEndStoppingTransition(kind, current);
     if (!stopping.ok) return stopping;
@@ -3373,7 +3431,9 @@ export class CodingRuntimeOrchestrator {
   private publicSnapshotWithDescription(
     snapshot: CodingRuntimeSnapshot | undefined,
   ): PublicSnapshot {
-    const base = this.projection.publicSnapshot(snapshot);
+    const projected = this.projection.publicSnapshot(snapshot);
+    const history = snapshot === undefined ? undefined : this.deps.history?.forRun(snapshot.runId);
+    const base = history === undefined ? projected : { ...projected, conversationId: history.id };
     const persisted =
       snapshot === undefined ? undefined : this.description?.jobs.current(snapshot.runId);
     const status =

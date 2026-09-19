@@ -1,5 +1,8 @@
 "use client";
 
+import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
+import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSession";
+import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import {
   CodingWorkbenchDeliveryReview,
   approvalHelpKey,
@@ -630,16 +633,66 @@ function useRunChannels(run: WorkbenchRunValue): WorkbenchRunChannels {
   return { research, skills };
 }
 
+function historyRuntimeState(
+  state: CodingWorkbenchRuntimeState,
+  history: CodingTaskSession,
+): CodingWorkbenchRuntimeState {
+  const canStart = state.canStart && !history.pending && !history.error;
+  if (history.visibleRun) return { ...state, canStart };
+  return {
+    ...state,
+    run: { ...state.run, value: null },
+    stream: { status: "idle", value: null, error: null },
+    events: [],
+    canRetry: false,
+    canStart,
+  };
+}
+
+function welcomeEligible(
+  history: CodingTaskSession,
+  state: CodingWorkbenchRuntimeState,
+  content: Readonly<Record<"activity" | "questions" | "review" | "research", boolean>>,
+): boolean {
+  return (
+    history.detail === null &&
+    welcomeEligibleState(state.run.value?.state) &&
+    state.run.value?.verifiedCommitResult === undefined &&
+    state.run.value?.draftDelivery === undefined &&
+    state.events.length === 0 &&
+    !Object.values(content).some(Boolean)
+  );
+}
+
 export function CodingWorkbenchWindow({
   selectedRoot,
   onOpenGit = noopOpenGit,
+  historySelection,
+  onHistorySelectionHandled,
+  onOpenHistory = (): void => undefined,
 }: {
   readonly selectedRoot?: string | undefined;
+  readonly historySelection?: string | undefined;
+  readonly onHistorySelectionHandled?: (() => void) | undefined;
+  readonly onOpenHistory?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
 }): ReactNode {
-  const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
+  const workspaceContext = useOptionalActiveWorkspace();
+  const activeWorkspace = workspaceContext ?? EMPTY_WORKSPACE;
   const chatCatalog = useOptionalChatSessionCatalog();
-  const { state, actions } = useCodingWorkbenchRuntime({ workspace: activeWorkspace });
+  const { state: runtimeState, actions } = useCodingWorkbenchRuntime({
+    workspace: activeWorkspace,
+  });
+  const history = useCodingTaskSession({
+    snapshot: runtimeState.run.value,
+    active: activeRunState(runtimeState.run.value?.state),
+    workspace: workspaceContext,
+    root: selectedRoot,
+    selection: historySelection,
+    onSelectionHandled: onHistorySelectionHandled,
+  });
+  const state = historyRuntimeState(runtimeState, history);
+
   const codingModels = useMemo(
     () => chatCatalog?.models.filter(isCodingWorkbenchModel) ?? [],
     [chatCatalog?.models],
@@ -681,6 +734,8 @@ export function CodingWorkbenchWindow({
   };
   return (
     <WorkbenchContent
+      history={history}
+      onOpenHistory={onOpenHistory}
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
@@ -727,6 +782,8 @@ function useCodingModelSelection(
 }
 
 interface WorkbenchContentProps {
+  readonly history: CodingTaskSession;
+  readonly onOpenHistory: () => void;
   readonly state: CodingWorkbenchRuntimeState;
   readonly actions: CodingWorkbenchRuntimeActions;
   readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
@@ -824,9 +881,21 @@ function WorkbenchContent({
           pauseReason={state.run.value?.pauseReason}
         />
       </header>
-      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      <p
+        className="sr-only"
+        role="status"
+        data-testid="coding-runtime-announcement"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
+      <CodingTaskSessionBar
+        session={columns.history}
+        active={runIsActive}
+        onHistory={columns.onOpenHistory}
+        workspacePath={activeWorkspace.activeBinding?.activeRoot ?? null}
+      />
       <div className={styles.body}>
         <WorkbenchAlert message={alert} />
         <WorkbenchColumns {...columns} />
@@ -850,6 +919,7 @@ function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => vo
 }
 
 function WorkbenchColumns({
+  history,
   state,
   actions,
   activeWorkspace,
@@ -1008,7 +1078,7 @@ function WorkbenchColumns({
           // Capture the workspace identity the Start is submitted against BEFORE the request goes
           // out: the run id only arrives with the response, by which time the pointer may have moved.
           runWorkspace.captureSubmission();
-          const projectMemory = { projectMemoryEnabled };
+          const projectMemory = { projectMemoryEnabled, conversationId: history.conversationId };
           if (acceptedIssue === null) void actions.start(taskIntent.trim(), projectMemory);
           else
             void actions.start(taskIntent.trim(), {
@@ -1033,11 +1103,14 @@ function WorkbenchColumns({
       startBlockedReason={startBlocker}
       repositoryLabel={repositoryLabel(repositoryRoot)}
       branchLabel={
-        runIsActive
-          ? (runWorkspace.bound?.taskBranch ?? activeWorkspace.activeInstance?.taskBranch ?? null)
+        runIsActive || history.detail !== null
+          ? (history.detail?.task.branch ??
+            runWorkspace.bound?.taskBranch ??
+            activeWorkspace.activeInstance?.taskBranch ??
+            null)
           : repositoryBranch.currentBranch
       }
-      branchContext={runIsActive ? "task" : "repository"}
+      branchContext={runIsActive || history.detail !== null ? "task" : "repository"}
       onOpenGit={() =>
         onOpenGit({
           root: repositoryRoot,
@@ -1087,15 +1160,12 @@ function WorkbenchColumns({
       </div>
     );
   }
-  const showWelcome =
-    welcomeEligibleState(state.run.value?.state) &&
-    state.run.value?.verifiedCommitResult === undefined &&
-    state.run.value?.draftDelivery === undefined &&
-    state.events.length === 0 &&
-    activity.feed === null &&
-    questions.questions.length === 0 &&
-    editorBridge.pendingReview === null &&
-    research.grant === null;
+  const showWelcome = welcomeEligible(history, state, {
+    activity: activity.feed !== null,
+    questions: questions.questions.length > 0,
+    review: editorBridge.pendingReview !== null,
+    research: research.grant !== null,
+  });
   return (
     <div className={styles.session}>
       {showWelcome ? (
@@ -1110,6 +1180,12 @@ function WorkbenchColumns({
           // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
           tabIndex={0}
         >
+          <CodingTaskTranscript
+            session={history}
+            liveRunId={
+              activity.feed?.availability === "available" ? state.run.value?.runId : undefined
+            }
+          />
           <PermissionPrompt state={state} research={research} onDecision={onDecision} />
           <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
           <CodingWorkbenchDraftDelivery
@@ -1176,6 +1252,12 @@ function WorkbenchColumns({
         </div>
       )}
       <div className={styles.composerDock}>
+        <CodingWorkbenchProgress
+          state={state.run.value?.state}
+          review={editorBridge.pendingReview !== null}
+          questions={questions.questions.length}
+          starting={state.mutation.kind === "start" && state.mutation.status === "pending"}
+        />
         <div className={styles.composerContext}>
           <CodingWorkbenchIssueChip
             accepted={acceptedIssue}

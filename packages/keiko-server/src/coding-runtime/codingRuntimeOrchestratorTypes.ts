@@ -1,3 +1,4 @@
+import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import type {
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
@@ -73,6 +74,7 @@ export interface CodingRuntimeApprovalAuthority {
 }
 
 export interface CodingRuntimeOrchestratorDeps {
+  readonly history?: CodingRuntimeHistory | undefined;
   readonly manager: CodingRuntimeManager;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly deploymentCeiling?: CodingWorkbenchRuntimeStartRequest["requestedMode"] | undefined;

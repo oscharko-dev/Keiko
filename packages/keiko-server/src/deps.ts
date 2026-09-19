@@ -4429,6 +4429,7 @@ function buildUiCodingRuntimeControlPlane(
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
   const projectMemory = createUiCodingRuntimeProjectMemory(args, memoryVault);
   return createCodingRuntimeControlPlane({
+    historyStore: args.bundle.uiStore,
     issueIntake: createProductionCodingRuntimeIssueIntake({
       store: args.bundle.uiStore,
       env: args.options.env,

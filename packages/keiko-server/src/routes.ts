@@ -1,3 +1,4 @@
+import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
 // BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
 // (method + pattern) is static and dependency-free; each entry names a handler that receives the
 // request context AND the per-server handler dependencies (resolved config, evidence store, run
@@ -1607,6 +1608,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // patterns as unmatched.
   // Productive coding-runtime actions flow only through the singleton server aggregate below.
   ...CODING_RUNTIME_ROUTE_GROUP,
+  ...CODING_HISTORY_ROUTES,
   // ADR-0141 (#2477): the authenticated local app-session channel — a distinct authenticated
   // fetch/snapshot + stream surface. It does not widen the permanently content-free runtime SSE
   // union above; content-bearing reads fail closed to a content-free projection without a session.

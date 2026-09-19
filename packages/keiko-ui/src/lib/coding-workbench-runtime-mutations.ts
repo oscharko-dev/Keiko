@@ -52,6 +52,7 @@ function startRequest(
   const request = {
     requestId: id,
     taskIntent,
+    ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
     requestedMode: current.requestedMode,
     runtimePreference: current.runtimePreference,
     projectMemory: { enabled: options.projectMemoryEnabled },

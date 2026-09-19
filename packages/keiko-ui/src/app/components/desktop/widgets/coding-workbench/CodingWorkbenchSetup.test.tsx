@@ -28,9 +28,29 @@ const setActiveMock = vi.hoisted(() => vi.fn());
 const listMock = vi.hoisted(() => vi.fn());
 const repairMock = vi.hoisted(() => vi.fn());
 const baseBranchMock = vi.hoisted(() => vi.fn());
+const branchRead = vi.hoisted(() => ({ loading: false, error: null as string | null }));
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
+}));
+
+vi.mock("../../hooks/useRepositoryBranchState", () => ({
+  useRepositoryBranchState: (): unknown => ({
+    branches: [
+      "main",
+      "master",
+      "dev",
+      "trunk",
+      "release/1",
+      "release/1.0",
+      "release/2",
+      "feature/typed",
+      "main-next",
+    ].map((name) => ({ name, current: name === "main" })),
+    currentBranch: "main",
+    ...branchRead,
+    refresh: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/task-workspace-api", () => ({
@@ -249,10 +269,22 @@ describe("CodingWorkbenchSetup", () => {
     repairMock.mockReset();
     baseBranchMock.mockReset();
     baseBranchMock.mockResolvedValue(null);
+    branchRead.loading = false;
+    branchRead.error = null;
   });
 
   afterEach(() => {
     resetClientDiagnosticWriter();
+  });
+
+  it.each(["loading", "failed"])("does not bind while branch inventory is %s", async (state) => {
+    branchRead.loading = state === "loading";
+    branchRead.error = state === "failed" ? "Branch lookup failed" : null;
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await flushBindSequence();
+    expect(bindButton()).toBeDisabled();
+    await userEvent.setup().type(screen.getByLabelText("Repository path"), "{Enter}");
+    expect(provisionMock).not.toHaveBeenCalled();
   });
 
   it("renders the setup section while the runtime is available and no binding is active", async () => {
@@ -325,8 +357,7 @@ describe("CodingWorkbenchSetup", () => {
     renderWorkbench(api);
 
     await user.type(screen.getByLabelText("Repository path"), "/repos/keiko-checkout");
-    await user.clear(screen.getByLabelText("Target branch"));
-    await user.type(screen.getByLabelText("Target branch"), "dev");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "dev");
     await user.click(screen.getByRole("button", { name: "Bind workspace" }));
 
     await waitFor(() => {
@@ -466,6 +497,33 @@ describe("CodingWorkbenchSetup", () => {
     );
     expect(alert).not.toHaveTextContent("WORKSPACE_ROOT_INVALID");
     expect(setActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("binds a separate task when another installation already owns the default task branch", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockRejectedValueOnce(
+      Object.assign(new Error("Existing task branch"), {
+        code: "BRANCH_CONFLICT",
+        failureClass: "blocked",
+      }),
+    );
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-new" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-new", "healthy"));
+    renderWorkbench(api, liveState(), "/repos/selected");
+    await user.click(await bindable());
+    await waitFor(() => expect(api.refresh).toHaveBeenCalledOnce());
+    expect(provisionMock).toHaveBeenCalledTimes(2);
+    expect(provisionMock.mock.calls[1]?.[0]).toEqual({
+      root: "/repos/selected",
+      baseBranch: "main",
+      taskId: expect.stringMatching(/^coding-workbench-main-[a-f0-9-]+$/u),
+      requestedBy: "studio-operator",
+    });
+    expect(setActiveMock).toHaveBeenCalledWith({
+      workspaceId: "ws-new",
+      requestedBy: "studio-operator",
+    });
   });
 
   it("explains a blocked task-branch conflict without exposing server detail", async () => {
@@ -641,7 +699,7 @@ describe("CodingWorkbenchSetup", () => {
   });
 
   // …but a branch the operator typed wins over every default, a new bound base included.
-  it("keeps a typed branch when the bound base branch changes", async () => {
+  it("keeps a selected branch when the bound base branch changes", async () => {
     const user = userEvent.setup();
     const view = renderWorkbench(
       boundWorkspaceApi("/repos/target", "master"),
@@ -649,8 +707,7 @@ describe("CodingWorkbenchSetup", () => {
       "/srv/keiko",
     );
     await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
-    await user.clear(screen.getByLabelText("Target branch"));
-    await user.type(screen.getByLabelText("Target branch"), "feature/typed");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "feature/typed");
 
     view.rerender(
       <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "release/2")}>
@@ -682,7 +739,7 @@ describe("CodingWorkbenchSetup", () => {
     expect(baseBranchMock).toHaveBeenCalledWith("/repos/other");
   });
 
-  // A branch typed for one repository is not a choice for the next: a new workbench-wide selection
+  // A branch selected for one repository is not a choice for the next: a new workbench-wide selection
   // re-arms the default the way the path field follows it (review of ec04288dc).
   it("re-arms the branch default when the selected repository changes", async () => {
     const user = userEvent.setup();
@@ -692,8 +749,7 @@ describe("CodingWorkbenchSetup", () => {
     await waitFor(() => {
       expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
     });
-    await user.clear(screen.getByLabelText("Target branch"));
-    await user.type(screen.getByLabelText("Target branch"), "release/1.0");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "release/1.0");
     baseBranchMock.mockResolvedValue("trunk");
 
     view.rerender(
@@ -710,9 +766,9 @@ describe("CodingWorkbenchSetup", () => {
 
   // …but "the next repository" is the one in the PATH FIELD, not the workbench-wide selection. A
   // typed path does not follow the switcher, so re-arming on the selection alone re-read the
-  // branch of a repository that was not being bound and overwrote the branch typed for the one
+  // branch of a repository that was not being bound and overwrote the branch selected for the one
   // that was: Bind then provisioned /repos/A with /repos/B's checked-out branch (#3381 review).
-  it("keeps a typed path and its typed branch when the workbench selection changes", async () => {
+  it("keeps a typed path and its selected branch when the workbench selection changes", async () => {
     const user = userEvent.setup();
     baseBranchMock.mockResolvedValue("dev");
     const api = workspaceApi();
@@ -723,8 +779,7 @@ describe("CodingWorkbenchSetup", () => {
 
     await user.clear(screen.getByLabelText("Repository path"));
     await user.type(screen.getByLabelText("Repository path"), "/repos/A");
-    await user.clear(screen.getByLabelText("Target branch"));
-    await user.type(screen.getByLabelText("Target branch"), "release/1");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "release/1");
     baseBranchMock.mockResolvedValue("trunk");
 
     view.rerender(
@@ -782,8 +837,7 @@ describe("CodingWorkbenchSetup", () => {
     );
     renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
 
-    await user.clear(screen.getByLabelText("Target branch"));
-    await user.type(screen.getByLabelText("Target branch"), "release/1.0");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "release/1.0");
     resolveLookup("dev");
 
     await waitFor(() => {
@@ -912,7 +966,7 @@ describe("CodingWorkbenchSetup", () => {
 
   // A branch the operator typed is their choice for whatever path they bind, so it never waits for
   // a lookup — the gate above must not turn into "the operator cannot bind what they chose".
-  it("binds an operator-typed branch immediately after the path changes", async () => {
+  it("binds an operator-selected branch immediately after the path changes", async () => {
     const user = userEvent.setup();
     baseBranchMock.mockResolvedValue("main");
     provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
@@ -921,8 +975,7 @@ describe("CodingWorkbenchSetup", () => {
     renderWorkbench(workspaceApi(), liveState(), "/repos/first");
     await bindable();
 
-    await user.clear(screen.getByLabelText("Target branch"));
-    await user.type(screen.getByLabelText("Target branch"), "release/1.0");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "release/1.0");
     await user.clear(screen.getByLabelText("Repository path"));
     await user.type(screen.getByLabelText("Repository path"), "/repos/second{Enter}");
 
@@ -1030,7 +1083,7 @@ describe("CodingWorkbenchSetup", () => {
     await user.click(screen.getByRole("button", { name: "Bind workspace" }));
     expect(await screen.findByRole("button", { name: "Repair and bind" })).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("Target branch"), "-next");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "main-next");
 
     expect(screen.getByLabelText("Target branch")).toHaveValue("main-next");
     expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();

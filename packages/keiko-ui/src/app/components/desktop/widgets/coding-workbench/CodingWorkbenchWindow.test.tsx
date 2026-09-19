@@ -85,6 +85,20 @@ vi.mock("@/lib/api", async (importOriginal) => {
   };
 });
 
+// Task selection/persistence is exercised at its owning hook in useCodingTaskSession.test.tsx.
+// These regression pins continue to exercise the existing runtime controls for the selected run.
+vi.mock("./useCodingTaskSession", () => ({
+  useCodingTaskSession: (): unknown => ({
+    detail: null,
+    conversationId: undefined,
+    visibleRun: true,
+    pending: false,
+    error: false,
+    newTask: vi.fn(),
+    finish: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
 }));
@@ -131,7 +145,7 @@ vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../context/ChatSessionContext")>();
   return {
     ...actual,
-    useOptionalChatSessionCatalog: () => ({
+    useOptionalChatSessionCatalog: (): unknown => ({
       activeProject: chatCatalogMock.activeProject,
       projects: chatCatalogMock.projects,
       models: [],
@@ -1026,7 +1040,9 @@ describe("CodingWorkbenchWindow", () => {
     expect(
       screen.queryByText(/Browser window not paired|keiko start --open/u),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      "Not ready to start",
+    );
     expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -1077,7 +1093,9 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      "Not ready to start",
+    );
     openWorkbenchInformation();
     expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
   });
@@ -1107,7 +1125,7 @@ describe("CodingWorkbenchWindow", () => {
     it("never renders the plain Ready to start label over an evaluation runtime", (): void => {
       renderWorkbench(evaluationState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByRole("status")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
@@ -1116,7 +1134,7 @@ describe("CodingWorkbenchWindow", () => {
       renderWorkbench(evaluationState());
 
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
-      expect(screen.getByRole("status")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
@@ -1129,7 +1147,7 @@ describe("CodingWorkbenchWindow", () => {
       expect(
         screen.getByText("Unverified evaluation runtime — no platform signature"),
       ).toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
@@ -1151,7 +1169,7 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps a platform-qualified runtime rendering exactly as before", (): void => {
       renderWorkbench(liveState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByRole("status")).toHaveTextContent("Runtime ready");
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent("Runtime ready");
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
       openWorkbenchInformation();
       expect(
@@ -1413,7 +1431,9 @@ describe("CodingWorkbenchWindow", () => {
         },
       }),
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Workspace unavailable");
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      "Workspace unavailable",
+    );
     openWorkbenchInformation();
     expect(screen.getByText("task-1 · issue/2257 · drifted")).toBeInTheDocument();
   });

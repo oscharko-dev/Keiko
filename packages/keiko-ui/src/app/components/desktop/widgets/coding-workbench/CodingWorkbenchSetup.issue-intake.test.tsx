@@ -28,6 +28,7 @@ import {
 import { codingWorkbenchIssueTaskId } from "./CodingWorkbenchSetup";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 
+const historyTaskMock = vi.hoisted(() => vi.fn());
 const runtimeHookMock = vi.hoisted(() => vi.fn());
 const provisionMock = vi.hoisted(() => vi.fn());
 const reconcileMock = vi.hoisted(() => vi.fn());
@@ -37,6 +38,12 @@ const repairMock = vi.hoisted(() => vi.fn());
 const baseBranchMock = vi.hoisted(() => vi.fn());
 const previewMock = vi.hoisted(() => vi.fn());
 const githubGrantMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/coding-history-api", () => ({
+  CODING_HISTORY_CHANGED: "keiko:coding-history-changed",
+  fetchCodingTask: historyTaskMock,
+  updateCodingTask: vi.fn(),
+}));
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -527,6 +534,23 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
     expect(view.runtimeActions.start).toHaveBeenCalledTimes(1);
 
     const binding = previewResponse().binding;
+    historyTaskMock.mockResolvedValue({
+      task: {
+        id: "history-42",
+        title: "Implement issue",
+        projectPath: REPOSITORY_PATH,
+        workspaceId: bound.activeInstance?.workspaceId,
+        taskId: codingWorkbenchIssueTaskId(42),
+        branch: "keiko/task/issue-42",
+        modelId: "coding",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        latestRunId: "run-42",
+      },
+      messages: [],
+      truncated: false,
+    });
     const terminalState: CodingWorkbenchRuntimeState = {
       ...liveState(),
       run: {
@@ -538,6 +562,7 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
           revision: 2,
           updatedAt: "2026-09-06T16:00:00.000Z",
           runId: "run-42",
+          conversationId: "history-42",
           issueBinding: {
             ...binding,
             schemaVersion: "1",

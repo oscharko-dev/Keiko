@@ -126,6 +126,8 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
   readonly taskIntent: string;
+  /** Durable conversation identity; never grants execution authority. */
+  readonly conversationId?: string | undefined;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
@@ -314,6 +316,7 @@ export interface CodingWorkbenchRuntimeSnapshot {
    * still uses #3399's existing PR preview, policy and one-use approval.
    */
   readonly descriptionStatus?: WorkbenchDescriptionStatus | undefined;
+  readonly conversationId?: string | undefined;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -436,6 +439,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
     [
       "requestId",
       "taskIntent",
+      "conversationId",
       "requestedMode",
       "runtimePreference",
       "modelId",
@@ -448,6 +452,8 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   );
   validateRequestId(value.requestId, errors);
   validateTaskIntent(value.taskIntent, errors);
+  if (value.conversationId !== undefined)
+    validateSafeId(value.conversationId, "conversationId", errors, 128);
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
     errors.push("requestedMode is invalid");
   }
@@ -631,10 +637,13 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "draftDelivery",
       "ciReadiness",
       "descriptionStatus",
+      "conversationId",
     ],
     "runtimeSnapshot",
   );
   validateSnapshotFields(value, errors);
+  if (value.conversationId !== undefined)
+    validateSafeId(value.conversationId, "conversationId", errors, 128);
   validateContextUsage(value.contextUsage, errors);
   validateIssueBinding(value.issueBinding, errors);
   validateSnapshotVerifiedCommit(value, errors);

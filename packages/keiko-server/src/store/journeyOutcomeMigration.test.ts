@@ -107,6 +107,8 @@ describe("V32 upgrades the original journey outcome table", () => {
       const store = createGitJourneyOutcomeStore(db);
       expect(store.record(outcome)).toBe(true);
       const previous = store.get(outcome.binding.remoteDigest, outcome.binding.prNumber);
+      // Preserve the already-upgraded V32 row while removing every later schema addition.
+      rewindSchemaFixture(db, 32);
       db.exec("PRAGMA user_version = 31");
       runMigrations(db);
       expect(store.get(outcome.binding.remoteDigest, outcome.binding.prNumber)).toEqual(previous);

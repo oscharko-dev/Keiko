@@ -43,6 +43,15 @@
   font-size: var(--text-caption);
 }
 
+@media (forced-colors: active) {
+  .cmpFeedback {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+}
+
 .cmpDialogBackdrop {
   position: fixed;
   z-index: 100;

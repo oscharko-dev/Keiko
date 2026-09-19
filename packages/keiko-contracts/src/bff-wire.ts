@@ -278,6 +278,27 @@ export interface Chat {
 }
 
 export type ChatRole = "user" | "assistant" | "system";
+
+/** A durable coding conversation; workspace references never confer execution authority. */
+export interface CodingHistoryTask {
+  readonly id: string;
+  readonly title: string;
+  readonly projectPath: string;
+  readonly modelId: string;
+  readonly branch: string;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly status: "active" | "completed";
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly latestRunId?: string | undefined;
+}
+
+export interface CodingHistoryDetail {
+  readonly task: CodingHistoryTask;
+  readonly messages: readonly ChatMessage[];
+  readonly truncated: boolean;
+}
 export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ChatTurnState = "pending" | "completed" | "failed" | "cancelled";
 
