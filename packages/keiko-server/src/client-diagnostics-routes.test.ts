@@ -679,7 +679,10 @@ describe("POST /api/diagnostics/client", () => {
   describe("binding evidence", () => {
     function bindingEvents(
       sink: BufferedServerLogSink,
-      op: "client.binding.resolved" | "client.binding.target-missing",
+      op:
+        | "client.binding.candidates-offered"
+        | "client.binding.resolved"
+        | "client.binding.target-missing",
     ): readonly ServerLogEvent[] {
       return sink.events.filter((event) => event.op === op);
     }
@@ -745,6 +748,52 @@ describe("POST /api/diagnostics/client", () => {
       // Without a client-supplied id, the ingest POST's own id applies.
       expect(events[0]?.correlationId).toBe(CORRELATION_ID);
       expect(events[0]?.extra).toMatchObject({ referenceShape: "uuid", heuristicFlagged: true });
+    });
+
+    // #3557 review: a window without a fingerprint states what it offered, zero included, as a state
+    // on the timeline of the list load that decided the offer.
+    it("logs an offer at info under the list load that decided it, with its count", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "chat-mfr3k2x1-6",
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        candidateCount: 0,
+        correlationId: "ui_chat-list-load-0006",
+      });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+      const events = bindingEvents(sink, "client.binding.candidates-offered");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        level: "info",
+        correlationId: "ui_chat-list-load-0006",
+        extra: { referenceShape: "redacted", candidateCount: 0, completeness: "complete" },
+      });
+      expect(events[0]?.errorKind).toBeUndefined();
+      expect(bindingEvents(sink, "client.binding.target-missing")).toEqual([]);
+    });
+
+    // #3557 review: only a binding found again after redaction names its chat, by fingerprint.
+    it("refuses a target fingerprint on a missing binding", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "chat-mfr3k2x1-1",
+        outcome: "target-missing",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        targetFingerprint: "a1".repeat(32),
+      });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+
+      expect(bindingEvents(sink, "client.binding.target-missing")).toEqual([]);
     });
 
     it("falls back to the ingest id when the client-supplied id is not a safe correlation id", async () => {
@@ -998,6 +1047,30 @@ describe("POST /api/diagnostics/client", () => {
     // The routine burst itself is still bounded, and its overflow is counted as a drop.
     expect(sink.events.filter((event) => event.op === "client.stage.started")).toHaveLength(60);
     expect(sink.events.some((event) => event.op === "client.diagnostic.rate-limited")).toBe(true);
+  });
+
+  // #3557 review: an offer is routine evidence, like a resolved binding; a burst of them never uses
+  // up the budget a failure report needs.
+  it("keeps a failure report admitted after a burst of offers", async () => {
+    const sink = captureServerLog();
+    for (let index = 1; index <= 61; index += 1) {
+      const offer = {
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: `chat-offer-${String(index)}`,
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        candidateCount: 1,
+      };
+      await handleClientDiagnosticIngest(context(JSON.stringify(offer)));
+    }
+    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+
+    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(1);
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
   });
 
   // #3557 review: both phases of one mounted stage carry the client-minted id, so they join.

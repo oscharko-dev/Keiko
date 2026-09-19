@@ -4,6 +4,7 @@ import {
   ACTIVITY_LOG_READINESS_REASONS,
   ACTIVITY_LOG_READINESS_STATES,
   ACTIVITY_LOG_WRITER_KINDS,
+  CLIENT_BINDING_CANDIDATES_MAX,
   CLIENT_BINDING_OUTCOMES,
   CLIENT_BINDING_REFERENCE_SHAPES,
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
@@ -453,13 +454,20 @@ describe("isClientBindingIngestRequest", () => {
     };
   }
 
+  // A redaction marker never resolved to a live chat, and only a redaction marker offers chats.
+  function possibleBinding(outcome: string, referenceShape: string): boolean {
+    if (outcome === "resolved") return referenceShape !== "redacted";
+    return outcome !== "candidates-offered" || referenceShape === "redacted";
+  }
+
   it("accepts every possible outcome and reference shape, with and without correlation ids", () => {
     for (const outcome of CLIENT_BINDING_OUTCOMES) {
       for (const referenceShape of CLIENT_BINDING_REFERENCE_SHAPES) {
-        if (outcome === "resolved" && referenceShape === "redacted") continue;
-        expect(isClientBindingIngestRequest({ ...bindingRequest(), outcome, referenceShape })).toBe(
-          true,
-        );
+        if (!possibleBinding(outcome, referenceShape)) continue;
+        const offer = outcome === "candidates-offered" ? { candidateCount: 1 } : {};
+        expect(
+          isClientBindingIngestRequest({ ...bindingRequest(), outcome, referenceShape, ...offer }),
+        ).toBe(true);
       }
     }
     expect(
@@ -505,6 +513,70 @@ describe("isClientBindingIngestRequest", () => {
         heuristicFlagged: true,
       }),
     ).toBe(true);
+  });
+
+  // #3557 review: a window whose redacted id carries no fingerprint says how many chats it offered,
+  // zero included. Nothing else carries a count, and only a redaction marker offers.
+  it("accepts an offer only with its candidate count, zero included, from a redaction marker", () => {
+    const offer = { ...bindingRequest(), outcome: "candidates-offered" };
+    for (const candidateCount of [0, 2, CLIENT_BINDING_CANDIDATES_MAX]) {
+      expect(isClientBindingIngestRequest({ ...offer, candidateCount })).toBe(true);
+    }
+    for (const candidateCount of [undefined, -1, 1.5, "2", CLIENT_BINDING_CANDIDATES_MAX + 1]) {
+      expect(isClientBindingIngestRequest({ ...offer, candidateCount })).toBe(false);
+    }
+    for (const referenceShape of CLIENT_BINDING_REFERENCE_SHAPES) {
+      if (referenceShape === "redacted") continue;
+      expect(isClientBindingIngestRequest({ ...offer, referenceShape, candidateCount: 1 })).toBe(
+        false,
+      );
+    }
+    for (const outcome of ["resolved", "target-missing"]) {
+      expect(
+        isClientBindingIngestRequest({
+          ...bindingRequest(),
+          outcome,
+          referenceShape: "uuid",
+          candidateCount: 1,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  // #3557 review: a binding found again after redaction names the chat it bound to, only by the
+  // fingerprint the window persists and never by its id, so two choices from one list stay apart.
+  it("accepts a target fingerprint only on a resolved binding found again after redaction", () => {
+    const targetFingerprint = "c".repeat(64);
+    const restored = { ...bindingRequest(), outcome: "resolved", heuristicFlagged: true };
+    for (const referenceShape of ["fingerprint", "user-selected"]) {
+      expect(isClientBindingIngestRequest({ ...restored, referenceShape, targetFingerprint })).toBe(
+        true,
+      );
+    }
+    for (const patch of [
+      { outcome: "resolved", referenceShape: "uuid" },
+      { outcome: "resolved", referenceShape: "opaque", heuristicFlagged: false },
+      { outcome: "target-missing", referenceShape: "fingerprint" },
+      { outcome: "candidates-offered", referenceShape: "redacted", candidateCount: 1 },
+    ]) {
+      expect(isClientBindingIngestRequest({ ...restored, ...patch, targetFingerprint })).toBe(
+        false,
+      );
+    }
+    for (const malformed of [
+      "1404206d-9ab6-4bca-8853-813867352087",
+      "c".repeat(63),
+      "C".repeat(64),
+      7,
+    ]) {
+      expect(
+        isClientBindingIngestRequest({
+          ...restored,
+          referenceShape: "fingerprint",
+          targetFingerprint: malformed,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("accepts a heuristic flag only for a server-issued UUID", () => {

@@ -481,16 +481,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: [],
+      state: ["client.binding.candidates-offered"],
       end: ["client.binding.resolved"],
       failure: ["client.binding.target-missing"],
       loss: [],
     },
-    requiredCausalOperations: ["client.binding.resolved", "client.binding.target-missing"],
+    requiredCausalOperations: [
+      "client.binding.candidates-offered",
+      "client.binding.resolved",
+      "client.binding.target-missing",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["client.binding.resolved", "client.binding.target-missing"],
+    requiredProofOperations: [
+      "client.binding.candidates-offered",
+      "client.binding.resolved",
+      "client.binding.target-missing",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["client.binding.resolved"],
+    requiredResourceOperations: ["client.binding.candidates-offered", "client.binding.resolved"],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

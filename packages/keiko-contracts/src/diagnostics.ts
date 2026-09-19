@@ -635,7 +635,13 @@ export function isClientStageIngestRequest(value: unknown): value is ClientStage
 export const CLIENT_BINDING_SURFACES = ["chat-window"] as const;
 export type ClientBindingSurface = (typeof CLIENT_BINDING_SURFACES)[number];
 
-export const CLIENT_BINDING_OUTCOMES = ["resolved", "target-missing"] as const;
+// `candidates-offered`: a window whose chat id persistence redacted without a fingerprint listed the
+// chats it may have shown, for the person to choose from (#3557 review).
+export const CLIENT_BINDING_OUTCOMES = [
+  "resolved",
+  "target-missing",
+  "candidates-offered",
+] as const;
 export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 
 // `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
@@ -663,6 +669,11 @@ export const CLIENT_BINDING_DECIDING_LOADS_MAX = 10_000;
 // truncation ever happens, so two windows can never share one (#3557 review). `~` stays out: it
 // joins two window ids into a connection id.
 export const CLIENT_BINDING_WINDOW_REF_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
+// How many chats one offer may report.
+export const CLIENT_BINDING_CANDIDATES_MAX = 10_000;
+// The one-way SHA-256 fingerprint a chat window records for a chat id persistence redacts; a binding
+// names the chat it was restored to only in this form, never by its id.
+export const CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/u;
 
 export interface ClientBindingIngestRequest {
   readonly kind: "binding";
@@ -678,6 +689,11 @@ export interface ClientBindingIngestRequest {
   readonly relatedCorrelationIds?: readonly string[] | undefined;
   // How many list loads decided the outcome in total; any the report does not name is loss.
   readonly decidingLoadCount?: number | undefined;
+  // `candidates-offered` only, and always there: how many chats the window offered, zero included.
+  readonly candidateCount?: number | undefined;
+  // A resolved binding found again after redaction (`fingerprint`, `user-selected`) only: the
+  // fingerprint of the chat it bound to, so two choices from one list answer stay apart.
+  readonly targetFingerprint?: string | undefined;
 }
 
 const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
@@ -690,6 +706,8 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "correlationId",
   "relatedCorrelationIds",
   "decidingLoadCount",
+  "candidateCount",
+  "targetFingerprint",
 ]);
 
 function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
@@ -711,6 +729,45 @@ function hasConsistentBindingReference(value: Record<string, unknown>): boolean 
   if (typeof value.heuristicFlagged !== "boolean") return false;
   if (value.outcome === "resolved" && value.referenceShape === "redacted") return false;
   return !value.heuristicFlagged || HEURISTIC_FLAGGABLE_REFERENCE_SHAPES.has(value.referenceShape);
+}
+
+const RESTORED_REFERENCE_SHAPES: ReadonlySet<ClientBindingReferenceShape> = new Set([
+  "fingerprint",
+  "user-selected",
+]);
+
+function isCandidateCount(value: unknown): boolean {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CLIENT_BINDING_CANDIDATES_MAX
+  );
+}
+
+// An offer always states its count and nothing else does; only a redaction marker offers.
+function hasConsistentCandidateCount(value: Record<string, unknown>): boolean {
+  const offered = value.outcome === "candidates-offered";
+  if (!offered) return value.candidateCount === undefined;
+  return value.referenceShape === "redacted" && isCandidateCount(value.candidateCount);
+}
+
+// Only a resolved binding found again after redaction names the chat it bound to, and only by its
+// fingerprint.
+function hasConsistentTargetFingerprint(value: Record<string, unknown>): boolean {
+  const { targetFingerprint } = value;
+  if (targetFingerprint === undefined) return true;
+  if (
+    typeof targetFingerprint !== "string" ||
+    !CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN.test(targetFingerprint)
+  ) {
+    return false;
+  }
+  return (
+    value.outcome === "resolved" &&
+    isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES) &&
+    RESTORED_REFERENCE_SHAPES.has(value.referenceShape)
+  );
 }
 
 function isDecidingLoadCount(value: unknown): boolean {
@@ -745,7 +802,12 @@ export function isClientBindingIngestRequest(value: unknown): value is ClientBin
   ) {
     return false;
   }
-  return hasConsistentBindingReference(value) && hasBindingCorrelations(value);
+  return (
+    hasConsistentBindingReference(value) &&
+    hasConsistentCandidateCount(value) &&
+    hasConsistentTargetFingerprint(value) &&
+    hasBindingCorrelations(value)
+  );
 }
 
 // ─── Stale-session repair evidence (#3557) ───────────────────────────────────────

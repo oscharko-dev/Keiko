@@ -28,6 +28,9 @@ import { resetServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 
 const CORRELATION_ID = "client-loss-route-test";
+// Two chats' fingerprints, the one-way form a chat window persists for an id persistence redacts.
+const FINGERPRINT_A = "a1".repeat(32);
+const FINGERPRINT_B = "b2".repeat(32);
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
 function context(rawBody: string): RouteContext {
@@ -345,7 +348,8 @@ describe("client diagnostics loss evidence", () => {
     expect(record.errorKind).toBeUndefined();
   });
 
-  // #3557 review: a chat restored through its id's fingerprint reports that shape.
+  // #3557 review: a chat restored through its id's fingerprint reports that shape, and names the
+  // chat it bound to by that fingerprint.
   it("persists a binding restored through a fingerprint as client.binding.resolved", async () => {
     const body = JSON.stringify({
       kind: "binding",
@@ -354,6 +358,7 @@ describe("client diagnostics loss evidence", () => {
       outcome: "resolved",
       referenceShape: "fingerprint",
       heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
     });
     expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
 
@@ -361,7 +366,89 @@ describe("client diagnostics loss evidence", () => {
     expect(expectActivityLogProof("client.binding.resolved.line", line ?? "")).toMatchObject({
       referenceShape: "fingerprint",
       heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
     });
+  });
+
+  // #3557 review: one window offered chats A and B from one list answer. Whichever the person
+  // chose, the line used to be identical; each now names the chat it bound to.
+  it("keeps two choices from one list answer apart by the chat each bound to", async () => {
+    for (const targetFingerprint of [FINGERPRINT_A, FINGERPRINT_B]) {
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "chat-mfr3k2x1-5",
+        outcome: "resolved",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+        correlationId: "ui_list-choice-0001",
+        decidingLoadCount: 1,
+        targetFingerprint,
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    }
+
+    const records = lines("client.binding.resolved").map((line) =>
+      expectActivityLogProof("client.binding.resolved.line", line),
+    );
+    expect(records.map((record) => record.targetFingerprint)).toEqual([
+      FINGERPRINT_A,
+      FINGERPRINT_B,
+    ]);
+    for (const record of records) {
+      expect(record).toMatchObject({
+        correlationId: "ui_list-choice-0001",
+        referenceShape: "user-selected",
+        bindingDigest: clientBindingDigest("chat-mfr3k2x1-5"),
+      });
+    }
+  });
+
+  // #3557 review: the chats a window without a fingerprint offered, zero included, are reported
+  // under the list loads that decided the offer, so the recovery state is reconstructable.
+  it("persists an offer as client.binding.candidates-offered with its count, zero included", async () => {
+    for (const offer of [
+      { windowRef: "chat-mfr3k2x1-6", candidateCount: 0, correlationId: "ui_list-offer-0001" },
+      {
+        windowRef: "chat-mfr3k2x1-7",
+        candidateCount: 2,
+        correlationId: "ui_list-offer-0002",
+        relatedCorrelationIds: ["ui_list-offer-0003"],
+        decidingLoadCount: 2,
+      },
+    ]) {
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        ...offer,
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    }
+
+    const [empty, offered] = lines("client.binding.candidates-offered").map((line) =>
+      expectActivityLogProof("client.binding.candidates-offered.line", line),
+    );
+    expect(empty).toMatchObject({
+      correlationId: "ui_list-offer-0001",
+      referenceShape: "redacted",
+      candidateCount: 0,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-6"),
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(offered).toMatchObject({
+      correlationId: "ui_list-offer-0002",
+      relatedCorrelationIds: ["ui_list-offer-0003"],
+      candidateCount: 2,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-7"),
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(empty?.errorKind).toBeUndefined();
+    expect(lines("client.binding.target-missing")).toEqual([]);
   });
 
   // #3557 review: a window whose redacted id carries no fingerprint, bound to the chat the person

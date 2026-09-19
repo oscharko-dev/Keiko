@@ -523,6 +523,14 @@ const CLIENT_BINDING_FIELDS = {
   },
 } as const;
 
+const CLIENT_BINDING_RESOLVED_FIELDS = {
+  ...CLIENT_BINDING_FIELDS,
+  // A binding found again after redaction (through its fingerprint, or chosen by the person): the
+  // fingerprint of the chat it bound to, the one the window persists, so two choices from one list
+  // answer stay apart (#3557 review).
+  targetFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+} as const;
+
 const CLIENT_BINDING_RESOLVED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -530,7 +538,7 @@ const CLIENT_BINDING_RESOLVED_OPERATION = defineActivityLogOperation({
   category: "diagnostic",
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientBindingResolved",
-  fields: CLIENT_BINDING_FIELDS,
+  fields: CLIENT_BINDING_RESOLVED_FIELDS,
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -552,6 +560,28 @@ const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["client-binding"],
   proofIds: ["client.binding.target-missing.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review: a window whose chat id persistence redacted without a fingerprint listed the chats
+// it may have shown, for the person to choose from. The line names the list loads that answered and
+// how many chats were offered, zero included, so the recovery state is reconstructable.
+const CLIENT_BINDING_CANDIDATES_OFFERED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.candidates-offered",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingCandidatesOffered",
+  fields: {
+    ...CLIENT_BINDING_FIELDS,
+    candidateCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.candidates-offered.line"],
   releaseImpact: "patch",
 });
 
@@ -1115,7 +1145,7 @@ function logClientStage(
   logClientStageSettled(request, correlationId);
 }
 
-type ClientBindingFields = ActivityLogFields<typeof CLIENT_BINDING_RESOLVED_OPERATION>;
+type ClientBindingFields = ActivityLogFields<typeof CLIENT_BINDING_TARGET_MISSING_OPERATION>;
 
 // The deciding list loads the line can name: the primary id when it is a safe correlation id, and
 // each distinct safe related id besides it. An id the server refuses, or one named twice, never
@@ -1175,7 +1205,25 @@ function logClientBindingResolved(
     activityLogEvent(
       CLIENT_BINDING_RESOLVED_OPERATION,
       { correlationId },
-      clientBindingFields(request),
+      {
+        ...clientBindingFields(request),
+        ...(request.targetFingerprint === undefined
+          ? {}
+          : { targetFingerprint: request.targetFingerprint }),
+      },
+    ),
+  );
+}
+
+function logClientBindingCandidatesOffered(
+  request: ClientBindingIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_BINDING_CANDIDATES_OFFERED_OPERATION,
+      { correlationId },
+      { ...clientBindingFields(request), candidateCount: request.candidateCount ?? 0 },
     ),
   );
 }
@@ -1203,6 +1251,10 @@ function logClientBinding(
   const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
   if (request.outcome === "resolved") {
     logClientBindingResolved(request, correlationId);
+    return;
+  }
+  if (request.outcome === "candidates-offered") {
+    logClientBindingCandidatesOffered(request, correlationId);
     return;
   }
   logClientBindingTargetMissing(request, correlationId);
@@ -1341,7 +1393,7 @@ function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
     case "stage":
       return "routine";
     case "binding":
-      return classified.report.outcome === "resolved" ? "routine" : "failure";
+      return classified.report.outcome === "target-missing" ? "failure" : "routine";
     case "session-repair":
       return ROUTINE_SESSION_REPAIR_OUTCOMES.has(classified.report.outcome) ? "routine" : "failure";
     case "message":
