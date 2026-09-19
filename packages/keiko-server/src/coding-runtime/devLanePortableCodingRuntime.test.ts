@@ -88,7 +88,9 @@ describe("dev-lane OpenCode discovery", () => {
       qualificationVerified: false,
       executableTreeDigestVerified: true,
     });
-    expect(runtime.sidecar.protocolHandshakeDigest).toBe(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256);
+    expect(runtime.sidecar.protocolHandshakeDigest).toBe(
+      OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+    );
     expect(runtime.qualification).toMatchObject({
       platform: "darwin",
       arch: "arm64",

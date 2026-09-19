@@ -65,8 +65,10 @@ import {
   type OpenCodeRuntimeAdapter,
   type OpenCodeSyncHint,
 } from "./opencodeRuntimeAdapter.js";
-import { projectOpenCodePermissionRequestId } from "./opencodeProtocol.js";
-import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
+import {
+  OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
+  projectOpenCodePermissionRequestId,
+} from "./opencodeProtocol.js";
 import {
   OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
   projectOpenCodeV2ProtocolSurface,
@@ -266,8 +268,7 @@ export function createOpenCodeRuntimeComposition(
     input.safeActivity?.settleTool,
     input.diagnostics,
     input.toolFacadeOrigin,
-    approvals,
-    runs,
+    { approvals, runs },
   );
   const lifecycle = lifecycleAdapter(input, bridge, runs);
   const manager = createCodingRuntimeManager({
@@ -925,17 +926,37 @@ function v2SyncHint(
   };
 }
 
+const KNOWN_V2_HISTORY_FAILURES = new Set([
+  "opencode-v2-response-invalid",
+  "opencode-v2-envelope-invalid",
+  "opencode-v2-history-oversized",
+  "opencode-v2-cursor-invalid",
+  "opencode-v2-message-time-invalid",
+  "opencode-v2-message-id-invalid",
+  "opencode-v2-content-invalid",
+  "opencode-v2-parent-message-missing",
+  "opencode-v2-tool-invalid",
+  "opencode-v2-tool-time-invalid",
+  "opencode-v2-tool-state-invalid",
+  "opencode-v2-plan-invalid",
+  "opencode-v2-text-oversized",
+]);
+
+function v2HistoryFailureReason(error: unknown): string {
+  if (error instanceof OpenCodeV2HistoryError) return error.safeCode;
+  if (error instanceof Error && error.message === "opencode-v2-response-oversized")
+    return `reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`;
+  if (error instanceof Error && KNOWN_V2_HISTORY_FAILURES.has(error.message))
+    return `reason=${error.message}`;
+  return "reason=transport-invalid";
+}
+
 function recordOpenCodeV2HistoryFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   error: unknown,
 ): void {
-  const reason =
-    error instanceof OpenCodeV2HistoryError
-      ? error.safeCode
-      : error instanceof Error && error.message === "opencode-v2-response-oversized"
-        ? `reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`
-        : "reason=transport-invalid";
+  const reason = v2HistoryFailureReason(error);
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date().toISOString(),
@@ -1265,9 +1286,12 @@ function createToolBridge(
   settleTool: SafeToolSettlement | undefined,
   diagnostics: ServerDiagnosticSink | undefined,
   toolFacadeOrigin: string,
-  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
-  runs: ReadonlyMap<string, PreparedRun>,
+  v2: {
+    readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
+    readonly runs: ReadonlyMap<string, PreparedRun>;
+  },
 ): ToolBridgeController {
+  const { approvals, runs } = v2;
   const limits = normalizeToolBridgeLimits(configuredLimits);
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);

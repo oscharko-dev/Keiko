@@ -213,7 +213,7 @@ describe("production OpenCode backend functional pipeline", () => {
         throw new Error(
           `functional-scenario-failed:${scripted.children
             .flatMap((child) => child.fixtureFailures())
-            .join(",")}`,
+            .join(",")};diagnostics=${pipeline.diagnostics.map((record) => record.code).join(",")}`,
           { cause: error },
         );
       }

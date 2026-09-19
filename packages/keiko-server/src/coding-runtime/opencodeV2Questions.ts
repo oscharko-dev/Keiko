@@ -18,8 +18,7 @@ function fields(form: Form): readonly Field[] {
     throw new Error("opencode-v2-form-fields-invalid");
   }
   const result = form.fields.map((value: unknown) => record(value));
-  if (result.some((value) => value === undefined))
-    throw new Error("opencode-v2-form-field-invalid");
+  if (result.includes(undefined)) throw new Error("opencode-v2-form-field-invalid");
   return result as readonly Field[];
 }
 
@@ -38,7 +37,7 @@ function options(
   return field.options.map((value: unknown) => {
     const option = record(value);
     if (typeof option?.label !== "string" || typeof option.value !== "string") {
-      throw new Error("opencode-v2-form-option-invalid");
+      throw new TypeError("opencode-v2-form-option-invalid");
     }
     return {
       label: option.label,

@@ -108,7 +108,7 @@ function assertMessageShape(message: Readonly<Record<string, unknown>>): void {
   const extra = Object.keys(message).filter((key) => !allowed.includes(key));
   if (extra.length === 0) return;
   throw new OpenCodeV2HistoryError(
-    `reason=event-unknown:eventSha256=${digest(message).slice(0, 16)}:role=${role}:extraCount=${String(extra.length)}:extraKeySha256=${digest(extra.slice().sort()).slice(0, 16)}:missing=none`,
+    `reason=event-unknown:eventSha256=${digest(message).slice(0, 16)}:role=${role}:extraCount=${String(extra.length)}:extraKeySha256=${digest(extra.slice().sort((a, b) => a.localeCompare(b))).slice(0, 16)}:missing=none`,
   );
 }
 
@@ -187,22 +187,7 @@ function toolState(
   const { id, name } = toolIdentity(part);
   if (state === undefined) throw new Error("opencode-v2-tool-state-invalid");
   assertToolInput(part, state);
-  const mapped =
-    status === "completed"
-      ? "succeeded"
-      : status === "error"
-        ? "failed"
-        : status === "streaming"
-          ? "pending"
-          : status;
-  if (
-    mapped !== "pending" &&
-    mapped !== "running" &&
-    mapped !== "succeeded" &&
-    mapped !== "failed"
-  ) {
-    throw new Error("opencode-v2-tool-state-invalid");
-  }
+  const mapped = displayToolState(status);
   return {
     kind: "tool",
     messageId,
@@ -211,6 +196,49 @@ function toolState(
     state: mapped,
     occurredAt: toolOccurredAt(part),
   };
+}
+
+function displayToolState(status: unknown): "pending" | "running" | "succeeded" | "failed" {
+  if (status === "streaming") return "pending";
+  if (status === "completed") return "succeeded";
+  if (status === "error") return "failed";
+  if (status === "running") return "running";
+  throw new Error("opencode-v2-tool-state-invalid");
+}
+
+function todoState(value: unknown): "pending" | "active" | "completed" | "cancelled" | undefined {
+  if (value === "pending" || value === "completed" || value === "cancelled") return value;
+  return value === "in_progress" ? "active" : undefined;
+}
+
+function planCandidate(
+  part: Readonly<Record<string, unknown>>,
+  messageId: string,
+  index: number,
+): Candidate | undefined {
+  const state = record(part.state);
+  if (state?.status !== "completed") return undefined;
+  assertToolInput(part, state);
+  const todos = record(state.input)?.todos;
+  if (!Array.isArray(todos)) throw new Error("opencode-v2-plan-invalid");
+  const steps = todos.map((value: unknown) => {
+    const item = record(value);
+    const status = todoState(item?.status);
+    if (
+      typeof item?.content !== "string" ||
+      !item.content ||
+      !status ||
+      typeof item.priority !== "string"
+    )
+      throw new Error("opencode-v2-plan-invalid");
+    return { text: item.content, state: status };
+  });
+  return candidate(`${messageId}:plan:${String(index)}`, "observation", part, {
+    kind: "plan",
+    anchorMessageId: messageId,
+    steps,
+    occurredAt: toolOccurredAt(part),
+  });
 }
 
 function assistantCandidates(
@@ -230,15 +258,27 @@ function assistantCandidates(
   ];
   if (!Array.isArray(message.content)) throw new Error("opencode-v2-content-invalid");
   for (const [index, value] of message.content.entries()) {
-    const part = record(value);
-    if (part?.type === "text" && typeof part.text === "string") {
-      result.push(textCandidate(id, index, part.text, occurredAt));
-    } else if (part?.type === "tool") {
-      const signal = toolState(part, id);
-      result.push(candidate(`${id}:tool:${String(index)}`, "tool", part, signal));
-    }
+    result.push(...assistantPartCandidates(value, id, index, occurredAt));
   }
   return result;
+}
+
+function assistantPartCandidates(
+  value: unknown,
+  messageId: string,
+  index: number,
+  occurredAt: string,
+): readonly Candidate[] {
+  const part = record(value);
+  if (part?.type === "text" && typeof part.text === "string")
+    return [textCandidate(messageId, index, part.text, occurredAt)];
+  if (part?.type !== "tool") return [];
+  if (part.name === "todowrite") {
+    const plan = planCandidate(part, messageId, index);
+    return plan === undefined ? [] : [plan];
+  }
+  const signal = toolState(part, messageId);
+  return [candidate(`${messageId}:tool:${String(index)}`, "tool", part, signal)];
 }
 
 function messageCandidates(

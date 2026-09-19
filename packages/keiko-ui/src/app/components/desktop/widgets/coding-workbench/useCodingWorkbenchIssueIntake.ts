@@ -38,13 +38,23 @@ function issueFailure(error: unknown): IssueIntakeFailure {
 }
 
 type PromptReference = { readonly issueRef?: string } | { readonly failure: IssueIntakeFailure };
+const URL_TRAILING_PUNCTUATION = new Set([")", "]", ".", ",", ";", "!", "?"]);
+
+function issueUrlToken(token: string): string | undefined {
+  const start = token.search(/https?:\/\//u);
+  if (start < 0) return undefined;
+  let end = token.length;
+  while (end > start && URL_TRAILING_PUNCTUATION.has(token.charAt(end - 1))) end -= 1;
+  const candidate = token.slice(start, end);
+  if (!/^https?:\/\/github\.com\//iu.test(candidate)) return undefined;
+  return /\/(?:issues|pull)\//u.test(candidate) ? candidate : undefined;
+}
 
 function promptReference(prompt: string): PromptReference {
   const refs = new Set<string>();
-  for (const [token] of prompt.matchAll(/https?:\/\/[^\s<>"`]+/gu)) {
-    const candidate = token.replace(/[)\].,;!?]+$/u, "");
-    if (!/^https?:\/\/github\.com\//iu.test(candidate)) continue;
-    if (!/\/(?:issues|pull)\//u.test(candidate)) continue;
+  for (const token of prompt.split(/[\s<>"`]/u)) {
+    const candidate = issueUrlToken(token);
+    if (candidate === undefined) continue;
     const parsed = parseGitHubIssueReference(candidate);
     if (!parsed.ok) return { failure: "invalid-reference" };
     refs.add(

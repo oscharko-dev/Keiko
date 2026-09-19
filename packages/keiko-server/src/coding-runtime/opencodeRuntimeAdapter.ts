@@ -1467,9 +1467,10 @@ function toolSourceRegistration(
       "  async execute(args, context) {",
     ];
   }
+  const pluginId = `keiko.${name ?? action}`;
   return [
     "export default {",
-    `  id: ${JSON.stringify(`keiko.${name ?? action}`)},`,
+    `  id: ${JSON.stringify(pluginId)},`,
     "  async setup(ctx) {",
     "    await ctx.tool.transform((editor) => {",
     "      editor.add({",

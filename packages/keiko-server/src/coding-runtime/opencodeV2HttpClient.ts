@@ -265,7 +265,8 @@ export function createOpenCodeV2HttpClient(
   if (endpoint === undefined || options.password.length === 0) {
     throw new Error("opencode-v2-endpoint-invalid");
   }
-  const authorization = `Basic ${Buffer.from(`opencode:${options.password}`, "utf8").toString("base64")}`;
+  const credentials = `opencode:${options.password}`;
+  const authorization = `Basic ${Buffer.from(credentials, "utf8").toString("base64")}`;
   async function request(
     method: "GET" | "POST" | "DELETE",
     path: string,

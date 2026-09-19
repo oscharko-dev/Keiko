@@ -116,15 +116,21 @@ describe("OpenCode launch profile", () => {
     const settings = record(provider.settings);
     expect(settings.baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
     expect(settings.chunkTimeout).toBe(30 * 60_000);
-    expect(provider.headers).toEqual({ Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}" });
+    expect(provider.headers).toEqual({
+      Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}",
+    });
     expect(config.permissions[0]).toMatchObject({ action: "*", effect: "deny" });
     for (const tool of OPENCODE_PINNED_BUILT_IN_TOOLS) {
-      expect(finalPermissionAction(config.permissions, tool)).toBe("deny");
+      expect(finalPermissionAction(config.permissions, tool)).toBe(
+        tool === "todowrite" ? "allow" : "deny",
+      );
     }
     for (const tool of OPENCODE_MODEL_VISIBLE_TOOL_NAMES) {
       expect(finalPermissionAction(config.permissions, tool)).toBe("allow");
     }
-    expect(finalPermissionAction(config.permissions, OPENCODE_GOVERNED_ACTION_PERMISSION)).toBe("deny");
+    expect(finalPermissionAction(config.permissions, OPENCODE_GOVERNED_ACTION_PERMISSION)).toBe(
+      "deny",
+    );
     expect(finalPermissionAction(config.permissions, "keiko_repository_read")).toBe("deny");
     expect(finalPermissionAction(config.permissions, "keiko_submit_changeset")).toBe("deny");
   });
@@ -163,13 +169,7 @@ describe("OpenCode launch profile", () => {
     });
     expect(profile.ok).toBe(true);
     if (profile.ok) {
-      expect(profile.args).toEqual([
-        "serve",
-        "--hostname",
-        "127.0.0.1",
-        "--port",
-        "0",
-      ]);
+      expect(profile.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0"]);
       expect(profile.env.OPENCODE_SERVER_PASSWORD).toHaveLength(43);
       expect(profile.env.PATH).toBeUndefined();
       expect(profile.env.HOME).toContain("/private/run");
@@ -204,7 +204,9 @@ describe("OpenCode launch profile", () => {
     expect(finalPermissionAction(config.permissions, "question")).toBe("allow");
     expect(finalPermissionAction(config.permissions, "keiko_workspace_read")).toBe("allow");
     expect(finalPermissionAction(config.permissions, "keiko_changeset_edit")).toBe("allow");
-    expect(finalPermissionAction(config.permissions, OPENCODE_GOVERNED_ACTION_PERMISSION)).toBe("deny");
+    expect(finalPermissionAction(config.permissions, OPENCODE_GOVERNED_ACTION_PERMISSION)).toBe(
+      "deny",
+    );
     for (const tool of ["bash", "read", "edit", "unknown_tool"]) {
       expect(finalPermissionAction(config.permissions, tool)).toBe("deny");
     }
