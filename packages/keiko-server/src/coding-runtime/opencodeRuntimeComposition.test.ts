@@ -2021,17 +2021,13 @@ describe("private OpenCode tool bridge", () => {
   // array -- reached the lifecycle failure with no line of its own. The closed reason and, for an
   // oversized pull, the budget it exceeded now travel in `code`; the response never does.
   it("records the closed transport reason when the history pull itself fails", async () => {
-    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics = persistedDiagnostics();
     let cancellations = 0;
     const fixture = await startBridgeFixture(
       { execute: vi.fn(() => Promise.resolve(completed)) },
       undefined,
       {
-        diagnostics: {
-          record: (record): void => {
-            records.push(record);
-          },
-        },
+        diagnostics: diagnostics.sink,
         historyResponse: Promise.resolve(
           new Response(
             new ReadableStream<Uint8Array>(
@@ -2059,13 +2055,14 @@ describe("private OpenCode tool bridge", () => {
     );
 
     expect(cancellations).toBe(1);
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
+    const record = expectPersistedDiagnostic(diagnostics.read(), "opencode.history");
+    expect(record).toMatchObject({
       correlationId: FIXTURE_RUN_ID,
-      operation: "coding-runtime.handshake",
+      diagnosticOperation: "coding-runtime.handshake",
       source: "opencode.history",
-      errorClass: "OpenCodeHistoryFailure",
-      message: "runtime-handshake-failed",
+      diagnosticErrorClass: "OpenCodeHistoryFailure",
+      diagnosticSummary: "runtime-handshake-failed",
+      errorKind: "internal",
       code: `stage=history:reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`,
     });
     await fixture.stop();

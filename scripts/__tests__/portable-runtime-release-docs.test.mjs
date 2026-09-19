@@ -74,6 +74,18 @@ describe("portable runtime release documentation", () => {
     expect(releaseDocs).toContain(approvals.sidecarRuntimes[0].upstream.commit);
   });
 
+  it("keeps every embedded OpenCode identity on the approved V2 pin", () => {
+    const approved = approvals.sidecarRuntimes[0];
+    const declarations = [...contract.matchAll(/"upstream": (\{[\s\S]*?\})/gu)];
+    expect(declarations).toHaveLength(2);
+    for (const declaration of declarations) {
+      expect(JSON.parse(declaration[1])).toEqual(approved.upstream);
+    }
+    expect(contract).not.toContain("1.18.30");
+    expect(contract).not.toContain("packages/sdk/openapi.json");
+    expect(contract).not.toContain('"adapterVersion": "1"');
+  });
+
   it("distinguishes immutable upstream evidence from signed shipped evidence", () => {
     const documented = embeddedManifest().sidecarRuntimes[0];
 

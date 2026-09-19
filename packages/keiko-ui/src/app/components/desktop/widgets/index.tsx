@@ -132,7 +132,10 @@ const CodingHistoryPanel = dynamic(
   { ssr: false },
 );
 const CodingWorkbenchWindow = dynamic(
-  () => import("./coding-workbench/CodingWorkbenchWindow").then((mod) => mod.CodingWorkbenchWindow),
+  () =>
+    import("./coding-workbench/CodingWorkbenchWindowHost").then(
+      (mod) => mod.CodingWorkbenchWindowHost,
+    ),
   { ssr: false, loading: windowChunkFallback },
 );
 const WorkspaceTrustPanel = dynamic(
@@ -761,40 +764,7 @@ registerWindowRender("codingHistory", (_cfg, ctx) => (
     onNew={() => ctx.openWindow("coding", { historySelection: `new:${Date.now()}` })}
   />
 ));
-registerWindowRender("coding", (cfg, ctx) => (
-  <CodingWorkbenchWindow
-    historySelection={str(cfg, "historySelection")}
-    onHistorySelectionHandled={() =>
-      ctx.openWindow("coding", { historySelection: undefined, repositoryPath: undefined })
-    }
-    onOpenHistory={() => ctx.openWindow("codingHistory")}
-    selectedRoot={str(cfg, "repositoryPath") ?? ctx.selectedRoot ?? undefined}
-    onOpenGit={({ root, binding, repositoryDialog, descriptionReview }) => {
-      if (root !== null && descriptionReview !== undefined) {
-        ctx.openWindow("governedPullRequest", {
-          projectPath: root,
-          descriptionOwnerAndRepo: descriptionReview.ownerAndRepo,
-          descriptionPrNumber: descriptionReview.prNumber,
-          descriptionProposalId: descriptionReview.proposalId,
-          descriptionSnapshotDigest: descriptionReview.snapshotDigest,
-        });
-        return;
-      }
-      ctx.openWindow(
-        "governedGit",
-        repositoryDialog === undefined && root === null
-          ? undefined
-          : {
-              ...(root === null ? {} : { projectPath: root }),
-              ...(binding === "repository" ? { rootBinding: CODING_REPOSITORY_BINDING } : {}),
-              ...(repositoryDialog === undefined
-                ? {}
-                : { repositoryDialog, repositoryReturnWindow: ctx.windowId }),
-            },
-      );
-    }}
-  />
-));
+registerWindowRender("coding", (cfg, ctx) => <CodingWorkbenchWindow cfg={cfg} context={ctx} />);
 // Epic #1571, Issue #1574 — Git client window shell. The selected repository root acts as the
 // projectId. Read it from cfg (projectPath / workspaceRoot) and fall back to the global selected
 // repository; an empty state renders when none is available. The shell persists the selected
