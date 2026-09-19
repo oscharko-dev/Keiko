@@ -6,7 +6,11 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildDevBffEnv, resolveDevBffStateDir } from "../lib/dev-bff-env.mjs";
+import {
+  applyProcessWideEvidenceEnv,
+  buildDevBffEnv,
+  resolveDevBffStateDir,
+} from "../lib/dev-bff-env.mjs";
 
 // NEVER touch the real repository `.env`/`.keiko` — every fixture below is its own temp "repo".
 const dirs = [];
@@ -113,5 +117,35 @@ describe("buildDevBffEnv", () => {
     const env = buildDevBffEnv({ repoRoot, processEnv: { FOO: "bar" }, stateDir });
     expect(env.FOO).toBe("bar");
     expect(env.KEIKO_STATE_DIR).toBe(stateDir);
+  });
+});
+
+// The process-wide Activity Log writer resolves its directory and level from process.env. Without
+// the effective evidence keys there, a dev BFF launched without an external KEIKO_STATE_DIR wrote
+// through two different directories, and a `.env`-only KEIKO_LOG_LEVEL reached readiness but
+// not the writer (#3557).
+describe("applyProcessWideEvidenceEnv", () => {
+  it("copies the state directory and every log setting, and nothing else", () => {
+    const target = { PATH: "/usr/bin", KEIKO_STATE_DIR: "/elsewhere" };
+
+    applyProcessWideEvidenceEnv(
+      {
+        KEIKO_STATE_DIR: "/repo/.keiko/dev",
+        KEIKO_LOG_LEVEL: "silent",
+        KEIKO_LOG_RETENTION_DAYS: "3",
+        KEIKO_OPENAI_API_KEY: "sk-test",
+        FIGMA_ACCESS_TOKEN: "figd-test",
+        KEIKO_UI_DATA_DIR: "/repo/.keiko/dev/ui",
+        KEIKO_LOG_SEGMENT_BYTES: undefined,
+      },
+      target,
+    );
+
+    expect(target).toEqual({
+      PATH: "/usr/bin",
+      KEIKO_STATE_DIR: "/repo/.keiko/dev",
+      KEIKO_LOG_LEVEL: "silent",
+      KEIKO_LOG_RETENTION_DAYS: "3",
+    });
   });
 });

@@ -69,3 +69,18 @@ export function buildDevBffEnv({ repoRoot, processEnv, stateDir }) {
     KEIKO_MEMORY_DIR: processEnv.KEIKO_MEMORY_DIR ?? join(stateDir, "memory"),
   });
 }
+
+/**
+ * The process-wide Activity Log writer resolves its directory and level from `process.env`, as it
+ * does under `keiko ui`, which sets `KEIKO_STATE_DIR` there first. Copy exactly the evidence keys
+ * of the effective environment into `target`, so every writer in this process agrees with the
+ * explicit `env`: `KEIKO_STATE_DIR` and the `KEIKO_LOG_*` settings. Never copy a credential, which
+ * would leak into every child process the BFF spawns.
+ */
+export function applyProcessWideEvidenceEnv(env, target) {
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) continue;
+    if (key !== "KEIKO_STATE_DIR" && !key.startsWith("KEIKO_LOG_")) continue;
+    target[key] = value;
+  }
+}

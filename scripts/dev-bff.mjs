@@ -12,7 +12,11 @@ import {
   UI_HOST,
 } from "../packages/keiko-server/dist/index.js";
 import { installProcessGuards } from "../packages/keiko-cli/dist/process-guards.js";
-import { buildDevBffEnv, resolveDevBffStateDir } from "./lib/dev-bff-env.mjs";
+import {
+  applyProcessWideEvidenceEnv,
+  buildDevBffEnv,
+  resolveDevBffStateDir,
+} from "./lib/dev-bff-env.mjs";
 import { refreshDevBffEvidence } from "./lib/dev-bff-evidence.mjs";
 import { shutdownDevBff } from "./lib/dev-bff-shutdown.mjs";
 
@@ -39,6 +43,8 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 // readiness, the heartbeat refresh, and every domain composition site — built BEFORE any of them
 // runs so none can fall back to a bare `process.env` that disagrees with it (#3557).
 const env = buildDevBffEnv({ repoRoot, processEnv: process.env, stateDir });
+// The process-wide writer reads `process.env`; give it the same directory and log settings (#3557).
+applyProcessWideEvidenceEnv(env, process.env);
 // The product's own crash evidence: an uncaught exception or unhandled rejection is written as a
 // body-free `process.fatal` line before the process exits, as `keiko ui` does — resolved against
 // this SAME effective `env`, so the fatal line lands in `stateDir` like everything else this
