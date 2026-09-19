@@ -14,13 +14,40 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const devBff = join(repoRoot, "scripts", "dev-bff.mjs");
 const LISTEN_TIMEOUT_MS = 30_000;
 const EXIT_TIMEOUT_MS = 40_000;
+// Bounds how long `afterEach` waits for a killed child's "close" before giving up on it — a killed
+// child that never reports "close" (a wedged handle) must not hang the whole suite.
+const CHILD_CLOSE_TIMEOUT_MS = 5_000;
 const children = new Set();
 const dirs = [];
 
-afterEach(() => {
-  // A child still running after a failed assertion must not outlive the test or its directory.
-  for (const child of children) child.kill("SIGKILL");
+// Resolves once `child` emits "close" (every stdio stream fully flushed and closed — a stronger
+// guarantee than "exit", which can fire while stdio is still draining) or after `timeoutMs`,
+// whichever comes first, so a wedged child can never hang the caller.
+function waitForChildClose(child, timeoutMs) {
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise();
+    };
+    const timer = setTimeout(settle, timeoutMs);
+    child.once("close", settle);
+  });
+}
+
+afterEach(async () => {
+  // A child still running after a failed assertion must not outlive the test or its directory —
+  // and removing that directory before a killed child's file handles are actually released can
+  // raise EBUSY/EPERM (Windows) or mask the real assertion failure under a spurious fs error. Kill
+  // every remaining child, wait for each one's "close" (bounded above), THEN remove the directories.
+  const closed = [...children].map((child) => {
+    child.kill("SIGKILL");
+    return waitForChildClose(child, CHILD_CLOSE_TIMEOUT_MS);
+  });
   children.clear();
+  await Promise.all(closed);
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 

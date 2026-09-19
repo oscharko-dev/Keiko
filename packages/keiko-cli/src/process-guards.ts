@@ -70,6 +70,13 @@ export interface ProcessGuardSink {
   // the real dynamic import. Defaults to it in production — see `loadServerModule` below — so no
   // production call site ever has to supply this.
   readonly loadServer?: (() => Promise<FatalDiagnosticsModule>) | undefined;
+  // The environment `resolveRuntimeStateDir` resolves the fatal-crash state directory from
+  // (`writeFatalActivityLogLine` below). Defaults to `process.env`. A caller that already computes
+  // its own effective/merged environment BEFORE `process.env` would reflect it — e.g. the dev BFF,
+  // which defaults `KEIKO_STATE_DIR` and folds in repo-local `.env` keys — passes it here so the
+  // fatal line lands in the SAME state directory every other evidence path in that process writes,
+  // instead of wherever a bare `process.env` read would resolve to (#3557 review finding 1).
+  readonly env?: NodeJS.ProcessEnv | undefined;
 }
 
 function loadServerModule(): Promise<FatalDiagnosticsModule> {
@@ -122,11 +129,14 @@ function writeFatalActivityLogLine(
   server: FatalDiagnosticsModule,
   machineKind: FatalReasonKind,
   described: ReturnType<FatalDiagnosticsModule["describeError"]>,
+  env: NodeJS.ProcessEnv,
 ): void {
   // `resolveRuntimeStateDir` is the one rule the CLI and the process-wide server logger share:
   // `KEIKO_STATE_DIR` when set, else `<cwd>/.keiko`, so the fatal line lands in the same log every
-  // other line of this process writes.
-  const stateDir = server.resolveRuntimeStateDir(process.env);
+  // other line of this process writes. `env` is `process.env` unless the sink overrides it (see
+  // `ProcessGuardSink.env`, #3557) — a caller with its own effective environment resolves the SAME
+  // state directory here that it used for every other evidence path.
+  const stateDir = server.resolveRuntimeStateDir(env);
   const activityLog: ServerLogSink = server.createActivityLogSink(stateDir);
   try {
     activityLog.write(
@@ -160,10 +170,11 @@ async function writeFatalLine(
   machineKind: FatalReasonKind,
   reason: unknown,
   loadServer: () => Promise<FatalDiagnosticsModule>,
+  env: NodeJS.ProcessEnv,
 ): Promise<string> {
   const server = await loadServer();
   const described = server.describeError(reason);
-  writeFatalActivityLogLine(server, machineKind, described);
+  writeFatalActivityLogLine(server, machineKind, described, env);
   return fatalProcessLine(humanKind, described.errorClass);
 }
 
@@ -219,6 +230,7 @@ async function handleFatalReason(
   sink: ProcessGuardSink,
 ): Promise<void> {
   const loadServer = sink.loadServer ?? loadServerModule;
+  const env = sink.env ?? process.env;
   let line = fatalProcessLine(humanKind, fallbackErrorKind(reason));
   let settled = false;
   // KEIKO-0837: await the sink.err write BEFORE sink.exit so an async stderr transport
@@ -245,7 +257,7 @@ async function handleFatalReason(
     const timer = setTimeout(() => {
       void finish().finally(resolve);
     }, FATAL_IMPORT_TIMEOUT_MS);
-    writeFatalLine(humanKind, machineKind, reason, loadServer)
+    writeFatalLine(humanKind, machineKind, reason, loadServer, env)
       .then((resolvedLine) => {
         line = resolvedLine;
       })
@@ -268,17 +280,22 @@ async function handleFatalReason(
 // crash handler.
 let processGuardsInstalled = false;
 
-export function installProcessGuards(sink: ProcessGuardSink = DEFAULT_PROCESS_GUARD_SINK): void {
+// Accepts a PARTIAL sink so a caller can override a single field (e.g. just `env`) without having
+// to reconstruct the other two mandatory ones — every field not supplied keeps its
+// `DEFAULT_PROCESS_GUARD_SINK` behaviour, so a no-argument call remains identical to before
+// (#3557). `handleFatalReason` still receives a fully-resolved `ProcessGuardSink`.
+export function installProcessGuards(sink: Partial<ProcessGuardSink> = {}): void {
   if (processGuardsInstalled) return;
   processGuardsInstalled = true;
+  const resolved: ProcessGuardSink = { ...DEFAULT_PROCESS_GUARD_SINK, ...sink };
   // Node never awaits an event listener's return value, so each listener stays void-returning and
   // explicitly floats its async work with `void` — the same fire-and-forget shape every other
   // process-signal listener in this codebase already uses.
   process.on("uncaughtException", (error: Error): void => {
-    void handleFatalReason("uncaught exception", "uncaught-exception", error, sink);
+    void handleFatalReason("uncaught exception", "uncaught-exception", error, resolved);
   });
   process.on("unhandledRejection", (reason: unknown): void => {
-    void handleFatalReason("unhandled rejection", "unhandled-rejection", reason, sink);
+    void handleFatalReason("unhandled rejection", "unhandled-rejection", reason, resolved);
   });
 }
 
