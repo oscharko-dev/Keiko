@@ -129,11 +129,11 @@ const DE_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.chooseOpen": "{title} öffnen, zuletzt aktiv am {updated}",
   "chat.restoration.chooseOpenReference": "{label}, Referenz {reference}",
   "chat.restoration.choiceNotice":
-    "Sie haben diese Unterhaltung für dieses Fenster gewählt. Behalten Sie sie, oder wählen Sie eine andere, falls es nicht die ist, die dieses Fenster gezeigt hat.",
+    "Du hast diese Unterhaltung für dieses Fenster gewählt. Behalte sie, oder wähle eine andere, falls es nicht die ist, die dieses Fenster gezeigt hat.",
   "chat.restoration.choicePendingNotice":
-    "Sie haben diese Unterhaltung für dieses Fenster gewählt. Prüfen Sie sie, sobald sie geöffnet ist, oder wählen Sie eine andere.",
+    "Du hast diese Unterhaltung für dieses Fenster gewählt. Prüfe sie, sobald sie geöffnet ist, oder wähle eine andere.",
   "chat.restoration.choiceMissingNotice":
-    "Die Unterhaltung, die Sie für dieses Fenster gewählt haben, ist nicht mehr verfügbar.",
+    "Die Unterhaltung, die du für dieses Fenster gewählt hast, ist nicht mehr verfügbar.",
   "chat.restoration.choiceKeep": "Behalten",
   "chat.restoration.choiceAnother": "Andere wählen",
   "editor.askSelection.selectText": "Wähle Text im aktiven Editor aus, bevor du Keiko fragst.",

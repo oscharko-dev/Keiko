@@ -1021,7 +1021,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "figmaSnapshotWindow.result.skippedPlural":
     "{count} screens could not be rendered and were skipped.",
   "figmaSnapshotWindow.result.skippedSingular":
-    "{count} screen could not be rendered and were skipped.",
+    "{count} screen could not be rendered and was skipped.",
   "figmaSnapshotWindow.revoke.confirmQuestion": "Really revoke the stored token?",
   "figmaSnapshotWindow.revoke.confirmYes": "Yes, revoke",
   "figmaSnapshotWindow.revoke.trigger": "Revoke stored token",

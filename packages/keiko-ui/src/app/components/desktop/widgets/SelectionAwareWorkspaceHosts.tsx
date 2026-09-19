@@ -1374,7 +1374,7 @@ function ChatChoiceNotice({
   if (decision === undefined) return null;
   const keep = state === "shown" ? decision.keep : undefined;
   return (
-    <div className={styles.cmpNotice} role="status">
+    <output className={styles.cmpNotice}>
       <p className={styles.cmpNoticeText}>{agentT(CHOICE_NOTICE_TEXT[state])}</p>
       <div className={styles.cmpNoticeActions}>
         {keep === undefined ? null : (
@@ -1386,7 +1386,7 @@ function ChatChoiceNotice({
           {agentT("chat.restoration.choiceAnother")}
         </button>
       </div>
-    </div>
+    </output>
   );
 }
 
