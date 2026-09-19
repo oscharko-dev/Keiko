@@ -61,5 +61,14 @@ describe("codingSafeActivityProjection finalizeIngest invariant-violation purge 
     expect(records[0]?.message).toBe("safe-activity-purged-invariant-violation");
     expect(records[0]?.message).not.toBe("safe-activity-purged-expiry");
     expect(records[0]?.operation).toBe("coding-runtime.safe-activity");
+    // The only purge that is a fault keeps its content-free diagnostic: a closed code, class and
+    // summary under the run's correlation id, and nothing from the feed it purged.
+    expect(records[0]).toMatchObject({
+      code: "CODING_SAFE_ACTIVITY_PURGED",
+      errorClass: "SafeActivityProjectionPurge",
+      correlationId: RUN_ID,
+      source: "opencode.safe-activity",
+    });
+    expect(JSON.stringify(records)).not.toContain("msg_user_0");
   });
 });
