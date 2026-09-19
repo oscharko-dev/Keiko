@@ -1,5 +1,9 @@
 :global(.window):has(.shell) {
-  background: color-mix(in oklch, var(--card-surface) 58%, transparent);
+  background: var(--surface-primary);
+}
+
+:global(.win-body):has(> .shell) {
+  overflow: hidden;
 }
 
 .shell {
@@ -8,7 +12,7 @@
   min-height: 100%;
   height: 100%;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   border-radius: inherit;
   color: var(--text-primary);
   background: transparent;
@@ -61,6 +65,14 @@
 
 .cmp-workbench-header {
   min-width: 0;
+}
+
+.cmpHeaderRow {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 72%, transparent);
 }
 
 .cmp-trust-notice {
@@ -143,9 +155,8 @@
   display: flex;
   min-height: 2.5rem;
   align-items: center;
-  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
   padding: var(--space-1) var(--space-4);
-  background: color-mix(in oklch, var(--surface-primary) 72%, transparent);
 }
 
 .cmpInfoTrigger {
@@ -160,6 +171,14 @@
   color: var(--text-secondary);
   font: var(--weight-semibold) var(--text-caption) var(--font-ui);
   cursor: pointer;
+}
+
+.cmpWorkspaceLocation code {
+  display: block;
+  padding: var(--space-2);
+  overflow-wrap: anywhere;
+  user-select: all;
+  font-size: var(--text-caption);
 }
 
 .cmpInfoTrigger:hover,
@@ -179,8 +198,8 @@
   z-index: 70;
   inset-block-start: calc(100% + var(--space-2));
   inset-inline-start: var(--space-4);
-  width: min(42rem, calc(100vw - 8rem));
-  max-height: min(40rem, calc(100vh - 10rem));
+  width: min(22rem, calc(100vw - 8rem));
+  max-height: min(28rem, calc(100vh - 10rem));
   margin: 0;
   overflow: auto;
   border: 1px solid var(--border-subtle);
@@ -188,6 +207,8 @@
   padding: var(--space-4);
   background: var(--surface-primary);
   box-shadow: var(--shadow-pop);
+  font-size: var(--text-caption);
+  line-height: 1.5;
 }
 
 .cmpInfoHeader {
@@ -207,19 +228,24 @@
 .cmpInfoGrid {
   display: grid;
   margin: 0;
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-surface);
-  background: var(--border-subtle);
+  gap: var(--space-1);
+  min-width: 0;
 }
 
 .cmpInfoRow {
   display: grid;
-  grid-template-columns: minmax(9rem, 0.8fr) minmax(0, 1.2fr);
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-secondary);
+  grid-template-columns: 6.75rem minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-block: var(--space-1);
+}
+
+.cmpInfoDetails {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cmpInfoDetails > summary {
+  font-size: var(--text-caption);
 }
 
 .cmpInfoRow dt {
@@ -370,25 +396,31 @@
   min-width: 0;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(8rem, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   border-end-start-radius: inherit;
   border-end-end-radius: inherit;
-  overflow-y: auto;
+  overflow: hidden;
   background: transparent;
 }
 
 .sessionStream {
   display: flex;
-  width: min(100%, 72rem);
+  width: 100%;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
   gap: var(--space-7);
   justify-self: center;
-  padding: var(--space-7) clamp(var(--space-5), 4vw, var(--space-9));
+  padding: var(--space-5);
+  align-items: center;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
+}
+
+.sessionStream > * {
+  width: min(100%, 760px);
+  flex: 0 0 auto;
 }
 
 .emptySession {
@@ -519,7 +551,10 @@
   z-index: 2;
   border-end-start-radius: inherit;
   border-end-end-radius: inherit;
-  padding: var(--space-3) clamp(var(--space-5), 4vw, var(--space-9)) var(--space-4);
+  width: min(100% - 2 * var(--space-5), 760px);
+  min-width: 0;
+  justify-self: center;
+  padding: var(--space-2) 0 var(--space-4);
   background: transparent;
 }
 
@@ -1031,31 +1066,15 @@
   overflow-wrap: anywhere;
 }
 
+/* One content column; compact disclosures share a 32px baseline. */
 .timeline {
-  position: relative;
   display: flex;
-  max-height: none;
   flex-direction: column;
-  gap: var(--space-3);
-  margin: var(--space-5) 0 0;
-  padding: 0 0 0 var(--space-1);
+  gap: var(--space-1);
+  margin: var(--space-3) 0 0;
+  padding: 0;
   overflow: visible;
   list-style: none;
-}
-
-.timeline::before {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-start: 0.68rem;
-  width: 1px;
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    color-mix(in oklch, var(--border-accent) 34%, transparent) 3rem,
-    color-mix(in oklch, var(--border-subtle) 72%, transparent) calc(100% - 3rem),
-    transparent
-  );
-  content: "";
 }
 
 .timeline:focus-visible {
@@ -1064,67 +1083,13 @@
 }
 
 .timelineItem {
-  position: relative;
-  display: grid;
   min-width: 0;
-  grid-template-columns: 1.4rem minmax(0, 1fr);
-  gap: var(--space-3);
-  align-content: start;
   padding: 0;
 }
 
-.timelineItem[data-timeline-kind="event"] {
-  padding-block: var(--space-1);
-}
-
-.timelineMarker {
-  z-index: 1;
-  display: grid;
-  width: 1.15rem;
-  height: 1.15rem;
-  place-items: center;
-  margin-top: 0.88rem;
-  border: 1px solid color-mix(in oklch, var(--border-accent) 72%, var(--border-subtle));
-  border-radius: var(--radius-pill);
-  background: var(--surface-primary);
-  box-shadow: 0 0 0 4px color-mix(in oklch, var(--surface-primary) 88%, transparent);
-}
-
-.timelineMarker::after {
-  width: 0.38rem;
-  height: 0.38rem;
-  border-radius: inherit;
-  background: var(--accent);
-  content: "";
-}
-
-.timelineItem[data-timeline-kind="event"][data-event-tone="routine"] .timelineMarker {
-  border-color: var(--border-subtle);
-  opacity: 0.5;
-}
-
-.timelineItem[data-timeline-kind="event"][data-event-tone="routine"] .timelineMarker::after {
-  background: var(--text-tertiary);
-}
-
-.timelineItem[data-event-tone="success"] .timelineMarker,
-.timelineItem[data-timeline-kind="tool"] .timelineMarker {
-  border-color: var(--feedback-success);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--feedback-success) 15%, transparent);
-}
-
-.timelineItem[data-event-tone="attention"] .timelineMarker {
-  border-color: var(--feedback-warning);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--feedback-warning) 18%, transparent);
-}
-
-.timelineItem[data-event-tone="success"] .timelineMarker::after,
-.timelineItem[data-timeline-kind="tool"] .timelineMarker::after {
-  background: var(--feedback-success);
-}
-
-.timelineItem[data-event-tone="attention"] .timelineMarker::after {
-  background: var(--feedback-warning);
+.timelineItem[data-timeline-kind="message"],
+.timelineItem[data-timeline-kind="question"] {
+  padding-block: var(--space-4);
 }
 
 .timelineBody,
@@ -1145,31 +1110,19 @@
 }
 
 .timelineBody[data-message-role] {
-  width: min(100%, 62rem);
-  border: 1px solid var(--ai-response-border);
-  border-radius: var(--radius-surface);
-  padding: var(--space-4) var(--space-5);
-  background: var(--ai-response-surface);
-  box-shadow: 0 18px 46px -38px rgb(var(--shadow-ink-rgb) / 0.72);
-}
-
-.timelineBody[data-message-role="assistant"] {
-  border-color: color-mix(in oklch, var(--border-accent) 36%, var(--ai-response-border));
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklch, var(--surface-accent-subtle) 34%, transparent),
-      transparent 8rem
-    ),
-    var(--ai-response-surface);
+  width: 100%;
+  min-width: 0;
+  padding-block: var(--space-2);
 }
 
 .timelineBody[data-message-role="user"] {
   width: fit-content;
-  max-width: min(100%, 54rem);
-  margin-inline-start: clamp(0rem, 9vw, 8rem);
-  border-color: color-mix(in oklch, var(--border-accent) 48%, var(--ai-response-border));
-  background: color-mix(in oklch, var(--surface-accent-subtle) 58%, var(--surface-primary));
+  max-width: 100%;
+  margin-inline-start: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-surface);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-secondary);
 }
 
 .timelineBody[data-message-role] .timelineTitle {
@@ -1219,43 +1172,101 @@
 }
 
 .toolCard {
-  display: grid;
-  width: min(100%, 34rem);
-  min-height: 3rem;
-  grid-template-columns: 1.7rem minmax(0, 1fr) auto auto;
-  gap: var(--space-3);
-  align-items: center;
-  border: 1px solid var(--ai-tool-border);
-  border-radius: var(--radius-control);
-  padding: var(--space-2) var(--space-3);
-  background: color-mix(in oklch, var(--ai-tool-surface) 84%, transparent);
+  width: 100%;
   color: var(--text-secondary);
-  box-shadow: 0 12px 30px -28px rgb(var(--shadow-ink-rgb) / 0.75);
+}
+
+.cmpActivitySummary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding-block: var(--space-1);
+  cursor: pointer;
+  font-size: var(--text-body-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+.cmpActivitySummary::-webkit-details-marker {
+  display: none;
+}
+
+.cmpActivitySummary::after {
+  content: "";
+  flex: 0 0 0.35rem;
+  width: 0.35rem;
+  height: 0.35rem;
+  margin-inline: var(--space-1);
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+}
+
+details[open] > .cmpActivitySummary::after {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+.cmpActivitySummary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+.cmpActivitySummary:hover {
+  color: var(--text-primary);
+}
+
+.toolCard .activityBadge {
+  border: 0;
+  background: transparent;
+  padding: 0;
 }
 
 .toolIcon {
   display: grid;
-  width: 1.55rem;
-  height: 1.55rem;
   place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: calc(var(--radius-control) - 2px);
-  background: color-mix(in oklch, var(--surface-secondary) 74%, transparent);
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 1rem;
+  color: var(--text-tertiary);
 }
 
 .toolIcon::before {
-  width: 0.72rem;
-  height: 0.72rem;
-  border: 1.5px solid currentColor;
-  border-block-start-color: transparent;
-  border-radius: var(--radius-pill);
-  color: var(--text-tertiary);
   content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.toolCard[data-tool-state="running"] .toolIcon::before {
+  border-top-color: transparent;
+  color: var(--text-accent);
+  animation: workbench-tool-spin 1s linear infinite;
 }
 
 .toolCard[data-tool-state="succeeded"] .toolIcon::before {
+  width: 0.45rem;
+  height: 0.65rem;
   border: 0;
-  background: var(--feedback-success);
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  border-radius: 0;
+  transform: rotate(45deg) translateY(-1px);
+}
+
+@keyframes workbench-tool-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolCard[data-tool-state="running"] .toolIcon::before {
+    animation: none;
+  }
 }
 
 .toolMeta {
@@ -1266,7 +1277,7 @@
   overflow: hidden;
   color: var(--text-primary);
   font-size: var(--text-body-sm);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1290,21 +1301,15 @@
   font-size: var(--text-caption);
 }
 
-.toolCard[data-tool-state="succeeded"] {
-  border-color: color-mix(in oklch, var(--feedback-success) 42%, var(--border-subtle));
-}
-
 .toolCard[data-tool-state="failed"],
 .toolCard[data-tool-state="denied"] {
-  border-color: var(--feedback-danger);
+  color: var(--feedback-danger);
 }
-
 .planCard {
-  border: 1px solid color-mix(in oklch, var(--border-accent) 52%, var(--border-subtle));
-  border-radius: var(--radius-surface);
-  padding: var(--space-4) var(--space-5);
-  background: color-mix(in oklch, var(--surface-accent-subtle) 50%, var(--surface-primary));
-  box-shadow: 0 18px 46px -40px rgb(var(--shadow-ink-rgb) / 0.8);
+  color: var(--text-secondary);
+}
+.planCard > .cmpActivitySummary > p {
+  display: inline;
 }
 
 .planSteps {
@@ -1350,23 +1355,12 @@
 }
 
 .eventCard {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-3);
-  align-items: baseline;
-  min-height: 1.9rem;
-  padding-block: var(--space-1);
+  min-width: 0;
   color: var(--text-tertiary);
 }
 
-.eventCard .timelineTitle {
-  color: var(--text-secondary);
-  font-size: var(--text-caption);
-  font-weight: var(--weight-medium);
-}
-
 .eventCard .timelineDetail {
-  margin: 0;
+  margin: var(--space-1) 0 var(--space-2);
   color: var(--text-tertiary);
   font-size: var(--text-caption);
 }
@@ -1811,4 +1805,67 @@
 .cmp-skill-readiness {
   color: var(--text-tertiary);
   font-size: var(--text-caption);
+}
+
+.cmpRunDetails {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+.cmpRunDetails::after {
+  content: "⌄";
+}
+.cmpRunDetails[aria-expanded="true"]::after {
+  content: "⌃";
+}
+.cmpRunDetails:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpGroupedTools {
+  margin: var(--space-1) 0 var(--space-2);
+  padding: 0 0 0 var(--space-3);
+  border-inline-start: 1px solid var(--border-subtle);
+  list-style: none;
+}
+.timeline[data-virtual="true"] {
+  max-height: 60vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cmpConversation {
+  min-width: 0;
+}
+
+.cmpChangesDisclosure {
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cmpChangesContent {
+  padding-block: var(--space-3);
+}
+
+.cmpRunActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.cmpRunActions:empty {
+  display: none;
+}
+.cmpRunActions .runtimeControls {
+  margin-inline-start: auto;
+  padding: 0;
 }

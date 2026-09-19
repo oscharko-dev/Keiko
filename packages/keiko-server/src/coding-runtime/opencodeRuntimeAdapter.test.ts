@@ -43,8 +43,8 @@ const KEIKO_PRODUCER_TOOLS = [
   "keiko_git_execute",
   "keiko_ci_status",
 ] as const;
-const MODEL_VISIBLE_TOOLS = ["question", "todowrite", ...KEIKO_PRODUCER_TOOLS] as const;
-const READY_LINE = "opencode server listening on http://127.0.0.1:43123\n";
+const MODEL_VISIBLE_TOOLS = ["question", ...KEIKO_PRODUCER_TOOLS] as const;
+const READY_LINE = "server listening on http://127.0.0.1:43123\n";
 
 type ReadinessPhase =
   | "target-attestation"
@@ -440,7 +440,7 @@ function readinessPorts(failAt?: ReadinessPhase): {
             if (!failed("authenticated-health")) return Promise.resolve({ status: 500 });
             return Promise.resolve(
               failed("authenticated-health-version")
-                ? { status: 200, version: "1.18.30" }
+                ? { status: 200, version: "2.0.10" }
                 : { status: 200, version: "wrong-version" },
             );
           }
@@ -642,7 +642,7 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(headers.Authorization).toBe("Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}");
     expect(bundle.config.tools).toMatchObject({
       question: true,
-      todowrite: true,
+      todowrite: false,
       keiko_workspace_read: true,
       keiko_changeset_edit: true,
       bash: false,
@@ -659,7 +659,7 @@ describe("OpenCode runtime adapter readiness", () => {
       "*": "deny",
       keiko_governed_action: "ask",
       question: "allow",
-      todowrite: "allow",
+      todowrite: "deny",
       keiko_workspace_read: "allow",
       keiko_changeset_edit: "allow",
     });

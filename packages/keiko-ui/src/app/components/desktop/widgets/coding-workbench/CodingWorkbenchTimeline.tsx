@@ -20,6 +20,7 @@ import type {
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
   useCodingWorkbenchTranslate,
@@ -28,7 +29,6 @@ import {
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
-import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const VIRTUAL_THRESHOLD = 100;
@@ -50,13 +50,21 @@ const ROW_HEIGHT_BY_KIND: Record<TimelineItemKind, number> = {
   message: 96,
   tool: 72,
   plan: 320,
+  group: 40,
   event: 88,
 };
 const QUESTION_SUMMARY_STATES = new Set(["offline", "error", "stale", "unpaired"]);
 
-type TimelineItemKind = "message" | "tool" | "plan" | "event";
+type TimelineItemKind = "message" | "tool" | "plan" | "event" | "group";
 
 type TimelineItem =
+  | {
+      readonly kind: "group";
+      readonly id: string;
+      readonly occurredAt: string;
+      readonly order: number;
+      readonly tools: readonly Extract<TimelineItem, { kind: "tool" }>[];
+    }
   | {
       readonly kind: "message";
       readonly id: string;
@@ -89,6 +97,7 @@ type TimelineItem =
     };
 
 export interface CodingWorkbenchTimelineProps {
+  readonly active?: boolean;
   readonly events: readonly CodingWorkbenchRuntimeSseEvent[];
   readonly activity: UseCodingWorkbenchSafeActivityResult;
   readonly questions: UseCodingWorkbenchQuestionsResult;
@@ -96,6 +105,7 @@ export interface CodingWorkbenchTimelineProps {
 }
 
 export function Timeline({
+  active = false,
   events,
   activity,
   questions,
@@ -104,20 +114,29 @@ export function Timeline({
   const t = useCodingWorkbenchTranslate();
   const internalTitleRef = useRef<HTMLHeadingElement>(null);
   const titleRef = focusRef ?? internalTitleRef;
-  const items = useMemo(() => timelineItems(events, activity.feed), [activity.feed, events]);
+  const [showEvents, setShowEvents] = useState(false);
+  const allItems = useMemo(() => timelineItems(events, activity.feed), [activity.feed, events]);
+  const items = useMemo(
+    () =>
+      groupCompletedTools(
+        allItems.filter(
+          (item) => showEvents || item.kind !== "event" || eventTone(item.event) === "attention",
+        ),
+      ),
+    [allItems, showEvents],
+  );
   const timeline = useTimelineWindow(items);
+  if (!active && allItems.length === 0 && questions.questions.length === 0) return null;
   return (
-    <section className={styles.card} aria-labelledby="timeline-title">
-      <PanelTitle
-        eyebrow={t("codingWorkbench.timeline.eyebrow")}
-        id="timeline-title"
-        headingRef={titleRef}
-        focusable
-      >
-        {t("codingWorkbench.timeline.title")}
-      </PanelTitle>
-      <p className="sr-only">{t("codingWorkbench.activity.reasoningBoundary")}</p>
-      <ActivityStatus activity={activity} t={t} />
+    <section className={styles.cmpConversation} aria-labelledby="timeline-title">
+      <TimelineHeading titleRef={titleRef} t={t} />
+      {active ? <ActivityStatus activity={activity} t={t} /> : null}
+      <RunDetailsToggle
+        visible={events.length > 0}
+        expanded={showEvents}
+        onToggle={() => setShowEvents(!showEvents)}
+        t={t}
+      />
       <QuestionSummary questions={questions} />
       <TimelineContent
         items={items}
@@ -127,6 +146,50 @@ export function Timeline({
         t={t}
       />
     </section>
+  );
+}
+
+function TimelineHeading({
+  titleRef,
+  t,
+}: {
+  readonly titleRef: RefObject<HTMLHeadingElement | null>;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <>
+      <h3 className="sr-only" id="timeline-title" ref={titleRef} tabIndex={-1}>
+        {t("codingWorkbench.timeline.title")}
+      </h3>
+      <p className="sr-only">{t("codingWorkbench.activity.reasoningBoundary")}</p>
+    </>
+  );
+}
+
+function RunDetailsToggle({
+  visible,
+  expanded,
+  onToggle,
+  t,
+}: {
+  readonly visible: boolean;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (!visible) return null;
+  return (
+    <button
+      type="button"
+      className={styles.cmpRunDetails}
+      aria-expanded={expanded}
+      onClick={() => {
+        onToggle();
+        reportClientDiagnostic("[keiko] coding workbench run details toggled");
+      }}
+    >
+      {t("codingWorkbench.timeline.details")}
+    </button>
   );
 }
 
@@ -220,6 +283,29 @@ function compactToolItems(items: readonly TimelineItem[]): readonly TimelineItem
     }
   }
   return compacted;
+}
+
+function groupCompletedTools(items: readonly TimelineItem[]): readonly TimelineItem[] {
+  const grouped: TimelineItem[] = [];
+  for (const item of items) {
+    const previous = grouped.at(-1);
+    if (item.kind !== "tool" || item.tool.state !== "succeeded") {
+      grouped.push(item);
+    } else if (previous?.kind === "group") {
+      grouped[grouped.length - 1] = { ...previous, tools: [...previous.tools, item] };
+    } else if (previous?.kind === "tool" && previous.tool.state === "succeeded") {
+      grouped[grouped.length - 1] = {
+        kind: "group",
+        id: `group:${previous.id}`,
+        occurredAt: previous.occurredAt,
+        order: previous.order,
+        tools: [previous, item],
+      };
+    } else {
+      grouped.push(item);
+    }
+  }
+  return grouped;
 }
 
 function canMergeToolItem(
@@ -354,6 +440,12 @@ function ActivityStatus({
   const truncated =
     activity.feed?.truncated === true ||
     activity.feed?.turns.some((turn) => turn.truncated) === true;
+  if (
+    !truncated &&
+    !retryableActivity(activity.status) &&
+    (activity.feed?.droppedEventCount ?? 0) === 0
+  )
+    return null;
   return (
     <div className={styles.activityStatus} data-activity-state={activity.status}>
       <p role="status" aria-live="polite" aria-atomic="true">
@@ -409,7 +501,7 @@ function TimelineContent({
 }): ReactNode {
   const hasQuestion = questions.questions.length > 0;
   if (items.length === 0 && !hasQuestion) {
-    return <p className={styles.emptyText}>{t("codingWorkbench.timeline.empty")}</p>;
+    return null;
   }
   return (
     <>
@@ -429,9 +521,22 @@ function TimelineContent({
   );
 }
 
+interface TimelineListProps {
+  readonly items: readonly TimelineItem[];
+  readonly timeline: TimelineWindow;
+  readonly questions: UseCodingWorkbenchQuestionsResult;
+  readonly restoreFocusRef: RefObject<HTMLHeadingElement | null>;
+  readonly t: CodingWorkbenchTranslate;
+}
+
 function TimelineList({
   items,
-  timeline: {
+  timeline,
+  questions,
+  restoreFocusRef,
+  t,
+}: TimelineListProps): ReactNode {
+  const {
     virtual,
     start,
     visible,
@@ -441,22 +546,13 @@ function TimelineList({
     hasMeasured,
     spacerBefore,
     spacerAfter,
-  },
-  questions,
-  restoreFocusRef,
-  t,
-}: {
-  readonly items: readonly TimelineItem[];
-  readonly timeline: TimelineWindow;
-  readonly questions: UseCodingWorkbenchQuestionsResult;
-  readonly restoreFocusRef: RefObject<HTMLHeadingElement | null>;
-  readonly t: CodingWorkbenchTranslate;
-}): ReactNode {
+  } = timeline;
   const questionCount = questions.questions.length > 0 ? 1 : 0;
   const total = items.length + questionCount;
   return (
     <ol
       className={styles.timeline}
+      data-virtual={virtual}
       aria-label={t("codingWorkbench.timeline.listLabel")}
       aria-describedby={virtual ? "coding-workbench-timeline-instructions" : undefined}
       tabIndex={virtual ? 0 : undefined}
@@ -503,15 +599,25 @@ function useRowMeasurement(
   id: string,
   measureRow: (id: string, height: number) => void,
   hasMeasured: (id: string) => boolean,
+  enabled = true,
 ): RefObject<HTMLLIElement | null> {
   const ref = useRef<HTMLLIElement>(null);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!enabled || node === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (node.offsetHeight > 0) measureRow(id, node.offsetHeight);
+    });
+    observer.observe(node);
+    return (): void => observer.disconnect();
+  }, [enabled, id, measureRow]);
   // Deliberately no dependency array: the effect must fire whenever the row commits so an
   // unmeasured row picks up its height as soon as the browser has laid it out. The hasMeasured
   // guard is what keeps the effect cheap — once a row's height is cached, subsequent commits
   // (including scroll-induced ones) short-circuit before touching `offsetHeight`, which is what
   // the pre-fix version would otherwise thrash on every visible row on every scroll.
   useLayoutEffect(() => {
-    if (hasMeasured(id)) return;
+    if (!enabled || hasMeasured(id)) return;
     const node = ref.current;
     if (node === null) return;
     const height = node.offsetHeight;
@@ -536,6 +642,7 @@ function TimelineRow({
   readonly hasMeasured: (id: string) => boolean;
 }): ReactNode {
   const rowProps = { item, position, total, t, measureRow, hasMeasured };
+  if (item.kind === "group") return <ToolGroupRow {...rowProps} item={item} />;
   if (item.kind === "message") return <MessageRow {...rowProps} item={item} />;
   if (item.kind === "tool") return <ToolRow {...rowProps} item={item} />;
   if (item.kind === "plan") return <PlanRow {...rowProps} item={item} />;
@@ -568,7 +675,6 @@ function MessageRow({
       aria-setsize={total}
       data-timeline-kind="message"
     >
-      <span className={styles.timelineMarker} aria-hidden="true" />
       <article className={styles.timelineBody} data-message-role={item.message.role}>
         <p className={styles.timelineTitle}>
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
@@ -627,13 +733,14 @@ function truncationFor(
 
 function ToolRow({
   item,
+  grouped = false,
   position,
   total,
   t,
   measureRow,
   hasMeasured,
-}: RowProps<Extract<TimelineItem, { kind: "tool" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
+}: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, !grouped);
   return (
     <li
       ref={rowRef}
@@ -642,22 +749,72 @@ function ToolRow({
       aria-setsize={total}
       data-timeline-kind="tool"
     >
-      <span className={styles.timelineMarker} aria-hidden="true" />
-      <article className={styles.toolCard} data-tool-state={item.tool.state}>
-        <span className={styles.toolIcon} aria-hidden="true" />
-        <div className={styles.toolMeta}>
-          <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
-          <code className={styles.toolName}>{item.tool.tool}</code>
-        </div>
-        {item.count > 1 ? (
-          <span className={styles.toolCount}>
-            {t("codingWorkbench.activity.toolCount", { count: item.count })}
+      <details
+        className={styles.toolCard}
+        data-tool-state={item.tool.state}
+        open={item.tool.state === "failed" || item.tool.state === "denied"}
+        onToggle={() => reportClientDiagnostic("[keiko] coding workbench tool details toggled")}
+      >
+        <summary className={styles.cmpActivitySummary}>
+          <span className={styles.toolIcon} aria-hidden="true" />
+          <div className={styles.toolMeta}>
+            <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
+          </div>
+          {item.count > 1 ? (
+            <span className={styles.toolCount}>
+              {t("codingWorkbench.activity.toolCount", { count: item.count })}
+            </span>
+          ) : null}
+          <span className={styles.activityBadge} data-state={item.tool.state}>
+            {t(`codingWorkbench.activity.toolState.${item.tool.state}`)}
           </span>
-        ) : null}
-        <span className={styles.activityBadge} data-state={item.tool.state}>
-          {t(`codingWorkbench.activity.toolState.${item.tool.state}`)}
-        </span>
-      </article>
+        </summary>
+        <code className={styles.toolName}>{item.tool.tool}</code>
+      </details>
+    </li>
+  );
+}
+
+function ToolGroupRow({
+  item,
+  position,
+  total,
+  t,
+  measureRow,
+  hasMeasured,
+}: RowProps<Extract<TimelineItem, { kind: "group" }>>): ReactNode {
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
+  const count = item.tools.reduce((sum, tool) => sum + tool.count, 0);
+  return (
+    <li
+      ref={rowRef}
+      className={styles.timelineItem}
+      aria-posinset={position}
+      aria-setsize={total}
+      data-timeline-kind="group"
+    >
+      <details
+        className={styles.cmpToolGroup}
+        onToggle={() => reportClientDiagnostic("[keiko] coding workbench activity group toggled")}
+      >
+        <summary className={styles.cmpActivitySummary}>
+          {t("codingWorkbench.activity.groupCount", { count })}
+        </summary>
+        <ol className={styles.cmpGroupedTools}>
+          {item.tools.map((tool, index) => (
+            <ToolRow
+              grouped
+              key={tool.id}
+              item={tool}
+              position={index + 1}
+              total={item.tools.length}
+              t={t}
+              measureRow={measureRow}
+              hasMeasured={hasMeasured}
+            />
+          ))}
+        </ol>
+      </details>
     </li>
   );
 }
@@ -690,9 +847,13 @@ function PlanRow({
       aria-setsize={total}
       data-timeline-kind="plan"
     >
-      <span className={styles.timelineMarker} aria-hidden="true" />
-      <section className={styles.planCard} aria-label={t("codingWorkbench.activity.plan.title")}>
-        <p className={styles.timelineTitle}>{t("codingWorkbench.activity.plan.title")}</p>
+      <details
+        className={styles.planCard}
+        onToggle={() => reportClientDiagnostic("[keiko] coding workbench plan details toggled")}
+      >
+        <summary className={styles.cmpActivitySummary}>
+          <p className={styles.timelineTitle}>{t("codingWorkbench.activity.plan.title")}</p>
+        </summary>
         <ol className={styles.planSteps}>
           {item.plan.steps.map((step, index) => (
             <li key={`${item.plan.anchorMessageId}:${String(index)}`} data-plan-state={step.state}>
@@ -705,7 +866,7 @@ function PlanRow({
           ))}
         </ol>
         {item.plan.truncated ? <p>{t("codingWorkbench.activity.plan.truncated")}</p> : null}
-      </section>
+      </details>
     </li>
   );
 }
@@ -729,11 +890,14 @@ function EventRow({
       data-timeline-kind="event"
       data-event-tone={tone}
     >
-      <span className={styles.timelineMarker} aria-hidden="true" />
-      <div className={styles.eventCard}>
-        <p className={styles.timelineTitle}>{eventTitle(item.event, t)}</p>
+      <details
+        className={styles.eventCard}
+        open={tone === "attention"}
+        onToggle={() => reportClientDiagnostic("[keiko] coding workbench event details toggled")}
+      >
+        <summary className={styles.cmpActivitySummary}>{eventTitle(item.event, t)}</summary>
         <p className={styles.timelineDetail}>{eventDetail(item.event, t)}</p>
-      </div>
+      </details>
     </li>
   );
 }
@@ -763,7 +927,6 @@ function QuestionRow({
       aria-setsize={total}
       data-timeline-kind="question"
     >
-      <span className={styles.timelineMarker} aria-hidden="true" />
       <CodingWorkbenchQuestionsSurface
         result={result}
         variant="inline"

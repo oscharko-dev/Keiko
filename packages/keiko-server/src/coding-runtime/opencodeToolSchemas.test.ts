@@ -56,15 +56,14 @@ interface RealAdvertisedTool {
   readonly parameters: Readonly<Record<string, unknown>>;
 }
 
-/** #3390 live-run capture: the real OpenCode 1.17.17 binary's actual `tools` advertisement. */
+/** Live V2 capture: the real OpenCode 2.0.10 binary's actual `tools` advertisement. */
 function realAdvertisementFixture(): readonly RealAdvertisedTool[] {
   const path = new URL(
-    "./opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json",
+    "./opencodeToolSchemas.opencode-2.0.10-advertised.fixture.json",
     import.meta.url,
   );
   const parsed = JSON.parse(readFileSync(path, "utf8")) as readonly {
     readonly name: string;
-    readonly description: string;
     readonly parameters: Readonly<Record<string, unknown>>;
   }[];
   return parsed.map(({ name, parameters }) => ({ name, parameters }));
@@ -88,7 +87,7 @@ describe("OpenCode visible tool contract", () => {
     }
   });
 
-  it("accepts only the pinned v1.18.30 verification projection", () => {
+  it("accepts only the pinned V2 verification projection", () => {
     expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
   });
 
@@ -158,7 +157,7 @@ describe("OpenCode visible tool contract", () => {
 
   it("accepts the exact projected surface including the eight new Git/CI tools and #3414's repository search", () => {
     expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
-    expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(19);
+    expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(18);
   });
 
   it("bounds keiko_git_diff to CODING_RUNTIME_GIT_MAX_PATHS paths", () => {
@@ -215,7 +214,7 @@ describe("OpenCode visible tool contract", () => {
 });
 
 describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
-  it("binds the seventeen catalog-representable governed tools plus its two native extensions (#3414 follow-up, #3417)", () => {
+  it("binds the seventeen governed tools plus the native question extension", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
       0,
       undefined,
@@ -224,7 +223,6 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
     expect(advertisement.kind).toBe("bound");
     expect(advertisement.projection.nativeExtensions).toEqual([
       { alias: "question", contractVersion: 1 },
-      { alias: "todowrite", contractVersion: 1 },
     ]);
     expect(advertisement.projection.tools.map((tool) => tool.alias).sort()).toEqual(
       [
@@ -256,13 +254,13 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   });
 
   // Every model-visible tool is accounted for by exactly one of two sources: the catalog
-  // projection, or its two exhaustively-declared native extensions (`question`, `todowrite`).
+  // projection, or its one declared native extension (`question`).
   // #3386/#3387/#3388 registered the eight Git/CI tools into the same catalog registration set
   // the original seven tools already came from (opencode.test.ts's "declares all eight
   // #3386/#3387/#3388 Git/CI tools under their canonical identities" test pins that registration),
   // so this stays one exact-equality invariant rather than a two-source partition: every
-  // model-visible tool is either a catalog-projected tool or one of its two native extensions.
-  it("names all nineteen OpenCode 1.18.30 model-visible tools once native extensions are included", () => {
+  // model-visible tool is either a catalog-projected tool or the native question extension.
+  it("names all eighteen OpenCode 2.0.10 model-visible tools", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
       0,
       undefined,
@@ -504,13 +502,9 @@ describe("deriveGatewayCatalogReadiness", () => {
   });
 });
 
-// #3390: a real OpenCode 1.17.17 run on macOS with the then-pinned binary refused every chat
-// completion with 403 CODING_GATEWAY_TOOL_CONTRACT_DRIFT because OpenCode projects an
-// empty-parameter tool's schema differently from every other tool: for `keiko_git_status` and
-// `keiko_git_push` (source `{"type":"object","properties":{},"required":[]}`) the real binary
-// sends `{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{},"type":
-// "object"}` -- no `required` key. The fixture below is that exact live capture, unmodified.
-describe("OpenCode 1.17.17 real advertisement fidelity (#3390 live-run evidence)", () => {
+// Captured directly from a real OpenCode 2.0.10 provider call. The gateway must accept its
+// closed top-level schemas while rejecting altered tools, including the two empty-parameter tools.
+describe("OpenCode 2.0.10 real advertisement fidelity", () => {
   it("accepts the unchanged live-captured tools with the current verification projection", () => {
     expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
   });

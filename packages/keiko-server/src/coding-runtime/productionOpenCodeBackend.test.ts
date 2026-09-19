@@ -318,7 +318,7 @@ function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeR
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "1.18.30",
+        upstreamVersion: "2.0.10",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "1",
         protocolVersion: "coding-sidecar-v1",
@@ -338,7 +338,7 @@ function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeR
       sbomEvidenceSha256: digest,
       protocolSchemaRawSha256: digest,
       protocolHandshakeDigest: digest,
-      protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1",
+      protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2",
       availability: {
         redistributionApproved: true,
         payloadPresent: true,

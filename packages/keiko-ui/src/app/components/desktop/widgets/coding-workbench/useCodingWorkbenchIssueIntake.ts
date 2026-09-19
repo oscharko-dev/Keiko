@@ -1,139 +1,135 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type {
-  CodingWorkbenchIssueBindingProjection,
-  CodingWorkbenchIssueBindingFailure,
-} from "@oscharko-dev/keiko-contracts";
-import { previewCodingWorkbenchIssue, type GitHubIssuePreviewResponseWire } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import type { CodingWorkbenchIssueBindingFailure } from "@oscharko-dev/keiko-contracts";
+import {
+  findGitHubIssueReferences,
+  parseGitHubIssueReference,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { previewCodingWorkbenchIssue } from "@/lib/api";
 import { codingWorkbenchIssueFailure } from "@/lib/coding-workbench-issue-errors";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import type { CodingWorkbenchIssueStartIntent } from "@/lib/coding-workbench-runtime-actions";
 
-export interface AcceptedWorkbenchIssue {
-  readonly repositoryPath: string;
-  readonly issueRef: string;
-  readonly label: string;
-  readonly binding: CodingWorkbenchIssueBindingProjection;
-}
-
-// #3384 B5-13: a rate limit, a GitHub-side 5xx, or a wall-time timeout on the issue read is
-// reported by the server as CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE — a free error code, not
-// a member of the closed CodingWorkbenchIssueBindingFailure wire vocabulary
-// (coding-workbench-issue-errors.ts stays closed on purpose). This UI-local state distinguishes it
-// from a genuinely unreadable issue so the retry-worded copy can be shown instead of "unknown".
 export type IssueIntakeFailure =
   | CodingWorkbenchIssueBindingFailure
   | "unknown"
-  | "unavailable-runtime"
   | "read-transient-failure"
-  | "unknown-repository";
-type IssueIntakeState =
-  | { readonly kind: "empty" | "loading" | "cancelled" }
-  | { readonly kind: "ready"; readonly response: GitHubIssuePreviewResponseWire }
+  | "unknown-repository"
+  | "multiple-issues";
+export type IssueIntakeState =
+  | { readonly kind: "empty" }
+  | { readonly kind: "loading" }
   | {
       readonly kind: "failed";
       readonly failure: IssueIntakeFailure;
       readonly correlationId: string | undefined;
     };
-
-const READ_TRANSIENT_FAILURE_CODE = "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE";
+type StartIssue = (issue: CodingWorkbenchIssueStartIntent | undefined) => void | Promise<void>;
 
 function issueFailure(error: unknown): IssueIntakeFailure {
   if (typeof error !== "object" || error === null || !("code" in error)) return "unknown";
-  if (error.code === READ_TRANSIENT_FAILURE_CODE) return "read-transient-failure";
-  // The routes refuse a repository the workbench has not opened yet (F63): name what the operator
-  // must do first instead of the generic "unknown" copy.
+  if (error.code === "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE")
+    return "read-transient-failure";
   if (error.code === UNKNOWN_REPOSITORY_ERROR_CODE) return "unknown-repository";
   return codingWorkbenchIssueFailure(error.code) ?? "unknown";
 }
 
-export function codingWorkbenchIssueTaskId(issueNumber: number): string {
-  return `coding-workbench-issue-${String(issueNumber)}`;
+type PromptReference = { readonly issueRef?: string } | { readonly failure: IssueIntakeFailure };
+
+function promptReference(prompt: string): PromptReference {
+  const refs = new Set<string>();
+  for (const [token] of prompt.matchAll(/https?:\/\/[^\s<>"`]+/gu)) {
+    const candidate = token.replace(/[)\].,;!?]+$/u, "");
+    if (!/^https?:\/\/github\.com\//iu.test(candidate)) continue;
+    if (!/\/(?:issues|pull)\//u.test(candidate)) continue;
+    const parsed = parseGitHubIssueReference(candidate);
+    if (!parsed.ok) return { failure: "invalid-reference" };
+    refs.add(
+      `https://github.com/${parsed.reference.ownerAndRepo.toLowerCase()}/issues/${String(parsed.reference.issueNumber)}`,
+    );
+  }
+  for (const reference of findGitHubIssueReferences(prompt, prompt.length))
+    refs.add(
+      `https://github.com/${reference.ownerAndRepo.toLowerCase()}/issues/${String(reference.issueNumber)}`,
+    );
+  if (refs.size === 0) {
+    for (const [, number] of prompt.matchAll(/(?:^|\s)#(\d{1,10})(?=$|[\s.,:;!?])/gu)) {
+      refs.add(`#${number}`);
+    }
+  }
+  if (refs.size > 1) return { failure: "multiple-issues" };
+  const issueRef = [...refs][0];
+  return issueRef === undefined ? {} : { issueRef };
 }
 
-export function acceptedWorkbenchIssue(
-  response: GitHubIssuePreviewResponseWire,
-  repositoryPath: string,
-): AcceptedWorkbenchIssue {
-  const { ownerAndRepo, issueNumber, url } = response.preview.provenance;
-  reportClientDiagnostic(
-    `[keiko] coding workbench issue accepted: issue ${String(issueNumber)} binding ${response.binding.bindingDigest.slice(0, 12)}`,
-  );
-  return {
-    repositoryPath: repositoryPath.trim(),
-    issueRef: url,
-    label: `${ownerAndRepo}#${String(issueNumber)}`,
-    binding: response.binding,
-  };
-}
-
-export interface IssueIntakeController {
-  readonly issueRef: string;
-  readonly state: IssueIntakeState;
-  readonly change: (value: string) => void;
-  readonly preview: () => void;
-  readonly cancel: () => void;
-  readonly reset: () => void;
-}
-
-async function resolvePreview(
-  repositoryPath: string,
+async function resolvePromptIssue(
+  root: string,
   issueRef: string,
   controller: AbortController,
   publish: (state: IssueIntakeState) => void,
+  start: StartIssue,
 ): Promise<void> {
   try {
     const response = await previewCodingWorkbenchIssue(
-      { repositoryPath: repositoryPath.trim(), issueRef: issueRef.trim() },
+      { repositoryPath: root.trim(), issueRef },
       controller.signal,
     );
     if (controller.signal.aborted) return;
-    reportClientDiagnostic(
-      `[keiko] coding workbench issue preview ready: issue ${String(response.binding.issueNumber)}`,
-    );
-    publish({ kind: "ready", response });
+    reportClientDiagnostic("[keiko] coding workbench prompt issue resolved");
+    await start({ issueRef, expectedIssueBindingDigest: response.binding.bindingDigest });
+    if (!controller.signal.aborted) publish({ kind: "empty" });
   } catch (error) {
     if (controller.signal.aborted) return;
     const failure = issueFailure(error);
     const correlationId = correlationIdOf(error);
-    reportClientDiagnostic(`[keiko] coding workbench issue preview failed: ${failure}`, {
+    reportClientDiagnostic(`[keiko] coding workbench prompt issue failed: ${failure}`, {
       correlationId,
     });
     publish({ kind: "failed", failure, correlationId });
   }
 }
 
-export function useCodingWorkbenchIssueIntake(repositoryPath: string): IssueIntakeController {
-  const [issueRef, setIssueRef] = useState("");
+export function useCodingWorkbenchIssueIntake(
+  repositoryPath: string,
+  scope: string,
+): {
+  readonly state: IssueIntakeState;
+  readonly submit: (prompt: string, start: StartIssue) => Promise<void>;
+  readonly cancel: () => void;
+} {
   const [state, setState] = useState<IssueIntakeState>({ kind: "empty" });
   const request = useRef<AbortController | null>(null);
-  const reset = useCallback((): void => {
+  useEffect(() => {
     request.current?.abort();
     setState({ kind: "empty" });
-  }, []);
-  useEffect(() => {
-    reset();
     return (): void => request.current?.abort();
-  }, [repositoryPath, reset]);
-  const change = (value: string): void => {
-    reset();
-    setIssueRef(value);
-  };
-  const preview = (): void => {
-    if (repositoryPath.trim() === "" || issueRef.trim() === "") return;
+  }, [repositoryPath, scope]);
+  const cancel = (): void => {
     request.current?.abort();
+    setState({ kind: "empty" });
+    reportClientDiagnostic("[keiko] coding workbench prompt issue cancelled");
+  };
+  const submit = async (prompt: string, start: StartIssue): Promise<void> => {
+    request.current?.abort();
+    const reference = promptReference(prompt);
+    if ("failure" in reference) {
+      reportClientDiagnostic(`[keiko] coding workbench prompt issue refused: ${reference.failure}`);
+      setState({ kind: "failed", failure: reference.failure, correlationId: undefined });
+      return;
+    }
+    setState({ kind: "empty" });
+    if (reference.issueRef === undefined) {
+      await start(undefined);
+      return;
+    }
     const controller = new AbortController();
     request.current = controller;
     setState({ kind: "loading" });
-    reportClientDiagnostic("[keiko] coding workbench issue preview requested");
-    void resolvePreview(repositoryPath, issueRef, controller, setState);
+    reportClientDiagnostic("[keiko] coding workbench prompt issue requested");
+    await resolvePromptIssue(repositoryPath, reference.issueRef, controller, setState, start);
   };
-  const cancel = (): void => {
-    request.current?.abort();
-    setState({ kind: "cancelled" });
-    reportClientDiagnostic("[keiko] coding workbench issue preview cancelled");
-  };
-  return { issueRef, state, change, preview, cancel, reset };
+  return { state, submit, cancel };
 }

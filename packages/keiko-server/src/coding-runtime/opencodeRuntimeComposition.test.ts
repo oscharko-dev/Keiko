@@ -42,8 +42,8 @@ import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { OpenCodeGovernedSinkReceipt } from "./opencodeRuntimeAdapter.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  projectOpenCodeProtocolSurface,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
@@ -57,168 +57,17 @@ const TOOL_CAPABILITY = "t".repeat(43);
 // `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
 const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "1.18.30";
+const OPENCODE_VERSION = "2.0.10";
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
-const OPENAPI = {
-  openapi: "3.1.0",
-  paths: {
-    "/global/health": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: {
-          "200": { $ref: "#/components/responses/Health" },
-          "401": { $ref: "#/components/responses/Unauthorized" },
-        },
-      },
-    },
-    "/global/event": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/EventStream" } },
-      },
-    },
-    "/doc": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/sync/history": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/History" } },
-      },
-    },
-    "/session": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Sessions" } },
-      },
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Session" } },
-      },
-    },
-    "/session/status": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/SessionStatus" } },
-      },
-    },
-    "/session/{sessionID}/prompt_async": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/session/{sessionID}/abort": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/permission": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/permission/{requestID}/reply": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question/{requestID}/reply": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question/{requestID}/reject": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-  },
-  components: {
-    securitySchemes: { basicAuth: { type: "http", scheme: "basic" } },
-    responses: {
-      Health: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/Health" } } },
-      },
-      Unauthorized: { description: "unauthorized" },
-      EventStream: { content: { "text/event-stream": { schema: { type: "string" } } } },
-      History: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/History" } } },
-      },
-      Sessions: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/SessionList" } } },
-      },
-      Session: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/Session" } } },
-      },
-      SessionStatus: {
-        content: {
-          "application/json": { schema: { $ref: "#/components/schemas/SessionStatusMap" } },
-        },
-      },
-    },
-    schemas: {
-      Health: {
-        type: "object",
-        required: ["healthy", "version"],
-        properties: { healthy: { type: "boolean" }, version: { type: "string" } },
-      },
-      History: { type: "array", items: { $ref: "#/components/schemas/Event" } },
-      Event: {
-        type: "object",
-        required: ["id", "aggregate_id", "seq", "type", "data"],
-        properties: {
-          id: { type: "string" },
-          aggregate_id: { type: "string" },
-          seq: { type: "integer" },
-          type: { type: "string" },
-          data: { type: "object" },
-        },
-      },
-      Session: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-      SessionList: {
-        type: "array",
-        items: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-      },
-      SessionStatusMap: {
-        type: "object",
-        additionalProperties: { $ref: "#/components/schemas/SessionStatus" },
-      },
-      SessionStatus: {
-        oneOf: [
-          { type: "object", required: ["type"], properties: { type: { const: "idle" } } },
-          { type: "object", required: ["type"], properties: { type: { const: "busy" } } },
-          {
-            type: "object",
-            required: ["type", "attempt", "message", "next"],
-            properties: {
-              type: { const: "retry" },
-              attempt: { type: "integer" },
-              message: { type: "string" },
-              next: { type: "number" },
-            },
-          },
-        ],
-      },
-    },
-  },
-} as const;
-const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeProtocolSurface(OPENAPI).digest;
+const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
+// Captured structural projection from OpenCode 2.0.10's actual OpenAPI document.
+const OPENAPI: unknown = JSON.parse(
+  readFileSync(
+    new URL("./opencodeProtocolSurface.opencode-2.0.10.fixture.json", import.meta.url),
+    "utf8",
+  ),
+);
+const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(OPENAPI).digest;
 
 interface OpenCodeRuntimeComposition {
   readonly manager: CodingRuntimeManager;
@@ -271,7 +120,7 @@ interface OpenCodeRuntimeCompositionModule {
       readonly verification: PortableSidecarRuntimeVerification & {
         readonly protocolSchemaRawSha256: string;
         readonly protocolHandshakeDigest: string;
-        readonly protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1";
+        readonly protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2";
       };
       readonly resourceRoot: string;
       readonly target: "macos-arm64";
@@ -368,12 +217,22 @@ function requestPath(url: URL | RequestInfo): string {
   return new URL(url.url).pathname;
 }
 
+function v2Json(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function v2Envelope(value: unknown): Response {
+  return v2Json({ data: value });
+}
+
 function portableFixture(resourceRoot: string): {
   readonly executablePath: string;
   readonly verification: PortableSidecarRuntimeVerification & {
     readonly protocolSchemaRawSha256: string;
     readonly protocolHandshakeDigest: string;
-    readonly protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1";
+    readonly protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2";
   };
 } {
   const payloadRootPath = "runtime/sidecars/opencode-compatible";
@@ -435,7 +294,7 @@ function portableFixture(resourceRoot: string): {
       },
       protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
       protocolHandshakeDigest: PROTOCOL_HANDSHAKE_DIGEST,
-      protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1",
+      protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2",
     },
   };
 }
@@ -550,7 +409,7 @@ async function startBridgeFixture(
     backend: {
       identity: { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" },
       spawnOwnedTree: (): RuntimeProcessTree => {
-        stdout.end("opencode server listening on http://127.0.0.1:43123\n");
+        stdout.end("server listening on http://127.0.0.1:43123\n");
         return {
           treeId: "tool-bridge-tree",
           stdout,
@@ -575,140 +434,108 @@ async function startBridgeFixture(
     ],
   });
   const sseFrame = new TextEncoder().encode(
-    control?.sseFrame ??
-      'data: {"payload":{"id":"evt_server","type":"server.connected","properties":{}}}\n\n',
+    control?.sseFrame ?? 'data: {"id":"evt_server","type":"server.connected","data":{}}\n\n',
   );
   let readinessChallengePhase: ReadinessChallengePhase = "before-prompt";
   // eslint-disable-next-line complexity -- finite mock endpoint table is intentionally explicit.
   const fetch = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
     const path = requestPath(url);
-    if (path === "/global/health" && new Headers(init?.headers).get("authorization") === null)
+    if (path === "/api/info" && new Headers(init?.headers).get("authorization") === null)
       return Promise.resolve(new Response("", { status: 401 }));
-    if (path === "/global/health")
-      return Promise.resolve(
-        new Response(JSON.stringify({ healthy: true, version: OPENCODE_VERSION }), {
-          headers: { "content-type": "application/json" },
-        }),
+    if (path === "/api/info") return Promise.resolve(v2Json({ version: OPENCODE_VERSION }));
+    if (path === "/openapi.json") return Promise.resolve(v2Json(OPENAPI));
+    if (path === "/api/event") {
+      let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+      let cancelled = false;
+      const onCancel = (): void => {
+        if (cancelled) return;
+        cancelled = true;
+        control?.onSseCancel?.();
+      };
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          onCancel();
+          try {
+            controllerRef?.close();
+          } catch {
+            // The V2 stream may already have ended before the test aborts its fetch.
+          }
+        },
+        { once: true },
       );
-    if (path === "/doc")
-      return Promise.resolve(
-        new Response(JSON.stringify(OPENAPI), { headers: { "content-type": "application/json" } }),
-      );
-    if (path === "/global/event")
       return Promise.resolve(
         new Response(
           new ReadableStream<Uint8Array>({
             start(controller): void {
+              controllerRef = controller;
               control?.onSseStart?.(controller);
               controller.enqueue(sseFrame);
             },
             cancel(): void {
-              control?.onSseCancel?.();
+              onCancel();
             },
           }),
           { headers: { "content-type": "text/event-stream" } },
         ),
       );
-    if (path === "/sync/history") {
-      if (control?.historyCalls !== undefined && typeof init?.body === "string") {
-        control.historyCalls.push(JSON.parse(init.body) as Readonly<Record<string, number>>);
-      }
-      if (control?.historyResponseFactory !== undefined) {
-        return control.historyResponseFactory();
-      }
-      return (
-        control?.historyResponse ??
-        Promise.resolve(
-          new Response(
-            JSON.stringify([
-              {
-                id: "evt_created",
-                aggregate_id: "ses_tool",
-                seq: 0,
-                type: "session.created.1",
-                data: { sessionID: "ses_tool", info: { id: "ses_tool", title: "private" } },
-              },
-            ]),
-            { headers: { "content-type": "application/json" } },
-          ),
-        )
-      );
     }
-    if (path.endsWith("/prompt_async")) {
+    if (path === "/api/session/ses_tool/message") {
+      control?.historyCalls?.push({});
+      if (control?.historyResponseFactory !== undefined) return control.historyResponseFactory();
+      return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
+    }
+    if (path.endsWith("/prompt")) {
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
         readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string") {
         control?.runControl?.promptBodies.push(init.body);
       }
-      return Promise.resolve(new Response(null, { status: 204 }));
+      return Promise.resolve(v2Envelope({}));
     }
-    if (path.endsWith("/abort")) {
+    if (path.endsWith("/interrupt")) {
       if (readinessChallengePhase === "prompt-pending") readinessChallengePhase = "aborted";
-      else control?.runControl?.abortSessions.push(path.split("/")[2] ?? "");
-      return Promise.resolve(
-        new Response("true", { headers: { "content-type": "application/json" } }),
-      );
+      else control?.runControl?.abortSessions.push(path.split("/")[3] ?? "");
+      return Promise.resolve(v2Envelope({}));
     }
-    if (path === "/session/status") {
+    if (path === "/api/session/active") {
       const statuses = control?.runControl?.statusResponses;
       const value =
         control?.runControl?.statusResponseForReadinessPhase?.(readinessChallengePhase) ??
         (statuses?.length === 1 ? statuses[0] : statuses?.shift());
-      return Promise.resolve(
-        new Response(JSON.stringify(value ?? {}), {
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      return Promise.resolve(v2Envelope(value ?? {}));
     }
-    if (path === "/question") {
+    if (path === "/api/form") {
       const responses = control?.runControl?.questionResponses;
       const value = responses?.length === 1 ? responses[0] : responses?.shift();
-      const respond = (): Response =>
-        new Response(JSON.stringify(value ?? []), {
-          headers: { "content-type": "application/json" },
-        });
-      // Lets a test race a concurrent dispose to completion WHILE this listQuestions() round
-      // trip is still in flight, then observe the caller's post-await readiness re-check.
+      const respond = (): Response => v2Envelope(value ?? []);
       const raced = control?.runControl?.onQuestionListFetch?.();
       return raced instanceof Promise ? raced.then(respond) : Promise.resolve(respond());
     }
-    if (path.startsWith("/question/")) {
+    if (path.includes("/form/")) {
       control?.runControl?.questionRequests?.push({
         method: init?.method ?? "GET",
         path,
         ...(typeof init?.body === "string" ? { body: init.body } : {}),
       });
-      return Promise.resolve(
-        new Response("true", { headers: { "content-type": "application/json" } }),
-      );
+      return Promise.resolve(v2Envelope({}));
     }
-    if (path === "/permission") {
+    if (path === "/api/permission/request") {
       const responses = control?.runControl?.permissionResponses;
       const value = responses?.length === 1 ? responses[0] : responses?.shift();
-      return Promise.resolve(
-        new Response(JSON.stringify(value ?? []), {
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      return Promise.resolve(v2Envelope(value ?? []));
     }
-    if (path.startsWith("/permission/")) {
+    if (path.includes("/permission/")) {
       control?.runControl?.permissionRequests?.push({
         method: init?.method ?? "GET",
         path,
         ...(typeof init?.body === "string" ? { body: init.body } : {}),
       });
-      return Promise.resolve(
-        new Response("true", { headers: { "content-type": "application/json" } }),
-      );
+      return Promise.resolve(v2Envelope({}));
     }
-    if (path === "/session" && init?.method === "POST")
-      return Promise.resolve(
-        new Response('{"id":"ses_tool"}', { headers: { "content-type": "application/json" } }),
-      );
-    if (path === "/session")
-      return Promise.resolve(
-        new Response('[{"id":"ses_tool"}]', { headers: { "content-type": "application/json" } }),
-      );
+    if (path === "/api/session" && init?.method === "POST")
+      return Promise.resolve(v2Envelope({ id: "ses_tool" }));
+    if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_tool" }]));
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
   const readinessAwareFacade: CodingToolFacade = {
@@ -797,7 +624,7 @@ async function startBridgeFixture(
 }
 
 function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
-  return turnHistory("stop");
+  return turnHistory("succeeded");
 }
 
 function changesetArguments(patch: string): Readonly<Record<string, unknown>> {
@@ -814,94 +641,42 @@ function editPartRow(
   state: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
   return {
-    id: `evt_edit_${String(sequence)}`,
-    aggregate_id: "ses_tool",
-    seq: sequence,
-    type: "message.part.updated.1",
-    data: {
-      sessionID: "ses_tool",
-      part: {
-        id: `prt_edit_${String(sequence)}`,
-        sessionID: "ses_tool",
-        messageID: "msg_assistant",
+    id: `msg_edit_${String(sequence)}`,
+    type: "assistant",
+    time: { created: sequence },
+    content: [
+      {
         type: "tool",
-        callID: "call_edit",
-        tool: "keiko_changeset_edit",
+        id: `call_edit_${String(sequence)}`,
+        name: "keiko_changeset_edit",
+        time: { created: sequence },
         state,
       },
-      time: sequence,
-    },
+    ],
   };
 }
 
 function failedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
-  return turnHistory("error", {
+  return turnHistory("failed", {
     name: "APIError",
     data: { message: "SENTINEL_PROVIDER_DETAIL", isRetryable: false },
   });
 }
 
 function turnHistory(
-  finish: "stop" | "error",
+  outcome: "succeeded" | "failed",
   error?: Readonly<Record<string, unknown>>,
 ): readonly Readonly<Record<string, unknown>>[] {
-  const tokens = {
-    total: 0,
-    input: 0,
-    output: 0,
-    reasoning: 0,
-    cache: { read: 0, write: 0 },
-  };
   return [
+    { id: "msg_user", type: "user", time: { created: 1 }, text: "bounded task" },
     {
-      id: "evt_created",
-      aggregate_id: "ses_tool",
-      seq: 0,
-      type: "session.created.1",
-      data: { sessionID: "ses_tool", info: { id: "ses_tool", title: "private" } },
+      id: "msg_assistant",
+      type: "assistant",
+      time: { created: 2 },
+      content: [{ type: "text", text: "done" }],
+      ...(error === undefined ? {} : { error }),
     },
-    {
-      id: "evt_user",
-      aggregate_id: "ses_tool",
-      seq: 1,
-      type: "message.updated.1",
-      data: {
-        sessionID: "ses_tool",
-        info: {
-          id: "msg_user",
-          sessionID: "ses_tool",
-          role: "user",
-          time: { created: 1 },
-          agent: "build",
-          model: { providerID: "keiko-runtime", modelID: "coding" },
-        },
-      },
-    },
-    {
-      id: "evt_assistant",
-      aggregate_id: "ses_tool",
-      seq: 2,
-      type: "message.updated.1",
-      data: {
-        sessionID: "ses_tool",
-        info: {
-          id: "msg_assistant",
-          sessionID: "ses_tool",
-          role: "assistant",
-          time: { created: 1, completed: 2 },
-          parentID: "msg_user",
-          modelID: "coding",
-          providerID: "keiko-runtime",
-          mode: "build",
-          agent: "build",
-          path: { cwd: "/private/workspace", root: "/" },
-          cost: 0,
-          tokens,
-          finish,
-          ...(error === undefined ? {} : { error }),
-        },
-      },
-    },
+    { id: "msg_idle", type: "idle", time: { created: 3 }, outcome },
   ];
 }
 
@@ -920,8 +695,8 @@ afterAll(() => {
 describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
-    expect(OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "e1db492f2ac661f2b44da6ef3d7e58ed34856621a2c58de4610640e1291266f6",
+    expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
+      "726109518aba483675a0be0a0b162221c7a50a24ef2de4539cb7fd0ea929ff9b",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -950,7 +725,7 @@ describe("unmounted OpenCode runtime composition", () => {
       spawnOwnedTree: (request): RuntimeProcessTree => {
         order.push("spawn");
         launch = request;
-        stdout.end("opencode server listening on http://127.0.0.1:43123\n");
+        stdout.end("server listening on http://127.0.0.1:43123\n");
         return {
           treeId: "tree-1",
           stdout,
@@ -987,7 +762,7 @@ describe("unmounted OpenCode runtime composition", () => {
     const sseControllers: ReadableStreamDefaultController<Uint8Array>[] = [];
     const sseCancellations: number[] = [];
     const sseFrame = new TextEncoder().encode(
-      'event: message\ndata: {"payload":{"id":"evt_server","type":"server.connected","properties":{}}}\n\n',
+      'data: {"id":"evt_server","type":"server.connected","data":{}}\n\n',
     );
     const stream = (): ReadableStream<Uint8Array> =>
       new ReadableStream({
@@ -1005,68 +780,35 @@ describe("unmounted OpenCode runtime composition", () => {
     const fetchMock = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
       const path = requestPath(url);
       const authorization = new Headers(init?.headers).get("authorization");
-      if (path === "/global/health" && authorization === null)
+      if (path === "/api/info" && authorization === null)
         return Promise.resolve(new Response("", { status: 401 }));
       expect(authorization).toMatch(/^Basic /u);
-      if (path === "/global/health")
-        return Promise.resolve(
-          new Response(JSON.stringify({ healthy: true, version: OPENCODE_VERSION }), {
-            headers: { "content-type": "application/json" },
-          }),
+      if (path === "/api/info") return Promise.resolve(v2Json({ version: OPENCODE_VERSION }));
+      if (path === "/openapi.json") return Promise.resolve(v2Json(OPENAPI));
+      if (path === "/api/event") {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            order.push("sse-abort");
+            sseCancellations.push(sseControllers.length - 1);
+            sseControllers.at(-1)?.close();
+          },
+          { once: true },
         );
-      if (path === "/doc") {
-        return Promise.resolve(
-          new Response(JSON.stringify(OPENAPI), {
-            headers: { "content-type": "application/json" },
-          }),
-        );
-      }
-      if (path === "/global/event") {
-        init?.signal?.addEventListener("abort", () => order.push("sse-abort"), { once: true });
         return Promise.resolve(
           new Response(stream(), { headers: { "content-type": "text/event-stream" } }),
         );
       }
-      if (path === "/sync/history")
+      if (path === "/api/session/ses_1/message") return Promise.resolve(v2Envelope([]));
+      if (path.endsWith("/prompt")) return Promise.resolve(v2Envelope({}));
+      if (path.endsWith("/interrupt")) return Promise.resolve(v2Envelope({}));
+      if (path === "/api/session/active")
         return Promise.resolve(
-          new Response(
-            JSON.stringify([
-              {
-                id: "evt_created",
-                aggregate_id: "ses_1",
-                seq: 0,
-                type: "session.created.1",
-                data: { sessionID: "ses_1", info: { id: "ses_1", title: "private" } },
-              },
-            ]),
-            { headers: { "content-type": "application/json" } },
-          ),
+          v2Envelope(readinessStatusReads++ < 4 ? { ses_1: { type: "busy" } } : {}),
         );
-      if (path.endsWith("/prompt_async"))
-        return Promise.resolve(new Response(null, { status: 204 }));
-      if (path.endsWith("/abort"))
-        return Promise.resolve(
-          new Response("false", { headers: { "content-type": "application/json" } }),
-        );
-      if (path === "/session/status")
-        return Promise.resolve(
-          new Response(
-            JSON.stringify(readinessStatusReads++ < 4 ? { ses_1: { type: "busy" } } : {}),
-            { headers: { "content-type": "application/json" } },
-          ),
-        );
-      if (path === "/session" && init?.method === "POST")
-        return Promise.resolve(
-          new Response(JSON.stringify({ id: "ses_1" }), {
-            headers: { "content-type": "application/json" },
-          }),
-        );
-      if (path === "/session")
-        return Promise.resolve(
-          new Response(JSON.stringify([{ id: "ses_1" }]), {
-            headers: { "content-type": "application/json" },
-          }),
-        );
+      if (path === "/api/session" && init?.method === "POST")
+        return Promise.resolve(v2Envelope({ id: "ses_1" }));
+      if (path === "/api/session") return Promise.resolve(v2Envelope([{ id: "ses_1" }]));
       return Promise.resolve(new Response("", { status: 404 }));
     });
     const fetch = fetchMock as unknown as typeof globalThis.fetch;
@@ -1167,13 +909,15 @@ describe("unmounted OpenCode runtime composition", () => {
     expect(startResult).toMatchObject({ ok: true });
     expect(readinessStatusReads).toBe(5);
     const sessionCreate = fetchMock.mock.calls.find(
-      ([url, init]) => requestPath(url) === "/session" && init?.method === "POST",
+      ([url, init]) => requestPath(url) === "/api/session" && init?.method === "POST",
     );
-    expect(sessionCreate?.[1]?.body).toBe(JSON.stringify({ title: FIXED_SESSION_TITLE }));
+    expect(sessionCreate?.[1]?.body).toBe(
+      JSON.stringify({ title: FIXED_SESSION_TITLE, location: { directory: workspaceRoot } }),
+    );
     expect(new Headers(sessionCreate?.[1]?.headers).get("content-type")).toBe("application/json");
     let readinessPromptObserved = false;
     for (const [url, init] of fetchMock.mock.calls) {
-      if (requestPath(url).endsWith("/prompt_async")) {
+      if (requestPath(url).endsWith("/prompt")) {
         expect(typeof init?.body).toBe("string");
         if (typeof init?.body === "string") {
           expect(init.body).not.toContain(FIXED_SESSION_TITLE);
@@ -1186,12 +930,12 @@ describe("unmounted OpenCode runtime composition", () => {
     // payload is deliberately the exact nested message shape.
     expect(order).toEqual(["spawn"]);
     expect(sseCancellations).toEqual([]);
-    expect(launch?.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0", "--no-mdns"]);
+    expect(launch?.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0"]);
     const runRoot = join(stateBaseRoot, "run-1");
     expect(launch?.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
     expect(launch?.env.OPENCODE_CONFIG_DIR).toBe(join(runRoot, "config", "opencode"));
     expect(
-      fetchMock.mock.calls.some(([url]) => url instanceof URL && url.pathname === "/doc"),
+      fetchMock.mock.calls.some(([url]) => url instanceof URL && url.pathname === "/openapi.json"),
     ).toBe(true);
     expect(
       new Set([
@@ -1214,20 +958,20 @@ describe("unmounted OpenCode runtime composition", () => {
       runRoot,
       join(runRoot, "config"),
       join(runRoot, "config", "opencode"),
-      join(runRoot, "config", "opencode", "tools"),
+      join(runRoot, "config", "opencode", "plugins"),
       join(runRoot, "state"),
     ])
       expect(statSync(path).mode & 0o777).toBe(0o700);
     for (const path of [
       join(runRoot, "config", "opencode", "opencode.json"),
-      join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"),
-      join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"),
+      join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
+      join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
     ])
       expect(statSync(path).mode & 0o777).toBe(0o600);
     const files = [
       join(runRoot, "config", "opencode", "opencode.json"),
-      join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"),
-      join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"),
+      join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
+      join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
     ]
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
@@ -1240,10 +984,10 @@ describe("unmounted OpenCode runtime composition", () => {
     const materializedConfig = JSON.parse(
       readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
     ) as {
-      readonly provider: Readonly<Record<string, unknown>>;
+      readonly providers: Readonly<Record<string, unknown>>;
       readonly compaction: Readonly<Record<string, unknown>>;
     };
-    const materializedProvider = materializedConfig.provider["keiko-runtime"] as {
+    const materializedProvider = materializedConfig.providers["keiko-runtime"] as {
       readonly models: Readonly<
         Record<string, { readonly limit: Readonly<Record<string, number>> }>
       >;
@@ -1253,10 +997,15 @@ describe("unmounted OpenCode runtime composition", () => {
       input: 61_440,
       output: 4_096,
     });
-    expect(materializedConfig.compaction).toMatchObject({ auto: true, prune: true, tail_turns: 2 });
+    expect(materializedConfig.compaction).toMatchObject({ auto: true });
+    expect(typeof (materializedConfig.compaction.keep as { readonly tokens: unknown }).tokens).toBe(
+      "number",
+    );
     const paths = fetchMock.mock.calls.map(([url]) => requestPath(url));
-    expect(paths.indexOf("/session")).toBeLessThan(paths.lastIndexOf("/session"));
-    expect(paths.indexOf("/sync/history")).toBeGreaterThan(paths.indexOf("/session"));
+    expect(paths.indexOf("/api/session")).toBeLessThan(paths.lastIndexOf("/api/session"));
+    expect(paths.indexOf("/api/session/ses_1/message")).toBeGreaterThan(
+      paths.indexOf("/api/session"),
+    );
     // ADR-0043 D11-D14 (#3390): the bridge's public `url` is the SAME attested loopback origin
     // supplied at composition -- relocated from asserting a self-issued ephemeral listener port
     // (retired) to asserting the bridge never fabricates a second one of its own.
@@ -1334,12 +1083,12 @@ describe("private OpenCode run control", () => {
     ) as CodingToolFacade["execute"],
   };
 
-  it("accepts a schema-compatible explicit idle readiness status", async () => {
+  it("accepts an empty V2 active-session map after readiness interruption", async () => {
     const fixture = await startBridgeFixture(facade, undefined, {
       runControl: {
         promptBodies: [],
         abortSessions: [],
-        statusResponses: [{ ses_tool: { type: "idle" } }],
+        statusResponses: [{}],
       },
     });
     await fixture.stop();
@@ -1371,11 +1120,11 @@ describe("private OpenCode run control", () => {
     const historyCalls: Readonly<Record<string, number>>[] = [];
     const fixture = await startBridgeFixture(facade, undefined, {
       sseFrame:
-        'data: {"payload":{"id":"evt_live_only","type":"session.status","properties":{"sessionID":"ses_other","status":{"type":"busy"}}}}\n\n',
+        'data: {"id":"evt_live_only","type":"session.execution.started","data":{"sessionID":"ses_other"}}\n\n',
       historyCalls,
     });
     try {
-      expect(historyCalls).toEqual([{}, { ses_tool: 0 }]);
+      expect(historyCalls).toEqual([{}, {}]);
     } finally {
       await fixture.stop();
     }
@@ -1385,10 +1134,10 @@ describe("private OpenCode run control", () => {
     const questionObservations: string[] = [];
     const fixture = await startBridgeFixture(facade, undefined, {
       sseFrame: [
-        'data: {"payload":{"id":"evt_q1","type":"question.asked","properties":{"sessionID":"ses_tool","id":"que_1"}}}\n\n',
-        'data: {"payload":{"id":"evt_q2","type":"question.replied","properties":{"sessionID":"ses_tool","requestID":"que_1"}}}\n\n',
-        'data: {"payload":{"id":"evt_q3","type":"question.asked","properties":{"sessionID":"ses_other","id":"que_2"}}}\n\n',
-        'data: {"payload":{"id":"evt_q4","type":"question.rejected","properties":{}}}\n\n',
+        'data: {"id":"evt_q1","type":"form.created","data":{"form":{"id":"frm_1","sessionID":"ses_tool"}}}\n\n',
+        'data: {"id":"evt_q2","type":"form.created","data":{"form":{"id":"frm_2","sessionID":"ses_tool"}}}\n\n',
+        'data: {"id":"evt_q3","type":"form.created","data":{"form":{"id":"frm_3","sessionID":"ses_other"}}}\n\n',
+        'data: {"id":"evt_q4","type":"form.created","data":{}}\n\n',
       ].join(""),
       questionObservations,
     });
@@ -1397,10 +1146,7 @@ describe("private OpenCode run control", () => {
         expect(questionObservations.length).toBeGreaterThanOrEqual(2);
       });
       // Foreign-session and session-unbound frames observe nothing; dedupe is the consumer's job.
-      expect(questionObservations).toEqual([
-        "question.asked\u0000evt_q1",
-        "question.replied\u0000evt_q2",
-      ]);
+      expect(questionObservations).toEqual(["evt_q1", "evt_q2"]);
     } finally {
       await fixture.stop();
     }
@@ -1413,7 +1159,6 @@ describe("private OpenCode run control", () => {
       readonly path: string;
       readonly body?: string;
     }[] = [];
-    let sseController: ReadableStreamDefaultController<Uint8Array> | undefined;
     const upstreamPermission = {
       id: "per_upstream_1",
       sessionID: "ses_tool",
@@ -1440,9 +1185,6 @@ describe("private OpenCode run control", () => {
     const fixture = await startBridgeFixture(facade, undefined, {
       mode: "governed-assist",
       runtimeEvents,
-      onSseStart: (controller): void => {
-        sseController = controller;
-      },
       runControl: {
         promptBodies: [],
         abortSessions: [],
@@ -1452,18 +1194,15 @@ describe("private OpenCode run control", () => {
       },
     });
     try {
-      if (sseController === undefined) throw new Error("expected live event controller");
-      sseController.enqueue(
-        new TextEncoder().encode(
-          `data: ${JSON.stringify({
-            payload: {
-              id: "evt_permission",
-              type: "permission.asked",
-              properties: upstreamPermission,
-            },
-          })}\n\n`,
-        ),
-      );
+      const decision = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify({
+          action: "permission-request",
+          runId: FIXTURE_RUN_ID,
+          properties: upstreamPermission,
+        }),
+      });
       await vi.waitFor(() => {
         expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
       });
@@ -1483,13 +1222,8 @@ describe("private OpenCode run control", () => {
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, requestId, "reject"),
       ).resolves.toBe(true);
-      expect(permissionRequests).toEqual([
-        {
-          method: "POST",
-          path: "/permission/per_upstream_1/reply",
-          body: '{"reply":"reject"}',
-        },
-      ]);
+      await expect(decision).resolves.toMatchObject({ status: 403 });
+      expect(permissionRequests).toEqual([]);
     } finally {
       await fixture.stop();
     }
@@ -1509,12 +1243,7 @@ describe("private OpenCode run control", () => {
     const fixture = await startBridgeFixture(facade, undefined, {
       governedEvents,
       runControl,
-      historyResponseFactory: () =>
-        Promise.resolve(
-          new Response(JSON.stringify(history), {
-            headers: { "content-type": "application/json" },
-          }),
-        ),
+      historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
       afterStart: (_runtime, root): void => {
         runRoot = root;
       },
@@ -1537,12 +1266,7 @@ describe("private OpenCode run control", () => {
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
     expect(runControl.abortSessions).toEqual(["ses_tool"]);
     expect(runControl.promptBodies).toEqual([
-      JSON.stringify({
-        parts: [
-          { type: "text", text: prompt },
-          { type: "text", text: initialContext, synthetic: true },
-        ],
-      }),
+      JSON.stringify({ text: `${initialContext}\n\n${prompt}` }),
     ]);
 
     const aborted = new AbortController();
@@ -1553,8 +1277,14 @@ describe("private OpenCode run control", () => {
     const retained = [
       JSON.stringify(governedEvents),
       readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
-      readFileSync(join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"), "utf8"),
-      readFileSync(join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"), "utf8"),
+      readFileSync(
+        join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
+        "utf8",
+      ),
+      readFileSync(
+        join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
+        "utf8",
+      ),
     ].join("\n");
     expect(retained).not.toContain(prompt);
     expect(retained).not.toContain(initialContext);
@@ -1581,12 +1311,7 @@ describe("private OpenCode run control", () => {
           records.push(record);
         },
       },
-      historyResponseFactory: () =>
-        Promise.resolve(
-          new Response(JSON.stringify(history), {
-            headers: { "content-type": "application/json" },
-          }),
-        ),
+      historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
     });
     try {
       await expect(
@@ -1643,12 +1368,7 @@ describe("private OpenCode run control", () => {
     };
     const fixture = await startBridgeFixture(facade, undefined, {
       runControl,
-      historyResponseFactory: () =>
-        Promise.resolve(
-          new Response(JSON.stringify(history), {
-            headers: { "content-type": "application/json" },
-          }),
-        ),
+      historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
     });
     try {
       await expect(
@@ -1667,7 +1387,7 @@ describe("private OpenCode run control", () => {
       expect(runControl.abortSessions).toEqual(["ses_tool"]);
       expect(abortSettled).toBe(false);
       history = completedTurnHistory();
-      runControl.statusResponses.push({ ses_tool: { type: "idle" } });
+      runControl.statusResponses.push({});
       await expect(aborting).resolves.toBe(true);
       await expect(terminal).resolves.toBe(true);
     } finally {
@@ -1683,20 +1403,24 @@ describe("private OpenCode run control", () => {
     }[] = [];
     const pending = [
       {
-        id: "que_fixed",
+        id: "frm_fixed",
         sessionID: "ses_tool",
-        questions: [
+        title: "Approval",
+        fields: [
           {
-            question: "Approve the bounded edit?",
-            header: "Approval",
-            options: [{ label: "Approve", description: "Continue" }],
+            key: "decision",
+            title: "Approval",
+            description: "Approve the bounded edit?",
+            type: "string",
+            options: [{ label: "Approve", value: "approved", description: "Continue" }],
           },
         ],
       },
       {
-        id: "que_other",
+        id: "frm_other",
         sessionID: "ses_other",
-        questions: [{ question: "Private other session", header: "Other", options: [] }],
+        title: "Other",
+        fields: [{ key: "decision", title: "Other", type: "string" }],
       },
     ];
     const fixture = await startBridgeFixture(facade, undefined, {
@@ -1711,7 +1435,19 @@ describe("private OpenCode run control", () => {
     try {
       await expect(fixture.runtime.runPort.listQuestions("unknown-run")).resolves.toEqual([]);
       await expect(fixture.runtime.runPort.listQuestions(FIXTURE_RUN_ID)).resolves.toEqual([
-        pending[0],
+        {
+          id: "que_fixed",
+          sessionID: "ses_tool",
+          questions: [
+            {
+              question: "Approve the bounded edit?",
+              header: "Approval",
+              options: [{ label: "Approve", description: "Continue" }],
+              multiple: false,
+              custom: false,
+            },
+          ],
+        },
       ]);
       await expect(
         fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_other", [["Approve"]]),
@@ -1730,8 +1466,12 @@ describe("private OpenCode run control", () => {
         fixture.runtime.runPort.rejectQuestion(FIXTURE_RUN_ID, "que_fixed"),
       ).resolves.toBe(true);
       expect(questionRequests).toEqual([
-        { method: "POST", path: "/question/que_fixed/reply", body: '{"answers":[["Approve"]]}' },
-        { method: "POST", path: "/question/que_fixed/reject" },
+        {
+          method: "POST",
+          path: "/api/session/ses_tool/form/frm_fixed/reply",
+          body: '{"answer":{"decision":"approved"}}',
+        },
+        { method: "DELETE", path: "/api/session/ses_tool/form/frm_fixed" },
       ]);
       expect(JSON.stringify(questionRequests)).not.toContain("Approve the bounded edit?");
     } finally {
@@ -1756,13 +1496,16 @@ describe("private OpenCode run control", () => {
     }[] = [];
     const pending = [
       {
-        id: "que_fixed",
+        id: "frm_fixed",
         sessionID: "ses_tool",
-        questions: [
+        title: "Approval",
+        fields: [
           {
-            question: "Approve the bounded edit?",
-            header: "Approval",
-            options: [{ label: "Approve", description: "Continue" }],
+            key: "decision",
+            title: "Approval",
+            description: "Approve the bounded edit?",
+            type: "string",
+            options: [{ label: "Approve", value: "approved", description: "Continue" }],
           },
         ],
       },
@@ -1915,20 +1658,7 @@ describe("private OpenCode tool bridge", () => {
     let releaseHistory: (() => void) | undefined;
     const historyResponse = new Promise<Response>((resolve) => {
       releaseHistory = (): void => {
-        resolve(
-          new Response(
-            JSON.stringify([
-              {
-                id: "evt_tool",
-                aggregate_id: "ses_tool",
-                seq: 0,
-                type: "session.status",
-                data: { sessionID: "ses_tool", status: "idle" },
-              },
-            ]),
-            { headers: { "content-type": "application/json" } },
-          ),
-        );
+        resolve(v2Envelope([]));
       };
     });
     let sseCancellations = 0;
@@ -1978,23 +1708,26 @@ describe("private OpenCode tool bridge", () => {
   it("reports a malformed history page as one bulk drop update", async () => {
     const recordDrops = vi.fn();
     const rows = Array.from({ length: 512 }, (_, sequence) => ({
-      id: `evt_malformed_${String(sequence)}`,
-      aggregate_id: "ses_tool",
-      seq: sequence,
+      id: `msg_malformed_${String(sequence)}`,
+      time: { created: sequence },
       type: "message.part.updated.1",
-      data: {
-        sessionID: "ses_tool",
-        part: { type: "text", text: "malformed" },
-        time: 1_721_323_200_000 + sequence,
-      },
     }));
+    const descending = rows.slice().reverse();
+    let offset = 0;
     const fixture = await startBridgeFixture(
       { execute: vi.fn(() => Promise.resolve(completed)) },
       undefined,
       {
-        historyResponse: Promise.resolve(
-          new Response(JSON.stringify(rows), { headers: { "content-type": "application/json" } }),
-        ),
+        historyResponseFactory: (): Promise<Response> => {
+          const batch = descending.slice(offset, offset + 100);
+          offset += batch.length;
+          return Promise.resolve(
+            v2Json({
+              data: batch,
+              ...(offset < descending.length ? { cursor: { next: String(offset) } } : {}),
+            }),
+          );
+        },
         expectedStart: {
           ok: false,
           failureCode: "protocol-schema-mismatch",
@@ -2020,13 +1753,12 @@ describe("private OpenCode tool bridge", () => {
     const sentinel = "SENTINEL_PRIVATE_HISTORY_BODY";
     const sentinelKey = "sentinelPrivateHistoryKey";
     const history = completedTurnHistory();
-    const assistant = history.at(-1);
+    const assistant = history.at(-2);
     if (assistant === undefined) throw new Error("assistant history fixture missing");
-    const data = assistant.data as Readonly<Record<string, unknown>>;
-    const info = data.info as Readonly<Record<string, unknown>>;
     const malformed = [
-      ...history.slice(0, -1),
-      { ...assistant, data: { ...data, info: { ...info, [sentinelKey]: sentinel } } },
+      ...history.slice(0, -2),
+      { ...assistant, [sentinelKey]: sentinel },
+      history.at(-1),
     ];
     const fixture = await startBridgeFixture(
       { execute: vi.fn(() => Promise.resolve(completed)) },
@@ -2037,11 +1769,7 @@ describe("private OpenCode tool bridge", () => {
             records.push(record);
           },
         },
-        historyResponse: Promise.resolve(
-          new Response(JSON.stringify(malformed), {
-            headers: { "content-type": "application/json" },
-          }),
-        ),
+        historyResponse: Promise.resolve(v2Envelope(malformed.slice().reverse())),
         expectedStart: {
           ok: false,
           failureCode: "protocol-schema-mismatch",
@@ -2087,25 +1815,24 @@ describe("private OpenCode tool bridge", () => {
         },
         historyResponseFactory: (): Promise<Response> =>
           Promise.resolve(
-            new Response(
-              JSON.stringify([
-                ...completedTurnHistory(),
-                editPartRow(3, { status: "pending", input, raw: JSON.stringify(input) }),
+            v2Envelope(
+              [
+                ...completedTurnHistory().slice(0, -1),
+                editPartRow(3, { status: "streaming", input: JSON.stringify(input) }),
                 editPartRow(4, {
                   status: "running",
                   input,
-                  title: "Edit",
                   metadata: {},
-                  time: { start: 1 },
                 }),
                 editPartRow(5, {
                   status: "error",
                   input,
-                  error: "INVALID_EDITS",
-                  time: { start: 1, end: 2 },
+                  error: { name: "INVALID_EDITS", data: { message: "bounded" } },
                 }),
-              ]),
-              { headers: { "content-type": "application/json" } },
+                completedTurnHistory().at(-1),
+              ]
+                .slice()
+                .reverse(),
             ),
           ),
       },
@@ -2119,7 +1846,6 @@ describe("private OpenCode tool bridge", () => {
   it("records a body-free structural diagnostic for a refused history part shape", async () => {
     const records: ServerDiagnosticRecord[] = [];
     const sentinel = "SENTINEL_PRIVATE_ARGUMENT_BODY";
-    const input = changesetArguments(sentinel);
     const fixture = await startBridgeFixture(
       { execute: vi.fn(() => Promise.resolve(completed)) },
       undefined,
@@ -2130,16 +1856,17 @@ describe("private OpenCode tool bridge", () => {
           },
         },
         historyResponse: Promise.resolve(
-          new Response(
-            JSON.stringify([
-              ...completedTurnHistory(),
+          v2Envelope(
+            [
+              ...completedTurnHistory().slice(0, -1),
               editPartRow(3, {
-                status: "pending",
-                input,
-                raw: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
+                status: "streaming",
+                input: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
               }),
-            ]),
-            { headers: { "content-type": "application/json" } },
+              completedTurnHistory().at(-1),
+            ]
+              .slice()
+              .reverse(),
           ),
         ),
         expectedStart: {
@@ -2159,7 +1886,7 @@ describe("private OpenCode tool bridge", () => {
       message: "runtime-handshake-failed",
     });
     expect(records[0]?.code).toMatch(
-      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:part=tool:tool=keiko_changeset_edit:status=pending:partBytes=[1-9][0-9]*:gate=argument-bound$/u,
+      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:part=tool:tool=keiko_changeset_edit:status=streaming:partBytes=[1-9][0-9]*:gate=argument-bound$/u,
     );
     expect(JSON.stringify(records)).not.toContain(sentinel);
     await fixture.stop();

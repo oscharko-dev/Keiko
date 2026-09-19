@@ -5,8 +5,7 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import styles from "./CodingWorkbenchProgress.module.css";
 
-type CodingProgressState =
-  "working" | "approval" | "question" | "paused" | "done" | "failed" | "stopped" | "ready";
+type CodingProgressState = "working" | "approval" | "question" | "paused" | "ready";
 
 function codingProgressState(
   state: CodingWorkbenchRuntimeStateName | undefined,
@@ -22,9 +21,6 @@ function runtimeProgressState(
   state: CodingWorkbenchRuntimeStateName | undefined,
 ): CodingProgressState {
   if (state === "paused") return "paused";
-  if (state === "succeeded") return "done";
-  if (state === "failed" || state === "recovery-required") return "failed";
-  if (state === "cancelled" || state === "taken-over") return "stopped";
   return state === "running" || state === "starting" || state === "stopping" ? "working" : "ready";
 }
 
@@ -41,7 +37,6 @@ function progressDecisionId(status: CodingProgressState, review: boolean): strin
 }
 
 function progressMark(status: CodingProgressState): string {
-  if (status === "done") return "✓";
   return status === "approval" || status === "question" ? "!" : "";
 }
 
@@ -63,6 +58,7 @@ export function CodingWorkbenchProgress({
   useEffect(() => {
     reportClientDiagnostic(`[keiko] coding workbench progress state: ${status}`);
   }, [status]);
+  if (status === "ready") return null;
   return (
     <div className={styles.cmpBar} data-status={status}>
       <span className={styles.cmpIndicator} aria-hidden="true">
@@ -70,7 +66,6 @@ export function CodingWorkbenchProgress({
       </span>
       <div className={styles.cmpCopy} role="status" aria-live="polite" aria-atomic="true">
         <strong>{t(`codingWorkbench.progress.${status}`)}</strong>
-        <span>{t(`codingWorkbench.progress.${status}Help`)}</span>
       </div>
       {status === "approval" || status === "question" ? (
         <button

@@ -110,34 +110,53 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--surface-primary);
-}
-.cmpSessionIdentity {
-  display: grid;
-  gap: 4px;
   min-width: 0;
-  flex: 1 1 200px;
-  overflow-wrap: anywhere;
-}
-.cmpSessionIdentity span,
-.cmpSessionIdentity details {
+  flex: 1;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
   font-size: var(--text-caption);
   color: var(--text-secondary);
 }
-.cmpSessionIdentity code {
-  display: block;
-  padding: 8px 0;
-  user-select: all;
-  overflow-wrap: anywhere;
+.cmpSessionIdentity {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cmpSessionActions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1);
+}
+.cmpSessionAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.cmpSessionAction:hover:not(:disabled) {
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+}
+.cmpSessionAction:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpSessionAction:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.cmpSessionBar > p,
+.cmpSessionBar > output {
+  margin: 0;
+  flex-basis: 100%;
 }
 .cmpTranscript {
   display: grid;
@@ -145,6 +164,8 @@
   margin-bottom: 20px;
 }
 .cmpMessage {
+  font-size: var(--text-body);
+  line-height: 1.64;
   padding: 14px 16px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-surface);
@@ -152,7 +173,15 @@
   overflow-wrap: anywhere;
 }
 .cmpMessage[data-role="user"] {
+  width: fit-content;
+  max-width: 100%;
+  margin-inline-start: auto;
   background: var(--surface-secondary);
+}
+.cmpMessage[data-role="assistant"] {
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
 }
 .cmpMessage > strong {
   display: block;

@@ -30,6 +30,7 @@ const ARCHIVE_FINAL_HOSTS = Object.freeze([
   "github.com",
   "release-assets.githubusercontent.com",
   "objects.githubusercontent.com",
+  "opencode.ai",
 ]);
 const RAW_EVIDENCE_FINAL_HOSTS = Object.freeze(["raw.githubusercontent.com"]);
 export const SPEC_EXECUTABLE_DIR = "bin";

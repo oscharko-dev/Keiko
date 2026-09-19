@@ -11,8 +11,8 @@ import {
   signatureKind,
 } from "./update-portable-staging-shared.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
 } from "./coding-runtime/opencodeProtocolSurface.js";
 import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeToolSchemas.js";
 import {
@@ -33,7 +33,7 @@ export interface PortableSidecarRuntimeVerification {
   readonly sbomEvidenceSha256: string;
   readonly protocolSchemaRawSha256: string;
   readonly protocolHandshakeDigest: string;
-  readonly protocolHandshakeAlgorithm: typeof OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM;
+  readonly protocolHandshakeAlgorithm: typeof OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM;
   /**
    * Server-owned provenance facts. This projection is intentionally content-free and is the
    * only portable-runtime evidence a launch path may consume.
@@ -113,8 +113,8 @@ export class PortableSidecarVerificationError extends Error {
 
 const SIDECAR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
-const OPENCODE_COMMIT = "3104c1428ec91f809e5ab86631300de41eb6952e";
-const OPENCODE_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
+const OPENCODE_COMMIT = "b8cedc1a7a5e2916bbb65dc1d4b620729c261638";
+const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const SIGNING_KEYS = [
   "notarizationRequired",
   "notarizationVerified",
@@ -360,9 +360,9 @@ function portableProvenanceVerified(
     fieldEquals(upstream, "tag", `v${OPENCODE_PINNED_VERSION}`),
     fieldEquals(upstream, "commit", OPENCODE_COMMIT),
     fieldEquals(adapter, "adapterName", "keiko-coding-sidecar"),
-    fieldEquals(adapter, "adapterVersion", "1"),
+    fieldEquals(adapter, "adapterVersion", "2"),
     fieldEquals(adapter, "transport", "http-sse"),
-    fieldEquals(schema, "path", "packages/sdk/openapi.json"),
+    fieldEquals(schema, "path", "packages/protocol/openapi.json"),
     fieldEquals(schema, "sha256", OPENCODE_SCHEMA_SHA256),
     fieldEquals(schema, "hashAlgorithm", "sha256"),
     fieldEquals(schema, "hashEncoding", "lowercase-hex"),
@@ -522,8 +522,8 @@ function parseNamedRuntime(
     sbomEvidencePath: evidence.sbom.path,
     sbomEvidenceSha256: evidence.sbom.sha256,
     protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-    protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+    protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
     availability: laneAvailability(lane),
   };
 }

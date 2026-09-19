@@ -28,6 +28,7 @@ import {
   type DiffParseResult,
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
 import { ApiError, postEditorAgentSessionSnapshot } from "./api";
+import { reportClientDiagnostic } from "./client-diagnostics";
 import { useRunLockedRoot } from "./useCodingWorkbenchChanges";
 import type {
   EditorAgentAction,
@@ -302,9 +303,13 @@ export function useCodingWorkbenchEditorBridge(
       return;
     }
     decidingRef.current = false;
+    const diff = parseUnifiedDiff(action.changeset?.patch ?? "");
+    reportClientDiagnostic(
+      `[keiko] coding workbench changeset review prepared: files ${String(diff.files.length)}`,
+    );
     setPending({
       action,
-      diff: parseUnifiedDiff(action.changeset?.patch ?? ""),
+      diff,
       deciding: false,
       deliveryFailed: false,
       deliveryFailure: null,

@@ -240,401 +240,23 @@ function authenticatedContext(body: unknown, origin?: string): RouteContext {
   };
 }
 
-const QUESTION_SCHEMA = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  properties: {
-    questions: {
-      description: "Questions to ask",
-      items: {
-        properties: {
-          header: { description: "Very short label (max 30 chars)", type: "string" },
-          multiple: { description: "Allow selecting multiple choices", type: "boolean" },
-          options: {
-            description: "Available choices",
-            items: {
-              properties: {
-                description: { description: "Explanation of choice", type: "string" },
-                label: { description: "Display text (1-5 words, concise)", type: "string" },
-              },
-              required: ["label", "description"],
-              type: "object",
-            },
-            type: "array",
-          },
-          question: { description: "Complete question", type: "string" },
-        },
-        required: ["question", "header", "options"],
-        type: "object",
-      },
-      type: "array",
-    },
-  },
-  required: ["questions"],
-  type: "object",
-} as const;
+// Captured from the real OpenCode 2.0.10 model request (schemas only, no request content).
+// These bytes are independent of Keiko's tool-catalog implementation.
+const PINNED_MODEL_VISIBLE_TOOLS = JSON.parse(
+  readFileSync(
+    new URL(
+      "./coding-runtime/opencodeToolSchemas.opencode-2.0.10-advertised.fixture.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+) as readonly { readonly name: string; readonly parameters: Readonly<Record<string, unknown>> }[];
 
-const WORKSPACE_READ_SCHEMA = {
-  type: "object",
-  properties: {
-    relativePath: {
-      type: "string",
-      minLength: 1,
-      maxLength: 512,
-      pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
-    },
-    startLine: {
-      type: "integer",
-      minimum: 1,
-      maximum: 1_000_000,
-      description: "1-based first line of the returned window; pass 1 to start at the file head.",
-    },
-    maxLines: {
-      type: "integer",
-      minimum: 1,
-      maximum: 5_000,
-      description:
-        "Window height in lines; startLine 1 with maxLines 5000 reads a small file whole. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file.",
-    },
-  },
-  // OpenCode v1.17.17 declares every custom-tool argument as required in its provider projection.
-  required: ["relativePath", "startLine", "maxLines"],
-} as const;
-
-// #3406/#3414: mirrors opencodeToolSchemas.ts's REPOSITORY_SEARCH_SCHEMA for #3386's H1 local
-// repository-search handler, projected as keiko_repository_search.
-const REPOSITORY_SEARCH_SCHEMA = {
-  type: "object",
-  properties: {
-    mode: {
-      type: "string",
-      enum: ["lexical", "literal", "regex", "symbol"],
-      description:
-        "lexical: natural-language keyword match. literal: exact substring. regex: bounded, ReDoS-safe pattern. symbol: exact identifier (no whitespace).",
-    },
-    query: {
-      type: "string",
-      minLength: 1,
-      maxLength: 200,
-      description: "Search text for the selected mode.",
-    },
-    caseSensitive: { type: "boolean" },
-    includeGlobs: {
-      type: "array",
-      maxItems: 32,
-      items: { type: "string", minLength: 1, maxLength: 200 },
-      description: "Workspace-relative glob patterns to restrict the search to.",
-    },
-    excludeGlobs: {
-      type: "array",
-      maxItems: 32,
-      items: { type: "string", minLength: 1, maxLength: 200 },
-      description: "Workspace-relative glob patterns to exclude from the search.",
-    },
-    maxResults: {
-      type: "integer",
-      minimum: 1,
-      maximum: 50,
-      description: "Maximum number of bounded content excerpts to return.",
-    },
-  },
-  required: ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"],
-} as const;
-
-const WORKSPACE_DISCOVER_SCHEMA = {
-  type: "object",
-  properties: {
-    query: {
-      type: "string",
-      minLength: 1,
-      maxLength: 256,
-      description:
-        "Case-insensitive filename/path keywords. Use a short distinctive term such as safeActivity, timeline, or composer. Use * only when a bounded repository overview is necessary.",
-    },
-    maxResults: {
-      type: "integer",
-      minimum: 1,
-      maximum: 100,
-      description: "Maximum number of matching workspace-relative file paths to return.",
-    },
-  },
-  required: ["query", "maxResults"],
-} as const;
-
-const CHANGESET_EDIT_SCHEMA = {
-  type: "object",
-  properties: {
-    changeset: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        patch: {
-          type: "string",
-          minLength: 1,
-          maxLength: 65_536,
-          pattern:
-            "^(?:(?:(?:diff --git [^\\r\\n]+ [^\\r\\n]+\\r?\\n)(?:index [^\\r\\n]+\\r?\\n)?)?--- (?:a/|/dev/null)|:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M [^\\r\\n]+\\r?\\n@@ )",
-          description:
-            "Strict unified diff for every listed file. Start each file with `--- a/<path>` and `+++ b/<path>` (or `/dev/null`), followed by one or more `@@ -old +new @@` hunks. A single-file `:100644 ... M <path>` raw-index header is accepted only as a compatibility fallback and is normalized before validation.",
-        },
-        files: {
-          type: "array",
-          minItems: 1,
-          maxItems: 50,
-          items: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              file: {
-                type: "string",
-                minLength: 1,
-                maxLength: 512,
-                pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
-              },
-              expectedContentHash: {
-                type: "string",
-                pattern: "^[a-f0-9]{64}$",
-                description: "SHA-256 digest returned by keiko_workspace_read.",
-              },
-            },
-            required: ["file", "expectedContentHash"],
-          },
-          description: "Every file changed by patch, bound to its last governed read digest.",
-        },
-        selectedFiles: {
-          type: "array",
-          minItems: 1,
-          maxItems: 50,
-          uniqueItems: true,
-          items: {
-            type: "string",
-            minLength: 1,
-            maxLength: 512,
-            pattern: "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$",
-          },
-          description: "Optional subset of files to apply; each entry must occur in files.",
-        },
-      },
-      required: ["patch", "files"],
-    },
-  },
-  required: ["changeset"],
-} as const;
-
-// OpenCode v1.17.17 strips `additionalProperties` before forwarding this schema.
-const VERIFICATION_PROJECTED_SCHEMA = {
-  type: "object",
-  properties: {
-    verifierId: {
-      type: "string",
-      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
-    },
-    targetPath: {
-      type: "string",
-      minLength: 0,
-      maxLength: 4096,
-      pattern: String.raw`^(?:$|(?![\\/])(?!.*(?:^|/)\.\.?(?:/|$))(?!.*\\).+)$`,
-      description:
-        "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path.",
-    },
-  },
-  required: ["verifierId", "targetPath"],
-} as const;
-
-// The built-in todowrite projection is byte-identical to its source schema (#2480).
-const TODO_WRITE_SCHEMA = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "object",
-  properties: {
-    todos: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          content: { type: "string", description: "Brief description of the task" },
-          status: {
-            type: "string",
-            description: "Current status of the task: pending, in_progress, completed, cancelled",
-          },
-          priority: {
-            type: "string",
-            description: "Priority level of the task: high, medium, low",
-          },
-        },
-        required: ["content", "status", "priority"],
-      },
-      description: "The updated todo list",
-    },
-  },
-  required: ["todos"],
-} as const;
-
-const RESEARCH_FETCH_SCHEMA = {
-  type: "object",
-  properties: {
-    target: {
-      type: "string",
-      minLength: 9,
-      maxLength: 512,
-      pattern: "^https://",
-    },
-  },
-  required: ["target"],
-} as const;
-
-const SKILL_SCHEMA = {
-  type: "object",
-  properties: {
-    skillId: {
-      type: "string",
-      pattern: "^skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\\.[0-9]{1,4}){0,2}$",
-      maxLength: 80,
-    },
-  },
-  required: ["skillId"],
-} as const;
-
-const CHILD_AGENT_SCHEMA = {
-  type: "object",
-  properties: {
-    objective: { type: "string", minLength: 1, maxLength: 512 },
-    maxToolCalls: { type: "integer", minimum: 1, maximum: 32 },
-  },
-  required: ["objective", "maxToolCalls"],
-} as const;
-
-// #3386/#3387/#3388: these are Keiko-authored managed Git/PR/CI tools, not stock OpenCode
-// built-ins. These independent fixtures exercise gateway rejection of schema drift against the
-// production handler schemas in opencodeToolSchemas.ts. Compatibility with the real binary's
-// advertisement is tested separately using the captured fixture in realOpenCodeAdvertisedTools.
-//
-// #3390 live-run evidence: OpenCode v1.17.17 does NOT advertise a zero-argument tool's source
-// shape (`{"type":"object","properties":{},"required":[]}`) verbatim -- it drops the empty
-// `required: []` array and adds a `$schema` marker instead. This is the real wire shape for
-// keiko_git_status/keiko_git_push, captured live and pinned in
-// coding-runtime/opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json.
-const GIT_STATUS_SCHEMA = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "object",
-  properties: {},
-} as const;
-const GIT_PUSH_SCHEMA = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "object",
-  properties: {},
-} as const;
-// #3417: keiko_skill_discover takes no argument either, so the real binary projects it exactly like
-// the two zero-argument Git tools above.
-const SKILL_DISCOVER_SCHEMA = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "object",
-  properties: {},
-} as const;
-const GIT_DIFF_SCHEMA = {
-  type: "object",
-  properties: {
-    scope: { type: "string", enum: ["working-tree", "index"] },
-    paths: {
-      type: "array",
-      minItems: 1,
-      maxItems: 50,
-      items: { type: "string", minLength: 1, maxLength: 512 },
-      description: "Workspace-relative paths to diff; denied or ignored paths never appear.",
-    },
-  },
-  required: ["scope", "paths"],
-} as const;
-const GIT_STAGE_SCHEMA = {
-  type: "object",
-  properties: {
-    paths: {
-      type: "array",
-      minItems: 1,
-      maxItems: 50,
-      items: { type: "string", minLength: 1, maxLength: 512 },
-      description: "Workspace-relative paths to propose staging.",
-    },
-  },
-  required: ["paths"],
-} as const;
-const GIT_COMMIT_SCHEMA = {
-  type: "object",
-  properties: {
-    message: {
-      type: "string",
-      minLength: 1,
-      maxLength: 8_192,
-      description: "Proposed commit message. This proposes only; a human approval is required.",
-    },
-  },
-  required: ["message"],
-} as const;
-const GIT_PULL_REQUEST_SCHEMA = {
-  type: "object",
-  properties: {
-    title: {
-      type: "string",
-      minLength: 1,
-      maxLength: 256,
-      pattern: "^[^\\0\\r\\n]+$",
-      description: "Proposed draft pull-request title.",
-    },
-  },
-  required: ["title"],
-} as const;
-const GIT_CI_STATUS_SCHEMA = {
-  type: "object",
-  properties: {
-    forceFresh: {
-      type: "boolean",
-      description:
-        "Set true to bypass the cached readiness snapshot and force one fresh provider read.",
-    },
-  },
-  required: ["forceFresh"],
-} as const;
-// Kept in exact sync with opencodeToolSchemas.ts's own GIT_EXECUTE_SCHEMA by hand (this file pins
-// the real wire schema independently of that module's export, on purpose, as its own regression
-// check) -- stage-/delivery-/commit- are the three prefixes the server actually mints, from
-// gitDelivery/proposalId.ts's PROPOSAL_ID_PREFIXES. The literal pattern below may only keep
-// restating that string because a test ("keeps the hand-typed proposalId pin in sync with the
-// derived pattern", below) asserts it equals proposalIdPattern() -- if that assertion ever fails,
-// fix this literal, not the test.
-const GIT_EXECUTE_SCHEMA = {
-  type: "object",
-  properties: {
-    kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
-    proposalId: {
-      type: "string",
-      minLength: 1,
-      maxLength: 64,
-      pattern: "^(?:stage|delivery|commit)-[0-9]{1,39}$",
-      description: "The proposalId returned by the matching propose-phase tool call.",
-    },
-  },
-  required: ["kind", "proposalId"],
-} as const;
-
-const PINNED_MODEL_VISIBLE_TOOLS = [
-  { name: "question", parameters: QUESTION_SCHEMA },
-  { name: "keiko_workspace_discover", parameters: WORKSPACE_DISCOVER_SCHEMA },
-  { name: "keiko_workspace_read", parameters: WORKSPACE_READ_SCHEMA },
-  { name: "keiko_repository_search", parameters: REPOSITORY_SEARCH_SCHEMA },
-  { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
-  { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
-  { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
-  { name: "keiko_skill_discover", parameters: SKILL_DISCOVER_SCHEMA },
-  { name: "keiko_skill", parameters: SKILL_SCHEMA },
-  { name: "keiko_child_agent", parameters: CHILD_AGENT_SCHEMA },
-  { name: "keiko_git_status", parameters: GIT_STATUS_SCHEMA },
-  { name: "keiko_git_diff", parameters: GIT_DIFF_SCHEMA },
-  { name: "keiko_git_stage", parameters: GIT_STAGE_SCHEMA },
-  { name: "keiko_git_commit", parameters: GIT_COMMIT_SCHEMA },
-  { name: "keiko_git_push", parameters: GIT_PUSH_SCHEMA },
-  { name: "keiko_pull_request", parameters: GIT_PULL_REQUEST_SCHEMA },
-  { name: "keiko_git_execute", parameters: GIT_EXECUTE_SCHEMA },
-  { name: "keiko_ci_status", parameters: GIT_CI_STATUS_SCHEMA },
-  { name: "todowrite", parameters: TODO_WRITE_SCHEMA },
-] as const;
+function pinnedToolSchema(name: string): Readonly<Record<string, unknown>> {
+  const tool = PINNED_MODEL_VISIBLE_TOOLS.find((candidate) => candidate.name === name);
+  if (tool === undefined) throw new TypeError(`Missing captured OpenCode tool: ${name}`);
+  return tool.parameters;
+}
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -670,21 +292,16 @@ function modelVisibleTools(
   }));
 }
 
+function v2ModelVisibleTools(): ModelVisibleRequestTool[] {
+  return modelVisibleTools();
+}
+
 /**
- * #3390 live-run evidence: the exact `tools` array the real OpenCode 1.17.17 binary sent on a
- * macOS run, captured verbatim (schema only, no secrets). Used to prove the gateway route itself
- * -- not just `hasExactOpenCodeVisibleToolContract` in isolation -- accepts real OpenCode traffic.
+ * The exact schema-only `tools` array sent by OpenCode 2.0.10 on a real macOS run.
+ * This route-level proof complements the isolated contract matcher.
  */
 function realOpenCodeAdvertisedTools(): ModelVisibleRequestTool[] {
-  const path = new URL(
-    "./coding-runtime/opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json",
-    import.meta.url,
-  );
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as readonly {
-    readonly name: string;
-    readonly parameters: unknown;
-  }[];
-  return modelVisibleTools(parsed);
+  return modelVisibleTools(PINNED_MODEL_VISIBLE_TOOLS);
 }
 
 /**
@@ -854,9 +471,8 @@ describe("coding-sidecar gateway", () => {
         undefined,
         opencodeGatewayOfferLifetimeMs(30_000),
       );
-      // The forwarded set is the seven catalog-representable tools plus the two native
-      // extensions (question/todowrite), merged by the model-gateway bridge (#3414 follow-up) --
-      // canonically the full pinned OpenCode 1.18.30 model-visible set.
+      // The forwarded set is the governed catalog plus the native question tool,
+      // matching the captured OpenCode 2.0.10 model-visible set.
       const expectedParametersByName = new Map<string, unknown>([
         ...advertisement.projection.tools.map((tool): [string, unknown] => [
           tool.alias,
@@ -1240,50 +856,39 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("keeps the hand-typed proposalId pin in sync with the derived pattern", () => {
-    expect(GIT_EXECUTE_SCHEMA.properties.proposalId.pattern).toBe(proposalIdPattern());
+    const schema = pinnedToolSchema("keiko_git_execute");
+    const properties = schema.properties as Readonly<Record<string, { readonly pattern?: string }>>;
+    expect(properties.proposalId?.pattern).toBe(proposalIdPattern());
   });
 
-  it("accepts exactly the pinned OpenCode v1.18.30 visible schemas by canonical digest", async () => {
+  it("accepts exactly the captured OpenCode 2.0.10 visible schemas by canonical digest", async () => {
     expect(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
-      ["question", "4f618d23c27d7147ab8564c3ec1050c508762a19b9a4858951a9cd3089b52df3"],
-      [
-        "keiko_workspace_discover",
-        "43c78833caee7bb83f746ae45cacd44d3b8cc07fc7a3b298a24caae993ba2978",
-      ],
-      ["keiko_workspace_read", "56d2649a7a308efdc47db2899922c9889822a17b9d9bd081ee0c099a066411ac"],
-      // #3406/#3414: keiko_repository_search projects #3386's H1 local repository-search handler
-      // (executeCodingRepositoryRequest); regenerated because the model-visible set changed.
+      ["keiko_changeset_edit", "ed31a7b545d02b150eb3896ca88a2b6823a4b9c02f1c86bb425351334dc9a2e1"],
+      ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
+      ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
+      ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
+      ["keiko_git_diff", "0d3a0f35cca521a4883ce70ad847f2585425483ae0d9c58d8ff6cea14119c079"],
+      ["keiko_git_execute", "fa0e9a6590a7012c266a77fe380c587fcc96f6e7fef39037f8596267d478d60f"],
+      ["keiko_git_push", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
+      ["keiko_git_stage", "6c0ce52bf8a41e07edd650c8f2cb37ebf89706a88ed4112e7166e43eef6860ba"],
+      ["keiko_git_status", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
+      ["keiko_pull_request", "3a1a2638bddc571a74a54ff53556219b1ead22034797cd62f683b2abd7ab8ef1"],
       [
         "keiko_repository_search",
-        "3abb5e7d1f1fa82aabb7b821c515078bc1a2e165a1471c940d4d72b9b9fc4069",
+        "c793976afbd7705d6dcfc9c82a6568b63162c506f7ba5aeb22a7909bd7fc87dc",
       ],
-      ["keiko_changeset_edit", "59902a2dd9af28ed8b97d1108215c6e88bbe0fba017a4756a99e833b9af48952"],
-      ["keiko_verification", "bb319a7fcdf14fb30a612f9a98945c1e2a356aab2ca6924014d07cb930c580ef"],
-      ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
-      // #3417: the same zero-argument projection as keiko_git_status and keiko_git_push.
-      ["keiko_skill_discover", "93ab7499dc3c616f8db8780fed0d9f69270803cda913882ad2ef3943db8d7225"],
-      ["keiko_skill", "c3a50e828f78a32481ce662f8cd92e04dd6375af8df916f3c588b0628ff2de2d"],
-      ["keiko_child_agent", "aa977e5c893cef8e1c7f6e5185836e039bb0a874e35c476d6a896a14441cb0ab"],
-      // #3390 live-run evidence: digests recomputed against the real OpenCode 1.17.17
-      // advertisement (opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json), which drops
-      // the empty `required: []` array and adds a `$schema` marker instead of sending the
-      // zero-argument source shape verbatim -- the prior digest pinned the source shape, which the
-      // real binary never actually sends, so the sidecar gateway refused every real request.
-      ["keiko_git_status", "93ab7499dc3c616f8db8780fed0d9f69270803cda913882ad2ef3943db8d7225"],
-      ["keiko_git_diff", "fa6966974e9e03d9fb30fb9b95a9f3dd53935ba03f991ce5b6575c5d5ee17a10"],
-      ["keiko_git_stage", "647e9587fc6f6fff73280f3dca63fe3f66a7614eb14652a467acff7de2192dc4"],
-      ["keiko_git_commit", "2df8d578416a283a3a72f8c71c4102264305107ae7c4e7b0e5d1806c3b066112"],
-      ["keiko_git_push", "93ab7499dc3c616f8db8780fed0d9f69270803cda913882ad2ef3943db8d7225"],
-      ["keiko_pull_request", "459ee94f01b4f6fe7581ea0d365a6adfc702c298d8eec915c51c4da311967c0a"],
-      // Digest recomputed: proposalId.pattern gained the "commit" prefix alongside stage/delivery
-      // (fixed the commit-proposal-id pattern gap -- the prior pattern rejected every real
-      // commit-* proposal id VerifiedCommitService.propose() mints, making #3386's commit
-      // redemption unreachable through this tool's own schema).
-      ["keiko_git_execute", "e86d3180571a32cdb281eead6c9ee58e9864e6d915a3cbeea14630c8a2c735cf"],
-      ["keiko_ci_status", "ffc444855e40f3ea3f6f091de97e0f552480d929ff020bc9dc15c88c14199a80"],
-      ["todowrite", "0adc662a3338db20587ec0eb8dc2c057847f940e2cd2e4e6b160abd6a68173d6"],
+      ["keiko_research_fetch", "af805d28c78e78e6e103cd7e0964a51f9f8198660b9882dc077b989a6ebfcf2d"],
+      ["keiko_skill", "6fe6bd523b0b52035e62c565bb047b24906161d97f549b320b28c2099a1ddd67"],
+      ["keiko_skill_discover", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
+      ["keiko_verification", "8cbb4582b87ff37f13040c8f064d1080b848bcfe7b6ff2159adf682acd41c35f"],
+      [
+        "keiko_workspace_discover",
+        "fdc3bd7f51fd0a7c913909fee514aa0c0f31127b9b4e10324c569fbfcdf4df6c",
+      ],
+      ["keiko_workspace_read", "29233b25ff1788400500ee0ec33c7ef915a016ea8646c5d9884bac699a618503"],
+      ["question", "c5e745bc20ee80f7cbad35122b5e3b58db1c6b863821ec26ef203d1e94c451a3"],
     ]);
     const chat = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
@@ -1405,12 +1010,12 @@ describe("coding-sidecar gateway", () => {
     expect(chat.mock.calls[0]?.[0].modelId).toBe("azure-coding-model");
   });
 
-  it("fails closed when OpenCode sends the unprojected verification source schema", async () => {
+  it("fails closed when the verification schema allows extra arguments", async () => {
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const tools = modelVisibleTools(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) =>
         tool.name === "keiko_verification"
-          ? { ...tool, parameters: { ...tool.parameters, additionalProperties: false } }
+          ? { ...tool, parameters: { ...tool.parameters, additionalProperties: true } }
           : tool,
       ),
     );
@@ -1818,12 +1423,8 @@ describe("coding-sidecar gateway", () => {
     expect(chat).toHaveBeenCalledTimes(2);
   });
 
-  // #3390: the real OpenCode 1.17.17 binary on macOS refused every chat completion with 403
-  // CODING_GATEWAY_TOOL_CONTRACT_DRIFT because it projects an empty-parameter tool's schema
-  // (keiko_git_status, keiko_git_push) differently from the pinned source shape. This proves the
-  // route itself now accepts that exact live-captured advertisement, not only the isolated
-  // schema-matching function (opencodeToolSchemas.test.ts covers that in unit isolation).
-  it("accepts the real OpenCode 1.17.17 live-captured advertisement (#3390 live-run evidence)", async () => {
+  // A real OpenCode 2.0.10 schema capture must pass the route-level contract gate.
+  it("accepts the real OpenCode 2.0.10 live-captured advertisement", async () => {
     const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
     const result = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext({
@@ -1846,161 +1447,12 @@ describe("coding-sidecar gateway", () => {
       authenticatedContext({
         model: "coding",
         messages: [{ role: "user", content: "continue" }],
-        tools: modelVisibleTools([
-          { name: "question", parameters: { ...QUESTION_SCHEMA, required: ["questions"] } },
-          {
-            name: "keiko_workspace_discover",
-            parameters: {
-              required: ["query", "maxResults"],
-              properties: { ...WORKSPACE_DISCOVER_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_workspace_read",
-            parameters: {
-              required: ["relativePath", "startLine", "maxLines"],
-              properties: { ...WORKSPACE_READ_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_repository_search",
-            parameters: {
-              required: [
-                "mode",
-                "query",
-                "caseSensitive",
-                "includeGlobs",
-                "excludeGlobs",
-                "maxResults",
-              ],
-              properties: { ...REPOSITORY_SEARCH_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_changeset_edit",
-            parameters: {
-              required: ["changeset"],
-              properties: { ...CHANGESET_EDIT_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_verification",
-            parameters: {
-              required: ["verifierId", "targetPath"],
-              properties: { ...VERIFICATION_PROJECTED_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_research_fetch",
-            parameters: {
-              required: ["target"],
-              properties: { ...RESEARCH_FETCH_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_skill_discover",
-            parameters: {
-              properties: {},
-              type: "object",
-              $schema: "https://json-schema.org/draft/2020-12/schema",
-            },
-          },
-          {
-            name: "keiko_skill",
-            parameters: {
-              required: ["skillId"],
-              properties: { ...SKILL_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_child_agent",
-            parameters: {
-              required: ["objective", "maxToolCalls"],
-              properties: { ...CHILD_AGENT_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_git_status",
-            parameters: {
-              type: "object",
-              $schema: "https://json-schema.org/draft/2020-12/schema",
-              properties: {},
-            },
-          },
-          {
-            name: "keiko_git_diff",
-            parameters: {
-              required: ["scope", "paths"],
-              properties: { ...GIT_DIFF_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_git_stage",
-            parameters: {
-              required: ["paths"],
-              properties: { ...GIT_STAGE_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_git_commit",
-            parameters: {
-              required: ["message"],
-              properties: { ...GIT_COMMIT_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_git_push",
-            parameters: {
-              properties: {},
-              $schema: "https://json-schema.org/draft/2020-12/schema",
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_pull_request",
-            parameters: {
-              required: ["title"],
-              properties: { ...GIT_PULL_REQUEST_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_git_execute",
-            parameters: {
-              required: ["kind", "proposalId"],
-              properties: { ...GIT_EXECUTE_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "keiko_ci_status",
-            parameters: {
-              required: ["forceFresh"],
-              properties: { ...GIT_CI_STATUS_SCHEMA.properties },
-              type: "object",
-            },
-          },
-          {
-            name: "todowrite",
-            parameters: {
-              required: ["todos"],
-              properties: { ...TODO_WRITE_SCHEMA.properties },
-              type: "object",
-              $schema: "https://json-schema.org/draft/2020-12/schema",
-            },
-          },
-        ]),
+        tools: modelVisibleTools(
+          PINNED_MODEL_VISIBLE_TOOLS.map((tool) => ({
+            name: tool.name,
+            parameters: Object.fromEntries(Object.entries(tool.parameters).reverse()),
+          })),
+        ),
       }),
       runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-1" } }),
@@ -2019,19 +1471,19 @@ describe("coding-sidecar gateway", () => {
         {
           name: "keiko_workspace_read",
           parameters: {
-            ...WORKSPACE_READ_SCHEMA,
+            ...pinnedToolSchema("keiko_workspace_read"),
             properties: { relativePath: { type: "string", minLength: 1 } },
           },
         },
-        PINNED_MODEL_VISIBLE_TOOLS[2],
+        ...PINNED_MODEL_VISIBLE_TOOLS.slice(2, 3),
       ]),
       modelVisibleTools([
         ...PINNED_MODEL_VISIBLE_TOOLS,
-        { name: "unknown_tool", parameters: QUESTION_SCHEMA },
+        { name: "unknown_tool", parameters: pinnedToolSchema("question") },
       ]),
       modelVisibleTools([
         ...PINNED_MODEL_VISIBLE_TOOLS,
-        { name: "bash", parameters: QUESTION_SCHEMA },
+        { name: "bash", parameters: pinnedToolSchema("question") },
       ]),
     ]) {
       const denied = await handleCodingSidecarGatewayChatCompletions(
@@ -2059,7 +1511,7 @@ describe("coding-sidecar gateway", () => {
           { role: "user", content: "read it" },
           {
             role: "assistant",
-            content: "",
+            content: null,
             tool_calls: [
               {
                 id: "call-1",
@@ -2073,7 +1525,7 @@ describe("coding-sidecar gateway", () => {
           },
           { role: "tool", content: "result", tool_call_id: "call-1" },
         ],
-        tools: modelVisibleTools(),
+        tools: v2ModelVisibleTools(),
       }),
       runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-1" } }),
@@ -4109,10 +3561,10 @@ describe("coding sidecar gateway rejection activity log", () => {
       extra: {
         reason: "tool-contract-drift",
         runId: "run-1",
-        expectedToolCount: 19,
+        expectedToolCount: 18,
         receivedToolCount: 2,
         unexpectedToolCount: 0,
-        missingToolCount: 17,
+        missingToolCount: 16,
         completeness: "complete",
         loss: "none",
       },
@@ -4144,7 +3596,7 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(result).toMatchObject({ status: 403 });
     expect(sink.events[0]?.extra).toMatchObject({
       unexpectedToolCount: 1,
-      missingToolCount: 19,
+      missingToolCount: 18,
       completeness: "complete",
       loss: "none",
     });

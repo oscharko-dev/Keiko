@@ -383,7 +383,6 @@ export function createOpenCodeRuntimeAdapter(
         monitoring = false;
         cancelTurn();
         activeAbort?.abort();
-        void activeIterator?.return?.();
       };
 
       async function monitorLoop(): Promise<void> {
@@ -767,8 +766,7 @@ function validTarget(readiness: OpenCodeRuntimeAdapterPorts["readiness"]): boole
 }
 
 function parseStartupEndpoint(line: string): string | undefined {
-  const match =
-    /^opencode server listening on http:\/\/127\.0\.0\.1:([1-9]\d{0,4})(?:\r?\n)?$/u.exec(line);
+  const match = /^server listening on http:\/\/127\.0\.0\.1:([1-9]\d{0,4})(?:\r?\n)?$/u.exec(line);
   const port = Number(match?.[1]);
   return Number.isSafeInteger(port) && port <= 65_535
     ? `http://127.0.0.1:${String(port)}`
@@ -1167,6 +1165,16 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
+/** V2 loads governed tools through plugin transforms instead of V1 tool files. */
+export function createGeneratedOpenCodeV2Plugins(): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
+      name,
+      toolSource(action, schemas, name, "v2"),
+    ]),
+  );
+}
+
 // #3386/#3387/#3388: git-status/git-diff/git-stage/git-commit/git-push/git-pull-request/git-ci are
 // each a fixed wire shape onto codingToolIpc.ts's existing "git"/"delivery" actions (see
 // `wireRequestFor` below); git-execute is the one shared redemption tool that turns any pending
@@ -1291,7 +1299,7 @@ function toolApprovalProofSource(): readonly string[] {
   ];
 }
 
-function governedPermissionSource(): readonly string[] {
+function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[] {
   return [
     `const governedPermission = ${JSON.stringify(OPENCODE_GOVERNED_ACTION_PERMISSION)};`,
     "function editPermission(args) {",
@@ -1320,13 +1328,24 @@ function governedPermissionSource(): readonly string[] {
     '  else if (mode === "governed-assist" && action === "verification") request = verificationPermission(args, approvalProof);',
     '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-ci") request = ciObservationPermission(approvalProof);',
     "  if (!request) return;",
-    "  await context.ask({",
-    "    permission: governedPermission,",
-    "    patterns: request.patterns,",
-    "    always: [],",
     // The ask expires with the one human-decision wait every governed layer budgets (PR #3452 review).
-    `    metadata: { ...request.metadata, expiresAt: new Date(Date.now() + ${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS)}).toISOString() },`,
-    "  });",
+    `  const metadata = { ...request.metadata, expiresAt: new Date(Date.now() + ${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS)}).toISOString() };`,
+    ...(version === "v1"
+      ? [
+          "  await context.ask({ permission: governedPermission, patterns: request.patterns, always: [], metadata });",
+        ]
+      : [
+          "  const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
+          "  const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
+          "  const runId = process.env.KEIKO_CODING_RUN_ID;",
+          '  if (!endpoint || !capability || !runId) throw new Error("keiko-tool-unavailable");',
+          "  const seed = `${context.sessionID}:${context.id}`;",
+          '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed));',
+          '  const id = "per_" + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);',
+          "  const body = JSON.stringify({ action: 'permission-request', runId, properties: { id, sessionID: context.sessionID, permission: governedPermission, patterns: request.patterns, always: [], metadata } });",
+          `  const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS + GOVERNED_TOOL_SETTLEMENT_GRACE_MS)}), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });`,
+          '  if (!response.ok || response.type === "opaqueredirect") throw new Error("keiko-tool-denied");',
+        ]),
     "}",
   ];
 }
@@ -1335,6 +1354,8 @@ function governedPermissionSource(): readonly string[] {
 function toolSource(
   action: GeneratedToolAction,
   schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+  name?: string,
+  version: "v1" | "v2" = "v1",
 ): string {
   const argumentNames = Object.keys(schemas);
   // The literal (non-model-supplied) wire fields for a fixed-shape git/delivery action, e.g.
@@ -1360,14 +1381,13 @@ function toolSource(
     "  if (!Number.isSafeInteger(read.totalLines) || read.totalLines < 0) return false;",
     "  return read.nextStartLine === undefined || (Number.isSafeInteger(read.nextStartLine) && read.nextStartLine >= 2);",
     "}",
-    "export default {",
-    `  description: ${JSON.stringify(toolDescription(action))},`,
-    "  args: inputSchemas,",
-    "  async execute(args, context) {",
+    ...toolSourceRegistration(action, name, version),
     "    const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     '    if (!endpoint || !capability) throw new Error("keiko-tool-unavailable");',
-    "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
+    version === "v2"
+      ? "    const identity = `${context.sessionID}:${context.id}`;"
+      : "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
     "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
     '    if (action === "verification" && request.targetPath === "") delete request.targetPath;',
@@ -1397,7 +1417,9 @@ function toolSource(
     "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
     "    const abort = () => controller.abort();",
-    '    context.abort.addEventListener("abort", abort, { once: true });',
+    ...(version === "v1"
+      ? ['    context.abort.addEventListener("abort", abort, { once: true });']
+      : []),
     "    const timeout = setTimeout(abort, TIMEOUT_MS);",
     "    try {",
     '      const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: controller.signal, headers: { Authorization: `Bearer ${capability}`, "Content-Type": "application/json" }, body });',
@@ -1418,13 +1440,43 @@ function toolSource(
     '      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);',
     "      const result = JSON.parse(text);",
     '      if (!validResult(result)) throw new Error("keiko-tool-invalid");',
-    "      return { title: action, output: text, metadata: {} };",
+    version === "v2"
+      ? "      return { content: text, metadata: {} };"
+      : "      return { title: action, output: text, metadata: {} };",
     "    } finally {",
     "      clearTimeout(timeout);",
-    '      context.abort.removeEventListener("abort", abort);',
+    ...(version === "v1" ? ['      context.abort.removeEventListener("abort", abort);'] : []),
     "    }",
     "  },",
+    ...(version === "v2" ? ["      });", "    });", "  },"] : []),
     "};",
-    ...governedPermissionSource(),
+    ...governedPermissionSource(version),
   ].join("\n");
+}
+
+function toolSourceRegistration(
+  action: GeneratedToolAction,
+  name: string | undefined,
+  version: "v1" | "v2",
+): readonly string[] {
+  if (version === "v1") {
+    return [
+      "export default {",
+      `  description: ${JSON.stringify(toolDescription(action))},`,
+      "  args: inputSchemas,",
+      "  async execute(args, context) {",
+    ];
+  }
+  return [
+    "export default {",
+    `  id: ${JSON.stringify(`keiko.${name ?? action}`)},`,
+    "  async setup(ctx) {",
+    "    await ctx.tool.transform((editor) => {",
+    "      editor.add({",
+    `        name: ${JSON.stringify(name)},`,
+    `        description: ${JSON.stringify(toolDescription(action))},`,
+    "        input: { type: 'object', properties: inputSchemas, required: argumentNames, additionalProperties: false },",
+    `        options: { permission: ${JSON.stringify(name)}, codemode: false },`,
+    "        async execute(args, context) {",
+  ];
 }

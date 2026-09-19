@@ -3,6 +3,7 @@
 // the runtime is available and no binding is active, drives provision → set-active → refresh with
 // the entered repository path and target branch, and surfaces failures as a content-free alert.
 
+import { useState, type ReactNode } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
@@ -17,7 +18,11 @@ import {
   ActiveWorkspaceProvider,
   type ActiveWorkspaceApi,
 } from "../../context/ActiveWorkspaceContext";
-import { codingWorkbenchSetupTaskId, stripLeadingAndTrailingDashes } from "./CodingWorkbenchSetup";
+import {
+  CodingWorkbenchSetup,
+  codingWorkbenchSetupTaskId,
+  stripLeadingAndTrailingDashes,
+} from "./CodingWorkbenchSetup";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
@@ -225,6 +230,22 @@ function renderWorkbench(
 
 function setupSection(): HTMLElement | null {
   return screen.queryByRole("region", { name: "Code setup" });
+}
+
+// Repository/base attribution pins remain at the owning setup component after the issue wizard's
+// removal; issue prompts now carry their bound repository directly to the preview route.
+function BoundSetup({ base }: { readonly base: string }): ReactNode {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <CodingWorkbenchSetup
+      selectedRoot="/repos/target"
+      selectedBaseBranch={base}
+      refreshWorkspace={async () => true}
+      runtimePosture="verified"
+      repositoryPathDraft={draft}
+      onRepositoryPathDraftChange={setDraft}
+    />
+  );
 }
 
 type UserApi = ReturnType<typeof userEvent.setup>;
@@ -571,11 +592,8 @@ describe("CodingWorkbenchSetup", () => {
   // F81 (run 28): issue intake after a bind reopened this card seeded with the server's workspace
   // root and looked up that path's branch. It starts from the bound workspace instead: its
   // repository and the base branch the operator bound, with no lookup for a path nobody chose.
-  it("starts issue intake from the bound repository and its base branch without a lookup", async () => {
-    const user = userEvent.setup();
-    renderWorkbench(boundWorkspaceApi("/repos/target", "master"), liveState(), "/srv/keiko");
-
-    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+  it("uses the bound repository and its base branch without a lookup", () => {
+    render(<BoundSetup base="master" />);
 
     expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/target");
     expect(screen.getByLabelText("Target branch")).toHaveValue("master");
@@ -585,20 +603,10 @@ describe("CodingWorkbenchSetup", () => {
   // The same repository bound onto another base replaces the default it seeded (review on PR #3452):
   // the earlier base must not stay settled for that path and reach the next bind.
   it("takes a new bound base branch for the same repository", async () => {
-    const user = userEvent.setup();
-    const view = renderWorkbench(
-      boundWorkspaceApi("/repos/target", "master"),
-      liveState(),
-      "/srv/keiko",
-    );
-    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+    const view = render(<BoundSetup base="master" />);
     expect(screen.getByLabelText("Target branch")).toHaveValue("master");
 
-    view.rerender(
-      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "release/2")}>
-        <CodingWorkbenchWindow selectedRoot="/srv/keiko" />
-      </ActiveWorkspaceProvider>,
-    );
+    view.rerender(<BoundSetup base="release/2" />);
 
     await waitFor(() => {
       expect(screen.getByLabelText("Target branch")).toHaveValue("release/2");
@@ -701,19 +709,10 @@ describe("CodingWorkbenchSetup", () => {
   // …but a branch the operator typed wins over every default, a new bound base included.
   it("keeps a selected branch when the bound base branch changes", async () => {
     const user = userEvent.setup();
-    const view = renderWorkbench(
-      boundWorkspaceApi("/repos/target", "master"),
-      liveState(),
-      "/srv/keiko",
-    );
-    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+    const view = render(<BoundSetup base="master" />);
     await user.selectOptions(screen.getByLabelText("Target branch"), "feature/typed");
 
-    view.rerender(
-      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "release/2")}>
-        <CodingWorkbenchWindow selectedRoot="/srv/keiko" />
-      </ActiveWorkspaceProvider>,
-    );
+    view.rerender(<BoundSetup base="release/2" />);
 
     await waitFor(() => {
       expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/target");
@@ -723,11 +722,10 @@ describe("CodingWorkbenchSetup", () => {
   });
 
   // The seeded branch is the bound repository's, not a choice for another path the operator types.
-  it("reads the branch of a different path typed after the issue-intake seed", async () => {
+  it("reads the branch of a different path typed after the bound-repository seed", async () => {
     const user = userEvent.setup();
     baseBranchMock.mockResolvedValue("trunk");
-    renderWorkbench(boundWorkspaceApi("/repos/target", "master"), liveState(), "/srv/keiko");
-    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+    render(<BoundSetup base="master" />);
 
     await user.clear(screen.getByLabelText("Repository path"));
     await user.type(screen.getByLabelText("Repository path"), "/repos/other");

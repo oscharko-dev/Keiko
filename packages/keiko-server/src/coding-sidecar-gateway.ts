@@ -696,7 +696,12 @@ function parseMessageBase(
   ) {
     return { kind: "invalid" };
   }
-  const content = parseMessageContent(value.content);
+  const content =
+    value.content === null &&
+    value.role === "assistant" &&
+    parseContinuationToolCalls(value.tool_calls) !== undefined
+      ? { kind: "ok" as const, value: "" }
+      : parseMessageContent(value.content);
   if (content.kind !== "ok") return content;
   return { kind: "ok", value: { role: value.role, content: content.value } };
 }

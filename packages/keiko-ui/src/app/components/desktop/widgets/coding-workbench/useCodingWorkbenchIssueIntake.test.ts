@@ -1,91 +1,120 @@
-/**
- * #3384 review 3941836282: a rate limit, a GitHub-side 5xx, or a wall-time timeout reading an
- * issue is reported by the server as CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE
- * (issuePreviewRoutes.ts B5-13). Before this fix `issueFailure()` only recognized the closed
- * CodingWorkbenchIssueBindingFailure vocabulary (coding-workbench-issue-errors.ts) and turned any
- * other code into "unknown" — so the transient-specific retry copy could never be selected. This
- * pins the UI-local "read-transient-failure" state without widening the closed wire contract.
- */
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, type RenderHookResult } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { ApiError } from "@/lib/api-shared-primitives";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 
-const previewMock = vi.hoisted(() => vi.fn());
+const preview = vi.hoisted(() => vi.fn());
+const log = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/api", () => ({ previewCodingWorkbenchIssue: preview }));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: log }));
+afterEach(() => vi.clearAllMocks());
 
-vi.mock("@/lib/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, previewCodingWorkbenchIssue: previewMock };
-});
+function mount(
+  scope = "task-one",
+): RenderHookResult<
+  ReturnType<typeof useCodingWorkbenchIssueIntake>,
+  { root: string; task: string }
+> {
+  return renderHook(({ root, task }) => useCodingWorkbenchIssueIntake(root, task), {
+    initialProps: { root: "/repo", task: scope },
+  });
+}
 
-afterEach(() => {
-  previewMock.mockReset();
-});
+const response = { binding: { bindingDigest: "a".repeat(64), issueNumber: 13 } };
 
-describe("useCodingWorkbenchIssueIntake — transient read failure", () => {
-  it("maps CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE to read-transient-failure, not unknown", async () => {
-    const rejection = new ApiError(
-      "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE",
-      "GitHub could not be reached (rate limit or a temporary error). Try again.",
-      503,
-    );
-    rejection.correlationId = "corr-transient-1";
-    previewMock.mockRejectedValueOnce(rejection);
-
-    const { result } = renderHook(() => useCodingWorkbenchIssueIntake("/repos/keiko-checkout"));
-    act(() => {
-      result.current.change("#42");
-    });
-    act(() => {
-      result.current.preview();
-    });
-
-    await waitFor(() => expect(result.current.state.kind).toBe("failed"));
-    expect(result.current.state).toStrictEqual({
-      kind: "failed",
-      failure: "read-transient-failure",
-      correlationId: "corr-transient-1",
-    });
+describe("prompt-driven issue intake", () => {
+  it("submits an ordinary prompt without an issue read", async () => {
+    const { result } = mount();
+    const start = vi.fn();
+    await act(() => result.current.submit("Explain the README", start));
+    expect(start).toHaveBeenCalledWith(undefined);
+    expect(preview).not.toHaveBeenCalled();
   });
 
-  // F63: previewing before the repository is open is refused with UNKNOWN_REPOSITORY; the intake
-  // names that step instead of the generic "unknown" copy.
-  it("maps UNKNOWN_REPOSITORY to unknown-repository, not unknown", async () => {
-    previewMock.mockRejectedValueOnce(
-      new ApiError(
-        "UNKNOWN_REPOSITORY",
-        "Open the repository before previewing an issue for it.",
-        409,
-      ),
+  it("resolves a pasted issue before starting with the server-owned digest", async () => {
+    preview.mockResolvedValue(response);
+    const { result } = mount();
+    const start = vi.fn();
+    await act(() =>
+      result.current.submit("Implement https://github.com/acme/repo/issues/13", start),
     );
-
-    const { result } = renderHook(() => useCodingWorkbenchIssueIntake("/repos/not-opened"));
-    act(() => {
-      result.current.change("#42");
+    expect(preview).toHaveBeenCalledWith(
+      { repositoryPath: "/repo", issueRef: "https://github.com/acme/repo/issues/13" },
+      expect.any(AbortSignal),
+    );
+    expect(start).toHaveBeenCalledWith({
+      issueRef: "https://github.com/acme/repo/issues/13",
+      expectedIssueBindingDigest: "a".repeat(64),
     });
-    act(() => {
-      result.current.preview();
-    });
-
-    await waitFor(() => expect(result.current.state.kind).toBe("failed"));
-    expect(result.current.state).toMatchObject({ kind: "failed", failure: "unknown-repository" });
+    expect(log).toHaveBeenCalledWith("[keiko] coding workbench prompt issue resolved");
+    expect(JSON.stringify(log.mock.calls)).not.toContain("acme/repo");
   });
 
-  it("still falls back to unknown for a code outside the closed vocabulary and the transient code", async () => {
-    previewMock.mockRejectedValueOnce(
-      new ApiError("SOME_UNRELATED_CODE", "message not shown", 500),
+  it.each([
+    ["Implement #13", "#13"],
+    ["Implement acme/repo#13", "https://github.com/acme/repo/issues/13"],
+    [
+      "[Issue](https://github.com/acme/repo/issues/13). See https://github.com/acme/repo/issues/13",
+      "https://github.com/acme/repo/issues/13",
+    ],
+  ])("recognizes and deduplicates %s", async (prompt, issueRef) => {
+    preview.mockResolvedValue(response);
+    const { result } = mount();
+    await act(() => result.current.submit(prompt, vi.fn()));
+    expect(preview).toHaveBeenCalledWith(
+      expect.objectContaining({ issueRef }),
+      expect.any(AbortSignal),
     );
+  });
 
-    const { result } = renderHook(() => useCodingWorkbenchIssueIntake("/repos/keiko-checkout"));
-    act(() => {
-      result.current.change("#42");
-    });
-    act(() => {
-      result.current.preview();
-    });
+  it.each([
+    [
+      "Compare https://github.com/acme/repo/issues/1 and https://github.com/acme/repo/issues/2",
+      "multiple-issues",
+    ],
+    ["Implement https://github.com/acme/repo/pull/13", "invalid-reference"],
+    ["Implement https://github.com/acme/repo/issues/0", "invalid-reference"],
+  ])("does not guess a binding for %s", async (prompt, failure) => {
+    const { result } = mount();
+    const start = vi.fn();
+    await act(() => result.current.submit(prompt, start));
+    expect(result.current.state).toMatchObject({ kind: "failed", failure });
+    expect(start).not.toHaveBeenCalled();
+    expect(preview).not.toHaveBeenCalled();
+  });
 
-    await waitFor(() => expect(result.current.state.kind).toBe("failed"));
-    expect(result.current.state).toMatchObject({ kind: "failed", failure: "unknown" });
+  it.each([
+    ["CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE", "read-transient-failure"],
+    ["UNKNOWN_REPOSITORY", "unknown-repository"],
+    ["SOME_UNRELATED_CODE", "unknown"],
+  ])("retains bounded failure classification for %s", async (code, failure) => {
+    preview.mockRejectedValue(new ApiError(code, "private response body", 503));
+    const { result } = mount();
+    const start = vi.fn();
+    await act(() => result.current.submit("Implement #13", start));
+    expect(result.current.state).toMatchObject({ kind: "failed", failure });
+    expect(start).not.toHaveBeenCalled();
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private response body");
+  });
+
+  it("abandons a read after a repository or task switch", async () => {
+    let resolve!: (value: typeof response) => void;
+    preview.mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    const { result, rerender } = mount();
+    const start = vi.fn();
+    let submitted!: Promise<void>;
+    act(() => {
+      submitted = result.current.submit("Implement #13", start);
+    });
+    rerender({ root: "/other", task: "task-two" });
+    await act(async () => {
+      resolve(response);
+      await submitted;
+    });
+    expect(start).not.toHaveBeenCalled();
   });
 });

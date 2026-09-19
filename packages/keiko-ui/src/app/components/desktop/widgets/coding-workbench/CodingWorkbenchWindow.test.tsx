@@ -444,31 +444,22 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
+  // The composer is the sole issue entry point after every terminal outcome. End-to-end issue
+  // resolution/authority pins live in CodingWorkbenchSetup.issue-intake.test.tsx.
   it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
-    "can reopen issue intake after a %s run with retained activity",
-    async (state) => {
-      const diagnostic = vi.fn();
-      setClientDiagnosticWriter(diagnostic);
-      try {
-        renderWorkbench(
-          liveState({
-            run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
-            events: [event(1)],
-          }),
-        );
-        await userEvent.setup().click(
-          screen.getByRole("button", {
-            name: "Start from a GitHub issue",
-          }),
-        );
-        expect(screen.getByRole("region", { name: "Code setup" })).toBeVisible();
-        expect(diagnostic).toHaveBeenCalledWith(
-          "[keiko] coding workbench issue intake opened",
-          undefined,
-        );
-      } finally {
-        resetClientDiagnosticWriter();
-      }
+    "keeps the composer available after a %s run without reopening setup",
+    (state) => {
+      renderWorkbench(
+        liveState({
+          run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
+          events: [event(1)],
+        }),
+      );
+      expect(screen.getByRole("textbox", { name: "Task instructions" })).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: "Start from a GitHub issue" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Code setup" })).not.toBeInTheDocument();
     },
   );
 

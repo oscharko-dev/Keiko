@@ -1,21 +1,8 @@
 export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.working": "Working",
-  "codingWorkbench.progress.workingHelp": "The coding agent is processing this task.",
   "codingWorkbench.progress.approval": "Waiting for your approval",
-  "codingWorkbench.progress.approvalHelp": "Review the proposed action to continue.",
   "codingWorkbench.progress.question": "Your answer is needed",
-  "codingWorkbench.progress.questionHelp": "The coding agent has a question about this task.",
   "codingWorkbench.progress.paused": "Paused",
-  "codingWorkbench.progress.pausedHelp": "Resume the task when you are ready.",
-  "codingWorkbench.progress.done": "Response complete",
-  "codingWorkbench.progress.doneHelp":
-    "Send a follow-up to continue this task, or start a new one.",
-  "codingWorkbench.progress.failed": "Attention needed",
-  "codingWorkbench.progress.failedHelp": "Review the reported failure before continuing.",
-  "codingWorkbench.progress.stopped": "Run ended",
-  "codingWorkbench.progress.stoppedHelp": "Your saved conversation remains in Coding History.",
-  "codingWorkbench.progress.ready": "No task running",
-  "codingWorkbench.progress.readyHelp": "Describe the next step in the message below.",
   "codingWorkbench.progress.review": "Review now",
   "codingWorkbench.progress.answer": "Answer question",
   "codingWorkbench.history.title": "Coding History",
@@ -226,8 +213,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.header.summary":
     "Start and supervise one governed coding run. Authority and outcomes remain server-owned.",
   "codingWorkbench.info.open": "Open Coding Workbench information",
+  "codingWorkbench.info.details": "Details",
   "codingWorkbench.info.label": "Information",
   "codingWorkbench.info.title": "Coding Workbench information",
+  "codingWorkbench.info.issue": "GitHub issue",
+  "codingWorkbench.info.failure": "Run failure",
   "codingWorkbench.info.project": "Project",
   "codingWorkbench.info.repositoryStatus": "Repository status",
   "codingWorkbench.info.repository.git": "Git repository",
@@ -424,9 +414,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.runtime.evaluation":
     "Unverified evaluation runtime — no platform signature",
   "codingWorkbench.readiness.runtime.unavailable": "Coding runtime unavailable",
-  "codingWorkbench.timeline.eyebrow": "Timeline",
+  "codingWorkbench.timeline.details": "Run details",
+  "codingWorkbench.activity.groupCount": "{count} actions completed",
   "codingWorkbench.timeline.title": "Activity",
-  "codingWorkbench.timeline.empty": "No activity yet.",
   "codingWorkbench.timeline.instructions":
     "Focus the timeline, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.timeline.listLabel": "Coding run event timeline",
@@ -434,9 +424,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.repository_search": "Repository search",
   "codingWorkbench.timeline.tool.workspace_discover": "Workspace discovery",
   "codingWorkbench.timeline.tool.workspace_read": "Workspace read",
-  "codingWorkbench.changes.eyebrow": "Files",
   "codingWorkbench.changes.title": "Changes",
-  "codingWorkbench.changes.help": "Changed files appear here.",
   "codingWorkbench.changes.idle": "Start a run to inspect its workspace changes.",
   "codingWorkbench.changes.loading": "Loading the latest bounded changes…",
   "codingWorkbench.changes.bindingLost":
@@ -449,7 +437,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.retry": "Refresh changes",
   "codingWorkbench.changes.asOf": "As of {head}",
   "codingWorkbench.changes.empty": "This run has no workspace changes at this revision.",
-  "codingWorkbench.changes.changedFiles": "Changed files ({count})",
+  "codingWorkbench.changes.changedFiles": "{count} changed files",
   "codingWorkbench.changes.virtualInstructions":
     "Focus the changed-file list, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.changes.filesTruncated":
@@ -569,11 +557,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.auth.status.unavailableRelease": "Unavailable in this release",
   "codingWorkbench.auth.status.unavailable": "Authentication unavailable",
   "codingWorkbench.controls.eyebrow": "Operator control",
+  "codingWorkbench.controls.help":
+    "Delivery follows the server-confirmed mode and validated Authority Envelope. Merge remains separately approval-gated.",
   "codingWorkbench.controls.title": "Stop or take over",
   "codingWorkbench.controls.stop": "Stop run",
   "codingWorkbench.controls.takeover": "Take over manually",
-  "codingWorkbench.controls.help":
-    "Delivery follows the server-confirmed mode and validated Authority Envelope. Merge remains separately approval-gated.",
   "codingWorkbench.controls.resumeMode.label": "Resume autonomy",
   "codingWorkbench.controls.resumeMode.help":
     "Resume with the server-confirmed current mode or a stricter mode. Widening is unavailable.",
@@ -989,55 +977,18 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The workspace could not be bound. Review the repository path and target branch.",
   "codingWorkbench.alert.runRefreshFailed": "Run could not be refreshed.",
   "codingWorkbench.alert.eventStreamRefreshFailed": "Event stream could not be refreshed.",
-  "codingWorkbench.issue.eyebrow": "GitHub issue",
-  "codingWorkbench.issue.title": "Start from a GitHub issue",
-  "codingWorkbench.issue.help":
-    "Optional. Paste an issue URL or #number from this repository. Keiko previews the issue as untrusted text and binds the run to the server-resolved issue, repository, remote and default branch.",
-  "codingWorkbench.issue.reference": "Issue URL or #number",
-  "codingWorkbench.issue.referencePlaceholder": "https://github.com/owner/repo/issues/123 or #123",
-  "codingWorkbench.issue.preview": "Preview issue",
-  "codingWorkbench.issue.previewing": "Previewing…",
-  "codingWorkbench.issue.cancel": "Cancel",
-  "codingWorkbench.issue.confirm": "Use this issue",
-  "codingWorkbench.issue.discard": "Discard preview",
-  "codingWorkbench.issue.remove": "Remove issue",
+  "codingWorkbench.issue.resolving": "Reading linked issue…",
+  "codingWorkbench.issue.error.multiple-issues":
+    "This prompt names several issues. Choose one primary issue for this task and send it again.",
   "codingWorkbench.issue.retry": "Try again",
-  "codingWorkbench.issue.changeRepository": "Change repository path",
-  "codingWorkbench.issue.openGit": "Open Git client to clone or switch",
-  "codingWorkbench.issue.previewRegion": "Issue preview",
-  "codingWorkbench.issue.untrustedNote":
-    "Issue text is shown as plain text and is never treated as instructions or approval.",
-  "codingWorkbench.issue.commentLabel": "Comment {index}",
-  "codingWorkbench.issue.commentsLabel": "Issue comment excerpts",
-  "codingWorkbench.issue.commentsTruncated":
-    "Additional comments or text were omitted from this bounded preview.",
-  "codingWorkbench.issue.bodyTruncated": "The issue body is truncated in this preview.",
-  "codingWorkbench.issue.fact.state": "State",
-  "codingWorkbench.issue.fact.comments": "Comments",
-  "codingWorkbench.issue.fact.provenance": "Source",
-  "codingWorkbench.issue.fact.url": "URL",
-  "codingWorkbench.issue.fact.baseRef": "Base branch",
-  "codingWorkbench.issue.state.open": "Open",
-  "codingWorkbench.issue.state.closed": "Closed",
-  "codingWorkbench.issue.commentCount": "{count} bounded comment(s) included",
-  "codingWorkbench.issue.excerptLabel": "Issue body excerpt",
-  "codingWorkbench.issue.excerptEmpty": "The issue has no body.",
-  "codingWorkbench.issue.baseRefServerChosen":
-    "The base branch is the repository's server-resolved default branch. It cannot be changed for an issue-bound run.",
+  "codingWorkbench.issue.cancel": "Cancel",
   "codingWorkbench.issue.accepted": "Issue {issue} · base {baseRef}",
-  "codingWorkbench.issue.acceptedHelp":
-    "The workspace binds from {baseRef} and the run starts bound to this issue. Remove the issue to start a generic run instead.",
-  "codingWorkbench.issue.status.loading": "Loading the issue preview…",
-  "codingWorkbench.issue.status.ready": "Issue preview ready.",
-  "codingWorkbench.issue.status.cancelled": "Issue preview cancelled. No run was started.",
-  "codingWorkbench.issue.status.failed": "The issue could not be loaded.",
-  "codingWorkbench.issue.status.empty": "Enter an issue URL or #number to preview it.",
   "codingWorkbench.issue.error.invalid-reference":
     "That is not a GitHub issue reference. Enter an issue URL or #number from this repository; pull request URLs and other hosts are rejected.",
   "codingWorkbench.issue.error.repository-mismatch":
     "The issue belongs to a different repository than the one at this path. Change the repository path, or open the Git client to switch to or clone that repository. Keiko never redirects silently.",
   "codingWorkbench.issue.error.auth-required":
-    "GitHub issue access is not enabled for this repository. Enable it here, then preview again.",
+    "GitHub issue access is not enabled for this repository. Enable it here, then send your prompt again.",
   "codingWorkbench.issue.enableAccess": "Enable GitHub issue access",
   "codingWorkbench.issue.error.issue-unavailable":
     "The issue could not be read. It may be closed, transferred, deleted, a pull request, or outside the access this installation has.",
@@ -1049,14 +1000,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The current authority does not allow binding a run to this issue. Review the autonomy mode and try again.",
   "codingWorkbench.issue.error.cancelled": "The issue intake was cancelled. No run was started.",
   "codingWorkbench.issue.error.unknown-repository":
-    "Open this repository in the workbench first, then preview the issue.",
-  "codingWorkbench.issue.error.unavailable-runtime":
-    "The coding runtime is unavailable on this installation, so an issue-bound run cannot start. The preview stays for reference; confirm once the runtime is active.",
+    "Open this repository in the workbench first, then send your prompt again.",
   "codingWorkbench.issue.error.unknown":
-    "The issue preview failed. Review the live state and try again.",
+    "The linked issue could not be read. Review the live state and try again.",
   "codingWorkbench.issue.supportId": "Support id: {correlationId}.",
-  "codingWorkbench.composer.issue.label": "Issue {issue}",
-  "codingWorkbench.composer.issue.remove": "Remove issue {issue} from this run",
   "codingWorkbench.githubAccess.title": "GitHub issue access",
   "codingWorkbench.githubAccess.description":
     "Lets the Coding Workbench read GitHub issues and comments for the selected repository through the local gh CLI. The grant is stored per local checkout; credentials never enter Keiko.",

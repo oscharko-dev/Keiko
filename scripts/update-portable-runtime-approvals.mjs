@@ -22,19 +22,15 @@ import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DOWNLOAD_TIMEOUT_MS = 300_000;
-const APPROVED_OPENCODE_VERSION = "1.18.30";
-const APPROVED_OPENCODE_COMMIT = "3104c1428ec91f809e5ab86631300de41eb6952e";
+const APPROVED_OPENCODE_VERSION = "2.0.10";
+const APPROVED_OPENCODE_COMMIT = "b8cedc1a7a5e2916bbb65dc1d4b620729c261638";
 const ARCHIVE_MAX_BYTES = 512 * 1024 * 1024;
 const TEXT_MAX_BYTES = 16 * 1024 * 1024;
 const NODE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);
-const RELEASE_HOSTS = Object.freeze([
-  "github.com",
-  "release-assets.githubusercontent.com",
-  "objects.githubusercontent.com",
-]);
+const RELEASE_HOSTS = Object.freeze(["opencode.ai"]);
 const RAW_HOSTS = Object.freeze(["raw.githubusercontent.com"]);
 const DEFAULT_UPDATE_DEPS = Object.freeze({ fetchFn: globalThis.fetch });
-const OPENCODE_RELEASE_BASE = "https://github.com/anomalyco/opencode/releases/download";
+const OPENCODE_RELEASE_BASE = "https://opencode.ai/files/bin";
 const OPENCODE_LICENSE_BASE = "https://raw.githubusercontent.com/anomalyco/opencode";
 function fail(message) {
   throw new Error(`update-portable-approvals: ${message}`);
@@ -138,7 +134,7 @@ async function downloadOpencodeArchives(version, workRoot, deps) {
   const downloads = {};
   for (const target of PORTABLE_TARGET_NAMES) {
     const name = portableTargetByName(target).sidecarArchiveName;
-    const url = `${OPENCODE_RELEASE_BASE}/v${version}/${name}`;
+    const url = `${OPENCODE_RELEASE_BASE}/${version}/${name}`;
     const payload = await fetchBuffer(url, ARCHIVE_MAX_BYTES, RELEASE_HOSTS, deps);
     const path = join(workRoot, `${target}-${name}`);
     writeFileSync(path, payload);

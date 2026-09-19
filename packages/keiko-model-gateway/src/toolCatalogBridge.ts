@@ -264,23 +264,20 @@ function capturedAdvertisement(input: unknown): GatewayToolCatalogAdvertisement 
   return object as unknown as GatewayToolCatalogAdvertisement;
 }
 /**
- * Native extensions (`question`, `todowrite`) are never Keiko tool descriptors (ADR-0175 D2) and
+ * The native `question` extension is not a Keiko tool descriptor (ADR-0175 D2) and
  * carry no schema on the compiled projection -- their pinned wire schema is the single source
  * `@oscharko-dev/keiko-tool-catalog`'s `OPENCODE_NATIVE_EXTENSION_DEFINITIONS`. A projection may
- * only ever declare the closed `"question" | "todowrite"` alias set (contracts-enforced), so a
+ * only ever declare the closed `"question"` alias set (contracts-enforced), so a
  * missing definition here is an impossible-by-contract drift, not a request-shaped error.
  */
-function nativeExtensionDefinition(
-  alias: "question" | "todowrite",
-): (typeof OPENCODE_NATIVE_EXTENSION_DEFINITIONS)[number] {
-  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS.find((entry) => entry.alias === alias);
-  if (definition === undefined)
-    throw new TypeError(`Missing native extension definition: ${alias}`);
+function nativeExtensionDefinition(): (typeof OPENCODE_NATIVE_EXTENSION_DEFINITIONS)[number] {
+  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS[0];
+  if (definition === undefined) throw new TypeError("Missing native extension definition");
   return definition;
 }
 function nativeExtensionTools(normalizer: ToolInvocationNormalizer): readonly ToolDefinition[] {
-  return normalizer.binding.projection.nativeExtensions.map((extension) => {
-    const definition = nativeExtensionDefinition(extension.alias);
+  return normalizer.binding.projection.nativeExtensions.map(() => {
+    const definition = nativeExtensionDefinition();
     return Object.freeze({
       name: definition.alias,
       description: definition.description,

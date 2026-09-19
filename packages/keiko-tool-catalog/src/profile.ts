@@ -43,10 +43,7 @@ function extensions(value: CatalogJsonValue | undefined): readonly CatalogNative
   const entries = catalogArray(value).map((entry): CatalogNativeExtension => {
     const object = catalogObject(entry);
     exactCatalogKeys(object, ["alias", "contractVersion"]);
-    requireCatalog(
-      (object.alias === "question" || object.alias === "todowrite") && object.contractVersion === 1,
-      "invalid-identity",
-    );
+    requireCatalog(object.alias === "question" && object.contractVersion === 1, "invalid-identity");
     return { alias: object.alias, contractVersion: 1 };
   });
   requireCatalog(

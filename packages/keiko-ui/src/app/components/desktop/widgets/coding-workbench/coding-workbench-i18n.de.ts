@@ -2,23 +2,9 @@ import type { CodingWorkbenchMessageCatalog } from "./coding-workbench-i18n.en";
 
 export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.working": "Arbeitet",
-  "codingWorkbench.progress.workingHelp": "Der Coding-Agent bearbeitet diese Aufgabe.",
   "codingWorkbench.progress.approval": "Wartet auf deine Freigabe",
-  "codingWorkbench.progress.approvalHelp": "Prüfe die vorgeschlagene Aktion, damit es weitergeht.",
   "codingWorkbench.progress.question": "Deine Antwort wird benötigt",
-  "codingWorkbench.progress.questionHelp": "Der Coding-Agent hat eine Rückfrage zur Aufgabe.",
   "codingWorkbench.progress.paused": "Pausiert",
-  "codingWorkbench.progress.pausedHelp": "Setze die Aufgabe fort, sobald du bereit bist.",
-  "codingWorkbench.progress.done": "Antwort abgeschlossen",
-  "codingWorkbench.progress.doneHelp":
-    "Schreibe eine Folgefrage für diese Aufgabe oder starte eine neue.",
-  "codingWorkbench.progress.failed": "Aktion erforderlich",
-  "codingWorkbench.progress.failedHelp": "Prüfe den angezeigten Fehler vor dem Fortsetzen.",
-  "codingWorkbench.progress.stopped": "Lauf beendet",
-  "codingWorkbench.progress.stoppedHelp":
-    "Der gespeicherte Verlauf bleibt in der Coding History erhalten.",
-  "codingWorkbench.progress.ready": "Keine Aufgabe läuft",
-  "codingWorkbench.progress.readyHelp": "Beschreibe den nächsten Schritt im Eingabefeld.",
   "codingWorkbench.progress.review": "Jetzt prüfen",
   "codingWorkbench.progress.answer": "Frage beantworten",
   "codingWorkbench.history.title": "Coding History",
@@ -246,8 +232,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.header.summary":
     "Starte und beaufsichtige einen gesteuerten Coding-Lauf. Autorität und Ergebnisse bleiben serverseitig.",
   "codingWorkbench.info.open": "Informationen zur Coding Workbench öffnen",
+  "codingWorkbench.info.details": "Details",
   "codingWorkbench.info.label": "Informationen",
   "codingWorkbench.info.title": "Informationen zur Coding Workbench",
+  "codingWorkbench.info.issue": "GitHub-Issue",
+  "codingWorkbench.info.failure": "Fehler beim Lauf",
   "codingWorkbench.info.project": "Projekt",
   "codingWorkbench.info.repositoryStatus": "Repository-Status",
   "codingWorkbench.info.repository.git": "Git-Repository",
@@ -446,9 +435,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.readiness.runtime.evaluation":
     "Ungeprüfte Evaluations-Runtime — ohne Plattformsignatur",
   "codingWorkbench.readiness.runtime.unavailable": "Coding-Runtime nicht verfügbar",
-  "codingWorkbench.timeline.eyebrow": "Verlauf",
+  "codingWorkbench.timeline.details": "Laufdetails",
+  "codingWorkbench.activity.groupCount": "{count} Aktionen abgeschlossen",
   "codingWorkbench.timeline.title": "Aktivität",
-  "codingWorkbench.timeline.empty": "Noch keine Aktivität.",
   "codingWorkbench.timeline.instructions":
     "Zeitleiste fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.timeline.listLabel": "Coding-Lauf-Ereigniszeitleiste",
@@ -456,9 +445,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.repository_search": "Repository-Suche",
   "codingWorkbench.timeline.tool.workspace_discover": "Workspace-Erkennung",
   "codingWorkbench.timeline.tool.workspace_read": "Workspace-Zugriff",
-  "codingWorkbench.changes.eyebrow": "Dateien",
   "codingWorkbench.changes.title": "Änderungen",
-  "codingWorkbench.changes.help": "Geänderte Dateien erscheinen hier.",
   "codingWorkbench.changes.idle": "Starte einen Lauf, um seine Workspace-Änderungen zu prüfen.",
   "codingWorkbench.changes.loading": "Neueste begrenzte Änderungen werden geladen…",
   "codingWorkbench.changes.bindingLost":
@@ -473,7 +460,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.asOf": "Stand {head}",
   "codingWorkbench.changes.empty":
     "Dieser Lauf enthält in dieser Revision keine Workspace-Änderungen.",
-  "codingWorkbench.changes.changedFiles": "Geänderte Dateien ({count})",
+  "codingWorkbench.changes.changedFiles": "{count} geänderte Dateien",
   "codingWorkbench.changes.virtualInstructions":
     "Liste der geänderten Dateien fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.changes.filesTruncated":
@@ -593,11 +580,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.auth.status.unavailableRelease": "In dieser Version nicht verfügbar",
   "codingWorkbench.auth.status.unavailable": "Authentifizierung nicht verfügbar",
   "codingWorkbench.controls.eyebrow": "Operatorsteuerung",
+  "codingWorkbench.controls.help":
+    "Die Auslieferung folgt dem serverbestätigten Modus und dem validierten Authority Envelope. Merge bleibt separat genehmigungspflichtig.",
   "codingWorkbench.controls.title": "Anhalten oder übernehmen",
   "codingWorkbench.controls.stop": "Lauf anhalten",
   "codingWorkbench.controls.takeover": "Manuell übernehmen",
-  "codingWorkbench.controls.help":
-    "Die Auslieferung folgt dem serverbestätigten Modus und dem validierten Authority Envelope. Merge bleibt separat genehmigungspflichtig.",
   "codingWorkbench.controls.resumeMode.label": "Autonomie beim Fortsetzen",
   "codingWorkbench.controls.resumeMode.help":
     "Setze den Lauf mit dem serverbestätigten aktuellen oder einem strengeren Modus fort. Eine Erweiterung ist nicht verfügbar.",
@@ -1027,52 +1014,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.runRefreshFailed": "Lauf konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.eventStreamRefreshFailed":
     "Ereignisstrom konnte nicht aktualisiert werden.",
-  "codingWorkbench.issue.eyebrow": "GitHub-Issue",
-  "codingWorkbench.issue.title": "Aus einem GitHub-Issue starten",
-  "codingWorkbench.issue.help":
-    "Optional. Füge eine Issue-URL oder #Nummer aus diesem Repository ein. Keiko zeigt das Issue als nicht vertrauenswürdigen Text an und bindet den Lauf an das serverseitig aufgelöste Issue, Repository, Remote und den Standardbranch.",
-  "codingWorkbench.issue.reference": "Issue-URL oder #Nummer",
-  "codingWorkbench.issue.referencePlaceholder":
-    "https://github.com/owner/repo/issues/123 oder #123",
-  "codingWorkbench.issue.preview": "Issue-Vorschau",
-  "codingWorkbench.issue.previewing": "Vorschau wird geladen…",
-  "codingWorkbench.issue.cancel": "Abbrechen",
-  "codingWorkbench.issue.confirm": "Dieses Issue verwenden",
-  "codingWorkbench.issue.discard": "Vorschau verwerfen",
-  "codingWorkbench.issue.remove": "Issue entfernen",
+  "codingWorkbench.issue.resolving": "Verlinktes Issue wird gelesen…",
+  "codingWorkbench.issue.error.multiple-issues":
+    "Dieser Prompt nennt mehrere Issues. Wähle ein Haupt-Issue für diese Aufgabe und sende ihn erneut.",
   "codingWorkbench.issue.retry": "Erneut versuchen",
-  "codingWorkbench.issue.changeRepository": "Repository-Pfad ändern",
-  "codingWorkbench.issue.openGit": "Git-Client öffnen, um zu klonen oder zu wechseln",
-  "codingWorkbench.issue.previewRegion": "Issue-Vorschau",
-  "codingWorkbench.issue.untrustedNote":
-    "Issue-Text wird als reiner Text angezeigt und niemals als Anweisung oder Freigabe behandelt.",
-  "codingWorkbench.issue.commentLabel": "Kommentar {index}",
-  "codingWorkbench.issue.commentsLabel": "Auszüge aus Issue-Kommentaren",
-  "codingWorkbench.issue.commentsTruncated":
-    "Weitere Kommentare oder Textteile wurden in dieser begrenzten Vorschau ausgelassen.",
-  "codingWorkbench.issue.bodyTruncated": "Der Issue-Text wurde in dieser Vorschau gekürzt.",
-  "codingWorkbench.issue.fact.state": "Status",
-  "codingWorkbench.issue.fact.comments": "Kommentare",
-  "codingWorkbench.issue.fact.provenance": "Quelle",
-  "codingWorkbench.issue.fact.url": "URL",
-  "codingWorkbench.issue.fact.baseRef": "Basisbranch",
-  "codingWorkbench.issue.state.open": "Offen",
-  "codingWorkbench.issue.state.closed": "Geschlossen",
-  "codingWorkbench.issue.commentCount": "{count} begrenzte Kommentar(e) enthalten",
-  "codingWorkbench.issue.excerptLabel": "Auszug aus dem Issue-Text",
-  "codingWorkbench.issue.excerptEmpty": "Das Issue hat keinen Text.",
-  "codingWorkbench.issue.baseRefServerChosen":
-    "Der Basisbranch ist der serverseitig aufgelöste Standardbranch des Repositorys. Für einen issue-gebundenen Lauf kann er nicht geändert werden.",
+  "codingWorkbench.issue.cancel": "Abbrechen",
   "codingWorkbench.issue.accepted": "Issue {issue} · Basis {baseRef}",
-  "codingWorkbench.issue.acceptedHelp":
-    "Der Arbeitsbereich wird von {baseRef} gebunden und der Lauf startet an dieses Issue gebunden. Entferne das Issue, um stattdessen einen generischen Lauf zu starten.",
-  "codingWorkbench.issue.status.loading": "Issue-Vorschau wird geladen…",
-  "codingWorkbench.issue.status.ready": "Issue-Vorschau bereit.",
-  "codingWorkbench.issue.status.cancelled":
-    "Issue-Vorschau abgebrochen. Es wurde kein Lauf gestartet.",
-  "codingWorkbench.issue.status.failed": "Das Issue konnte nicht geladen werden.",
-  "codingWorkbench.issue.status.empty":
-    "Gib eine Issue-URL oder #Nummer ein, um eine Vorschau zu sehen.",
   "codingWorkbench.issue.error.invalid-reference":
     "Das ist keine GitHub-Issue-Referenz. Gib eine Issue-URL oder #Nummer aus diesem Repository ein; Pull-Request-URLs und andere Hosts werden abgelehnt.",
   "codingWorkbench.issue.error.repository-mismatch":
@@ -1092,13 +1039,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Issue-Aufnahme wurde abgebrochen. Es wurde kein Lauf gestartet.",
   "codingWorkbench.issue.error.unknown-repository":
     "Öffne dieses Repository zuerst in der Workbench und lade dann die Vorschau des Issues.",
-  "codingWorkbench.issue.error.unavailable-runtime":
-    "Die Coding-Runtime ist auf dieser Installation nicht verfügbar, daher kann kein issue-gebundener Lauf starten. Die Vorschau bleibt zur Ansicht; bestätige, sobald die Runtime aktiv ist.",
   "codingWorkbench.issue.error.unknown":
     "Die Issue-Vorschau ist fehlgeschlagen. Prüfe den Live-Zustand und versuche es erneut.",
   "codingWorkbench.issue.supportId": "Support-ID: {correlationId}.",
-  "codingWorkbench.composer.issue.label": "Issue {issue}",
-  "codingWorkbench.composer.issue.remove": "Issue {issue} aus diesem Lauf entfernen",
   "codingWorkbench.githubAccess.title": "GitHub-Issue-Zugriff",
   "codingWorkbench.githubAccess.description":
     "Erlaubt der Coding Workbench, GitHub-Issues und Kommentare des ausgewählten Repositorys über die lokale gh-CLI zu lesen. Die Freigabe wird pro lokalem Checkout gespeichert; Zugangsdaten gelangen nie in Keiko.",

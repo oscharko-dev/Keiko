@@ -219,18 +219,18 @@ function sidecarRuntime(
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "1.18.30",
-      tag: "v1.18.30",
-      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
+      version: "2.0.10",
+      tag: "v2.0.10",
+      commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
+      adapterVersion: "2",
       transport: "http-sse",
     },
     protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      sha256: "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
+      path: "packages/protocol/openapi.json",
+      sha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -1009,7 +1009,7 @@ describe("portable update staging", () => {
 
     expect(summary.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "1.18.30",
+      upstreamVersion: "2.0.10",
       payloadSha256: sidecarPayloadSha256(files),
       payloadSha256Prefix: sidecarPayloadSha256(files).slice(0, 12),
       status: "verified",

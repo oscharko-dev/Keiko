@@ -11,39 +11,19 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
-import type { IssueIntakeController } from "./useCodingWorkbenchIssueIntake";
-
-function controller(overrides: Partial<IssueIntakeController> = {}): IssueIntakeController {
-  return {
-    issueRef: "#42",
-    state: { kind: "empty" },
-    change: vi.fn(),
-    preview: vi.fn(),
-    cancel: vi.fn(),
-    reset: vi.fn(),
-    ...overrides,
-  };
-}
-
 describe("CodingWorkbenchIssueIntake — read-transient-failure", () => {
   it("renders the calm retry-worded message, not the provider status text, with a retry button", () => {
     const preview = vi.fn();
     render(
       <CodingWorkbenchIssueIntake
-        intake={controller({
-          state: {
-            kind: "failed",
-            failure: "read-transient-failure",
-            correlationId: "corr-1",
-          },
-          preview,
-        })}
-        accepted={null}
+        state={{
+          kind: "failed",
+          failure: "read-transient-failure",
+          correlationId: "corr-1",
+        }}
         repositoryPath="/repos/keiko-checkout"
-        runtimePosture="verified"
-        pending={false}
-        onAccepted={vi.fn()}
-        onOpenGit={undefined}
+        onCancel={vi.fn()}
+        onRetry={preview}
       />,
     );
 
@@ -62,16 +42,10 @@ describe("CodingWorkbenchIssueIntake — read-transient-failure", () => {
     const preview = vi.fn();
     render(
       <CodingWorkbenchIssueIntake
-        intake={controller({
-          state: { kind: "failed", failure: "read-transient-failure", correlationId: undefined },
-          preview,
-        })}
-        accepted={null}
+        state={{ kind: "failed", failure: "read-transient-failure", correlationId: undefined }}
         repositoryPath="/repos/keiko-checkout"
-        runtimePosture="verified"
-        pending={false}
-        onAccepted={vi.fn()}
-        onOpenGit={undefined}
+        onCancel={vi.fn()}
+        onRetry={preview}
       />,
     );
 

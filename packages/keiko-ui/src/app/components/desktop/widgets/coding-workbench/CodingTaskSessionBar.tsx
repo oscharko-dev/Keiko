@@ -3,53 +3,71 @@ import type { ReactNode } from "react";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
+import { Icons } from "../../Icons";
 import styles from "./CodingHistory.module.css";
 
-export function CodingTaskSessionBar({
-  session,
-  active,
-  onHistory,
-  workspacePath,
-}: {
+interface SessionBarProps {
   readonly session: CodingTaskSession;
   readonly active: boolean;
   readonly onHistory: () => void;
-  readonly workspacePath: string | null;
-}): ReactNode {
+}
+
+function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const locked = active || session.pending;
+  const actions = [
+    {
+      label: t("codingWorkbench.history.title"),
+      icon: Icons.codingHistory,
+      run: onHistory,
+      disabled: false,
+    },
+    {
+      label: t("codingWorkbench.history.finish"),
+      icon: Icons.check,
+      run: (): void => void session.finish(),
+      disabled: locked || session.detail === null,
+    },
+    {
+      label: t("codingWorkbench.history.new"),
+      icon: Icons.plus,
+      run: (): void => void session.newTask(),
+      disabled: locked,
+    },
+  ];
+  return (
+    <div className={styles.cmpSessionActions}>
+      {actions.map(({ label, icon: Icon, run, disabled }) => (
+        <button
+          key={label}
+          className={styles.cmpSessionAction}
+          type="button"
+          onClick={run}
+          disabled={disabled}
+          aria-label={label}
+          title={label}
+        >
+          <Icon />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
+  const { session } = props;
+  const t = useCodingWorkbenchTranslate();
+  if (session.detail === null && !session.pending && !session.error) return null;
   return (
     <div className={styles.cmpSessionBar}>
-      <div className={styles.cmpSessionIdentity}>
-        <strong>{session.detail?.task.title ?? t("codingWorkbench.history.new")}</strong>
-        {session.detail !== null ? <span>{session.detail.task.branch}</span> : null}
-        {workspacePath !== null ? (
-          <details>
-            <summary>{t("codingWorkbench.history.location")}</summary>
-            <code>{workspacePath}</code>
-          </details>
-        ) : null}
-      </div>
-      <div className={styles.cmpSessionActions}>
-        <button className={styles.cmpSecondary} type="button" onClick={onHistory}>
-          {t("codingWorkbench.history.title")}
-        </button>
-        <button
-          className={styles.cmpSecondary}
-          type="button"
-          disabled={active || session.pending || session.detail === null}
-          onClick={() => void session.finish()}
-        >
-          {t("codingWorkbench.history.finish")}
-        </button>
-        <button
-          className={styles.cmpPrimary}
-          type="button"
-          disabled={active || session.pending}
-          onClick={() => void session.newTask()}
-        >
-          {t("codingWorkbench.history.new")}
-        </button>
-      </div>
+      {session.detail !== null ? (
+        <>
+          <span className={styles.cmpSessionIdentity} title={session.detail.task.title}>
+            {session.detail.task.title}
+          </span>
+          <TaskSessionActions {...props} />
+        </>
+      ) : null}
       {session.error ? <p role="alert">{t("codingWorkbench.history.error")}</p> : null}
       {session.pending ? <output>{t("codingWorkbench.history.loading")}</output> : null}
     </div>

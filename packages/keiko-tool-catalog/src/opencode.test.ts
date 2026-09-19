@@ -52,11 +52,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Recursively asserts the managed-runtime dialect's stripped/all-required transform held. */
+/** Recursively asserts the managed-runtime dialect's closed/all-required transform held. */
 function assertManagedShape(schema: unknown): void {
   if (!isRecord(schema)) return;
   if (schema.type === "object") {
-    expect(schema.additionalProperties).toBeUndefined();
+    expect(schema.additionalProperties).toBe(false);
     const properties = isRecord(schema.properties) ? schema.properties : {};
     expect(schema.required).toEqual(Object.keys(properties).sort());
     for (const value of Object.values(properties)) assertManagedShape(value);
@@ -231,22 +231,19 @@ describe("opencode registration set", () => {
     expect(tool.effects).toEqual(["workspace-read"]);
   });
 
-  it("declares question and todowrite as native extensions, never as tool descriptors", () => {
+  it("declares question as a native extension, never as a tool descriptor", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    expect(projection.nativeExtensions).toEqual([
-      { alias: "question", contractVersion: 1 },
-      { alias: "todowrite", contractVersion: 1 },
-    ]);
+    expect(projection.nativeExtensions).toEqual([{ alias: "question", contractVersion: 1 }]);
     expect(projection.tools.map((tool) => tool.alias)).not.toContain("question");
     expect(projection.tools.map((tool) => tool.alias)).not.toContain("todowrite");
   });
 
-  it("pins the managed-runtime dialect: opencode 1.18.30, every projected schema all-required and additionalProperties stripped", () => {
+  it("pins the managed-runtime dialect: opencode 2.0.10, every projected schema all-required and closed", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     expect(projection.adapterDialect).toEqual({ id: "managed-runtime-json-schema", version: 1 });
-    expect(projection.adapterRuntime).toEqual({ id: "opencode", version: "1.18.30" });
+    expect(projection.adapterRuntime).toEqual({ id: "opencode", version: "2.0.10" });
     for (const tool of projection.tools) assertManagedShape(tool.inputSchema);
   });
 
@@ -306,11 +303,8 @@ describe("OPENCODE_NATIVE_EXTENSION_DEFINITIONS", () => {
     );
   });
 
-  it("declares exactly question and todowrite, each with a non-empty description and an object schema", () => {
-    expect(OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map((entry) => entry.alias).sort()).toEqual([
-      "question",
-      "todowrite",
-    ]);
+  it("declares only question with a non-empty description and an object schema", () => {
+    expect(OPENCODE_NATIVE_EXTENSION_DEFINITIONS.map((entry) => entry.alias)).toEqual(["question"]);
     for (const entry of OPENCODE_NATIVE_EXTENSION_DEFINITIONS) {
       expect(entry.contractVersion).toBe(1);
       expect(entry.description.length).toBeGreaterThan(0);

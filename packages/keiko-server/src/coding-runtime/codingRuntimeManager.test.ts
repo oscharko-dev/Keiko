@@ -53,14 +53,14 @@ import {
   createCodingToolApprovalBridge,
 } from "./codingToolApprovalBridge.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_GOVERNED_ACTION_PERMISSION } from "./opencodeToolSchemas.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
 
 const tempDirs: string[] = [];
-const OPENCODE_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
+const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const TEST_QUALIFICATION: RuntimeQualificationIdentity = {
   platform: "win32",
   arch: "x64",
@@ -665,8 +665,8 @@ function createPortableRuntimeFixture(): {
       sbomEvidencePath: `${payloadRootPath}/sbom.cdx.json`,
       sbomEvidenceSha256: sbomDigest,
       protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-      protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-      protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+      protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+      protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
       availability: {
         redistributionApproved: true,
         payloadPresent: true,
@@ -681,7 +681,7 @@ function createPortableRuntimeFixture(): {
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "1.18.30",
+        upstreamVersion: "2.0.10",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "1",
         protocolVersion: "http-sse",
@@ -804,8 +804,8 @@ describe("coding runtime manager", () => {
       sbomEvidencePath: "runtime/sidecars/opencode-adapter/sbom.evidence.json",
       sbomEvidenceSha256: "b".repeat(64),
       protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-      protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-      protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+      protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+      protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
       availability: {
         redistributionApproved: true,
         payloadPresent: true,

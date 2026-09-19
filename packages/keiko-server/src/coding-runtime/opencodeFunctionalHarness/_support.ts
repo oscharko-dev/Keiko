@@ -29,7 +29,7 @@ import {
   projectedGatewaySchema,
 } from "../opencodeToolSchemas.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeProtocolSurface,
 } from "../opencodeProtocolSurface.js";
 import {
@@ -44,7 +44,7 @@ import {
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
-const PROTOCOL_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
+const PROTOCOL_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
 const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
@@ -224,7 +224,7 @@ export interface FunctionalGatewayTool {
  * test can derive a deliberately incomplete projection (e.g. `.filter(...)` out one tool) for a
  * live fail-closed proof against the real sidecar gateway route, without restating this mapping.
  * Derives every entry's parameters from `opencodeToolSchemas.ts`'s own `projectedGatewaySchema`
- * (the single source for OpenCode's v1.18.30 wire projection) so this scripted advertisement can
+ * (the single source for OpenCode's v2.0.10 wire projection) so this scripted advertisement can
  * never drift from the incoming trust check it is meant to satisfy.
  */
 export function functionalGatewayTools(): readonly FunctionalGatewayTool[] {
@@ -265,7 +265,7 @@ export function stagedFunctionalPortable(testRoot: string): FunctionalPortableOp
   // surface pin, not onto the scripted harness surface digest.
   const sidecar = {
     ...verification(installRoot, target),
-    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   };
   return {
     evidenceClass: "functional-not-platform-qualified",
@@ -381,7 +381,7 @@ function verification(
     sbomEvidenceSha256: digest(join(installRoot, "payload/evidence/sbom.cdx.json")),
     protocolSchemaRawSha256: PROTOCOL_SCHEMA_SHA256,
     protocolHandshakeDigest: PROTOCOL_HANDSHAKE_DIGEST,
-    protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1",
+    protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2",
     availability: {
       redistributionApproved: true,
       payloadPresent: true,
@@ -1008,7 +1008,7 @@ class FakeOpenCodeChild {
 
   /**
    * A rejected (or aborted) question fails the tool and ends the turn, like the real binary.
-   * The real v1.18.30 publishes its question lifecycle live-only over /global/event — question
+   * The real v2.0.10 publishes its question lifecycle live-only over /global/event — question
    * rows never reach the durable history — so the fake mirrors exactly that.
    */
   private askQuestion(call: FakeToolCall, signal: AbortSignal): Promise<string> {
@@ -1072,7 +1072,7 @@ class FakeOpenCodeChild {
   }
 }
 
-/** Mirrors the v1.18.30 built-in: full-replace todo state, no facade round-trip, no tool event. */
+/** Mirrors the v2.0.10 built-in: full-replace todo state, no facade round-trip, no tool event. */
 function executeBuiltInTodoWrite(call: FakeToolCall): string {
   return JSON.stringify(call.args.todos ?? [], null, 2);
 }
