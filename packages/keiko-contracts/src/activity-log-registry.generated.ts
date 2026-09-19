@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7beaaf28c83548f54b208ac2c3102e9a009b6a4348736a43f823668cc78aa260" as const;
+  "591b5745472beec5881b61a9eabaff1b719fbd8acd4d22a2797831aaa6132723" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -866,12 +866,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
       },
-      modelId: {
-        type: "string",
-        dataClass: "opaque-id",
-        required: false,
-        maxLength: 240,
-      },
       modelIdDigest: {
         type: "string",
         dataClass: "digest",
@@ -921,12 +915,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
-      },
-      modelId: {
-        type: "string",
-        dataClass: "opaque-id",
-        required: false,
-        maxLength: 240,
       },
       modelIdDigest: {
         type: "string",
@@ -1108,12 +1096,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["chat", "embedding", "ocr-vision", "voice", "unknown"],
-      },
-      modelId: {
-        type: "string",
-        dataClass: "opaque-id",
-        required: false,
-        maxLength: 240,
       },
       modelIdDigest: {
         type: "string",
@@ -10178,12 +10160,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      modelId: {
-        type: "string",
-        dataClass: "opaque-id",
-        required: false,
-        maxLength: 240,
-      },
       modelIdDigest: {
         type: "string",
         dataClass: "digest",
@@ -10227,12 +10203,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      modelId: {
-        type: "string",
-        dataClass: "opaque-id",
-        required: false,
-        maxLength: 240,
-      },
       modelIdDigest: {
         type: "string",
         dataClass: "digest",
@@ -10269,12 +10239,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "loss-state",
         required: true,
-      },
-      modelId: {
-        type: "string",
-        dataClass: "opaque-id",
-        required: false,
-        maxLength: 240,
       },
       modelIdDigest: {
         type: "string",
@@ -10325,12 +10289,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
-      modelId: {
-        type: "string",
-        dataClass: "opaque-id",
-        required: false,
-        maxLength: 240,
-      },
       modelIdDigest: {
         type: "string",
         dataClass: "digest",
@@ -10368,12 +10326,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "loss-state",
         required: true,
-      },
-      modelId: {
-        type: "string",
-        dataClass: "opaque-id",
-        required: false,
-        maxLength: 240,
       },
       modelIdDigest: {
         type: "string",
@@ -27512,12 +27464,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
-              name: "modelId",
-              type: "string",
-              dataClass: "opaque-id",
-              required: false,
-            },
-            {
               name: "modelIdDigest",
               type: "string",
               dataClass: "digest",
@@ -27542,13 +27488,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: [
-            "closed-enum",
-            "completeness-state",
-            "digest",
-            "loss-state",
-            "opaque-id",
-          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -27566,12 +27506,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
-              name: "modelId",
-              type: "string",
-              dataClass: "opaque-id",
-              required: false,
-            },
-            {
               name: "modelIdDigest",
               type: "string",
               dataClass: "digest",
@@ -27596,13 +27530,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: [
-            "closed-enum",
-            "completeness-state",
-            "digest",
-            "loss-state",
-            "opaque-id",
-          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -27620,12 +27548,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
-              name: "modelId",
-              type: "string",
-              dataClass: "opaque-id",
-              required: false,
-            },
-            {
               name: "modelIdDigest",
               type: "string",
               dataClass: "digest",
@@ -27650,13 +27572,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: [
-            "closed-enum",
-            "completeness-state",
-            "digest",
-            "loss-state",
-            "opaque-id",
-          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -39528,12 +39444,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "modelId",
-              type: "string",
-              dataClass: "opaque-id",
-              required: false,
-            },
-            {
               name: "modelIdDigest",
               type: "string",
               dataClass: "digest",
@@ -39552,14 +39462,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: [
-            "closed-enum",
-            "completeness-state",
-            "count",
-            "digest",
-            "loss-state",
-            "opaque-id",
-          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -39577,12 +39480,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "modelId",
-              type: "string",
-              dataClass: "opaque-id",
-              required: false,
-            },
-            {
               name: "modelIdDigest",
               type: "string",
               dataClass: "digest",
@@ -39595,7 +39492,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["completeness-state", "count", "digest", "loss-state", "opaque-id"],
+          evidenceClasses: ["completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -39612,12 +39509,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
-            {
-              name: "modelId",
-              type: "string",
-              dataClass: "opaque-id",
-              required: false,
-            },
             {
               name: "modelIdDigest",
               type: "string",
@@ -39643,14 +39534,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: [
-            "closed-enum",
-            "completeness-state",
-            "count",
-            "digest",
-            "loss-state",
-            "opaque-id",
-          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -39667,12 +39551,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
-            {
-              name: "modelId",
-              type: "string",
-              dataClass: "opaque-id",
-              required: false,
-            },
             {
               name: "modelIdDigest",
               type: "string",
@@ -39704,12 +39582,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
-              name: "modelId",
-              type: "string",
-              dataClass: "opaque-id",
-              required: false,
-            },
-            {
               name: "modelIdDigest",
               type: "string",
               dataClass: "digest",
@@ -39728,14 +39600,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: [
-            "closed-enum",
-            "completeness-state",
-            "count",
-            "digest",
-            "loss-state",
-            "opaque-id",
-          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
