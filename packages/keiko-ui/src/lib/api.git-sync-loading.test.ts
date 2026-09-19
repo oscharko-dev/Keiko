@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "./client-diagnostics";
-import { fetchGitDeliverySyncPreview, fetchGitDeliverySyncExecute } from "./api";
+import {
+  fetchGitDeliverySyncPreview,
+  fetchGitDeliverySyncExecute,
+  fetchGitDeliverySyncApprove,
+} from "./api";
 
-vi.mock("@oscharko-dev/keiko-contracts/runtime/git-sync", () => {
+vi.mock("./coding-workbench-lazy-fetchers", () => {
   throw new TypeError("private chunk URL");
 });
 afterEach(() => {
@@ -10,7 +14,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("git sync validator chunk failure", () => {
-  it.each([fetchGitDeliverySyncPreview, fetchGitDeliverySyncExecute])(
+  it.each([fetchGitDeliverySyncPreview, fetchGitDeliverySyncExecute, fetchGitDeliverySyncApprove])(
     "logs the failed prerequisite before making any Git request",
     async (fetchSync) => {
       const writer = vi.fn();

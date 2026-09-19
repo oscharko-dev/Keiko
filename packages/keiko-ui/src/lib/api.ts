@@ -3135,28 +3135,9 @@ export interface GitDeliverySyncInput {
   readonly userInitiated?: true | undefined;
 }
 
-function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    ...(input.remote === undefined ? {} : { remote: input.remote }),
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-    ...(input.userInitiated === true ? { userInitiated: true } : {}),
-  });
-}
-
-function gitDeliverySyncPath(
-  operation: GitSyncOperation,
-  phase: "preview" | "approve" | "execute",
-): string {
-  return `/api/git-delivery/${operation}/${phase}`;
-}
-
-async function loadGitSyncValidators(): Promise<
-  typeof import("@oscharko-dev/keiko-contracts/runtime/git-sync")
-> {
+async function loadGitSyncApi(): Promise<typeof import("./coding-workbench-lazy-fetchers")> {
   try {
-    return await import("@oscharko-dev/keiko-contracts/runtime/git-sync");
+    return await import("./coding-workbench-lazy-fetchers");
   } catch (cause) {
     const error = new ApiError(
       "MODULE_LOAD_FAILED",
@@ -3178,32 +3159,16 @@ export async function fetchGitDeliverySyncPreview(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
-  const { validateGitSyncPreview } = await loadGitSyncValidators();
-  return fetchJson(
-    gitDeliverySyncPath(input.operation, "preview"),
-    {
-      method: "POST",
-      body: gitDeliverySyncBody(input),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validateGitSyncPreview,
-  );
+  const api = await loadGitSyncApi();
+  return api.fetchGitSyncPreview(fetchJson, input, signal);
 }
 
 export async function fetchGitDeliverySyncExecute(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
-  const { validateGitSyncExecuteResponse } = await loadGitSyncValidators();
-  return fetchJson(
-    gitDeliverySyncPath(input.operation, "execute"),
-    {
-      method: "POST",
-      body: gitDeliverySyncBody(input),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validateGitSyncExecuteResponse,
-  );
+  const api = await loadGitSyncApi();
+  return api.fetchGitSyncExecute(fetchJson, input, signal);
 }
 
 export interface GitDeliverySyncApproveResponse {
@@ -3216,11 +3181,8 @@ export async function fetchGitDeliverySyncApprove(
   input: Omit<GitDeliverySyncInput, "approval" | "userInitiated">,
   signal?: AbortSignal,
 ): Promise<GitDeliverySyncApproveResponse> {
-  return fetchJson(gitDeliverySyncPath(input.operation, "approve"), {
-    method: "POST",
-    body: gitDeliverySyncBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const api = await loadGitSyncApi();
+  return api.fetchGitSyncApprove(fetchJson, input, signal);
 }
 
 /**
