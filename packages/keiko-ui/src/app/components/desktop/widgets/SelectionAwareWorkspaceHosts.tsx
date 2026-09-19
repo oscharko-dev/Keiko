@@ -33,6 +33,7 @@ import {
 } from "../hooks/workspace-persistence";
 import {
   type ChatChoiceDecision,
+  type ChatReferenceMissing,
   type ChatReferenceRestoration,
   type RedactedChatChoice,
   chatReferenceFingerprint,
@@ -1139,18 +1140,34 @@ function chatBindingOutcome(
   return routing.activeTarget?.id === chatId ? "resolved" : undefined;
 }
 
-// The persisted reference's closed shape; a binding found again after redaction says how.
+// The persisted reference's closed shape. A binding found again after redaction says how and names
+// its chat by fingerprint; a fingerprint that no listed chat has any more says so and names the
+// chat it no longer finds, so it never reads like a marker that named nothing (#3557 review).
 type ChatBindingReferenceEvidence = Omit<
   ReturnType<typeof persistedReferenceEvidence>,
   "referenceShape"
-> & { readonly referenceShape: ClientBindingReferenceShape };
+> & { readonly referenceShape: ClientBindingReferenceShape; readonly targetFingerprint?: string };
 
 function chatBindingReferenceEvidence(
+  outcome: ChatBindingOutcome,
   chatId: string,
-  restoration: ChatReferenceRestoration | undefined,
+  { restoration, missing }: ChatRebindEvidence,
 ): ChatBindingReferenceEvidence {
+  if (outcome === "target-missing" && missing !== undefined) {
+    // Only an id the heuristic flags is ever persisted as a fingerprint.
+    return {
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: missing.fingerprint,
+    };
+  }
   const evidence = persistedReferenceEvidence(chatId);
-  return restoration === undefined ? evidence : { ...evidence, referenceShape: restoration.shape };
+  if (restoration === undefined) return evidence;
+  return {
+    ...evidence,
+    referenceShape: restoration.shape,
+    targetFingerprint: chatReferenceFingerprint(chatId),
+  };
 }
 
 function chatBindingMessage(
@@ -1163,20 +1180,26 @@ function chatBindingMessage(
   return `${head} (reference=${evidence.referenceShape}${flagged})`;
 }
 
+// How a redacted window's lookup ended: the chat it found again, or the fingerprint it found gone.
+interface ChatRebindEvidence {
+  readonly restoration?: ChatReferenceRestoration | undefined;
+  readonly missing?: ChatReferenceMissing | undefined;
+}
+
 function useBoundChatBindingEvidence(
   configuration: BoundChatConfig,
   ctx: WindowRenderContext,
   routing: BoundChatRouting,
   session: ChatSessionApi,
-  restoration: ChatReferenceRestoration | undefined,
+  rebound: ChatRebindEvidence,
 ): void {
   const outcome = chatBindingOutcome(routing, configuration.chatId);
   useChatBindingEvidence({
     routing,
     chatId: configuration.chatId,
     windowId: ctx.windowId,
-    loads: chatBindingDecidingLoads(outcome, routing, session, restoration),
-    restoration,
+    loads: chatBindingDecidingLoads(outcome, routing, session, rebound),
+    rebound,
   });
 }
 
@@ -1191,17 +1214,21 @@ interface ChatBindingDecidingLoads {
 // A legacy binding without a persisted project is judged missing only after its scan read every
 // project's list and none held the chat: every one of those loads decided it, and the scan kept
 // their ids. A binding found again after redaction was decided by the lookup's own loads, whose ids
-// it kept, never by whichever load the active project ran since. Any other verdict was decided by
-// the active project's list. A failed lookup reports no binding outcome: it records its own
-// correlated diagnostic when a list cannot be read.
+// it kept, never by whichever load the active project ran since, and so was a fingerprint that the
+// lookup found naming no listed chat (#3557 review). Any other verdict was decided by the active
+// project's list. A failed lookup reports no binding outcome: it records its own correlated
+// diagnostic when a list cannot be read.
 function chatBindingDecidingLoads(
   outcome: ChatBindingOutcome | undefined,
   routing: BoundChatRouting,
   session: ChatSessionApi,
-  restoration: ChatReferenceRestoration | undefined,
+  { restoration, missing }: ChatRebindEvidence,
 ): ChatBindingDecidingLoads {
   if (outcome === "resolved" && restoration !== undefined) {
     return { correlationIds: [restoration.correlationId], count: 1 };
+  }
+  if (outcome === "target-missing" && missing !== undefined) {
+    return { correlationIds: missing.correlationIds, count: missing.correlationIds.length };
   }
   const scanned = routing.legacyScanCorrelationIds;
   if (outcome === "target-missing" && scanned !== undefined) {
@@ -1217,7 +1244,7 @@ interface ChatBindingEvidenceArgs {
   readonly chatId: string | undefined;
   readonly windowId: string;
   readonly loads: ChatBindingDecidingLoads;
-  readonly restoration: ChatReferenceRestoration | undefined;
+  readonly rebound: ChatRebindEvidence;
 }
 
 // A restored chat window whose conversation cannot be resolved renders "Chat not found". Without
@@ -1235,16 +1262,17 @@ function useChatBindingEvidence({
   chatId,
   windowId,
   loads,
-  restoration,
+  rebound,
 }: ChatBindingEvidenceArgs): void {
   const reportedRef = useRef<ReportedBindings>({ keys: new Set(), restorations: new WeakSet() });
   const outcome = chatBindingOutcome(routing, chatId);
   const idsKey = loads.correlationIds.join("\u0000");
   const { count } = loads;
+  const { restoration, missing } = rebound;
   useEffect((): void => {
     if (outcome === undefined || chatId === undefined) return;
     if (!claimBindingReport(reportedRef.current, outcome, chatId, restoration)) return;
-    const evidence = chatBindingReferenceEvidence(chatId, restoration);
+    const evidence = chatBindingReferenceEvidence(outcome, chatId, { restoration, missing });
     const [correlationId, ...related] = idsKey === "" ? [] : idsKey.split("\u0000");
     reportClientDiagnostic(chatBindingMessage(outcome, evidence), {
       correlationId,
@@ -1255,12 +1283,9 @@ function useChatBindingEvidence({
         windowRef: windowId,
         ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
         ...(count === 0 ? {} : { decidingLoadCount: count }),
-        ...(outcome === "resolved" && restoration !== undefined
-          ? { targetFingerprint: chatReferenceFingerprint(chatId) }
-          : {}),
       },
     });
-  }, [chatId, count, idsKey, outcome, restoration, windowId]);
+  }, [chatId, count, idsKey, missing, outcome, restoration, windowId]);
 }
 
 interface ReportedBindings {
@@ -1318,27 +1343,39 @@ function ChatChoice({ choice }: { readonly choice: RedactedChatChoice }): ReactN
 
 // The chat a person chose for a redacted snapshot stays a choice until they keep it: they can check
 // the conversation the window now shows, and withdraw it to choose again (#3557 review).
-// Keep needs the chosen chat on screen: once it is missing, only withdrawal is offered, so no one
-// keeps a conversation they cannot inspect.
+// Whether the chosen chat is on screen: only then can the person inspect it, and only then keep it.
+type ChatChoiceNoticeState = "shown" | "pending" | "missing";
+
+function chatChoiceNoticeState(target: {
+  readonly routing: BoundChatRouting;
+  readonly targetLookupFailed: boolean;
+  readonly waitingForTarget: boolean;
+}): ChatChoiceNoticeState {
+  if (target.routing.targetMissing) return "missing";
+  return target.targetLookupFailed || target.waitingForTarget ? "pending" : "shown";
+}
+
+const CHOICE_NOTICE_TEXT: Readonly<Record<ChatChoiceNoticeState, EditorAgentMessageKey>> = {
+  shown: "chat.restoration.choiceNotice",
+  pending: "chat.restoration.choicePendingNotice",
+  missing: "chat.restoration.choiceMissingNotice",
+};
+
+// Keep needs the chosen chat on screen (#3557 review): while it opens, while its lookup failed, and
+// once it is missing, only withdrawal is offered, so no one keeps a conversation they cannot inspect.
 function ChatChoiceNotice({
   decision,
-  targetMissing,
+  state,
 }: {
   readonly decision: ChatChoiceDecision | undefined;
-  readonly targetMissing: boolean;
+  readonly state: ChatChoiceNoticeState;
 }): ReactNode {
   const agentT = useEditorAgentTranslate();
   if (decision === undefined) return null;
-  const keep = targetMissing ? undefined : decision.keep;
+  const keep = state === "shown" ? decision.keep : undefined;
   return (
     <div className={styles.cmpNotice} role="status">
-      <p className={styles.cmpNoticeText}>
-        {agentT(
-          keep === undefined
-            ? "chat.restoration.choiceMissingNotice"
-            : "chat.restoration.choiceNotice",
-        )}
-      </p>
+      <p className={styles.cmpNoticeText}>{agentT(CHOICE_NOTICE_TEXT[state])}</p>
       <div className={styles.cmpNoticeActions}>
         {keep === undefined ? null : (
           <button type="button" className="lk-btn lk-btn-ghost" onClick={keep}>
@@ -1548,6 +1585,7 @@ export function ChatWindowSessionHost({
       ctx={ctx}
       decision={decision}
       restoration={restoration}
+      missing={rebind.missing}
       session={session}
     />
   );
@@ -1559,6 +1597,7 @@ interface BoundChatWindowSessionHostProps {
   readonly ctx: WindowRenderContext;
   readonly decision?: ChatChoiceDecision | undefined;
   readonly restoration?: ChatReferenceRestoration | undefined;
+  readonly missing?: ChatReferenceMissing | undefined;
   readonly session: ChatSessionApi;
 }
 
@@ -1653,7 +1692,7 @@ function useBoundChatTitleSync(
 }
 
 function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): ReactNode {
-  const { cfg, ctx, restoration, session } = props;
+  const { cfg, ctx, session } = props;
   const configuration = boundChatConfig(cfg);
   const routing = useBoundChatRouting({
     chatId: configuration.chatId,
@@ -1663,7 +1702,7 @@ function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): Rea
     session,
     updateCfg: ctx.updateCfg,
   });
-  useBoundChatBindingEvidence(configuration, ctx, routing, session, restoration);
+  useBoundChatBindingEvidence(configuration, ctx, routing, session, props);
   useBoundChatWindowRuntime(configuration, ctx, routing, session);
   const memory = useBoundMemorySession({
     activeTarget: routing.activeTarget,
@@ -1682,6 +1721,7 @@ function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): Rea
     routing,
     sessionLoading: session.loading,
   });
+  const noticeState = chatChoiceNoticeState({ routing, targetLookupFailed, waitingForTarget });
   return (
     <ChatSessionProvider value={memory.session}>
       <BoundChatAlerts
@@ -1689,7 +1729,7 @@ function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): Rea
         lookupFailed={targetLookupFailed}
         sessionError={session.error}
       />
-      <ChatChoiceNotice decision={props.decision} targetMissing={routing.targetMissing} />
+      <ChatChoiceNotice decision={props.decision} state={noticeState} />
       <BoundChatBody
         activeProjectPath={session.activeProject?.path}
         choice={props.choice}

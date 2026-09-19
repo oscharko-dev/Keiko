@@ -142,7 +142,7 @@ export interface ChatReferenceRestoration {
 }
 
 /** A persisted fingerprint that names no listed chat any more, and the loads that said so. */
-interface ChatReferenceMissing {
+export interface ChatReferenceMissing {
   readonly fingerprint: string;
   readonly correlationIds: readonly string[];
 }

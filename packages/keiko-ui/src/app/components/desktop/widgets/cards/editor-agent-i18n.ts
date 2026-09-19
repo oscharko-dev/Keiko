@@ -22,6 +22,8 @@ const EN_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.chooseOpenReference": "{label}, reference {reference}",
   "chat.restoration.choiceNotice":
     "You chose this conversation for this window. Keep it, or choose another if it is not the one this window showed.",
+  "chat.restoration.choicePendingNotice":
+    "You chose this conversation for this window. Check it once it opens, or choose another.",
   "chat.restoration.choiceMissingNotice":
     "The conversation you chose for this window is no longer available.",
   "chat.restoration.choiceKeep": "Keep",
@@ -128,6 +130,8 @@ const DE_EDITOR_AGENT_MESSAGES = {
   "chat.restoration.chooseOpenReference": "{label}, Referenz {reference}",
   "chat.restoration.choiceNotice":
     "Sie haben diese Unterhaltung für dieses Fenster gewählt. Behalten Sie sie, oder wählen Sie eine andere, falls es nicht die ist, die dieses Fenster gezeigt hat.",
+  "chat.restoration.choicePendingNotice":
+    "Sie haben diese Unterhaltung für dieses Fenster gewählt. Prüfen Sie sie, sobald sie geöffnet ist, oder wählen Sie eine andere.",
   "chat.restoration.choiceMissingNotice":
     "Die Unterhaltung, die Sie für dieses Fenster gewählt haben, ist nicht mehr verfügbar.",
   "chat.restoration.choiceKeep": "Behalten",

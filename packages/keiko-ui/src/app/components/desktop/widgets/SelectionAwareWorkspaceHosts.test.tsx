@@ -2242,6 +2242,36 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(screen.getByRole("button", { name: "Choose another" })).toBeInTheDocument();
   });
 
+  // #3557 review: while the chosen chat is still opening, or its lookup failed, the person cannot
+  // inspect it yet, so Keep waits until the chat is on screen.
+  it("offers Keep only once the chosen chat is on screen", async (): Promise<void> => {
+    const { chatA } = offerChatsAandB();
+    const liveA = chatSessionState.chats.find((chat) => chat.id === chatA);
+    chatSessionState.activeChat = undefined;
+    const { rerender } = restoreChatWindow(
+      flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    );
+
+    expect(
+      await screen.findByText(
+        "You chose this conversation for this window. Check it once it opens, or choose another.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+
+    chatSessionState.activeChat = liveA;
+    rerender();
+    expect(await screen.findByRole("button", { name: "Keep" })).toBeInTheDocument();
+
+    chatSessionState.projects = [];
+    rerender();
+    await waitFor((): void => expect(screen.queryByRole("button", { name: "Keep" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Choose another" })).toBeInTheDocument();
+  });
+
   // #3557 review: the chosen chat was closed or deleted before a reload. Its fingerprint names no
   // listed chat, so the window shows it missing and offers only withdrawal, which returns the window
   // to the chats it may have shown.
@@ -2266,6 +2296,24 @@ describe("ChatWindowSessionHost target missing", () => {
       await screen.findByText("The conversation you chose for this window is no longer available."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+    // The missing line names the lookup that found A gone, never the active project's own load.
+    await waitFor((): void =>
+      expect(decisionReports("target-missing")).toEqual([
+        expect.objectContaining({
+          referenceShape: "fingerprint",
+          heuristicFlagged: true,
+          targetFingerprint: chatReferenceFingerprint(chatA),
+          decidingLoadCount: 1,
+        }),
+      ]),
+    );
+    const missingCall = reportClientDiagnosticMock.mock.calls.find(([message]) =>
+      String(message).includes("restore target not found"),
+    );
+    expect((missingCall?.[1] as { correlationId?: string } | undefined)?.correlationId).toBe(
+      lookupLoadId(),
+    );
+    expect(lookupLoadId()).not.toBe("ui_list-active-0002");
     await userEvent.click(screen.getByRole("button", { name: "Choose another" }));
 
     expect(ctx.updateCfg).toHaveBeenCalledWith({
@@ -2475,7 +2523,9 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: flaggedId });
   });
 
-  it("reports a redacted binding whose fingerprint matches no chat as missing", async (): Promise<void> => {
+  // #3557 review: a fingerprint that no listed chat has any more is reported as that fingerprint,
+  // never like a marker that named nothing.
+  it("reports a fingerprint that matches no chat as a missing fingerprint reference", async (): Promise<void> => {
     chatSessionState.activeChat = undefined;
     chatSessionState.chats = [];
     chatSessionState.projects = [];
@@ -2493,9 +2543,13 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(await screen.findByText("Chat not found")).toBeInTheDocument();
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
-        "[keiko] chat window restore target not found (reference=redacted)",
+        "[keiko] chat window restore target not found (reference=fingerprint, heuristic-flagged)",
         expect.objectContaining({
-          bindingReport: expect.objectContaining({ referenceShape: "redacted" }) as unknown,
+          bindingReport: expect.objectContaining({
+            referenceShape: "fingerprint",
+            heuristicFlagged: true,
+            targetFingerprint: "a".repeat(64),
+          }) as unknown,
         }),
       ),
     );
