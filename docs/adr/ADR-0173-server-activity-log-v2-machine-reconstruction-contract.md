@@ -891,9 +891,8 @@ request":
     bounded to the contract's ceiling;
   - a restored window's binding: `client.binding.resolved` at `info`, or
     `client.binding.target-missing` at `warn` with `errorKind: unavailable`. It carries the
-    persisted reference's closed shape (`uuid`, `opaque`, `redacted`, `fingerprint`,
-    `sole-candidate`) and whether the
-    card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
+    persisted reference's closed shape (`uuid`, `opaque`, `redacted`, `fingerprint`) and
+    whether the card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
     reference itself. No reference is exempt from that heuristic, and no stored form works around
     it. The server issues every reference a window persists (chat, PR description proposal,
     Figma snapshot, QI run and agent run ids) through `newReferenceId`, which never draws an id
@@ -905,12 +904,14 @@ request":
     shows the id, so persistence never stores the redaction marker without it. On restore the
     window finds its chat again by comparing that fingerprint with the chats the server lists
     (reference shape `fingerprint`). A snapshot an older build wrote holds the redaction marker
-    without a fingerprint; a redacted reference can only have named a chat whose id persistence
-    redacts, so the window binds to the only such chat its lists hold (reference shape
-    `sole-candidate`), and with none or several it reports the chat missing. A list that cannot be
-    read decides nothing: the lookup runs again after a bounded backoff instead of reporting the
-    chat missing. A binding found again this way names the chat list loads of its own lookup,
-    never a later load of the active project. The window's own persisted id, which
+    without a fingerprint, which identifies nothing: no listed chat can be proven to be the one it
+    named, so that window is never rebound and reports its chat missing. The lookup decides
+    nothing while the project catalog is loading or failed to load, or the window's project is
+    not listed, and a list that cannot be read decides nothing either: the lookup runs again
+    after a bounded backoff, and at once when the catalog changes. A list that failed is reported
+    under the id its load was sent with and its closed `errorKind`, even when the transport
+    failed before any response. A binding found again this way names the chat list load of its
+    own lookup, never a later load of the active project. The window's own persisted id, which
     persistence holds to a closed safe shape, reaches the server whole and is logged only as its
     digest (`bindingDigest`), so two windows never share one. Its correlation id is that of the
     chat list load that decided the outcome; a missing legacy binding names every list its scan
