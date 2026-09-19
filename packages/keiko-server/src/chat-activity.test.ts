@@ -274,4 +274,43 @@ describe("chat rejection readiness evidence (#3557)", () => {
     );
     expect(persisted).not.toHaveProperty("readinessObservation");
   });
+
+  // Review finding A follow-up: a configured model id that is not itself body-free (an operator
+  // can name a provider entry "alice@example.com") must still leave a line — as a digest, never as
+  // the raw id and never dropped. `model-id-evidence.test.ts` proves the projection that DECIDES
+  // this; this proves chat-activity.ts correctly emits whatever it is handed.
+  it("chat.creation.rejected — persists a modelIdDigest instead of a non-opaque model id", () => {
+    const sink = captureServerLog();
+
+    logChatCreationRejectionEvent({
+      correlationId: "corr-chat-create-model-digest",
+      status: 400,
+      reason: "configuration",
+      modelKind: "unknown",
+      modelIdDigest: "0123456789abcdef",
+    });
+
+    const [event] = sink.events;
+    const persisted = expectActivityLogProof(
+      "chat.creation.rejected.reason",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ modelIdDigest: "0123456789abcdef" });
+    expect(persisted).not.toHaveProperty("modelId");
+  });
+
+  it("chat.creation.rejected — bounds an overlong modelIdDigest to the operation's 16 characters", () => {
+    const sink = captureServerLog();
+
+    logChatCreationRejectionEvent({
+      correlationId: "corr-chat-create-digest-long",
+      status: 400,
+      reason: "configuration",
+      modelKind: "unknown",
+      modelIdDigest: "a".repeat(30),
+    });
+
+    const [event] = sink.events;
+    expect(event?.extra?.modelIdDigest).toBe("a".repeat(16));
+  });
 });

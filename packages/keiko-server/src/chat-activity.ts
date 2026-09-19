@@ -17,10 +17,12 @@ export type ChatReadinessObservation = "unobserved" | "not-ready";
 
 interface ChatRejectionModelEvidence {
   readonly modelId?: string | undefined;
+  readonly modelIdDigest?: string | undefined;
   readonly readinessObservation?: ChatReadinessObservation | undefined;
 }
 
 const MAX_REJECTION_MODEL_ID_CHARS = 240;
+const MAX_REJECTION_MODEL_ID_DIGEST_CHARS = 16;
 export type GitChangeDescriptionTurnDenial = "authority-expired" | "model-egress-denied";
 export type GitChangeDescriptionTargetDenial =
   "repository-unavailable" | "reader-unauthorized" | "remote-unresolved";
@@ -56,7 +58,12 @@ const CHAT_REJECTION_COMMON_FIELDS = {
   },
   // The refused model and, for a readiness refusal, the state that refused it. Without them a
   // refusal read as a failed live check even when no check had run in this process (#3557).
+  // `modelId` is the raw refused id, projected and validated by
+  // `observability/model-id-evidence.ts` before it ever reaches this module — never a caller value
+  // verbatim. `modelIdDigest` carries evidence for a CONFIGURED id that projection could not log
+  // raw (review finding A follow-up); at most one of the two is ever present.
   modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 240 },
+  modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
   readinessObservation: {
     type: "string",
     dataClass: "closed-enum",
@@ -242,14 +249,22 @@ function rejectionErrorKind(reason: ChatRejectionReason): ActivityLogErrorKind {
   return reason === "generation" ? "internal" : "invalid-request";
 }
 
+// The caller (chat-handlers.ts, which holds `UiHandlerDeps`) has already projected the candidate
+// model id through `observability/model-id-evidence.ts`: either the bounded raw id or its digest,
+// never a caller-supplied value verbatim, and never both at once. This only bounds defensively (in
+// case a future caller forgets to) and reshapes into the emitted field set.
 function rejectionModelFields(evidence: ChatRejectionModelEvidence): {
   readonly modelId?: string;
+  readonly modelIdDigest?: string;
   readonly readinessObservation?: ChatReadinessObservation;
 } {
   return {
     ...(evidence.modelId === undefined
       ? {}
       : { modelId: evidence.modelId.slice(0, MAX_REJECTION_MODEL_ID_CHARS) }),
+    ...(evidence.modelIdDigest === undefined
+      ? {}
+      : { modelIdDigest: evidence.modelIdDigest.slice(0, MAX_REJECTION_MODEL_ID_DIGEST_CHARS) }),
     ...(evidence.readinessObservation === undefined
       ? {}
       : { readinessObservation: evidence.readinessObservation }),

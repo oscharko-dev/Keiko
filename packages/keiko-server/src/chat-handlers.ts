@@ -8,8 +8,6 @@ import { basename } from "node:path";
 import {
   GatewayError,
   ContextOverflowError,
-  findCapability,
-  findConfiguredCapability,
   listCapabilities,
   listConfiguredCapabilities,
   type ModelCapability,
@@ -175,6 +173,10 @@ import {
   type GitChangeDescriptionTargetDenial,
   type GitChangeDescriptionTurnDenial,
 } from "./chat-activity.js";
+// #3557 review finding A: the one owning projection from a candidate model id to Activity Log
+// evidence. `chatCapability` below delegates its resolution here too, so the "is this configured"
+// answer a 400 response relies on and the answer the log line relies on can never drift apart.
+import { modelIdEvidence, resolvedModelCapability } from "./observability/model-id-evidence.js";
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
@@ -283,8 +285,7 @@ function asParsedOrRouteResult<T>(value: T | RouteResult): T | RouteResult {
 }
 
 function chatCapability(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
-  const config = currentGatewayConfig(deps);
-  return config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
+  return resolvedModelCapability(deps, modelId);
 }
 
 function defaultChatModelId(deps: UiHandlerDeps): string {
@@ -922,7 +923,7 @@ function logChatCreationRejection(
     status,
     reason: readinessFailure ? "readiness" : "configuration",
     modelKind,
-    modelId,
+    ...modelIdEvidence(deps, modelId),
     readinessObservation: readinessFailure ? readinessObservationOf(deps, modelId) : undefined,
   });
 }
@@ -940,7 +941,7 @@ export function logChatRejection(
     status,
     reason,
     modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
-    modelId,
+    ...modelIdEvidence(deps, modelId),
     readinessObservation:
       reason === "readiness" ? readinessObservationOf(deps, modelId) : undefined,
   });
