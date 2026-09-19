@@ -123,25 +123,34 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(false);
   const sequence = useRef(0);
-  useHistoryScope(latest, setDetail);
+  const scopeRevision = useHistoryScope(latest, detail, setDetail, sequence);
   const load = useCallback(
     async (id: string, activate: boolean): Promise<void> => {
       const seq = ++sequence.current;
+      const requestedScope = scopeRevision.current;
       setPending(true);
       setError(false);
       try {
         const result = await fetchCodingTask(id);
         if (seq !== sequence.current) return;
-        if (!taskScopeMatches(result, latest.current, activate)) {
-          setDetail(null);
-          reportScopeMismatch(latest.current);
+        if (requestedScope !== scopeRevision.current) {
+          reportScopeChange(latest.current, "activation-cancelled");
           return;
         }
-        if (activate && !(await latest.current.workspace?.switchTo(result.task.workspaceId)))
-          throw new Error("Workspace unavailable");
-        if (seq === sequence.current) setDetail(result);
+        const activated = await activateHistoryTask(result, latest, activate);
+        if (seq !== sequence.current) return;
+        if (activationSuperseded(result, latest.current, requestedScope, scopeRevision.current))
+          return;
+        if (!activated) {
+          setDetail(null);
+          return;
+        }
+        setDetail(result);
       } catch (cause) {
-        if (seq === sequence.current) {
+        if (seq !== sequence.current) return;
+        if (requestedScope !== scopeRevision.current)
+          reportScopeChange(latest.current, "activation-cancelled");
+        else {
           reportFailure(cause);
           setError(true);
         }
@@ -149,9 +158,34 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
         if (seq === sequence.current) setPending(false);
       }
     },
-    [latest],
+    [latest, scopeRevision],
   );
   return { detail, setDetail, pending, setPending, error, setError, load, sequence };
+}
+
+function activationSuperseded(
+  result: CodingHistoryDetail,
+  input: SessionInput,
+  requestedScope: number,
+  currentScope: number,
+): boolean {
+  if (requestedScope === currentScope || taskScopeMatches(result, input, false)) return false;
+  reportScopeChange(input, "activation-superseded");
+  return true;
+}
+
+async function activateHistoryTask(
+  result: CodingHistoryDetail,
+  latest: { current: SessionInput },
+  activate: boolean,
+): Promise<boolean> {
+  if (!taskScopeMatches(result, latest.current, activate)) {
+    reportScopeMismatch(latest.current);
+    return false;
+  }
+  if (activate && !(await latest.current.workspace?.switchTo(result.task.workspaceId)))
+    throw new Error("Workspace unavailable");
+  return true;
 }
 
 function reportScopeMismatch(input: SessionInput): void {
@@ -160,17 +194,40 @@ function reportScopeMismatch(input: SessionInput): void {
   });
 }
 
+function reportScopeChange(
+  input: SessionInput,
+  reason: "activation-cancelled" | "activation-superseded" | "detail-cleared",
+): void {
+  reportClientDiagnostic(`[keiko] coding task history scope changed: ${reason}`, {
+    correlationId: input.snapshot?.runId,
+  });
+}
+
 function useHistoryScope(
   latest: { current: SessionInput },
+  detail: CodingHistoryDetail | null,
   setDetail: TaskLoader["setDetail"],
-): void {
+  sequence: TaskLoader["sequence"],
+): { current: number } {
+  const revision = useRef(0);
+  useEffect(
+    () => (): void => {
+      sequence.current += 1;
+    },
+    [sequence],
+  );
+  const stored = useRef(detail);
+  stored.current = detail;
   const root = latest.current.root;
   const workspaceId = latest.current.workspace?.activeInstance?.workspaceId;
   useEffect(() => {
-    setDetail((current) =>
-      current !== null && !taskScopeMatches(current, latest.current, false) ? null : current,
-    );
+    revision.current += 1;
+    if (stored.current !== null && !taskScopeMatches(stored.current, latest.current, false)) {
+      setDetail(null);
+      reportScopeChange(latest.current, "detail-cleared");
+    }
   }, [root, workspaceId, latest, setDetail]);
+  return revision;
 }
 
 function useNewTask(

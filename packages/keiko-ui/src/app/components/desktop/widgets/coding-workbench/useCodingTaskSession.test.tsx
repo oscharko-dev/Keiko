@@ -15,6 +15,22 @@ vi.mock("@/lib/coding-history-api", () => ({
 }));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+  reject(reason: unknown): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolveFn: (value: T) => void = () => undefined;
+  let rejectFn: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolveFn = res;
+    rejectFn = rej;
+  });
+  return { promise, resolve: resolveFn, reject: rejectFn };
+}
+
 const detail: CodingHistoryDetail = {
   task: {
     id: "chat-one",
@@ -157,6 +173,10 @@ describe("coding task selection", () => {
     expect(result.current.detail).toBeNull();
     expect(result.current.conversationId).toBeUndefined();
     expect(result.current.visibleRun).toBe(false);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding task history scope changed: detail-cleared",
+      { correlationId: "run-one" },
+    );
     await waitFor(() => expect(result.current.pending).toBe(false));
     expect(result.current.detail).toBeNull();
     expect(reportClientDiagnostic).toHaveBeenCalledWith(
@@ -281,5 +301,188 @@ describe("coding task selection", () => {
     expect(result.current.visibleRun).toBe(false);
     expect(result.current.error).toBe(true);
     expect(result.current.pending).toBe(false);
+  });
+});
+
+describe("pending history activation scope", () => {
+  it.each([false, true])(
+    "does not override an external workspace switch (return=%s)",
+    async (returnToSource) => {
+      const workspace = activeWorkspace();
+      if (workspace.activeInstance === null) throw new Error("Missing workspace fixture");
+      const pending = deferred<CodingHistoryDetail>();
+      read.mockReturnValue(pending.promise);
+      const { result, rerender } = renderHook(
+        ({ current }) =>
+          useCodingTaskSession({
+            snapshot: null,
+            active: false,
+            root: "/repo",
+            workspace: current,
+            selection: "chat-one",
+          }),
+        { initialProps: { current: workspace } },
+      );
+      expect(result.current.pending).toBe(true);
+      rerender({
+        current: {
+          ...workspace,
+          activeInstance: {
+            ...workspace.activeInstance,
+            workspaceId: "ws-external",
+          },
+        },
+      });
+      if (returnToSource) rerender({ current: workspace });
+      await act(async () => pending.resolve(detail));
+      expect(workspace.switchTo).not.toHaveBeenCalled();
+      expect(result.current.detail).toBeNull();
+      expect(result.current.pending).toBe(false);
+      expect(result.current.error).toBe(false);
+    },
+  );
+
+  it("does not reactivate a task after changing the unbound project root", async () => {
+    const workspace = { ...activeWorkspace(), activeInstance: null };
+    const pending = deferred<CodingHistoryDetail>();
+    read.mockReturnValue(pending.promise);
+    const { result, rerender } = renderHook(
+      ({ root }) =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root,
+          workspace,
+          selection: "chat-one",
+        }),
+      { initialProps: { root: "/repo" } },
+    );
+    rerender({ root: "/other" });
+    await act(async () => pending.resolve(detail));
+    expect(workspace.switchTo).not.toHaveBeenCalled();
+    expect(result.current.detail).toBeNull();
+    expect(result.current.pending).toBe(false);
+  });
+
+  it("does not switch the global workspace after the workbench unmounts", async () => {
+    const workspace = activeWorkspace();
+    const pending = deferred<CodingHistoryDetail>();
+    read.mockReturnValue(pending.promise);
+    const { unmount } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: null,
+        active: false,
+        root: "/repo",
+        workspace,
+        selection: "chat-one",
+      }),
+    );
+    unmount();
+    await act(async () => pending.resolve(detail));
+    expect(workspace.switchTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("history activation settlement", () => {
+  it.each(["ws-one", "ws-external"])(
+    "handles the switch acknowledgement in %s",
+    async (workspaceId) => {
+      const switching = deferred<boolean>();
+      const workspace = { ...activeWorkspace(), switchTo: vi.fn(() => switching.promise) };
+      if (workspace.activeInstance === null) throw new Error("Missing workspace fixture");
+      const { result, rerender } = renderHook(
+        ({ current }) =>
+          useCodingTaskSession({
+            snapshot: null,
+            active: false,
+            root: "/repo",
+            workspace: current,
+            selection: "chat-one",
+          }),
+        {
+          initialProps: {
+            current: {
+              ...workspace,
+              activeInstance: {
+                ...workspace.activeInstance,
+                workspaceId: "ws-source",
+              },
+            },
+          },
+        },
+      );
+      await waitFor(() => expect(workspace.switchTo).toHaveBeenCalledWith("ws-one"));
+      rerender({
+        current: { ...workspace, activeInstance: { ...workspace.activeInstance, workspaceId } },
+      });
+      await act(async () => switching.resolve(true));
+      expect(result.current.pending).toBe(false);
+      expect(result.current.error).toBe(false);
+      if (workspaceId === "ws-one") expect(result.current.detail).toEqual(detail);
+      else {
+        expect(result.current.detail).toBeNull();
+        expect(reportClientDiagnostic).toHaveBeenCalledWith(
+          "[keiko] coding task history scope changed: activation-superseded",
+          { correlationId: undefined },
+        );
+      }
+    },
+  );
+
+  it("records clearing a completed historical task without a live snapshot", async () => {
+    const workspace = activeWorkspace();
+    if (workspace.activeInstance === null) throw new Error("Missing workspace fixture");
+    const { result, rerender } = renderHook(
+      ({ current }) =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace: current,
+          selection: "chat-one",
+        }),
+      { initialProps: { current: workspace } },
+    );
+    await waitFor(() => expect(result.current.detail).toEqual(detail));
+    vi.mocked(reportClientDiagnostic).mockClear();
+    rerender({
+      current: {
+        ...workspace,
+        activeInstance: { ...workspace.activeInstance, workspaceId: "ws-two" },
+      },
+    });
+    expect(result.current.detail).toBeNull();
+    expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] coding task history scope changed: detail-cleared",
+      { correlationId: undefined },
+    );
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards a late fetch failure after the operator changed projects", async () => {
+    const pending = deferred<CodingHistoryDetail>();
+    read.mockReturnValue(pending.promise);
+    const { result, rerender } = renderHook(
+      ({ root }) =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root,
+          workspace: null,
+          selection: "chat-one",
+        }),
+      { initialProps: { root: "/repo" } },
+    );
+    rerender({ root: "/other" });
+    await act(async () => pending.reject(new Error("private server response")));
+    expect(result.current.error).toBe(false);
+    expect(result.current.pending).toBe(false);
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding task history scope changed: activation-cancelled",
+      { correlationId: undefined },
+    );
+    expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain(
+      "private server response",
+    );
   });
 });

@@ -86,6 +86,23 @@ real fixture model output, with a separate sufficient model output allowance; it
 every ordinary progress message. Existing paired visibility, truncation, redaction, question,
 verification, stop, and workspace-escape assertions remain exercised.
 
+## History selection and repair continuation — 2026-09-20
+
+Pending explicit history loads now remember the workspace-scope revision that requested them.
+Switching repositories or task workspaces, including switching away and back before the response,
+cancels the stale activation. Closing the Workbench also invalidates the request. A successful
+history-owned workspace switch remains valid; an externally superseded switch cannot restore stale
+conversation detail. Scope cancellation and clearing a completed historical conversation without a
+live snapshot emit separate body-free client diagnostics through the existing port. Four new race
+cases failed before the fix; all 18 session tests pass afterward.
+
+The same no-issue live task continued in its existing workspace. The model corrected the Vite
+configuration, and the production build verifier passed. The keyboard test still failed: successive
+focus assertions retained an incorrect eight-tab bound. The operator rejected a further edit that
+would not repair that bound, then stopped the run through the composer; the UI confirmed Stopped.
+This is not a completed test-generation task. It verifies continuation, reviewed edits, failed-test
+feedback, a successful repaired build, rejection, and composer stop. No commit or push occurred.
+
 ## Remaining qualification
 
 - Repeated selection of the same history task, concurrent refreshes, and title synchronization.
