@@ -6462,6 +6462,23 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: color-mix(in oklab, var(--accent) 14%, transparent);
   border-color: color-mix(in oklab, var(--accent) 30%, transparent);
 }
+.ml-elig-setup {
+  color: var(--fg);
+  background: color-mix(in oklab, var(--warn) 14%, transparent);
+  border-color: color-mix(in oklab, var(--warn) 30%, transparent);
+}
+.cmp-batch-mode-label {
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+.cmp-batch-failed-transcript {
+  max-height: 7rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .ml-elig-no {
   color: var(--fg);
   background: color-mix(in oklab, var(--danger) 14%, transparent);

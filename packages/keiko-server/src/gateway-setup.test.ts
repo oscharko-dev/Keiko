@@ -4207,7 +4207,7 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("explains the missing shared audio connection when only a Realtime deployment is entered", async () => {
+  it("uses the existing gateway connection for a newly selected Realtime deployment", async () => {
     const uiDir = await tempDir("keiko-gw-ui-voice-connection-");
     const deps = buildUiHandlerDeps({
       configPath: undefined,
@@ -4236,10 +4236,15 @@ describe("handleGatewaySetup", () => {
       deps,
     );
 
-    expect(result.status).toBe(400);
-    expect(JSON.stringify(result.body)).toContain(
-      "Audio endpoint URL and credential are required when an audio model is selected.",
-    );
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    const provider = requiredProvider(config, "realtime-model");
+    expect(provider.baseUrl).toBe("https://llm.example.com/v1");
+    expect(provider.apiKey).toBe("chat-token");
+    expect(
+      config.capabilities?.find((capability) => capability.id === "realtime-model")
+        ?.realtimeTranscriptionModel,
+    ).toBe("realtime-transcription-model");
     deps.store.close();
   });
 
@@ -5819,6 +5824,55 @@ describe("handleGatewaySetup", () => {
       (provider) => provider.modelId === "keiko-stt",
     );
     expect(voice?.apiKey).toBe("voice-token");
+    deps.store.close();
+  });
+
+  it("rotates a voice provider that shares the primary gateway connection", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-shared-voice-rotation-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-shared-voice-rotation-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "old-token",
+          },
+          {
+            modelId: "customer-whisper",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "old-token",
+            capability: {
+              id: "customer-whisper",
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "gateway-managed",
+            },
+          },
+        ],
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "new-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(
+      currentGatewayConfig(deps)?.providers.find(
+        (provider) => provider.modelId === "customer-whisper",
+      )?.apiKey,
+    ).toBe("new-token");
     deps.store.close();
   });
 
@@ -9107,6 +9161,185 @@ describe("normalizeDiscoveryPayload", () => {
       chatModelIds: ["chat-via-params"],
       embeddingModelIds: ["embedding-via-params"],
     });
+  });
+
+  it("discovers LiteLLM Whisper and speech models for their voice roles without chat probing", () => {
+    const discovered = normalizeDiscoveryPayloadForSetup({
+      data: [
+        { model_name: "customer-chat", model_info: { mode: "chat" } },
+        { model_name: "customer-whisper", model_info: { mode: "audio_transcription" } },
+        { model_name: "customer-speech", model_info: { mode: "audio_speech" } },
+      ],
+    });
+    expect(discovered.chatModelIds).toEqual(["customer-chat"]);
+    expect(discovered.voiceSpeechInputModelIds).toEqual(["customer-whisper"]);
+    expect(discovered.voiceSpeechOutputModelIds).toEqual(["customer-speech"]);
+    expect(discovered.unsupportedModels).toBeUndefined();
+  });
+
+  it("stores a discovered LiteLLM Whisper alias as an STT provider", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-whisper-discovery-");
+    const evidenceDir = await tempDir("keiko-gw-ev-whisper-discovery-");
+    const seenChatCandidates: string[][] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              { model_name: "customer-chat", model_info: { mode: "chat" } },
+              { model_name: "customer-whisper", model_info: { mode: "audio_transcription" } },
+            ],
+          }),
+        ),
+      gatewaySetupTester: (_config, modelIds) => {
+        seenChatCandidates.push([...modelIds]);
+        return Promise.resolve([...modelIds]);
+      },
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://gateway.example.com/v1", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(seenChatCandidates).toEqual([["customer-chat"]]);
+      const config = currentGatewayConfig(deps);
+      expect(
+        config?.capabilities?.find((capability) => capability.id === "customer-whisper"),
+      ).toMatchObject({
+        kind: "voice",
+        supportsSpeechInput: true,
+        voiceProviderLocality: "gateway-managed",
+      });
+      expect(
+        config?.capabilities?.find((capability) => capability.id === "customer-whisper")
+          ?.supportsSpeechOutput,
+      ).not.toBe(true);
+      expect(config?.providers.some((provider) => provider.modelId === "customer-whisper")).toBe(
+        true,
+      );
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("lets a customer complete a discovered speech model by providing only its supported voice ID", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-discovered-voice-id-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-discovered-voice-id-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              { model_name: "customer-chat", model_info: { mode: "chat" } },
+              { model_name: "customer-whisper", model_info: { mode: "audio_transcription" } },
+              { model_name: "customer-speech", model_info: { mode: "audio_speech" } },
+            ],
+          }),
+        ),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([...modelIds]),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      expect(
+        (
+          await handleGatewaySetup(
+            ctx({ baseUrl: "https://gateway.example.com/v1", apiKey: "example-token" }),
+            deps,
+          )
+        ).status,
+      ).toBe(200);
+      expect(
+        requiredProvider(requiredGatewayConfig(deps), "customer-speech").voiceProfiles,
+      ).toBeUndefined();
+
+      const completion = await handleGatewaySetup(
+        ctx({ preserveExisting: true, voiceOutputVoiceId: "customer-voice" }),
+        deps,
+      );
+      expect(completion.status).toBe(200);
+      const config = requiredGatewayConfig(deps);
+      expect(requiredProvider(config, "customer-speech").voiceProfiles).toEqual([
+        { persona: "neutral", voiceId: "customer-voice" },
+      ]);
+      expect(
+        config.capabilities?.find((capability) => capability.id === "customer-speech")
+          ?.supportedVoicePersonas,
+      ).toEqual(["neutral"]);
+      const resolved = sink.events.filter((event) => event.op === "gateway.voice.setup.resolved");
+      expect(resolved).toHaveLength(2);
+      expect(resolved[0]?.extra).toMatchObject({
+        speechInputModels: 1,
+        incompleteSpeechOutputModels: 1,
+        usableSpeechOutputModels: 0,
+      });
+      expect(resolved[1]?.extra).toMatchObject({
+        speechInputModels: 1,
+        incompleteSpeechOutputModels: 0,
+        usableSpeechOutputModels: 1,
+      });
+      expect(
+        activityLogEventRegistration(
+          resolved[1] as unknown as Readonly<Record<PropertyKey, unknown>>,
+        ),
+      ).toBeDefined();
+      expect(
+        expectActivityLogProof(
+          "gateway.voice.setup.resolved.line",
+          formatActivityLogProofLine(resolved[1] ?? {}),
+        ),
+      ).toMatchObject({ usableSpeechOutputModels: 1, incompleteSpeechOutputModels: 0 });
+    } finally {
+      resetServerLogger();
+      deps.store.close();
+    }
+  });
+
+  it("uses the verified Azure gateway connection for a speech deployment without duplicate credentials", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-azure-voice-shared-");
+    const evidenceDir = await tempDir("keiko-gw-ev-azure-voice-shared-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([...modelIds]),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://example.openai.azure.com/openai",
+          apiKey: "example-secret-token",
+          apiKeyHeaderName: "api-key",
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "2024-10-21",
+          deploymentNames: ["customer-chat"],
+          voiceSpeechToTextModelId: "customer-transcription",
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(
+        currentGatewayConfig(deps)?.providers.find(
+          (provider) => provider.modelId === "customer-transcription",
+        ),
+      ).toMatchObject({
+        baseUrl: "https://example.openai.azure.com/openai",
+        apiKeyHeaderName: "api-key",
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2024-10-21",
+      });
+    } finally {
+      deps.store.close();
+    }
   });
 
   // Field incident (LiteLLM customer, 2026-08): the declared mode is the ONLY affirmative

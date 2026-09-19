@@ -3515,6 +3515,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "gateway-voice-configuration",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["gateway.voice.setup.resolved"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["gateway.voice.setup.resolved"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["gateway.voice.setup.resolved"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["gateway.voice.setup.resolved"],
+    requiredEvidenceClasses: ["completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "gateway-tool-catalog",
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {

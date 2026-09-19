@@ -31,13 +31,8 @@ import KeikoSelect from "../../KeikoSelect";
 import { VoiceDictationButton, VoiceDictationPreviewFromController } from "../../VoiceDictation";
 import { OrganicWorkspaceBubble } from "../../EmptyWorkspaceBlob";
 import { useDictation } from "../../hooks/useDictation";
-import {
-  supportsDictation,
-  supportsRealtimeVoice,
-  useVoiceCapability,
-} from "../../hooks/useVoiceCapability";
+import { supportsDictation, useVoiceCapability } from "../../hooks/useVoiceCapability";
 import { dictationCaptureSupported } from "../../hooks/dictation-recorder";
-import { realtimeVoiceTransportSupported } from "../../hooks/voice-rtc-transport";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -177,8 +172,6 @@ function useTaskComposerController(
   const [blockedSubmitAttempted, setBlockedSubmitAttempted] = useState(false);
   const voiceCapability = useVoiceCapability();
   const dictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
-  const liveDictationEnabled =
-    dictationVisible && supportsRealtimeVoice(voiceCapability) && realtimeVoiceTransportSupported();
   const insertTranscript = useCallback(
     (text: string): void => {
       onTaskIntentChange(taskIntent.trim().length === 0 ? text : `${taskIntent.trimEnd()} ${text}`);
@@ -188,7 +181,6 @@ function useTaskComposerController(
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
-    realtime: { enabled: liveDictationEnabled },
   });
   const blockedReason = submitBlockedReason(input, t);
   const submitBlocked = blockedReason !== null;

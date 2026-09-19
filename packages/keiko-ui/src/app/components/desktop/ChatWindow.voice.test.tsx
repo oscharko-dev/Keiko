@@ -445,7 +445,7 @@ describe("ChatWindow voice dialogue availability", () => {
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
   });
 
-  it("hides the dialogue switch when full-realtime is advertised but RTCPeerConnection is absent", async () => {
+  it("offers turn-based dialogue when RTCPeerConnection is absent", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: { ...FULL_REALTIME, availableVoicePersonas: ["male"] },
     });
@@ -458,8 +458,16 @@ describe("ChatWindow voice dialogue availability", () => {
     renderWindow(makeSession());
 
     await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
-    expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
+    expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+  });
+
+  it("does not offer Digital Twin without a configured chat model", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession({ models: [], selectedModel: undefined }));
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+    expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
   });
 });
 
@@ -913,7 +921,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     expect(await screen.findByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
   });
 
-  it("hides the dialogue switch for full-realtime WITHOUT browser WebRTC", async () => {
+  it("offers turn-based dialogue for full-realtime WITHOUT browser WebRTC", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
     });
@@ -921,7 +929,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     renderWindow(makeSession());
 
     await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
-    expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
+    expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
   });
 
   it("entering dialogue starts the realtime controller without rendering extra controls (AC1)", async () => {

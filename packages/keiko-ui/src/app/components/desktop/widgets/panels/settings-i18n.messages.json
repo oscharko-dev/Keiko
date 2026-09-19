@@ -167,6 +167,18 @@
     "en": "Voice provider - {label}",
     "de": "Sprachanbieter - {label}"
   },
+  "settings.models.voiceNeedsOutputVoice": {
+    "en": "Choose a supported output voice in Audio settings",
+    "de": "Unterstützte Ausgabestimme in den Audio-Einstellungen wählen"
+  },
+  "settings.models.voiceNeedsRealtimeTranscription": {
+    "en": "Native Realtime needs a live transcription deployment; Digital Twin can use speech-to-text instead",
+    "de": "Natives Realtime braucht ein Live-Transkriptions-Deployment; Digital Twin kann stattdessen Speech-to-Text nutzen"
+  },
+  "settings.models.configureAudio": {
+    "en": "Set up audio",
+    "de": "Audio einrichten"
+  },
   "settings.models.voiceCapabilitySpeechToText": {
     "en": "speech-to-text",
     "de": "Speech-to-Text"

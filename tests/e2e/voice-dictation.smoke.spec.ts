@@ -14,6 +14,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
+import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
 
 const STT_CAPABILITY = {
   voice: {
@@ -32,6 +33,17 @@ const NO_VOICE_CAPABILITY = {
     capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
     transport: { websocketControl: false, webrtcMedia: false },
     reason: "no-voice-provider",
+  },
+};
+
+const FULL_VOICE_CAPABILITY = {
+  voice: {
+    available: true,
+    profile: "full-realtime",
+    capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+    transport: { websocketControl: true, webrtcMedia: true },
+    availableVoicePersonas: ["neutral"],
+    providerLocality: "azure-foundry",
   },
 };
 
@@ -120,4 +132,44 @@ test("composer dictation @smoke — denied permission does not break the compose
   page,
 }) => {
   await deniedPermissionFlow(page);
+});
+
+test("coding workbench dictation @smoke — full voice capability still uses STT only", async ({
+  page,
+}) => {
+  const workbench = await installLiveCodingWorkbenchRuntime(page);
+  await page.addInitScript(fakeDictationMediaInit("grant"));
+  await page.route("**/api/voice/capability", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(FULL_VOICE_CAPABILITY) }),
+  );
+  let transcriptionCalls = 0;
+  await page.route("**/api/voice/transcribe", (route) => {
+    transcriptionCalls += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript: "inspect this repository", confidence: 0.9 }),
+    });
+  });
+  const voiceRequests: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (
+      path.startsWith("/api/voice/") &&
+      path !== "/api/voice/capability" &&
+      path !== "/api/voice/transcribe"
+    )
+      voiceRequests.push(path);
+  });
+  await workbench.open();
+  await page.getByRole("button", { name: "Dictate a message" }).click();
+  await page.getByRole("button", { name: "Stop dictation" }).click();
+  await expect(page.getByRole("textbox", { name: "Review your dictation" })).toHaveValue(
+    "inspect this repository",
+  );
+  await page.getByRole("button", { name: "Insert transcript into the message" }).click();
+  await expect(page.getByRole("textbox", { name: "Task instructions" })).toHaveValue(
+    "inspect this repository",
+  );
+  expect(transcriptionCalls).toBe(1);
+  expect(voiceRequests).toEqual([]);
 });

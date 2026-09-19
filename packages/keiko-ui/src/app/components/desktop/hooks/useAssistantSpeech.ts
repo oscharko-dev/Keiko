@@ -61,6 +61,9 @@ export interface UseAssistantSpeechOptions {
   // never sees a voice id. Undefined lets the server select the first explicitly configured mapping;
   // synthesis fails closed when no mapping exists.
   readonly persona?: VoicePersona | undefined;
+  // Called once when this exact canonical assistant message has finished or failed playback.
+  // A turn-based dialogue uses it to return the floor to speech capture.
+  readonly onSettled?: ((messageId: string) => void) | undefined;
   // Optional #499 turn manager to receive assistant-speech and interruption signals (AC2).
   readonly turnManager?: VoiceTurnManagerEngine | undefined;
   // Test seams. Production uses the BFF synthesis client, `new Audio()`, and the URL object-store.
@@ -144,6 +147,7 @@ function attachBufferedAudioHandlers(
   playbackRef: CurrentRef<VoicePlaybackBinding>,
   teardown: () => void,
   cancelledRef: CurrentRef<boolean>,
+  onSettled: () => void,
 ): void {
   audio.onplaying = (): void => {
     if (!cancelledRef.current) {
@@ -154,12 +158,14 @@ function attachBufferedAudioHandlers(
     if (!cancelledRef.current) {
       playbackRef.current.complete();
       teardown();
+      onSettled();
     }
   };
   audio.onerror = (): void => {
     if (!cancelledRef.current) {
       playbackRef.current.fail("internal");
       teardown();
+      onSettled();
     }
   };
 }
@@ -172,11 +178,13 @@ function playBufferedAudio(
   playbackRef: CurrentRef<VoicePlaybackBinding>,
   teardown: () => void,
   cancelledRef: CurrentRef<boolean>,
+  onSettled: () => void,
 ): Promise<void> {
   return Promise.resolve(audio.play()).catch((error: unknown) => {
     if (!cancelledRef.current && !isAbortError(error)) {
       playbackRef.current.fail("internal");
       teardown();
+      onSettled();
     }
   });
 }
@@ -221,6 +229,14 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
   // the synthesizeRef pattern, so a persona change never re-triggers a turn that handledRef already owns).
   const personaRef = useRef(persona);
   personaRef.current = persona;
+  const onSettledRef = useRef(options.onSettled);
+  onSettledRef.current = options.onSettled;
+  const settledMessageRef = useRef<string | undefined>(undefined);
+  const notifySettled = useCallback((id: string): void => {
+    if (settledMessageRef.current === id) return;
+    settledMessageRef.current = id;
+    onSettledRef.current?.(id);
+  }, []);
 
   // Releases the audio element, revokes the object URL, and aborts any pending synthesis fetch. Safe to
   // call repeatedly: every reference is cleared and re-checked. This is the single teardown used by the
@@ -272,6 +288,7 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
     // Muted records the user's preference for whether a spoken response begins. A message that arrives
     // muted is marked handled but never spoken; an explicit replay speaks regardless.
     if (pb.snapshot.muted && !isReplay) {
+      notifySettled(messageId);
       return;
     }
 
@@ -299,8 +316,9 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
           const url = createUrlRef.current(blob);
           urlRef.current = url;
           audio.src = url;
-          attachBufferedAudioHandlers(audio, playbackRef, teardown, cancelledRef);
-          return playBufferedAudio(audio, playbackRef, teardown, cancelledRef);
+          const settle = (): void => notifySettled(messageId);
+          attachBufferedAudioHandlers(audio, playbackRef, teardown, cancelledRef, settle);
+          return playBufferedAudio(audio, playbackRef, teardown, cancelledRef, settle);
         })
         .catch((error: unknown) => {
           if (cancelledRef.current || isAbortError(error)) {
@@ -308,6 +326,7 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
           }
           playbackRef.current.fail(failureFromError(error));
           teardown();
+          notifySettled(messageId);
         });
     };
 
@@ -331,12 +350,14 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
               if (!cancelledRef.current) {
                 playbackRef.current.complete();
                 teardown();
+                notifySettled(messageId);
               }
             },
             onError: (): void => {
               if (!cancelledRef.current && !controller.signal.aborted) {
                 playbackRef.current.fail("internal");
                 teardown();
+                notifySettled(messageId);
               }
             },
           },
@@ -357,7 +378,7 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
       cancelledRef.current = true;
       teardown();
     };
-  }, [enabled, available, text, messageId, replayNonce, teardown]);
+  }, [enabled, available, text, messageId, replayNonce, teardown, notifySettled]);
 
   useEffect(
     () => () => {

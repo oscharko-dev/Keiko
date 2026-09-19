@@ -182,11 +182,12 @@ describe("useVoiceDialogMode — availability gating", () => {
     expect(second.result.current.available).toBe(true);
   });
 
-  it("is unavailable for full-realtime WITHOUT WebRTC media", () => {
+  it("offers batch capture when native WebRTC media is unavailable", () => {
     const { result } = renderHook(() =>
       useVoiceDialogMode({ capability: FULL_REALTIME_NO_WEBRTC }),
     );
-    expect(result.current.available).toBe(false);
+    expect(result.current.available).toBe(true);
+    expect(result.current.capture).toBe("batch");
   });
 
   it("is unavailable when the browser cannot capture realtime audio, even for full-realtime", () => {
@@ -196,20 +197,23 @@ describe("useVoiceDialogMode — availability gating", () => {
     expect(result.current.available).toBe(false);
   });
 
-  it("is unavailable when RTCPeerConnection is absent, even for full-realtime", () => {
+  it("uses batch capture when RTCPeerConnection is absent", () => {
     vi.unstubAllGlobals();
+    vi.stubGlobal("MediaRecorder", StubMediaRecorder);
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
       value: { getUserMedia: vi.fn() },
     });
     const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
-    expect(result.current.available).toBe(false);
+    expect(result.current.available).toBe(true);
+    expect(result.current.capture).toBe("batch");
   });
 
-  it("is unavailable when WebRTC cannot enforce a send-only microphone transceiver", () => {
+  it("uses batch capture when WebRTC cannot enforce a send-only microphone transceiver", () => {
     vi.stubGlobal("RTCPeerConnection", class {});
     const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
-    expect(result.current.available).toBe(false);
+    expect(result.current.available).toBe(true);
+    expect(result.current.capture).toBe("batch");
   });
 });
 

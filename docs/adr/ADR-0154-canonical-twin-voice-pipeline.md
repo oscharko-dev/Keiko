@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (independent audit of PR #2665, 2026-07-22).
+Accepted (independent audit of PR #2665, 2026-07-22; turn-based capture amendment, 2026-09-19).
 
 Supersedes [ADR-0096](ADR-0096-voice-dialogue-session-orchestration.md) D2, D3, D7, and D8.
 It also supersedes [ADR-0116](ADR-0116-realtime-voice-live-memory-recall.md): Realtime providers no
@@ -50,20 +50,21 @@ from canonical chat persistence, project/workspace/user scopes, MemoriaViva, rep
 Pod retrieval, grounding, citations, governance, and diagnostics.
 
 The audit also found that older decisions and current code disagreed. ADR-0096 specified a batch
-STT+TTS dialogue fallback and deferred live Realtime transcripts, while the shipped Twin interface now
-uses Realtime WebRTC for live capture, VAD, partial transcription, and final transcription. ADR-0116
+STT+TTS dialogue fallback and deferred live Realtime transcripts, while the audited Twin interface
+used Realtime WebRTC for live capture, VAD, partial transcription, and final transcription. ADR-0116
 made the Realtime provider a memory/tool consumer, which conflicts with the single-answer-authority
 invariant. Leaving those decisions active would invite the parallel response architecture to return.
 
 The remaining architecture needs three independent capabilities:
 
-1. a Realtime media/transcription deployment for WebRTC input, VAD, and final transcripts;
+1. a speech-to-text deployment for turn-based capture, or a Realtime media/transcription deployment
+   for native WebRTC input, VAD, and final transcripts;
 2. the normal chat model and canonical chat pipeline for every assistant answer; and
 3. an explicit speech-output deployment plus persona mapping for optional TTS playback.
 
 No deployment name, model default, or provider voice id is universally compatible across OpenAI,
-Azure Foundry, and customer-hosted endpoints. Each required deployment alias and output voice mapping
-must therefore be explicit.
+Azure Foundry, LiteLLM, and customer-hosted endpoints. Gateway-declared audio roles may be discovered;
+an output voice id must be explicitly mapped if the gateway cannot supply a verifiable choice.
 
 ## Decision
 
@@ -160,17 +161,19 @@ only synthesis input and never rewrites persisted or rendered content.
 assistant personas and no provider voice ids. Persona resolution considers only providers that
 explicitly advertise `supportsSpeechOutput` and carry a configured server-side persona mapping.
 
-Twin Voice is offered only when all of the following resolve fail-closed:
+Twin Voice requires a canonical chat model, a configured speech-output provider, and at least one
+persona mapped to that provider. It selects capture in this order:
 
-- a reachable Realtime WebRTC transport;
-- an explicit compatible live-transcription deployment alias;
-- browser support for the approved WebRTC capture posture;
-- a reachable explicit speech-output provider; and
-- at least one persona mapped to that speech-output provider.
+1. Native Realtime when the deployment has an explicit compatible live-transcription alias, the
+   approved WebRTC transport is available, and the browser supports the send-only media posture.
+2. Turn-based speech-to-text when a configured transcription model and browser batch recording are
+   available. The existing recorder and VAD settle one short clip, and the final transcript enters
+   the same canonical Chat-owned queue as native Realtime. Assistant speech is still the matching
+   persisted chat answer rendered through the same TTS path.
 
-Batch STT remains Composer dictation or push-to-talk assistance. It is not a second, supposedly
-equivalent Voice Dialogue transport fallback. A Realtime-only deployment may support live transcript
-capture but must never report `speaks: true`.
+The turn-based mode is identified as such in the UI and does not claim native Realtime latency or
+barge-in. Composer dictation remains a distinct draft-editing feature; it never silently sends a
+message. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
 
 No default transcription deployment or output voice is inherited when a deployment changes. An
 unchanged existing provider-specific value may be preserved by an unrelated update; selecting a new
@@ -247,9 +250,9 @@ and office conditions. Automated or synthetic results must never be reported as 
   unrelated chats or independent stores.
 - Realtime provider compromise or schema drift cannot directly create an assistant answer or invoke a
   Keiko retrieval/memory tool.
-- Voice Dialogue now requires explicit Realtime transcription and explicit TTS configuration. This is
-  more setup than a provider-native speech-to-speech session but makes compatibility and authority
-  honest.
+- Native Voice Dialogue requires explicit Realtime transcription. Turn-based Voice Dialogue can use
+  a discovered Whisper-class transcription deployment with canonical chat and mapped TTS. Neither
+  mode grants the media provider authority to generate assistant answers.
 - A Realtime deployment without TTS can still support transcript capture where surfaced, but it cannot
   claim a spoken Twin.
 - TTS begins after the canonical answer completes, so response latency includes the governed chat
@@ -269,11 +272,11 @@ apply canonical retrieval, governance, citations, memory capture, and persistenc
 Rejected. It still grants the provider an independent assistant/tool loop and duplicates orchestration
 already owned by canonical chat. Passing the final transcript to chat is smaller and strictly stronger.
 
-### Preserve the batch STT+TTS dialogue fallback
+### Present turn-based STT+TTS as native Realtime
 
-Rejected for Twin Voice. Batch STT remains useful Composer dictation, but presenting it as equivalent
-dialogue would create a second capture/settlement lifecycle and weaken the Realtime/VAD turn-taking
-contract. Twin availability fails closed when its Realtime prerequisites are absent.
+Rejected. Turn-based capture is a supported Digital Twin path, but its higher latency and lack of
+native barge-in must remain visible. It reuses the existing dictation recorder, VAD, canonical Chat
+queue, and assistant playback instead of adding a second answer or persistence authority.
 
 ### Infer universal model and voice defaults
 

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "ecfc025fb8d2c04ac35d3f3e404912edf19b3004d8eaf8bb3dfaadec51a6ade4" as const;
+  "ffb11569ae53d7c09c5ccef231103d0abb36e08e13a252111d027653040cd360" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -10962,6 +10962,57 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["gateway-tool-schema-rejection"],
     proofIds: ["gateway.tool-catalog.repair.emitted-line"],
     releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.voice.setup.resolved",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-setup.logVoiceSetupResolution",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      speechInputModels: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      usableSpeechOutputModels: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      incompleteSpeechOutputModels: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      usableRealtimeModels: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      incompleteRealtimeModels: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["gateway-voice-configuration"],
+    proofIds: ["gateway.voice.setup.resolved.line"],
+    releaseImpact: "minor",
   },
   {
     contractKind: "activity-log-operation",
@@ -25459,8 +25510,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 310,
-  completeClassCount: 310,
+  supportedClassCount: 311,
+  completeClassCount: 311,
   completeness: "complete",
   classes: [
     {
@@ -40137,6 +40188,80 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.tool-catalog.repair.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "gateway-voice-configuration",
+      requirementContract: "gateway-voice-configuration",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.voice.setup.resolved"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "gateway.voice.setup.resolved",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["gateway.voice.setup.resolved"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "gateway.voice.setup.resolved",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "incompleteRealtimeModels",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "incompleteSpeechOutputModels",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "speechInputModels",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "usableRealtimeModels",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "usableSpeechOutputModels",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.voice.setup.resolved.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -56882,6 +57007,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.tool-catalog.projected": "model-gateway",
     "gateway.tool-catalog.rejected": "model-gateway",
     "gateway.tool-catalog.repair": "model-gateway",
+    "gateway.voice.setup.resolved": "model-gateway",
     "git-change.chat.apply": "bff",
     "git-change.chat.blocked": "editor-delivery",
     "git-change.chat.connected": "editor-delivery",

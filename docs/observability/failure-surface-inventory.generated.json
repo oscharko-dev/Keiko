@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ecfc025fb8d2c04ac35d3f3e404912edf19b3004d8eaf8bb3dfaadec51a6ade4"
+    "catalogDigest": "ffb11569ae53d7c09c5ccef231103d0abb36e08e13a252111d027653040cd360"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 424,
-    "proofCount": 432,
-    "resolvedProofCount": 432,
-    "failureClassCount": 310,
+    "operationCount": 425,
+    "proofCount": 433,
+    "resolvedProofCount": 433,
+    "failureClassCount": 311,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -174,6 +174,7 @@
         "gateway.tool-catalog.projected",
         "gateway.tool-catalog.rejected",
         "gateway.tool-catalog.repair",
+        "gateway.voice.setup.resolved",
         "http.gateway.egress.planned",
         "http.gateway.fetch.completed",
         "http.gateway.fetch.failed",
@@ -724,6 +725,7 @@
     "gateway-stream-read": ["model-gateway.dependency-failure"],
     "gateway-tls-trust": ["model-gateway.dependency-failure"],
     "gateway-tool-calling-capability": ["model-gateway.dependency-failure"],
+    "gateway-voice-configuration": ["model-gateway.dependency-failure"],
     "gateway-tool-catalog": ["model-gateway.rejection"],
     "gateway-tool-schema-rejection": ["model-gateway.dependency-failure"],
     "git-change-chat-connect": ["editor-delivery.rejection"],
@@ -1432,6 +1434,7 @@
     "gateway.tool-catalog.repair.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.tool-schema-repair.test.ts"
     ],
+    "gateway.voice.setup.resolved.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
     "git-change.chat.apply.outcome": ["packages/keiko-server/src/chat-activity.test.ts"],
     "git-change.chat.blocked.reason": ["packages/keiko-server/src/gitChangeRoutes.test.ts"],
     "git-change.chat.connected.scope": ["packages/keiko-server/src/gitChangeRoutes.test.ts"],

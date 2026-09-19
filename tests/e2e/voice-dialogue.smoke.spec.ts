@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chat, ChatMessage, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { evidenceScreenshotPath } from "./support/evidence.js";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 
 const MEMORY_CAPTURE_TRANSCRIPT =
   "KEIKO_E2E_JOURNAL_CAPTURE: remember the deterministic release window.";
@@ -90,6 +91,31 @@ const NO_VOICE_CAPABILITY = {
     reason: "no-voice-provider",
   },
 };
+
+const BATCH_VOICE_CAPABILITY = {
+  voice: {
+    available: true,
+    profile: "speech-output",
+    capabilities: { speechToText: true, speechOutput: true, realtimeVoice: false },
+    transport: { websocketControl: false, webrtcMedia: false },
+    availableVoicePersonas: ["neutral"],
+    providerLocality: "gateway-managed",
+  },
+};
+
+const BATCH_AUDIO_INIT = `${fakeDictationMediaInit("grant")}
+  window.__canonicalTtsPlays = 0;
+  window.Audio = class {
+    constructor() { this.onplaying = null; this.onended = null; this.onerror = null; }
+    play() {
+      window.__canonicalTtsPlays += 1;
+      this.onplaying?.();
+      setTimeout(() => this.onended?.(), 0);
+      return Promise.resolve();
+    }
+    pause() {}
+  };
+`;
 
 // Issue #1563 — the two partial deployments that must NOT offer spoken dialogue (no full STT+TTS
 // conjunction): speech-to-text only (dictation, no spoken answer) and speech-output only (spoken
@@ -1057,6 +1083,42 @@ test("voice dialogue @smoke — Realtime WebRTC uses canonical chat turns (AC1/A
   request,
 }) => {
   await dialogueTurnFlow(page, request);
+});
+
+test("voice dialogue @smoke — Whisper-style STT and TTS complete a browser dialogue turn", async ({
+  page,
+}) => {
+  const transcript = "how is the deploy status";
+  await page.addInitScript(BATCH_AUDIO_INIT);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  await page.route("**/api/voice/transcribe", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transcript, confidence: 0.9 }),
+    }),
+  );
+  const sends = captureVoiceChatSends(page);
+  const speeches = await captureSynthesizedTexts(page);
+  await openComposer(page);
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await expect(dialogSwitch).toBeVisible();
+  await dialogSwitch.click();
+  await expect(page.getByText(/Turn-based Digital Twin/u)).toBeVisible();
+  await page.getByRole("button", { name: "Finish speaking" }).click();
+  const conversation = page.getByRole("log", { name: "Conversation" });
+  await expect(conversation.getByText(transcript, { exact: true })).toHaveCount(1);
+  await expect(conversation.getByText(/KEIKO_E2E_STREAM_OK/u)).toHaveCount(1);
+  await expect.poll(() => speeches.length).toBe(1);
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
+  await expect(page.getByRole("button", { name: "Finish speaking" })).toBeVisible();
+  expect(sends.canonicalContents()).toEqual([transcript]);
+  expect(sends.legacyPaths()).toEqual([]);
+  expect(sends.canonicalPayloads()[0]).toMatchObject({
+    content: transcript,
+    clientTurnId: expect.stringMatching(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u),
+  });
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
 });
 
 test("voice dialogue @smoke — canonical speech reaches Memoria Viva exactly once", async ({
