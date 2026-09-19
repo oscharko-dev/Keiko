@@ -3056,12 +3056,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeQuestionPort.ts",
-      "owner": "listRuntimeQuestions",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeResolver.ts",
       "owner": "runtimeMutationLive",
       "kind": "unregistered-catch",

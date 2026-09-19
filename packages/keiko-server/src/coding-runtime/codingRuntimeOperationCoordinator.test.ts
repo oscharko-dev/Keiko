@@ -489,7 +489,7 @@ describe("CodingRuntimeOperationCoordinator", () => {
     expect(reject).not.toHaveBeenCalled();
   });
 
-  it.each(["missing-run", "missing-port", "revoked", "runtime-refusal", "runtime-error"])(
+  it.each(["missing-run", "missing-port", "revoked", "runtime-refusal"])(
     "preserves authority failure for a production question %s",
     async (condition) => {
       const runs = new Map([
@@ -500,10 +500,7 @@ describe("CodingRuntimeOperationCoordinator", () => {
               condition === "missing-port"
                 ? undefined
                 : questionPort({
-                    answer: () =>
-                      condition === "runtime-error"
-                        ? Promise.reject(new Error("protocol unavailable"))
-                        : Promise.resolve(false),
+                    answer: () => Promise.resolve(false),
                   }),
             operationGuard: createProductionRuntimeOperationGuard(
               "run-1",
@@ -522,6 +519,60 @@ describe("CodingRuntimeOperationCoordinator", () => {
           answers: [["Continue"]],
         }),
       ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    },
+  );
+
+  it.each(["list", "answer", "reject"] as const)(
+    "persists request-correlated %s failures through the production question guard",
+    async (operation) => {
+      const activityLog = createBufferedServerLogSink();
+      const fail = (): Promise<never> => Promise.reject(new Error("PRIVATE_PROTOCOL_BODY"));
+      const port = createProductionRuntimeQuestionPort(
+        new Map([
+          [
+            "run-1",
+            {
+              questionPort: questionPort({ list: fail, answer: fail, reject: fail }),
+              operationGuard: createProductionRuntimeOperationGuard("run-1", () => true),
+            },
+          ],
+        ]),
+      );
+      const subject = coordinator({ port, activityLog });
+      const request = { requestId: "request-1", expectedRevision: 3 };
+      const correlationId = "request-question-transport";
+      const result =
+        operation === "list"
+          ? subject.listQuestions("run-1", request, correlationId)
+          : operation === "answer"
+            ? subject.answerQuestion(
+                "run-1",
+                { ...request, questionId: "que_1", answers: [["Yes"]] },
+                correlationId,
+              )
+            : subject.rejectQuestion("run-1", { ...request, questionId: "que_1" }, correlationId);
+      await expect(result).resolves.toEqual({
+        ok: false,
+        failureCode: "authority-resolution-failed",
+      });
+      expect(activityLog.events).toHaveLength(1);
+      const event = activityLog.events[0];
+      if (event === undefined) throw new Error("Expected the transport failure event");
+      const line = formatActivityLogProofLine(event);
+      const proof =
+        operation === "list"
+          ? expectActivityLogProof("coding-runtime.question.list-failed.emitted-line", line)
+          : expectActivityLogProof(
+              "coding-runtime.question.authority-resolution-failed.emitted-line",
+              line,
+            );
+      expect(proof).toMatchObject({
+        correlationId,
+        runId: "run-1",
+        operation,
+        errorKind: "internal",
+      });
+      expect(line).not.toContain("PRIVATE_PROTOCOL_BODY");
     },
   );
 

@@ -1934,6 +1934,7 @@
       "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
     ],
     "server.diagnostic.failure.activity-log-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
       "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],

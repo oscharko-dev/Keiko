@@ -113,7 +113,7 @@ function assertMessageShape(message: Readonly<Record<string, unknown>>): void {
         if (left === right) return 0;
         return left < right ? -1 : 1;
       }),
-    ).slice(0, 16)}:missing=none`,
+    ).slice(0, 16)}`,
   );
 }
 
@@ -127,7 +127,7 @@ function assertToolInput(
   const inputBytes = valid ? Buffer.byteLength(JSON.stringify(input), "utf8") : 0;
   if (valid && inputBytes <= TOOL_CATALOG_LIMITS.maxArgumentBytes) return;
   throw new OpenCodeV2HistoryError(
-    `reason=event-unknown:eventSha256=${digest(part).slice(0, 16)}:part=tool:toolSha256=${digest(part.name).slice(0, 16)}:statusSha256=${digest(state.status ?? null).slice(0, 16)}:partBytes=${String(Buffer.byteLength(JSON.stringify(part), "utf8"))}:gate=argument-bound`,
+    `reason=argument-bound:eventSha256=${digest(part).slice(0, 16)}:toolSha256=${digest(part.name).slice(0, 16)}:statusSha256=${digest(state.status ?? null).slice(0, 16)}:partBytes=${String(Buffer.byteLength(JSON.stringify(part), "utf8"))}`,
   );
 }
 

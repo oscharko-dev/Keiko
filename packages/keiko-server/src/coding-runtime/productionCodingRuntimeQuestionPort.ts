@@ -9,7 +9,6 @@ import type {
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type { CodingRuntimeRunOperation } from "./productionCodingRuntimeHost.js";
 import type { ProductionRuntimeOperationGuard } from "./productionCodingRuntimePorts.js";
-import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 
 export function createOpenCodeRuntimeQuestionPort(
   runPort: Pick<OpenCodeRunPort, "listQuestions" | "answerQuestion" | "rejectQuestion">,
@@ -63,9 +62,9 @@ async function listRuntimeQuestions(
       return undefined;
     }
     return questions;
-  } catch {
+  } catch (error) {
     reservation.release();
-    return undefined;
+    throw error;
   }
 }
 
@@ -101,7 +100,6 @@ async function mutateRuntimeQuestion(
     return accepted && reservation.commit();
   } catch (error) {
     reservation.release();
-    if (error instanceof CodingRuntimeQuestionAnswerRejectedError) throw error;
-    return false;
+    throw error;
   }
 }

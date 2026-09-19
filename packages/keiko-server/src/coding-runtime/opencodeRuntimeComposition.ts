@@ -984,7 +984,7 @@ function recordOpenCodeV2HistoryFailure(
     source: "opencode.history",
     errorClass: "OpenCodeHistoryFailure",
     message: "runtime-handshake-failed",
-    code: `stage=sse-history-reconciliation:${reason}`,
+    code: `stage=history:${reason}`,
   });
 }
 

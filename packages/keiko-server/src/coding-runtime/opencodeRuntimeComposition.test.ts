@@ -28,7 +28,16 @@ import {
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 
-import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  defaultServerDiagnosticSink,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createRuntimeProcessSupervisor,
@@ -204,6 +213,29 @@ async function withDeterministicReadinessTimers<T>(operation: () => Promise<T>):
   } finally {
     vi.useRealTimers();
   }
+}
+
+function persistedDiagnostics(): { sink: ServerDiagnosticSink; read: () => string } {
+  const stateDir = tempDir("keiko-opencode-diagnostics-");
+  vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+  return { sink: defaultServerDiagnosticSink, read: () => readPersistedActivityLog(stateDir) };
+}
+
+function expectPersistedDiagnostic(raw: string, source: string): Record<string, unknown> {
+  const lines = persistedActivityLogLines(raw, "server.diagnostic.failure").filter(
+    (line) => (JSON.parse(line) as { source?: string }).source === source,
+  );
+  expect(lines).toHaveLength(1);
+  const line = lines[0];
+  if (line === undefined) throw new Error("Expected the persisted diagnostic");
+  const record = expectActivityLogProof("server.diagnostic.failure.activity-log-line", line);
+  expect(record).toMatchObject({
+    correlationId: FIXTURE_RUN_ID,
+    source,
+    completeness: "complete",
+    loss: "none",
+  });
+  return record;
 }
 
 function tempDir(prefix: string): string {
@@ -682,6 +714,7 @@ function turnHistory(
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -1523,13 +1556,9 @@ describe("private OpenCode run control", () => {
   it.each(["list", "answer", "reject"] as const)(
     "propagates V2 %s transport failures with redacted run evidence",
     async (operation) => {
-      const records: ServerDiagnosticRecord[] = [];
+      const diagnostics = persistedDiagnostics();
       const fixture = await startBridgeFixture(facade, undefined, {
-        diagnostics: {
-          record: (record): void => {
-            records.push(record);
-          },
-        },
+        diagnostics: diagnostics.sink,
         runControl: {
           promptBodies: [],
           abortSessions: [],
@@ -1546,10 +1575,14 @@ describe("private OpenCode run control", () => {
               ? port.answerQuestion(FIXTURE_RUN_ID, "que_fixed", [["Approve"]])
               : port.rejectQuestion(FIXTURE_RUN_ID, "que_fixed");
         await expect(request).rejects.toThrow();
-        expect(records).toEqual([
-          expect.objectContaining({ correlationId: FIXTURE_RUN_ID, source: "opencode.turn" }),
-        ]);
-        expect(JSON.stringify(records)).not.toContain("PRIVATE_FORM_CONTENT");
+        const persisted = diagnostics.read();
+        const record = expectPersistedDiagnostic(persisted, "opencode.turn");
+        expect(record).toMatchObject({
+          diagnosticOperation: "coding-runtime.opencode-composition",
+          diagnosticSummary: "runtime-turn-failed",
+        });
+        expect(record.code).toMatch(/^stage=question:/u);
+        expect(persisted).not.toContain("PRIVATE_FORM_CONTENT");
       } finally {
         await fixture.stop();
       }
@@ -1826,7 +1859,7 @@ describe("private OpenCode tool bridge", () => {
   });
 
   it("records a body-free structural diagnostic for an unknown history message shape", async () => {
-    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics = persistedDiagnostics();
     const sentinel = "SENTINEL_PRIVATE_HISTORY_BODY";
     const sentinelKey = "ÄpfelPrivateHistoryKey";
     const history = completedTurnHistory();
@@ -1841,11 +1874,7 @@ describe("private OpenCode tool bridge", () => {
       { execute: vi.fn(() => Promise.resolve(completed)) },
       undefined,
       {
-        diagnostics: {
-          record: (record): void => {
-            records.push(record);
-          },
-        },
+        diagnostics: diagnostics.sink,
         historyResponse: Promise.resolve(v2Envelope(malformed.slice().reverse())),
         expectedStart: {
           ok: false,
@@ -1855,24 +1884,25 @@ describe("private OpenCode tool bridge", () => {
       },
     );
 
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
+    const persisted = diagnostics.read();
+    const record = expectPersistedDiagnostic(persisted, "opencode.history");
+    expect(record).toMatchObject({
       correlationId: FIXTURE_RUN_ID,
-      operation: "coding-runtime.handshake",
+      diagnosticOperation: "coding-runtime.handshake",
       source: "opencode.history",
-      errorClass: "OpenCodeHistoryFailure",
-      message: "runtime-handshake-failed",
+      diagnosticErrorClass: "OpenCodeHistoryFailure",
+      diagnosticSummary: "runtime-handshake-failed",
     });
-    expect(records[0]?.code).toMatch(
-      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:role=assistant:extraCount=2:extraKeySha256=[a-f0-9]{16}:missing=none$/u,
+    expect(record.code).toMatch(
+      /^stage=history:reason=event-unknown:eventSha256=[a-f0-9]{16}:role=assistant:extraCount=2:extraKeySha256=[a-f0-9]{16}$/u,
     );
-    expect(JSON.stringify(records)).not.toContain(sentinel);
-    expect(JSON.stringify(records)).not.toContain(sentinelKey);
+    expect(persisted).not.toContain(sentinel);
+    expect(persisted).not.toContain(sentinelKey);
     const keysDigest = createHash("sha256")
       .update(JSON.stringify(["zebra", sentinelKey]))
       .digest("hex")
       .slice(0, 16);
-    expect(records[0]?.code).toContain(`extraKeySha256=${keysDigest}`);
+    expect(record.code).toContain(`extraKeySha256=${keysDigest}`);
     await fixture.stop();
   });
 
@@ -1928,17 +1958,13 @@ describe("private OpenCode tool bridge", () => {
   it.each(["streaming", "SENTINEL_PRIVATE_STATUS"])(
     "records a body-free diagnostic for a refused history part with status %s",
     async (status) => {
-      const records: ServerDiagnosticRecord[] = [];
+      const diagnostics = persistedDiagnostics();
       const sentinel = "SENTINEL_PRIVATE_ARGUMENT_BODY";
       const fixture = await startBridgeFixture(
         { execute: vi.fn(() => Promise.resolve(completed)) },
         undefined,
         {
-          diagnostics: {
-            record: (record): void => {
-              records.push(record);
-            },
-          },
+          diagnostics: diagnostics.sink,
           historyResponse: Promise.resolve(
             v2Envelope(
               [
@@ -1972,20 +1998,21 @@ describe("private OpenCode tool bridge", () => {
         },
       );
 
-      expect(records).toHaveLength(1);
-      expect(records[0]).toMatchObject({
+      const persisted = diagnostics.read();
+      const record = expectPersistedDiagnostic(persisted, "opencode.history");
+      expect(record).toMatchObject({
         correlationId: FIXTURE_RUN_ID,
-        operation: "coding-runtime.handshake",
+        diagnosticOperation: "coding-runtime.handshake",
         source: "opencode.history",
-        errorClass: "OpenCodeHistoryFailure",
-        message: "runtime-handshake-failed",
+        diagnosticErrorClass: "OpenCodeHistoryFailure",
+        diagnosticSummary: "runtime-handshake-failed",
       });
-      expect(records[0]?.code).toMatch(
-        /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:part=tool:toolSha256=[a-f0-9]{16}:statusSha256=[a-f0-9]{16}:partBytes=[1-9][0-9]*:gate=argument-bound$/u,
+      expect(record.code).toMatch(
+        /^stage=history:reason=argument-bound:eventSha256=[a-f0-9]{16}:toolSha256=[a-f0-9]{16}:statusSha256=[a-f0-9]{16}:partBytes=[1-9][0-9]*$/u,
       );
-      expect(JSON.stringify(records)).not.toContain(sentinel);
-      expect(JSON.stringify(records)).not.toContain("PRIVATE_EMPLOYEE_A123");
-      expect(JSON.stringify(records)).not.toContain("SENTINEL_PRIVATE_STATUS");
+      expect(persisted).not.toContain(sentinel);
+      expect(persisted).not.toContain("PRIVATE_EMPLOYEE_A123");
+      expect(persisted).not.toContain("SENTINEL_PRIVATE_STATUS");
       await fixture.stop();
     },
   );
@@ -2039,7 +2066,7 @@ describe("private OpenCode tool bridge", () => {
       source: "opencode.history",
       errorClass: "OpenCodeHistoryFailure",
       message: "runtime-handshake-failed",
-      code: `stage=sse-history-reconciliation:reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`,
+      code: `stage=history:reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`,
     });
     await fixture.stop();
   });
