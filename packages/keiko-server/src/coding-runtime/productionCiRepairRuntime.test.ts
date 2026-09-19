@@ -272,6 +272,23 @@ const editRequest = {
   idempotencyKey: "edit-next",
 } as const;
 describe("production CI repair accounting availability", () => {
+  it("admits a model prompt while the runtime authority is live and the snapshot is starting", () => {
+    const test = fixture(false, { seedExhaustedBudget: false });
+    const current = test.snapshots.get("run-1");
+    if (current === undefined) throw new Error("Missing run");
+    const snapshots = {
+      ...test.snapshots,
+      get: (runId: string): CodingRuntimeSnapshot | undefined =>
+        runId === current.runId ? { ...current, state: "starting" } : test.snapshots.get(runId),
+    };
+    const budget = createProductionCiRepairBudget(
+      { ...test.deps, snapshots },
+      test.verified,
+      test.current,
+    );
+    expect(budget?.canChargePrompt(1)).toBe(true);
+    expect(budget?.chargePrompt(1)).toBe(true);
+  });
   it.each([
     [false, "ciRepairBudget"],
     [true, "ciRepairBudget"],

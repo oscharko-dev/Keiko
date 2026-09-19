@@ -136,6 +136,7 @@ function budgetContext(
 }
 
 const LIVE_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
+  "starting",
   "ready",
   "running",
   "awaiting-approval",
