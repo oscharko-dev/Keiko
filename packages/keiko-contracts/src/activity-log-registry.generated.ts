@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4ae0529389cdb106b1a97c5278d0717028a77bc4fc1acd8d4c68d90f0bda9c4e" as const;
+  "a045fea1b4ec2f44706e299a3260c64bab2277fc1dc7abd6e31c6279067b1dd5" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1804,12 +1804,151 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      disambiguatedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
     },
     causal: "correlation",
     lifecycle: "state",
     analyzerProjection: "timeline",
     failureClasses: ["client-binding"],
     proofIds: ["client.binding.candidates-offered.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.binding.choice-kept",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientBindingChoiceKept",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat-window"],
+      },
+      referenceShape: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["uuid", "opaque", "redacted", "fingerprint", "user-selected"],
+      },
+      heuristicFlagged: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      bindingDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      relatedCorrelationIds: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+        maxItems: 63,
+      },
+      targetFingerprint: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-binding"],
+    proofIds: ["client.binding.choice-kept.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.binding.choice-withdrawn",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientBindingChoiceWithdrawn",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat-window"],
+      },
+      referenceShape: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["uuid", "opaque", "redacted", "fingerprint", "user-selected"],
+      },
+      heuristicFlagged: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      bindingDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      decidingLoadCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      relatedCorrelationIds: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+        maxItems: 63,
+      },
+      targetFingerprint: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-binding"],
+    proofIds: ["client.binding.choice-withdrawn.line"],
     releaseImpact: "patch",
   },
   {
@@ -28687,7 +28826,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["client.binding.candidates-offered"],
+        state: [
+          "client.binding.candidates-offered",
+          "client.binding.choice-kept",
+          "client.binding.choice-withdrawn",
+        ],
         end: ["client.binding.resolved"],
         failure: ["client.binding.target-missing"],
         loss: [],
@@ -28695,6 +28838,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "client.binding.candidates-offered",
+          mode: "correlation",
+        },
+        {
+          op: "client.binding.choice-kept",
+          mode: "correlation",
+        },
+        {
+          op: "client.binding.choice-withdrawn",
           mode: "correlation",
         },
         {
@@ -28707,7 +28858,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: [],
-      resourceSignals: ["client.binding.candidates-offered", "client.binding.resolved"],
+      resourceSignals: [
+        "client.binding.candidates-offered",
+        "client.binding.choice-kept",
+        "client.binding.choice-withdrawn",
+        "client.binding.resolved",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -28735,6 +28891,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: false,
+            },
+            {
+              name: "disambiguatedCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
             },
             {
               name: "heuristicFlagged",
@@ -28774,6 +28936,140 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.binding.candidates-offered.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.binding.choice-kept",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "bindingDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "decidingLoadCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "heuristicFlagged",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "referenceShape",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "relatedCorrelationIds",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "surface",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "targetFingerprint",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.binding.choice-kept.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.binding.choice-withdrawn",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "bindingDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "decidingLoadCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "heuristicFlagged",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "referenceShape",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "relatedCorrelationIds",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "surface",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "targetFingerprint",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.binding.choice-withdrawn.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -58716,6 +59012,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "cli.uninstall.failed": "runtime-packages",
     "cli.uninstall.started": "runtime-packages",
     "client.binding.candidates-offered": "client-diagnostics",
+    "client.binding.choice-kept": "client-diagnostics",
+    "client.binding.choice-withdrawn": "client-diagnostics",
     "client.binding.resolved": "client-diagnostics",
     "client.binding.target-missing": "client-diagnostics",
     "client.diagnostic": "client-diagnostics",

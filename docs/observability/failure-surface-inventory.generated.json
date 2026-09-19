@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4ae0529389cdb106b1a97c5278d0717028a77bc4fc1acd8d4c68d90f0bda9c4e"
+    "catalogDigest": "a045fea1b4ec2f44706e299a3260c64bab2277fc1dc7abd6e31c6279067b1dd5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 441,
-    "proofCount": 449,
-    "resolvedProofCount": 449,
+    "operationCount": 443,
+    "proofCount": 451,
+    "resolvedProofCount": 451,
     "failureClassCount": 315,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -113,6 +113,8 @@
       "ports": ["ServerLogSink"],
       "operations": [
         "client.binding.candidates-offered",
+        "client.binding.choice-kept",
+        "client.binding.choice-withdrawn",
         "client.binding.resolved",
         "client.binding.target-missing",
         "client.diagnostic",
@@ -1009,6 +1011,12 @@
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
     ],
     "client.binding.candidates-offered.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.binding.choice-kept.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.binding.choice-withdrawn.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
     "client.binding.resolved.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
