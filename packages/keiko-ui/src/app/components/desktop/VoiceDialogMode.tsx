@@ -107,6 +107,7 @@ const SESSION_INTERRUPT_HINT_ID = "cmp-voice-dialog-interrupt-hint";
 const TURN_INTERRUPT_HINT_ID = "cmp-voice-turn-interrupt-hint";
 
 export interface VoiceDialogInterruptButtonProps {
+  readonly iconOnly?: boolean | undefined;
   readonly canInterrupt: boolean;
   readonly onInterrupt: () => void;
 }
@@ -118,6 +119,7 @@ export interface VoiceDialogInterruptButtonProps {
 // ChatWindow mounts it once a dialogue session is connected); this component only owns whether
 // the mounted button is actionable.
 export function VoiceDialogInterruptButton({
+  iconOnly = false,
   canInterrupt,
   onInterrupt,
 }: VoiceDialogInterruptButtonProps): ReactNode {
@@ -129,7 +131,8 @@ export function VoiceDialogInterruptButton({
   return (
     <button
       type="button"
-      className="cmp-voice-btn"
+      className={iconOnly ? "cmp-icon ui-tip" : "cmp-voice-btn"}
+      data-tip={t("voiceDialog.interrupt.action")}
       aria-label={t("voiceDialog.interrupt.ariaLabel")}
       // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
       // availability condition audible; the native `disabled` would blur and hide it.
@@ -140,7 +143,13 @@ export function VoiceDialogInterruptButton({
         onInterrupt();
       }}
     >
-      {t("voiceDialog.interrupt.action")}
+      {iconOnly ? (
+        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+          <rect x="4" y="4" width="10" height="10" rx="2" fill="currentColor" />
+        </svg>
+      ) : (
+        t("voiceDialog.interrupt.action")
+      )}
       {/* No inline space here: aria-label already names the button, so this sr-only hint is
           read separately via aria-describedby, not concatenated with the visible label text —
           no space is ever implied (S6772). */}

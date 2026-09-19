@@ -316,6 +316,7 @@ describe("gateway readiness route", () => {
         { modelId: "test-chat-model", options: { probes: [] } },
         deps,
         "corr-settings-readiness-0001",
+        "settings",
       );
 
       const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
@@ -348,6 +349,35 @@ describe("gateway readiness route", () => {
       deps.store.close();
     },
   );
+
+  // The settings dialog reaches readiness through this route, so the route names the settings
+  // trigger; the on-demand probe records its lifecycle with the automatic lines instead (#3559).
+  it("logs a check the settings dialog runs through the route as a settings check", async () => {
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(
+        gatewayConfig(),
+        vi.fn(() => Promise.resolve(jsonResponse(chatPayload("OK"), 200))),
+      ),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    await handleGatewayReadiness(
+      {
+        ...ctx({ modelId: "test-chat-model", options: { probes: [] } }),
+        correlationId: "corr-settings-route-0001",
+      },
+      deps,
+    );
+
+    const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+    expect(readiness.map((event) => [event.op, event.correlationId, event.extra?.trigger])).toEqual(
+      [
+        ["gateway.readiness.started", "corr-settings-route-0001", "settings"],
+        ["gateway.readiness.completed", "corr-settings-route-0001", "settings"],
+      ],
+    );
+  });
 
   // The full id serves provider selection and the response; the log carries only the digest of the
   // whole id, never a truncated prefix that two long ids could share (#3557 review).

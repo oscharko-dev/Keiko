@@ -53,7 +53,7 @@ const SPEECH_TTS_MIME_CORRECTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["opus"],
+      values: ["opus", "wav", "flac", "mp3"],
     },
   },
   causal: "none",
@@ -324,12 +324,12 @@ async function dispatch(
 // Normalizes the provider `content-type` to a bare audio MIME type, dropping any parameters (e.g.
 // `; charset`). A provider that omits the header or returns a non-audio type falls back to the MIME
 // derived from the requested response format, so the browser always receives a playable label.
-const OGG_HEADER_PROBE_BYTES = 6;
+const AUDIO_HEADER_PROBE_BYTES = 12;
 
 function hasOggContainerSignature(audio: Uint8Array | undefined): boolean {
   return (
     audio !== undefined &&
-    audio.byteLength >= OGG_HEADER_PROBE_BYTES &&
+    audio.byteLength >= 6 &&
     audio[0] === 0x4f &&
     audio[1] === 0x67 &&
     audio[2] === 0x67 &&
@@ -337,6 +337,70 @@ function hasOggContainerSignature(audio: Uint8Array | undefined): boolean {
     audio[4] === 0x00 &&
     ((audio[5] ?? 0xff) & 0xf8) === 0
   );
+}
+
+function hasWaveContainerSignature(audio: Uint8Array): boolean {
+  return (
+    audio.byteLength >= AUDIO_HEADER_PROBE_BYTES &&
+    audio[0] === 0x52 &&
+    audio[1] === 0x49 &&
+    audio[2] === 0x46 &&
+    audio[3] === 0x46 &&
+    audio[8] === 0x57 &&
+    audio[9] === 0x41 &&
+    audio[10] === 0x56 &&
+    audio[11] === 0x45
+  );
+}
+
+function hasFlacContainerSignature(audio: Uint8Array): boolean {
+  return (
+    audio.byteLength >= 4 &&
+    audio[0] === 0x66 &&
+    audio[1] === 0x4c &&
+    audio[2] === 0x61 &&
+    audio[3] === 0x43
+  );
+}
+
+function hasMp3Id3Signature(audio: Uint8Array): boolean {
+  return audio.byteLength >= 3 && audio[0] === 0x49 && audio[1] === 0x44 && audio[2] === 0x33;
+}
+
+function hasMp3FrameSignature(audio: Uint8Array): boolean {
+  if (audio.byteLength < 4 || audio[0] !== 0xff) return false;
+  const versionAndLayer = audio[1] ?? 0;
+  const rateAndFrequency = audio[2] ?? 0;
+  return (
+    (versionAndLayer & 0xe0) === 0xe0 &&
+    (versionAndLayer & 0x18) !== 0x08 &&
+    (versionAndLayer & 0x06) !== 0 &&
+    (rateAndFrequency & 0xf0) !== 0xf0 &&
+    (rateAndFrequency & 0x0c) !== 0x0c
+  );
+}
+
+type RecognizedAudioMime = "audio/ogg" | "audio/wav" | "audio/flac" | "audio/mpeg";
+
+function signatureMimeType(audio: Uint8Array): RecognizedAudioMime | undefined {
+  if (hasOggContainerSignature(audio)) return "audio/ogg";
+  if (hasWaveContainerSignature(audio)) return "audio/wav";
+  if (hasFlacContainerSignature(audio)) return "audio/flac";
+  if (hasMp3Id3Signature(audio) || hasMp3FrameSignature(audio)) return "audio/mpeg";
+  return undefined;
+}
+
+function recognizedMimeClass(mimeType: RecognizedAudioMime): "opus" | "wav" | "flac" | "mp3" {
+  switch (mimeType) {
+    case "audio/ogg":
+      return "opus";
+    case "audio/wav":
+      return "wav";
+    case "audio/flac":
+      return "flac";
+    case "audio/mpeg":
+      return "mp3";
+  }
 }
 
 function declaredMimeType(response: Response, responseFormat: SpeechResponseFormat): string {
@@ -362,19 +426,23 @@ function resolveBufferedMimeType(
   log: ModelGatewayLogSink,
 ): string {
   const declared = declaredMimeType(response, responseFormat);
-  // Azure's deployment-style TTS endpoint can return an Opus/Ogg body with `audio/mpeg`. The
-  // container signature is authoritative in that disagreement; forwarding the wrong MIME makes a
-  // valid clip fail browser playback and any later speech-to-text handoff.
-  if (hasOggContainerSignature(audio) && declared !== "audio/ogg") {
+  // Gateway implementations can ignore response_format or mislabel the returned container. A
+  // recognized file signature takes precedence over a contradictory or inferred MIME; raw PCM has
+  // no signature, so an unknown prefix keeps the declared type.
+  const detected = signatureMimeType(audio);
+  if (detected !== undefined && declared !== detected) {
     const correlationId = logCorrelationId(log);
     log.write(
       activityLogEvent(
         SPEECH_TTS_MIME_CORRECTED_OPERATION,
         { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
-        { declaredMimeClass: speechMimeClass(declared), resolvedMimeClass: "opus" },
+        {
+          declaredMimeClass: speechMimeClass(declared),
+          resolvedMimeClass: recognizedMimeClass(detected),
+        },
       ),
     );
-    return "audio/ogg";
+    return detected;
   }
   return declared;
 }
@@ -565,7 +633,7 @@ export async function requestTextToSpeechStream(
   }
   let peeked: Awaited<ReturnType<typeof peekBodyStream>>;
   try {
-    peeked = await peekBodyStream(dispatched.body, OGG_HEADER_PROBE_BYTES);
+    peeked = await peekBodyStream(dispatched.body, AUDIO_HEADER_PROBE_BYTES);
   } catch (error) {
     const kind = classifyDispatchError(error, built.timeoutSignal, built.callerSignal);
     const correlationId = logCorrelationId(built.log);

@@ -1,3 +1,4 @@
+import { logChatResponseMessages } from "./chat-activity.js";
 // Desktop chat SSE streaming BFF route (#152). ADDITIVE to the buffered /api/desktop/chat path,
 // which stays byte-identical as the client's fallback. This handler reuses the buffered path's
 // front-matter (parseDesktopChatSend → validate, #149 guardrail, memory) and its
@@ -388,6 +389,7 @@ function finalizeStreamedTurn(
     historyPrefix: gatewayHistoryPrefix(gatewayTurn),
     correlationId: ctx.correlationId,
   });
+  logChatResponseMessages(payload, ctx.correlationId);
   writeTerminalFrame(ctx, sseMessage({ event: "done", data: payload }));
 }
 
@@ -448,6 +450,7 @@ function streamingReplayOutcome(
   response: DesktopChatSendResponse,
 ): HandlerOutcome {
   ctx.res.writeHead(200, SSE_HEADERS);
+  logChatResponseMessages(response, ctx.correlationId);
   writeTerminalFrame(ctx, sseMessage({ event: "done", data: response }));
   ctx.res.end();
   return STREAMING;
@@ -765,6 +768,7 @@ function writeGitChangeDescriptionStream(
   if (assistant !== undefined) {
     writeTerminalFrame(ctx, sseMessage({ event: "token", data: { text: assistant.content } }));
   }
+  logChatResponseMessages(response, ctx.correlationId);
   writeTerminalFrame(ctx, sseMessage({ event: "done", data: response }));
   ctx.res.end();
   return STREAMING;

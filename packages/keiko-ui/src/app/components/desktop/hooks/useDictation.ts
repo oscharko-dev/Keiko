@@ -173,6 +173,8 @@ function dictationReducer(state: DictationState, action: DictationAction): Dicta
   }
 }
 
+import type { ClientVoiceCaptureReason } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
 export interface UseDictationOptions {
   // Appends the reviewed transcript into the composer draft. The hook never sends — insertion is the
   // terminal action, after which the user sends through the normal composer flow.
@@ -180,6 +182,9 @@ export interface UseDictationOptions {
   // Chat-window identity shared with Voice Dialogue. It serializes every microphone capture on the
   // page without coupling the two controllers or leaking capture state between conversations.
   readonly captureOwner?: string | undefined;
+  // Dialogue holds this lease across STT, chat, and playback. Composer dictation omits it and
+  // continues to own/release its private lease after every clip.
+  readonly captureLease?: symbol | undefined;
   // Optional BCP-47 hint forwarded to the provider.
   readonly language?: string | undefined;
   // Optional voice-activity detector. When provided (dialogue mode), the recording stream is monitored
@@ -199,6 +204,9 @@ export interface UseDictationOptions {
       }
     | undefined;
   readonly postRollMs?: number | undefined;
+  readonly onSilenceRenewed?: (() => void) | undefined;
+  readonly onSilenceRenewalFailed?: ((error: unknown) => void) | undefined;
+  readonly onCaptureBoundReached?: ((reason: ClientVoiceCaptureReason) => void) | undefined;
   // Optional content-free latency sink (Plan §1). Receives only mark enum literals and millisecond
   // deltas across the capture round trip — never audio or transcript text.
   readonly latencySink?: VoiceLatencyObserverSink | undefined;
@@ -284,11 +292,76 @@ function buildTranscribeRequest(
   };
 }
 
+function batchOperationIsCurrent(
+  mounted: boolean,
+  cancelled: boolean,
+  generation: number,
+  currentGeneration: number,
+): boolean {
+  return mounted && !cancelled && generation === currentGeneration;
+}
+
+function captureBoundReason(
+  renewable: boolean,
+  session: DictationSession,
+): ClientVoiceCaptureReason {
+  if (!renewable) return "vad-unavailable";
+  return session.renewSilence === undefined ? "renewal-unsupported" : "speech-observed";
+}
+
+function armBatchCaptureLimit(input: {
+  readonly session: DictationSession;
+  readonly timer: { current: ReturnType<typeof setTimeout> | undefined };
+  readonly stillSilent: () => boolean;
+  readonly current: () => boolean;
+  readonly stop: () => void;
+  readonly renewed: () => void;
+  readonly failed: (error: unknown) => void;
+  readonly renewable: () => boolean;
+  readonly boundReached: (reason: ClientVoiceCaptureReason) => void;
+}): void {
+  let deadline = Date.now() + DICTATION_AUTO_STOP_MS;
+  const schedule = (): void => {
+    input.timer.current = setTimeout(
+      () => {
+        if (!input.current()) return;
+        if (
+          !input.renewable() ||
+          !input.stillSilent() ||
+          input.session.renewSilence === undefined
+        ) {
+          const remaining = deadline - Date.now();
+          const reason = captureBoundReason(input.renewable(), input.session);
+          const stopAtBound = (): void => {
+            if (!input.current()) return;
+            input.boundReached(reason);
+            input.stop();
+          };
+          if (remaining > 0) input.timer.current = setTimeout(stopAtBound, remaining);
+          else stopAtBound();
+          return;
+        }
+        void input.session.renewSilence(input.stillSilent).then((age) => {
+          if (!input.current()) return;
+          if (age !== undefined) {
+            deadline = Date.now() + DICTATION_AUTO_STOP_MS - age;
+            input.renewed();
+          }
+          schedule();
+        }, input.failed);
+      },
+      Math.min(60_000, Math.max(0, deadline - Date.now())),
+    );
+  };
+  schedule();
+}
+
 export function useDictation(options: UseDictationOptions): DictationController {
   const { onInsert, language } = options;
   const internalCaptureOwner = useId();
   const captureOwner = options.captureOwner ?? internalCaptureOwner;
-  const captureLeaseRef = useRef(Symbol("dictation-capture"));
+  const captureLeaseRef = useRef(options.captureLease ?? Symbol("dictation-capture"));
+  const ownsCaptureLease = options.captureLease === undefined;
   const [state, dispatch] = useReducer(dictationReducer, INITIAL_STATE);
 
   // Stable refs for the injectable seams and the live session/timer so the action callbacks stay
@@ -338,6 +411,13 @@ export function useDictation(options: UseDictationOptions): DictationController 
     | undefined
   >(undefined);
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const batchSpeechObservedRef = useRef(false);
+  const onCaptureBoundReachedRef = useRef(options.onCaptureBoundReached);
+  onCaptureBoundReachedRef.current = options.onCaptureBoundReached;
+  const onSilenceRenewalFailedRef = useRef(options.onSilenceRenewalFailed);
+  onSilenceRenewalFailedRef.current = options.onSilenceRenewalFailed;
+  const onSilenceRenewedRef = useRef(options.onSilenceRenewed);
+  onSilenceRenewedRef.current = options.onSilenceRenewed;
   const realtimeDisconnectGraceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const stoppingRef = useRef(false);
   // The live voice-activity monitor for the current recording (dialogue mode only). Released whenever
@@ -357,10 +437,11 @@ export function useDictation(options: UseDictationOptions): DictationController 
   // establishing a session, so leaving voice mode mid-permission still releases the mic deterministically
   // (AC3 — "stopping or leaving dialog mode releases microphone resources deterministically").
   const cancelledRef = useRef(false);
+  const generationRef = useRef(0);
 
   const releaseCapture = useCallback((): void => {
-    releaseVoiceCapture(captureLeaseRef.current);
-  }, []);
+    if (ownsCaptureLease) releaseVoiceCapture(captureLeaseRef.current);
+  }, [ownsCaptureLease]);
 
   const clearAutoStop = useCallback((): void => {
     if (autoStopRef.current !== undefined) {
@@ -541,12 +622,24 @@ export function useDictation(options: UseDictationOptions): DictationController 
     [latency, rejectRealtimeFinal, settleRealtimeFinal],
   );
 
+  const batchCurrent = useCallback(
+    (generation: number): boolean =>
+      batchOperationIsCurrent(
+        mountedRef.current,
+        cancelledRef.current,
+        generation,
+        generationRef.current,
+      ),
+    [],
+  );
+
   const stopBatch = useCallback((): void => {
     const session = sessionRef.current;
     if (session === undefined || stoppingRef.current) {
       return;
     }
     stoppingRef.current = true;
+    const generation = generationRef.current;
     latency.mark("stop_pressed");
     clearAutoStop();
     detachVad();
@@ -556,7 +649,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
       setTimeout(resolve, postRollMs);
     })
       .then(() => {
-        if (!mountedRef.current || sessionRef.current !== session) {
+        if (!batchCurrent(generation) || sessionRef.current !== session) {
           return undefined;
         }
         latency.mark("postroll_done");
@@ -565,30 +658,39 @@ export function useDictation(options: UseDictationOptions): DictationController 
         return session.stop();
       })
       .then((capture) => {
-        releaseCapture();
-        if (capture === undefined) {
+        if (capture === undefined || !batchCurrent(generation)) {
           return undefined;
         }
+        releaseCapture();
         latency.mark("upload_start");
         return transcribe(buildTranscribeRequest(capture, language));
       })
       .then((result) => {
         if (result === undefined) return;
-        if (!mountedRef.current) return;
+        if (!batchCurrent(generation)) return;
         // Batch STT: the response IS the final transcript, so upload_end and stt_final coincide.
         latency.mark("upload_end");
         latency.mark("stt_final");
         dispatch({ type: "preview", transcript: result.transcript });
       })
       .catch((error: unknown) => {
+        if (!batchCurrent(generation)) return;
         releaseCapture();
-        if (!mountedRef.current) return;
         dispatch({ type: "error", ...classifyError(error) });
       })
       .finally(() => {
-        stoppingRef.current = false;
+        if (generationRef.current === generation) stoppingRef.current = false;
       });
-  }, [clearAutoStop, detachVad, language, latency, postRollMs, releaseCapture, transcribe]);
+  }, [
+    batchCurrent,
+    clearAutoStop,
+    detachVad,
+    language,
+    latency,
+    postRollMs,
+    releaseCapture,
+    transcribe,
+  ]);
 
   const stopRealtime = useCallback((): void => {
     const session = realtimeSessionRef.current;
@@ -653,24 +755,27 @@ export function useDictation(options: UseDictationOptions): DictationController 
       return;
     }
     startingRef.current = true;
+    generationRef.current += 1;
+    const generation = generationRef.current;
     stoppingRef.current = false;
     cancelledRef.current = false;
     latency.reset();
     latency.mark("mic_click");
+    batchSpeechObservedRef.current = false;
     dispatch({ type: "requesting", mode: "batch" });
     const recorder = (recorderRef.current ??= recorderFactory());
     void recorder
       .start({
         timesliceMs: DICTATION_CAPTURE_TIMESLICE_MS,
         onReady: () => {
-          if (!mountedRef.current || cancelledRef.current) {
+          if (!batchCurrent(generation)) {
             return;
           }
           latency.mark("first_audio_level");
           dispatch({ type: "micReady" });
         },
         onAudioLevel: (level) => {
-          if (!mountedRef.current || cancelledRef.current) {
+          if (!batchCurrent(generation)) {
             return;
           }
           dispatch({ type: "audioLevel", level });
@@ -681,24 +786,48 @@ export function useDictation(options: UseDictationOptions): DictationController 
       })
       .then(
         (session) => {
-          startingRef.current = false;
           // If the composer unmounted OR the flow was cancelled (left/stopped dialog mode) while
           // permission was pending, release the just-granted microphone immediately and touch no state —
           // leaving voice mode mid-permission must still release the mic deterministically (AC3).
-          if (!mountedRef.current || cancelledRef.current) {
+          if (!batchCurrent(generation)) {
             session.cancel();
-            releaseCapture();
             return;
           }
+          startingRef.current = false;
           sessionRef.current = session;
           latency.mark("media_recorder_start");
           dispatch({ type: "recording" });
-          autoStopRef.current = setTimeout(() => stopBatch(), DICTATION_AUTO_STOP_MS);
+          armBatchCaptureLimit({
+            session,
+            timer: autoStopRef,
+            stillSilent: () =>
+              vadMonitorRef.current?.available === true &&
+              !batchSpeechObservedRef.current &&
+              batchCurrent(generation) &&
+              !stoppingRef.current,
+            current: () => batchCurrent(generation) && !stoppingRef.current,
+            stop: stopBatch,
+            renewable: () => vadMonitorRef.current?.available === true,
+            renewed: () => onSilenceRenewedRef.current?.(),
+            boundReached: (reason) => onCaptureBoundReachedRef.current?.(reason),
+            failed: (error) => {
+              if (!batchCurrent(generation) || stoppingRef.current) return;
+              onSilenceRenewalFailedRef.current?.(error);
+              clearAutoStop();
+              detachVad();
+              session.cancel();
+              sessionRef.current = undefined;
+              releaseCapture();
+              dispatch({ type: "error", ...classifyError(error) });
+            },
+          });
           // Dialogue mode: monitor the live capture stream so a trailing silence after speech ends the
           // turn automatically (hands-free). end-of-turn drives the same stop() as a manual mic tap.
           if (vad !== undefined && session.stream !== undefined) {
             vadMonitorRef.current = vad.start(session.stream, (event) => {
+              if (!batchCurrent(generation)) return;
               if (event === "speech-onset") {
+                batchSpeechObservedRef.current = true;
                 dispatch({ type: "speechDetected" });
                 return;
               }
@@ -709,13 +838,22 @@ export function useDictation(options: UseDictationOptions): DictationController 
           }
         },
         (error: unknown) => {
+          if (!batchCurrent(generation)) return;
           startingRef.current = false;
           releaseCapture();
-          if (!mountedRef.current) return;
           dispatch({ type: "error", ...classifyError(error) });
         },
       );
-  }, [latency, recorderFactory, releaseCapture, stopBatch, vad]);
+  }, [
+    batchCurrent,
+    clearAutoStop,
+    detachVad,
+    latency,
+    recorderFactory,
+    releaseCapture,
+    stopBatch,
+    vad,
+  ]);
 
   const startRealtime = useCallback((): void => {
     if (
@@ -879,6 +1017,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
     // released by its own resolve branch instead of establishing a session (AC3 — deterministic release
     // even when the user leaves dialog mode mid-permission).
     cancelledRef.current = true;
+    generationRef.current += 1;
     stoppingRef.current = false;
     clearAutoStop();
     detachVad();

@@ -18,6 +18,9 @@ import {
   CLIENT_STAGE_DURATION_MS_MAX,
   CLIENT_STAGE_IDS,
   CLIENT_STAGE_ORDINAL_MAX,
+  CLIENT_VOICE_DIALOGUE_STAGES,
+  CLIENT_VOICE_CAPTURE_REASONS,
+  CLIENT_VOICE_CAPTURE_ERRORS,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
   isActivityLogReadinessSnapshot,
   isClientBindingIngestRequest,
@@ -63,10 +66,40 @@ describe("isClientDiagnosticIngestRequest", () => {
             readyState,
             correlationId: "abcdefgh",
             kind,
+            ...(kind === "voice-dialogue" ? { voiceDialogueStage: "started" } : {}),
           }),
         ).toBe(true);
       }
     }
+  });
+
+  it("requires a closed stage for voice dialogue and rejects unrelated stage injection", () => {
+    for (const voiceDialogueStage of CLIENT_VOICE_DIALOGUE_STAGES) {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          kind: "voice-dialogue",
+          voiceDialogueStage,
+        }),
+      ).toBe(true);
+    }
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), kind: "voice-dialogue" })).toBe(
+      false,
+    );
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        kind: "voice-dialogue",
+        voiceDialogueStage: "private user text",
+      }),
+    ).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        kind: "other",
+        voiceDialogueStage: "turn-submitted",
+      }),
+    ).toBe(false);
   });
 
   it("rejects a non-object value", () => {
@@ -619,4 +652,93 @@ describe("isClientSessionRepairIngestRequest", () => {
       }
     }
   });
+});
+
+describe("capture diagnostic vocabulary", () => {
+  it.each([
+    ["voiceCaptureReason", CLIENT_VOICE_CAPTURE_REASONS],
+    ["voiceCaptureError", CLIENT_VOICE_CAPTURE_ERRORS],
+  ] as const)("accepts exactly the closed %s vocabulary", (field, vocabulary) => {
+    const request = {
+      ...validRequest(),
+      kind: "voice-dialogue",
+      voiceDialogueStage: "capture-renewal-failed",
+    };
+    for (const value of vocabulary) {
+      expect(isClientDiagnosticIngestRequest({ ...request, [field]: value })).toBe(true);
+      expect(isClientDiagnosticIngestRequest({ ...request, [field]: `${value}-extra` })).toBe(
+        false,
+      );
+      expect(isClientDiagnosticIngestRequest({ ...request, [field]: ` ${value}` })).toBe(false);
+    }
+    for (const value of ["", null, 0, {}, []]) {
+      expect(isClientDiagnosticIngestRequest({ ...request, [field]: value })).toBe(false);
+    }
+  });
+
+  it.each(["voiceCaptureReason", "voiceCaptureError"])("rejects hostile %s", (field) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        message: "capture",
+        clientTs: "2026-09-19T00:00:00.000Z",
+        kind: "voice-dialogue",
+        voiceDialogueStage: "capture-renewal-failed",
+        [field]: "private arbitrary error text",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("client module and markdown identity boundaries", () => {
+  const base = { message: "diagnostic", clientTs: "2026-09-19T00:00:00.000Z" };
+  it("accepts the known module and a short provider message identity", () => {
+    expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "git-sync" })).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        markdownLayout: { messageId: "msg_1", listStart: 1, listIndex: 0, depth: 0 },
+      }),
+    ).toBe(true);
+  });
+  it.each(["", "private text", "https://private.invalid", "x".repeat(129)])(
+    "rejects hostile message identity %s",
+    (messageId) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...base,
+          markdownLayout: { messageId, listStart: 1, listIndex: 0, depth: 0 },
+        }),
+      ).toBe(false);
+    },
+  );
+  it("rejects an unregistered module name", () => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "private module URL" }),
+    ).toBe(false);
+  });
+});
+
+describe("client error evidence trust boundary", () => {
+  const base = { message: "failure", clientTs: "2026-09-19T00:00:00.000Z" };
+  const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345";
+  const evidence = { errorClass: "TypeError", frames: [frame], causeChain: ["Error"] };
+  it("accepts the bounded closed evidence shape", () => {
+    expect(isClientDiagnosticIngestRequest({ ...base, errorEvidence: evidence })).toBe(true);
+  });
+  it.each([
+    { ...evidence, errorClass: "PrivateCustomer" },
+    { ...evidence, frames: ["https://private.invalid/file.js:1:2"] },
+    { ...evidence, frames: ["dist/ui/static/_next/static/chunks/../private.js:1:2"] },
+    { ...evidence, frames: Array.from({ length: 9 }, () => frame) },
+    { ...evidence, causeChain: ["private cause"] },
+    { ...evidence, causeChain: Array.from({ length: 6 }, () => "Error") },
+  ])("rejects hostile or unbounded evidence", (errorEvidence) => {
+    expect(isClientDiagnosticIngestRequest({ ...base, errorEvidence })).toBe(false);
+  });
+});
+
+it("preserves the closed native DOMException class for browser error events", () => {
+  expect(clientErrorClass(new DOMException("private device detail", "NotReadableError"))).toBe(
+    "NotReadableError",
+  );
 });

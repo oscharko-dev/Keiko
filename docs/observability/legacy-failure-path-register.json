@@ -7667,7 +7667,7 @@
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/assistant-speech-streaming.ts",
       "owner": "createBrowserAssistantSpeechStreamingSink",
       "kind": "unregistered-catch",
-      "count": 2
+      "count": 1
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/hooks/assistant-speech-streaming.ts",
@@ -8308,12 +8308,6 @@
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
       "owner": "sendDesktopChatStream",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/api.ts",
-      "owner": "streamAssistantSpeech",
       "kind": "unregistered-catch",
       "count": 1
     },

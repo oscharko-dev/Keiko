@@ -21,7 +21,11 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary } from "@/lib/client-error-summary";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 
-import { sharedFetchChatsOutcome, type ChatListLoad } from "../hooks/useChatSession";
+import {
+  ChatListLoadError,
+  sharedFetchChatsWithEvidence,
+  type ChatListLoad,
+} from "../hooks/useChatSession";
 import {
   CHAT_ID_FINGERPRINT_CFG_KEY,
   persistedReferenceEvidence,
@@ -56,16 +60,23 @@ export type ChatReferenceLookup =
 
 // A failed load is reported under the id it was sent with and its closed class, so its failure
 // joins the list load's own timeline (#3557 review).
-async function projectListing(project: ProjectWithAvailability): Promise<ChatListLoad | undefined> {
-  const outcome = await sharedFetchChatsOutcome(project.path);
-  if (outcome.ok) return outcome.load;
-  const { correlationId, errorClass, errorKind } = outcome.failure;
+function reportListingFailure(error: unknown): void {
+  const failed = error instanceof ChatListLoadError ? error : undefined;
+  const errorClass = failed?.errorClass ?? clientErrorSummary(error);
   // i18n-exempt: body-free diagnostic message for the activity log, never rendered
   reportClientDiagnostic(`[keiko] chat reference lookup failed: ${errorClass}`, {
-    correlationId,
-    errorKind,
+    correlationId: failed?.correlationId,
+    errorKind: failed?.errorKind ?? "unknown",
   });
-  return undefined;
+}
+
+async function projectListing(project: ProjectWithAvailability): Promise<ChatListLoad | undefined> {
+  try {
+    return await sharedFetchChatsWithEvidence(project.path);
+  } catch (error) {
+    reportListingFailure(error);
+    return undefined;
+  }
 }
 
 /** The open chat, among the listed projects' chats, whose id has this fingerprint. */

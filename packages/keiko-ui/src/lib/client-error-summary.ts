@@ -7,7 +7,8 @@
 // boundary just because a browser console feels local. The console is also the one surface a user
 // is most likely to screenshot into a bug report.
 //
-// So the object never travels. What travels is its CLASS, which is what actually tells an operator
+// So the raw object never travels. The optional client-error-evidence reducer separately admits
+// only bounded production chunk coordinates and closed cause classes, never a raw stack. What travels is its CLASS, which is what actually tells an operator
 // what kind of failure happened ("TypeError" vs "AbortError" vs a bespoke error type), plus whatever
 // closed identifiers the call site already knows are safe. A caller that has a closed reason code
 // should pass that code in its own static message rather than relying on this summary.

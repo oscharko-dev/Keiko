@@ -818,6 +818,9 @@ interface SendMessageOptions {
   // Stable opaque identity for safe retry of a Voice final. It is body-only and never used as a
   // header/log identifier; the BFF store scope-hashes it before persistence.
   readonly clientTurnId?: string;
+  // A batch dialogue's request-scoped Activity Log join key. The canonical queue retains it across
+  // retries; native Realtime and typed sends keep their existing request-generated identifiers.
+  readonly correlationId?: string;
   // Queue-owned target captured when Realtime hands off the final transcript. Keeping this target
   // outside React's active-chat state lets the FIFO survive chat and mode switches without scope drift.
   readonly canonicalVoiceTarget?: CanonicalVoiceSendTarget;
@@ -858,6 +861,7 @@ interface UngroundedSendRequest {
   readonly attachments: readonly ConversationAttachmentDescriptorWire[];
   readonly memory: ConversationMemoryRequestWire;
   readonly clientTurnId: string | undefined;
+  readonly correlationId?: string;
 }
 
 function desktopChatInputForUngrounded(
@@ -893,6 +897,15 @@ interface SendAttemptRequest {
   readonly canonicalTarget: CanonicalVoiceSendTarget | undefined;
   readonly forceBuffered: boolean;
   readonly clientTurnId: string | undefined;
+  readonly correlationId?: string;
+}
+
+interface GroundedSendRequest extends Pick<
+  SendAttemptRequest,
+  "chat" | "content" | "optimisticId" | "modelId" | "signal" | "clientTurnId"
+> {
+  readonly memory: ConversationMemoryRequestWire;
+  readonly correlationId: SendAttemptRequest["correlationId"];
 }
 
 interface SendAttemptExecution {
@@ -952,6 +965,7 @@ export type SendMessageOutcome =
 interface CanonicalVoiceTurnInput {
   readonly text: string;
   readonly clientTurnId: string;
+  readonly correlationId?: string;
   // The production Realtime handoff may consume the single bounded reserve slot. Once regular
   // capacity is reached, ChatWindow synchronously tells Realtime to stop capture, so no finalized
   // transcript remains component-local across a mode switch or unmount.
@@ -974,6 +988,7 @@ interface CanonicalVoiceQueueItem {
   readonly content: string;
   readonly contentDigest: string;
   readonly clientTurnId: string;
+  readonly correlationId: string | undefined;
   readonly target: CanonicalVoiceSendTarget;
   readonly optimistic: ChatMessage;
   readonly byteLength: number;
@@ -1333,6 +1348,7 @@ async function requestCanonicalVoiceQueueOutcome(
       text: item.content,
       reportOutcome: true,
       clientTurnId: item.clientTurnId,
+      ...(item.correlationId === undefined ? {} : { correlationId: item.correlationId }),
       canonicalVoiceTarget: item.target,
       optimisticMessage: item.optimistic,
       forceBuffered: true,
@@ -1778,33 +1794,36 @@ function sharedFetchChats(projectPath: string): Promise<ChatListLoad> {
   return startSharedChatListLoad(projectPath).promise.then(cloneChatListPayload);
 }
 
-/** A chat list load that failed: the id it was sent with and the closed class of its failure. */
-interface ChatListLoadFailure {
-  readonly correlationId: string;
-  readonly errorKind: ActivityLogErrorKind;
-  // The error's class from the closed vocabulary, never its message.
-  readonly errorClass: string;
+/**
+ * A chat list load that failed (#3557 review). A transport failure rejects before any response
+ * could carry an id, so the error keeps the id the load was sent with, and the closed class of its
+ * cause; never the cause's message.
+ */
+export class ChatListLoadError extends Error {
+  public readonly correlationId: string;
+  public readonly errorKind: ActivityLogErrorKind;
+  // The cause's class from the closed vocabulary.
+  public readonly errorClass: string;
+
+  public constructor(cause: unknown, correlationId: string) {
+    super("Chat list load failed", { cause });
+    this.name = "ChatListLoadError";
+    this.correlationId = correlationId;
+    this.errorKind = bffRequestErrorKind(cause);
+    this.errorClass = clientErrorSummary(cause);
+  }
 }
 
-export type ChatListLoadOutcome =
-  | { readonly ok: true; readonly load: ChatListLoad }
-  | { readonly ok: false; readonly failure: ChatListLoadFailure };
-
 /**
- * The same shared load as `sharedFetchChats`, for a caller that records its failure (#3557 review):
- * a transport failure rejects before any response could carry an id, so the failure keeps the id
- * this load was sent with, and its closed class.
+ * The same shared load as `sharedFetchChats`, for a caller that records its failure: it rejects with
+ * a `ChatListLoadError` that names the load.
  */
-export async function sharedFetchChatsOutcome(projectPath: string): Promise<ChatListLoadOutcome> {
+export async function sharedFetchChatsWithEvidence(projectPath: string): Promise<ChatListLoad> {
   const { promise, correlationId } = startSharedChatListLoad(projectPath);
   try {
-    return { ok: true, load: cloneChatListPayload(await promise) };
+    return cloneChatListPayload(await promise);
   } catch (error) {
-    const errorKind = bffRequestErrorKind(error);
-    return {
-      ok: false,
-      failure: { correlationId, errorKind, errorClass: clientErrorSummary(error) },
-    };
+    throw new ChatListLoadError(error, correlationId);
   }
 }
 
@@ -3615,7 +3634,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       try {
         updateOwnedSendStatus(signal, "contacting");
         // Issue #148 — byte-bounded document context on the request body.
-        const result = await sendDesktopChat(desktopChatInputForUngrounded(request), signal);
+        const result = await sendDesktopChat(
+          desktopChatInputForUngrounded(request),
+          signal,
+          request.correlationId,
+        );
         if (signal.aborted) return { status: "cancelled" };
         const outcome = completedSendOutcome(result.messages, result.attachmentDeliveries);
         if (!isStillActiveChat(chat.id)) return outcome;
@@ -3674,15 +3697,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // The route persists both messages and returns the redacted citation projection; the hook
   // refetches the message log on success so the bubbles reflect the canonical store state.
   const sendGrounded = useCallback(
-    async (
-      chat: Chat,
-      content: string,
-      optimisticId: string,
-      modelId: string,
-      signal: AbortSignal,
-      memory: ConversationMemoryRequestWire,
-      clientTurnId: string | undefined,
-    ): Promise<SendAttemptOutcome> => {
+    async ({
+      chat,
+      content,
+      optimisticId,
+      modelId,
+      signal,
+      memory,
+      clientTurnId,
+      correlationId,
+    }: GroundedSendRequest): Promise<SendAttemptOutcome> => {
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
@@ -3700,6 +3724,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
           },
           signal,
+          correlationId,
         );
         if (!isStillActiveChat(chat.id)) {
           return { status: "completed", assistantMessageId: result.assistantMessageId };
@@ -3777,15 +3802,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         // part of it. Unconditional on purpose: whichever caller arrives here with staged files,
         // the user is told rather than silently ignored.
         if (staged.length > 0) setError(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
-        const terminal = await sendGrounded(
+        const terminal = await sendGrounded({
           chat,
-          request.content,
-          request.optimisticId,
-          request.modelId,
+          content: request.content,
+          optimisticId: request.optimisticId,
+          modelId: request.modelId,
           signal,
           memory,
-          request.clientTurnId,
-        );
+          clientTurnId: request.clientTurnId,
+          correlationId: request.correlationId,
+        });
         return { terminal, disclosures: documentBundle.disclosures, consumedAttachmentIds };
       }
       const ungroundedRequest: UngroundedSendRequest = {
@@ -3799,6 +3825,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         attachments,
         memory,
         clientTurnId: request.clientTurnId,
+        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       };
       const terminal =
         request.forceBuffered || staged.some((attachment) => attachment.kind === "image")
@@ -3988,6 +4015,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           canonicalTarget,
           forceBuffered: options?.forceBuffered === true,
           clientTurnId,
+          ...(options?.correlationId === undefined ? {} : { correlationId: options.correlationId }),
         });
         const { settled, persistence } = await settleSendAttempt({
           terminal,
@@ -4353,6 +4381,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         content,
         contentDigest,
         clientTurnId,
+        correlationId: input.correlationId,
         target: {
           chat,
           project,

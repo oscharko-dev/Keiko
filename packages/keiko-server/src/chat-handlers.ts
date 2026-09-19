@@ -165,6 +165,7 @@ import {
   logChatCreationRejectionEvent,
   logChatRejectionEvent,
   logChatTurnStartedEvent,
+  logChatResponse,
   logGitChangeApply,
   logGitChangeDescriptionTargetDenied,
   logGitChangeTurnAuthorityEvent,
@@ -3338,7 +3339,8 @@ export async function handleSendDesktopChat(
     );
     if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
-    if (inspection.kind === "replay") return { status: 200, body: inspection.response };
+    if (inspection.kind === "replay")
+      return logChatResponse({ status: 200, body: inspection.response }, ctx.correlationId);
     if (inspection.kind === "rejected") return inspection.result;
     const result = await runSerializedChatTurn(
       deps,
@@ -3361,7 +3363,8 @@ export async function handleSendDesktopChat(
           : persistGitChangeDescriptionTurn(ctx, deps, current, cancellation.signal);
       },
     );
-    return result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
+    const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
+    return logChatResponse(response, ctx.correlationId);
   } finally {
     cancellation.dispose();
   }
@@ -3817,6 +3820,12 @@ export async function handleRegenerateDesktopChat(
     const prepared = await parseDesktopChatRegenerate(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(prepared)) return prepared;
+    await ensureOnDemandConversationReadiness(
+      deps,
+      prepared.request.modelId ?? prepared.chat.selectedModel,
+      ctx.correlationId,
+    );
+    if (requestSignalAborted(cancellation.signal)) return requestCancelledResult();
     const result = await runSerializedChatTurn(
       deps,
       prepared.request.chatId,
@@ -3832,7 +3841,8 @@ export async function handleRegenerateDesktopChat(
           : persistRegeneratedChatTurn(deps, current, cancellation.signal, ctx.correlationId);
       },
     );
-    return result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
+    const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;
+    return logChatResponse(response, ctx.correlationId);
   } finally {
     cancellation.dispose();
   }

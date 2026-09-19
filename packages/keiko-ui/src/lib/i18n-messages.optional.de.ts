@@ -856,17 +856,23 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Datei stimmt Sprach-Wiederholversuche ab, die dieses Formular nicht übernehmen kann — beim Speichern gilt das Standard-Wiederholverhalten.",
   "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
   "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
-  "gatewaySetup.voice.title": "Audio & Digital Voice",
+  "gatewaySetup.voice.locality.azureFoundry": "Microsoft Foundry",
+  "gatewaySetup.voice.locality.customerHosted": "Vom Kunden betrieben",
+  "gatewaySetup.voice.locality.localOnly": "Nur lokal",
+  "gatewaySetup.voice.locality.gatewayManaged": "Vom Gateway verwaltet (Standort unbekannt)",
+  "gatewaySetup.voice.title": "Audio & Digital Twin",
   "gatewaySetup.voice.description":
     "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",
   "gatewaySetup.voice.guidance":
-    "Konfiguriere nur, was du brauchst: Diktieren benötigt ein Speech-to-Text-Deployment. Digital Voice benötigt ein Realtime-Media-Deployment und das damit kompatible Live-Transkriptions-Deployment. Vorlesen benötigt ein Speech-Output-Deployment. Deployment-Namen sind anbieterspezifisch. Um einen Audio-Endpunkt zu ersetzen, gib neue Zugangsdaten und die Anbieter-Lokalität sowie jede zu verschiebende Rolle erneut an; ausgelassene Rollen behalten ihre gespeicherte Verbindung.",
+    "Keiko erkennt Audiomodelle am Gateway und verwendet dieselbe Verbindung. Fehlt ein Modell, trage unten seinen Deployment-Namen ein. Digital Twin funktioniert mit Spracherkennung, Chat und Sprachausgabe; natives Realtime ist optional. Für Sprachausgabe wird außerdem eine unterstützte Stimmen-ID benötigt. Eine separate Audio-Verbindung und natives Realtime findest du unter Erweitert.",
+  "gatewaySetup.voice.advancedSettings":
+    "Erweitert: natives Realtime oder separate Audio-Verbindung",
   "gatewaySetup.voice.selectedCapabilities":
-    "Ausgewählte Funktionen: Diktieren {dictate} · Digital Voice {digitalVoice} · Vorlesen {readAloud}.",
+    "Ausgewählte Funktionen: Diktieren {dictate} · Digital Twin {digitalVoice} · Vorlesen {readAloud}.",
   "gatewaySetup.voice.dictateDeployment": "Diktieren · Speech-to-Text-Deployment",
-  "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime-Deployment",
+  "gatewaySetup.voice.realtimeDeployment": "Natives Realtime · Deployment",
   "gatewaySetup.voice.realtimeTranscriptionDeployment":
-    "Digital Voice · Live-Transkriptions-Deployment",
+    "Natives Realtime · Live-Transkriptions-Deployment",
   "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
     "ihr-realtime-transkriptions-deployment",
   "gatewaySetup.voice.realtimeTranscriptionRequiredLabel": "mit Realtime erforderlich",
@@ -898,7 +904,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gatewaySetup.voice.speechOutputDeployment": "Vorlesen · Speech-Output-Deployment",
   "gatewaySetup.voice.outputVoice": "Ausgabestimme",
   "gatewaySetup.voice.outputVoiceHint":
-    "für Vorlesen erforderlich; verwende eine vom gewählten Anbieter unterstützte ID",
+    "bei Bedarf eine vom Sprachanbieter unterstützte Stimmen-ID eingeben",
   "gatewaySetup.voice.outputVoiceRequired":
     "Beim Konfigurieren oder Austauschen eines Speech-Output-Deployments ist eine ausdrückliche Anbieter-Stimmen-ID erforderlich.",
   "gatewaySetup.voice.endpointUrl": "Audio-Endpunkt-URL",
@@ -917,17 +923,17 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Leer lassen, um das gespeicherte Zeitlimit beizubehalten",
   "gatewaySetup.voice.storedAria": "Gespeicherte Audio-Zugangsdaten",
   "gatewaySetup.voice.audioModels": "Audio-Modelle",
-  "gatewaySetup.voice.updateSettings": "Audio- und Digital-Voice-Einstellungen aktualisieren",
+  "gatewaySetup.voice.updateSettings": "Audio- und Digital-Twin-Einstellungen aktualisieren",
   "gatewaySetup.voice.success.audioAndFigma":
-    "Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
+    "Audio- und Digital-Twin-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
   "gatewaySetup.voice.success.gatewayAudioAndFigma":
-    "Modell-Gateway-, Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
+    "Modell-Gateway-, Audio- und Digital-Twin-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
   "gatewaySetup.voice.success.audio":
-    "Audio- und Digital-Voice-Einstellungen aktualisiert. Keiko wird neu geladen…",
+    "Audio- und Digital-Twin-Einstellungen aktualisiert. Keiko wird neu geladen…",
   "gatewaySetup.voice.success.verifiedAudioAndFigma":
-    "{verified}, Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…{skipped}",
+    "{verified}, Audio- und Digital-Twin-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…{skipped}",
   "gatewaySetup.voice.success.verifiedAudio":
-    "{verified} und Audio- sowie Digital-Voice-Einstellungen aktualisiert. Keiko wird neu geladen…{skipped}",
+    "{verified} und Audio- sowie Digital-Twin-Einstellungen aktualisiert. Keiko wird neu geladen…{skipped}",
   "figmaSnapshotWindow.railLabel": "Figma-Snapshot",
   "figmaSnapshotWindow.common.cancel": "Abbrechen",
   "figmaSnapshotWindow.common.save": "Speichern",

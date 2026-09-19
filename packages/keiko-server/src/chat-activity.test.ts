@@ -15,6 +15,7 @@ import {
   logChatCreationRejectionEvent,
   logChatRejectionEvent,
   logChatTurnStartedEvent,
+  logChatResponse,
   logGitChangeApply,
   logGitChangeDescriptionTargetDenied,
   logGitChangeTurnAuthorityEvent,
@@ -136,6 +137,64 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
       imageAttachmentCount: 1,
       imageAttachmentBytes: 2_048,
     });
+  });
+
+  it("chat.response.message — links a rendered assistant to its originating request", () => {
+    const sink = captureServerLog();
+    const response = {
+      status: 200,
+      body: {
+        messages: [
+          { id: "user-message", role: "user", content: "private question" },
+          { id: "assistant-message", role: "assistant", content: "private answer" },
+        ],
+      },
+    };
+    expect(logChatResponse(response, "chat-request")).toBe(response);
+    const [event] = sink.events;
+    const line = formatActivityLogProofLine(event ?? {});
+    expect(expectActivityLogProof("chat.response.message.causality", line)).toMatchObject({
+      correlationId: "assistant-message",
+      parentCorrelationId: "chat-request",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(sink.events).toHaveLength(1);
+    expect(line).not.toContain("private");
+  });
+
+  it.each([8, 128])("links valid assistant identities at the %i-character boundary", (length) => {
+    const sink = captureServerLog();
+    const id = "a".repeat(length);
+    const response = { status: 200, body: { messages: [{ role: "assistant", id }] } };
+    expect(logChatResponse(response, "chat-request")).toBe(response);
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      correlationId: id,
+      parentCorrelationId: "chat-request",
+    });
+  });
+
+  it.each([
+    null,
+    {},
+    { messages: null },
+    { messages: {} },
+    { messages: [] },
+    { messages: [null, false, 42, "private text", {}] },
+    { messages: [{ role: "user", id: "valid-user-id" }] },
+    { messages: [{ role: "assistant" }] },
+    { messages: [{ role: "assistant", id: 42 }] },
+    { messages: [{ role: "assistant", id: "" }] },
+    { messages: [{ role: "assistant", id: "a".repeat(7) }] },
+    { messages: [{ role: "assistant", id: "a".repeat(129) }] },
+    { messages: [{ role: "assistant", id: "private unsafe identity" }] },
+  ])("omits malformed response identities without changing the response: %j", (body) => {
+    const sink = captureServerLog();
+    const response = { status: 200, body };
+    expect(() => logChatResponse(response, "chat-request")).not.toThrow();
+    expect(logChatResponse(response, "chat-request")).toBe(response);
+    expect(sink.events).toHaveLength(0);
   });
 
   it("pr-description.chat.turn.admitted — persists the relationship id on admission", () => {

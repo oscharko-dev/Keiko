@@ -6,9 +6,9 @@ import {
   ensureOnDemandConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import type { ServerLogEvent } from "./observability/server-log.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import {
   expectActivityLogProof,
@@ -259,90 +259,121 @@ describe("ensureAnyConversationReadyChatModel budget", () => {
   });
 });
 
-// #3557: the on-demand probe used to leave no line at all, so a conversation refused after it could
-// not be told apart from one refused without any check. Its lines carry the conversation request's
-// correlation id, so that request's timeline shows the check it waited for.
-describe("on-demand readiness evidence", () => {
-  it("logs the probe under the conversation request's correlation id", async () => {
-    const { deps } = probeableDeps("not-a-timestamp");
+describe("on-demand readiness correlation", () => {
+  it.each(["ready", "failed"] as const)(
+    "links every concurrent waiter to the single shared %s probe",
+    async (status) => {
+      const { deps } = probeableDeps("invalid");
+      const events: ServerLogEvent[] = [];
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      const fetch = vi.fn(() => pending);
+      const shared = {
+        ...deps,
+        activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+        gatewayReadinessFetch: fetch,
+      };
+      const calls = ["create-request", "send-request", "regenerate-request"].map((correlationId) =>
+        ensureOnDemandConversationReadiness(shared, "chat-model", correlationId),
+      );
+      release(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: status === "ready" ? "OK" : "" } }] }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+      await Promise.all(calls);
+      expect(fetch).toHaveBeenCalledOnce();
+      const joined = events.filter((event) => event.op === "gateway.readiness.automatic.joined");
+      expect(joined.map((event) => event.correlationId)).toEqual([
+        "send-request",
+        "regenerate-request",
+      ]);
+      for (const event of joined) {
+        expect(
+          expectActivityLogProof(
+            "gateway.readiness.automatic.joined.line",
+            formatActivityLogProofLine(event),
+          ),
+        ).toMatchObject({
+          parentCorrelationId: "create-request",
+          modelIdDigest: CHAT_MODEL_DIGEST,
+        });
+        // A model id reaches a readiness line only as its digest (#3557 review).
+        expect(event.extra).not.toHaveProperty("modelId");
+      }
+      expect(
+        events.find((event) => event.op === "gateway.readiness.automatic.completed"),
+      ).toMatchObject({ correlationId: "create-request", extra: { overallStatus: status } });
+    },
+  );
+
+  it("keeps the request identity through a default-model walk", async () => {
+    const { deps } = probeableDeps("invalid");
     const events: ServerLogEvent[] = [];
-    const logged = {
-      ...deps,
-      activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
-    } as UiHandlerDeps;
-
-    await ensureOnDemandConversationReadiness(logged, "chat-model", "corr-chat-send-0001");
-
-    const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
-    expect(readiness.map((event) => [event.op, event.correlationId])).toEqual([
-      ["gateway.readiness.started", "corr-chat-send-0001"],
-      ["gateway.readiness.completed", "corr-chat-send-0001"],
-    ]);
-    expect(
-      expectActivityLogProof(
-        "gateway.readiness.started.line",
-        formatActivityLogProofLine(readiness[0] ?? {}),
-      ),
-    ).toMatchObject({ modelIdDigest: CHAT_MODEL_DIGEST, trigger: "on-demand", probeCount: 1 });
-    expect(
-      expectActivityLogProof(
-        "gateway.readiness.completed.line",
-        formatActivityLogProofLine(readiness[1] ?? {}),
-      ),
-    ).toMatchObject({
-      modelIdDigest: CHAT_MODEL_DIGEST,
-      trigger: "on-demand",
-      overallStatus: "ready",
-      probeCount: 1,
-    });
-    expect(readiness[1]?.durationMs).toEqual(expect.any(Number));
+    await ensureAnyConversationReadyChatModel(
+      {
+        ...deps,
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      },
+      "chat-model",
+      "create-chat-0001",
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "gateway.readiness.automatic.started",
+          correlationId: "create-chat-0001",
+        }),
+        expect.objectContaining({
+          op: "gateway.readiness.automatic.completed",
+          correlationId: "create-chat-0001",
+        }),
+      ]),
+    );
   });
 
-  // Review finding B (P1) and its CodeRabbit duplicate at gateway-readiness.ts:1664: after a
-  // restart, two sends for the same unobserved model can arrive together. The FIRST starts the
-  // probe; before this fix the SECOND just awaited it silently, so its own timeline had no line at
-  // all connecting it to the check that actually decided its outcome.
-  it("logs a join line under the SECOND caller's own correlation id, linked to the probe's", async () => {
-    const { deps } = probeableDeps("not-a-timestamp");
+  it("records a failed probe outcome against the admitting request", async () => {
+    const { deps } = probeableDeps("invalid");
     const events: ServerLogEvent[] = [];
-    const logged = {
-      ...deps,
-      activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
-    } as UiHandlerDeps;
-
-    // Both calls are issued before either is awaited: `ensureOnDemandConversationReadiness` writes
-    // the shared in-flight map synchronously, before its own first `await`, so the second call is
-    // guaranteed to observe the first's in-flight probe instead of racing to start its own — this
-    // mirrors two concurrent chat requests for the same unobserved model hitting the BFF together.
-    const first = ensureOnDemandConversationReadiness(logged, "chat-model", "corr-probe-A");
-    const second = ensureOnDemandConversationReadiness(logged, "chat-model", "corr-joiner-B");
-    await Promise.all([first, second]);
-
-    const joined = events.filter((event) => event.op === "gateway.readiness.joined");
-    expect(joined).toHaveLength(1);
-    const [joinEvent] = joined;
-    expect(joinEvent?.correlationId).toBe("corr-joiner-B");
-    const persisted = expectActivityLogProof(
-      "gateway.readiness.joined.line",
-      formatActivityLogProofLine(joinEvent ?? {}),
+    await ensureOnDemandConversationReadiness(
+      {
+        ...deps,
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        gatewayReadinessFetch: () => Promise.reject(new Error("synthetic transport failure")),
+      },
+      "chat-model",
+      "send-chat-0001",
     );
-    expect(persisted).toMatchObject({
-      probeCorrelationId: "corr-probe-A",
-      modelIdDigest: CHAT_MODEL_DIGEST,
-    });
-
-    // The probe itself still ran exactly once, under the FIRST caller's correlation id — the
-    // joiner never starts a probe of its own.
-    const readiness = events.filter(
-      (event) =>
-        event.op.startsWith("gateway.readiness.") && event.op !== "gateway.readiness.joined",
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "gateway.readiness.automatic.started",
+          correlationId: "send-chat-0001",
+        }),
+        expect.objectContaining({
+          op: "gateway.readiness.automatic.completed",
+          correlationId: "send-chat-0001",
+        }),
+      ]),
     );
-    expect(readiness.map((event) => [event.op, event.correlationId])).toEqual([
-      ["gateway.readiness.started", "corr-probe-A"],
-      ["gateway.readiness.completed", "corr-probe-A"],
-    ]);
+    expect(
+      events.find((event) => event.op === "gateway.readiness.automatic.completed")?.extra,
+    ).toMatchObject({ overallStatus: "failed" });
   });
 
+  // #3557: a joiner without a request context still gets its own id, never the probe's or the
+  // unknown fallback, so its line never merges into another request's timeline.
   it("mints its own correlation id for a joiner that supplied none", async () => {
     const { deps } = probeableDeps("not-a-timestamp");
     const events: ServerLogEvent[] = [];
@@ -355,10 +386,11 @@ describe("on-demand readiness evidence", () => {
     const second = ensureOnDemandConversationReadiness(logged, "chat-model");
     await Promise.all([first, second]);
 
-    const joined = events.filter((event) => event.op === "gateway.readiness.joined");
+    const joined = events.filter((event) => event.op === "gateway.readiness.automatic.joined");
     expect(joined).toHaveLength(1);
     expect(typeof joined[0]?.correlationId).toBe("string");
     expect(joined[0]?.correlationId).not.toBe("corr-probe-only");
     expect(joined[0]?.correlationId).not.toBe(UNKNOWN_CORRELATION_ID);
+    expect(joined[0]?.parentCorrelationId).toBe("corr-probe-only");
   });
 });

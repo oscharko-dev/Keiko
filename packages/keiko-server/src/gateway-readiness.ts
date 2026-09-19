@@ -140,10 +140,10 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
-// Every readiness run other than the Coding Workbench's automatic one: the settings dialog's check
-// and the on-demand probe a conversation entry point runs when this process holds no current
-// observation for the model. Only the automatic run used to leave a line, so a chat refused as not
-// ready could not be told apart from one refused without any check having run (#3557).
+// Every readiness check a person starts in the settings dialog. The Coding Workbench's automatic
+// run and the on-demand probe a conversation entry point runs keep the automatic operations
+// (`gateway.readiness.automatic.*`). Only the automatic run used to leave a line, so a check run
+// from the settings dialog left no evidence at all (#3557).
 const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -157,7 +157,7 @@ const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["settings", "on-demand"],
+      values: ["settings"],
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
   },
@@ -182,7 +182,7 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["settings", "on-demand"],
+      values: ["settings"],
     },
     overallStatus: {
       type: "string",
@@ -200,34 +200,32 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-// #3557 review finding B: a caller that finds a readiness probe already in flight for the same
-// model does not run its own probe — it awaits the one already running
-// (`ensureOnDemandConversationReadiness`). Its own request still needs a durable link to the
-// evidence that decided its outcome, or its timeline cannot reconstruct the check it awaited: the
-// probe's `gateway.readiness.started`/`.completed` lines carry only the FIRST caller's correlation
-// id. This op lets every JOINING caller log one line under its OWN correlation id, linking to the
-// probe's.
-const GATEWAY_READINESS_JOINED_OPERATION = defineActivityLogOperation({
+// A conversation request that finds an on-demand probe already running for its model awaits that
+// probe instead of starting its own. Its own timeline still links to the evidence that decided its
+// outcome: this line, under its own correlation id, with the probe's as its parent (#3557, #3559).
+const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "gateway.readiness.joined",
+  op: "gateway.readiness.automatic.joined",
   category: "gateway",
   owner: "keiko-server",
-  emitter: "gateway-readiness.logReadinessJoined",
+  emitter: "gateway-readiness.logAutomaticReadinessJoined",
   fields: {
     ...GATEWAY_READINESS_MODEL_ID_FIELDS,
-    probeCorrelationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    generation: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-readiness"],
-  proofIds: ["gateway.readiness.joined.line"],
+  proofIds: ["gateway.readiness.automatic.joined.line"],
   releaseImpact: "patch",
 });
 
-/** Who ran a non-automatic readiness check: the settings dialog, or a conversation entry point. */
-export type GatewayReadinessTrigger = "settings" | "on-demand";
+/** Who started a non-automatic readiness check: the settings dialog. */
+type GatewayReadinessTrigger = "settings";
 
 type ProbeStatus = GatewayReadinessProbeResult["status"];
 
@@ -415,14 +413,56 @@ function logAutomaticReadinessCompleted(
   correlationId: string,
   report: GatewayReadinessReport,
 ): void {
+  logAutomaticReadinessOutcome(
+    deps,
+    correlationId,
+    report.modelId,
+    report.overallStatus,
+    report.probes.length,
+  );
+}
+
+function logAutomaticReadinessJoined(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+  probeCorrelationId: string,
+  generation: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION,
+      {
+        correlationId,
+        ...(correlationId === probeCorrelationId
+          ? {}
+          : { parentCorrelationId: probeCorrelationId }),
+      },
+      {
+        ...modelIdEvidence(modelId),
+        generation,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function logAutomaticReadinessOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  modelId: string,
+  overallStatus: GatewayReadinessReport["overallStatus"],
+  probeCount: number,
+): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
       { correlationId },
       {
-        ...modelIdEvidence(report.modelId),
-        overallStatus: report.overallStatus,
-        probeCount: report.probes.length,
+        ...modelIdEvidence(modelId),
+        overallStatus,
+        probeCount,
       },
     ),
   );
@@ -465,24 +505,9 @@ function logReadinessCompleted(
   );
 }
 
-// #3557 review finding B: logs the JOIN fact under the joining caller's own correlation id,
-// linking to the probe it is about to await.
-function logReadinessJoined(
-  deps: UiHandlerDeps,
-  correlationId: string,
-  probeCorrelationId: string,
-  modelId: string,
-): void {
-  (deps.activityLog ?? processServerLogSink()).write(
-    activityLogEvent(
-      GATEWAY_READINESS_JOINED_OPERATION,
-      { correlationId },
-      { ...modelIdEvidence(modelId), probeCorrelationId },
-    ),
-  );
-}
-
-// One run's start line: the Coding Workbench's automatic run keeps its own operation.
+// One run's start line: the Coding Workbench's automatic run keeps its own operation, and a run
+// without a trigger is recorded by its caller (the on-demand probe logs the automatic operations
+// around it, so nothing here may log it twice).
 function logReadinessRunStarted(
   deps: UiHandlerDeps,
   run: ReadinessRunEvidence,
@@ -493,6 +518,7 @@ function logReadinessRunStarted(
     logAutomaticReadinessStarted(deps, run.correlationId, modelId, probeCount);
     return;
   }
+  if (run.trigger === undefined) return;
   logReadinessStarted(deps, run.correlationId, run.trigger, modelId, probeCount);
 }
 
@@ -505,13 +531,14 @@ function logReadinessRunCompleted(
     logAutomaticReadinessCompleted(deps, run.correlationId, report);
     return;
   }
+  if (run.trigger === undefined) return;
   logReadinessCompleted(deps, run.correlationId, run.trigger, report, Date.now() - run.startedAtMs);
 }
 
 interface ReadinessRunEvidence {
   readonly correlationId: string;
   readonly automatic: boolean;
-  readonly trigger: GatewayReadinessTrigger;
+  readonly trigger: GatewayReadinessTrigger | undefined;
   readonly startedAtMs: number;
 }
 
@@ -1606,7 +1633,8 @@ export async function runGatewayReadiness(
   // one id. A caller without a request context (a scheduled/CLI run) gets a freshly minted id rather
   // than an id-less record.
   requestCorrelationId?: string,
-  trigger: GatewayReadinessTrigger = "settings",
+  // Who started the run. Without one, the caller records the run's lifecycle itself.
+  trigger?: GatewayReadinessTrigger,
 ): Promise<GatewayReadinessReport | RouteResult> {
   const selection = chooseProvider(currentGatewayConfig(deps), request.modelId, request.options);
   if ("status" in selection) return selection;
@@ -1662,10 +1690,10 @@ export async function runGatewayReadiness(
 // demand with the minimal chat probe. The admission stays honest — the probe must actually
 // pass. Concurrent callers share one in-flight probe per model.
 //
-// `correlationId` is the FIRST caller's — the one the probe's `gateway.readiness.started`/
+// `correlationId` is the FIRST caller's: the one the probe's `gateway.readiness.automatic.started`/
 // `.completed` lines carry. Every LATER caller that joins it instead of starting its own logs a
-// `gateway.readiness.joined` line under its OWN correlation id, linking to this one (#3557 review
-// finding B), so a joiner's timeline can still reconstruct the check it awaited.
+// `gateway.readiness.automatic.joined` line under its OWN correlation id, with the probe's as its
+// parent (#3557, #3559), so a joiner's timeline can still reconstruct the check it awaited.
 interface OnDemandReadinessProbe {
   readonly promise: Promise<void>;
   readonly correlationId: string;
@@ -1714,41 +1742,48 @@ export async function ensureOnDemandConversationReadiness(
   const key = `${String(holder.generation())}:${modelId}`;
   const inFlight = onDemandReadinessProbes.get(key);
   if (inFlight !== undefined) {
-    logReadinessJoined(deps, correlationId ?? newCorrelationId(), inFlight.correlationId, modelId);
+    logAutomaticReadinessJoined(
+      deps,
+      modelId,
+      correlationId ?? newCorrelationId(),
+      inFlight.correlationId,
+      holder.generation(),
+    );
     await inFlight.promise;
     return;
   }
   const probeCorrelationId = correlationId ?? newCorrelationId();
-  const promise = runOnDemandReadinessProbe(deps, holder, modelId, probeCorrelationId).finally(
-    () => {
-      onDemandReadinessProbes.delete(key);
-    },
-  );
-  onDemandReadinessProbes.set(key, { promise, correlationId: probeCorrelationId });
-  await promise;
+  const probe = runOnDemandReadinessProbe(deps, holder, modelId, probeCorrelationId).finally(() => {
+    onDemandReadinessProbes.delete(key);
+  });
+  onDemandReadinessProbes.set(key, { promise: probe, correlationId: probeCorrelationId });
+  await probe;
 }
 
 async function runOnDemandReadinessProbe(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
-  correlationId: string,
+  correlationId?: string,
 ): Promise<void> {
   const generation = holder.generation();
+  const probeCorrelationId = correlationId ?? newCorrelationId();
+  let overallStatus: GatewayReadinessReport["overallStatus"] = "failed";
+  logAutomaticReadinessStarted(deps, probeCorrelationId, modelId, 1);
   try {
-    await runGatewayReadiness(
+    const report = await runGatewayReadiness(
       { modelId, options: { probes: [] } },
       deps,
-      correlationId,
-      "on-demand",
+      probeCorrelationId,
     );
+    if (!("status" in report)) overallStatus = report.overallStatus;
   } catch (error) {
     // The route still answers with the honest unready result — but never silently: the
     // underlying failure lands as a redacted operator diagnostic with a correlation id.
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
-        correlationId,
+        correlationId: probeCorrelationId,
         operation: "gateway.readiness",
         source: "gateway-readiness.on-demand",
         error,
@@ -1756,6 +1791,8 @@ async function runOnDemandReadinessProbe(
         redact: (message): string => String(deps.redactor(message)),
       }),
     );
+  } finally {
+    logAutomaticReadinessOutcome(deps, probeCorrelationId, modelId, overallStatus, 1);
   }
   // A failed report CLEARS the capability entry; without a current-generation observation
   // every subsequent chat attempt would probe the provider again. Persist an explicit
@@ -1842,7 +1879,7 @@ export async function handleGatewayReadiness(
 ): Promise<RouteResult> {
   const body = await readJsonBody(ctx.req, ctx.correlationId);
   if ("status" in body) return body;
-  const report = await runGatewayReadiness(body.parsed, deps, ctx.correlationId);
+  const report = await runGatewayReadiness(body.parsed, deps, ctx.correlationId, "settings");
   if ("status" in report) return report;
   return { status: 200, body: report };
 }

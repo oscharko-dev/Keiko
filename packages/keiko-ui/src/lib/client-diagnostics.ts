@@ -40,9 +40,14 @@ import {
   type ClientSessionRepairOutcome,
   type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
+  type ClientMarkdownLayout,
+  type ClientErrorEvidence,
   type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
   type ClientDiagnosticLossCounts,
+  type ClientVoiceDialogueStage,
+  type ClientVoiceCaptureReason,
+  type ClientVoiceCaptureError,
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientStageId,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
@@ -92,9 +97,16 @@ export interface ClientDiagnosticSessionRepairReport {
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   // The closed class of the failure, when the caller classified it (`bffRequestErrorKind`).
   readonly errorKind?: ActivityLogErrorKind | undefined;
+  readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
+  readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
+  readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
+  readonly markdownLayout?: ClientMarkdownLayout | undefined;
+  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

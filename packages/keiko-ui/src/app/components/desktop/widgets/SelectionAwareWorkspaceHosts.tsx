@@ -5,6 +5,7 @@ import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { updateChat } from "@/lib/api";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId } from "@/lib/http";
 import { useTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -20,7 +21,7 @@ import {
 } from "../windows/chatWindowActivity";
 import {
   chatListCorrelationId,
-  sharedFetchChatsOutcome,
+  sharedFetchChatsWithEvidence,
   useChatSession,
   type ChatListLoad,
   type ChatSessionApi,
@@ -703,12 +704,17 @@ type ChatProjectLookup =
 async function readProjectChats(
   project: ProjectWithAvailability,
 ): Promise<ChatListLoad | undefined> {
-  const outcome = await sharedFetchChatsOutcome(project.path);
-  if (outcome.ok) return outcome.load;
-  window.reportError(
-    correlatedDiagnostic(CHAT_PROJECT_LOOKUP_DIAGNOSTIC, outcome.failure.correlationId),
-  );
-  return undefined;
+  try {
+    return await sharedFetchChatsWithEvidence(project.path);
+  } catch (error) {
+    window.reportError(
+      correlatedDiagnostic(
+        CHAT_PROJECT_LOOKUP_DIAGNOSTIC,
+        correlationIdOf(error) ?? newClientCorrelationId(),
+      ),
+    );
+    return undefined;
+  }
 }
 
 async function findChatProjectPath(

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  streamAssistantSpeech,
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
   cloneRepository,
@@ -4649,6 +4650,45 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
       code: "CONTRACT_VALIDATION_FAILED",
       correlationId: "corr-malformed-apply",
+    });
+  });
+});
+
+describe("streamAssistantSpeech correlation", () => {
+  it("retains the transmitted request identity when fetch rejects before headers", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new TypeError("private network detail"));
+    vi.stubGlobal("fetch", fetchMock);
+    const error = await streamAssistantSpeech({ text: "Synthetic test" }).catch(
+      (cause: unknown) => cause,
+    );
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(error).toMatchObject({
+      correlationId: new Headers(request?.headers).get("X-Keiko-Correlation-Id"),
+    });
+    expect(String(error)).not.toContain("private network detail");
+  });
+
+  it("preserves cancellation so interruption does not trigger a fallback", async () => {
+    const abort = new DOMException("Aborted", "AbortError");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockRejectedValue(abort));
+    await expect(streamAssistantSpeech({ text: "Synthetic test" })).rejects.toBe(abort);
+  });
+
+  it("preserves the server correlation on a failed streaming synthesis request", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: { code: "UPSTREAM_UNAVAILABLE", message: "Unavailable" } }),
+          { status: 502, headers: { "X-Keiko-Correlation-Id": "speech-request-0001" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(streamAssistantSpeech({ text: "Synthetic test" })).rejects.toMatchObject({
+      status: 502,
+      correlationId: "speech-request-0001",
     });
   });
 });

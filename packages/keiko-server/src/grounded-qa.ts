@@ -1,3 +1,4 @@
+import { logChatResponseMessage } from "./chat-activity.js";
 // BFF route POST /api/chats/messages/grounded (Issue #185 / Epic #177). Composes the
 // orchestrator's pure pipeline with the UiStore so a single HTTP round trip persists both
 // the user question and the assistant answer alongside a redacted citation projection.
@@ -2433,7 +2434,11 @@ export async function handleGroundedAsk(
     const prepared = await prepareGroundedAsk(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return groundedCancelledResult();
     if ("status" in prepared) return prepared;
-    return await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+    const result = await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
+    if (result.status === 200 && groundedAnswerBody(result.body)) {
+      logChatResponseMessage(result.body.assistantMessageId, ctx.correlationId);
+    }
+    return result;
   } finally {
     cancellation.dispose();
   }

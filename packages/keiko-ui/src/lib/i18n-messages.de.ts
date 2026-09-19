@@ -668,6 +668,11 @@ export const DE_MESSAGES = {
     "Dein gesprochener Beitrag wartet noch auf eine bestätigte Antwort. Versuche ihn erneut, bevor du eine weitere Nachricht sendest.",
   "chat.voice.retryPendingTurn": "Gesprochenen Beitrag erneut versuchen",
   "chat.voice.discardPendingTurn": "Gesprochenen Beitrag verwerfen",
+  "chat.voice.batchRetry": "Erneut versuchen",
+  "chat.voice.batchUseText": "Mit diesem Text fortfahren",
+  "chat.voice.batchFinish": "Sprechen beenden",
+  "chat.voice.batchMode":
+    "Digital Twin: Sprich, um Keiko zu unterbrechen, oder nutze die Taste Unterbrechen.",
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.load": "Chat konnte nicht geladen werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",

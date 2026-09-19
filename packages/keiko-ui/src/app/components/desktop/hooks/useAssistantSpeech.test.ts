@@ -5,6 +5,7 @@
 // keep the test deterministic with no real media element or network.
 
 import { act, renderHook } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import { ApiError, synthesizeAssistantSpeech } from "@/lib/api";
@@ -522,6 +523,23 @@ function makeFakeStreamingSink(engage: boolean): {
 }
 
 describe("useAssistantSpeech — streamed PCM playback", () => {
+  it("recreates the streaming sink after StrictMode replays its cleanup", () => {
+    const first = makeFakeStreamingSink(true);
+    const second = makeFakeStreamingSink(true);
+    const createStreamingSink = vi
+      .fn()
+      .mockReturnValueOnce(first.sink)
+      .mockReturnValueOnce(second.sink);
+    const h = harness({ createStreamingSink });
+    const { result } = renderHook(() => useAssistantSpeech(h.options), { wrapper: StrictMode });
+
+    act(() => result.current.primeAudioOutput());
+
+    expect(first.disposes()).toBe(1);
+    expect(second.primes()).toBe(1);
+    expect(first.primes()).toBe(0);
+  });
+
   it("primes local output synchronously without starting synthesis or playback", () => {
     const fake = makeFakeStreamingSink(true);
     const h = harness({

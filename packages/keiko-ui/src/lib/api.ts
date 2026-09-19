@@ -165,7 +165,6 @@ import {
   isActivityLogReadinessSnapshot,
   type HealthResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { validateGitHistoryResponse } from "@oscharko-dev/keiko-contracts/runtime/git-history";
 import {
   validateGitRemotesResponse,
   validateGitRepositorySummary,
@@ -174,10 +173,6 @@ import {
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
-import {
-  validateGitSyncExecuteResponse,
-  validateGitSyncPreview,
-} from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 // Only the one numeric bound below is a genuine eager dependency: `GITHUB_ISSUE_REFERENCE_MAX_CHARS`
 // is a value re-export consumed synchronously by CodingWorkbenchIssueIntake.tsx (a `maxLength` prop,
 // not behind the dynamic() boundary the rest of the Coding Workbench tree sits behind). Every other
@@ -191,6 +186,8 @@ import type {
   PrDescriptionApplicationReason,
   PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorEvidence } from "./client-error-evidence";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
@@ -693,27 +690,27 @@ export async function streamAssistantSpeech(
   input: VoiceSpeechRequest,
   signal?: AbortSignal,
 ): Promise<Response> {
+  const correlationId = newClientCorrelationId();
   const res = await fetch("/api/voice/speak/stream", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Keiko-CSRF": "1",
+      [CORRELATION_HEADER]: correlationId,
       Accept: "audio/pcm",
     },
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),
+  }).catch((cause: unknown) => {
+    if (isRecordValue(cause) && cause["name"] === "AbortError") throw cause;
+    const failure = new ApiError("NETWORK_ERROR", "Speech streaming could not be reached.", 0);
+    failure.correlationId = correlationId;
+    throw failure;
   });
   if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as BffError;
-      code = envelope.error.code;
-      message = envelope.error.message;
-    } catch {
-      // parse failure — keep generic message, never log body
-    }
-    throw new ApiError(code, message, res.status);
+    const error = await bffFailure(res);
+    error.correlationId ??= correlationId;
+    throw error;
   }
   return res;
 }
@@ -1330,12 +1327,14 @@ export type SendDesktopChatInput = DesktopChatSendRequestWire;
 export async function sendDesktopChat(
   input: SendDesktopChatInput,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<DesktopChatSendResponse> {
-  return fetchJson("/api/desktop/chat", {
-    method: "POST",
-    body: JSON.stringify(input),
-    signal: signal ?? null,
-  });
+  return fetchJson(
+    "/api/desktop/chat",
+    { method: "POST", body: JSON.stringify(input), signal: signal ?? null },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function uploadConversationAttachment(
@@ -1943,11 +1942,8 @@ export async function fetchGitHistory(input: {
   readonly limit?: number;
   readonly skip?: number;
 }): Promise<GitHistoryResponse> {
-  const params = new URLSearchParams();
-  params.set("root", input.root);
-  if (input.limit !== undefined) params.set("limit", input.limit.toString());
-  if (input.skip !== undefined) params.set("skip", input.skip.toString());
-  return fetchJson(`/api/git/history?${params.toString()}`, undefined, validateGitHistoryResponse);
+  const api = await loadGitWorkbenchApi("git-history");
+  return api.fetchGitHistory(fetchJson, input);
 }
 
 export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
@@ -2743,14 +2739,16 @@ export async function fetchEditorAgentAudit(sessionId: string): Promise<EditorAg
 export async function askGrounded(
   req: GroundedAskRequest,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GroundedAnswer> {
   // RequestInit.signal is `AbortSignal | null`. Under exactOptionalPropertyTypes we cannot
   // pass `undefined`, so convert here.
-  return fetchJson("/api/chats/messages/grounded", {
-    method: "POST",
-    body: JSON.stringify(req),
-    signal: signal ?? null,
-  });
+  return fetchJson(
+    "/api/chats/messages/grounded",
+    { method: "POST", body: JSON.stringify(req), signal: signal ?? null },
+    undefined,
+    correlationId,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -3144,51 +3142,43 @@ export interface GitDeliverySyncInput {
   readonly userInitiated?: true | undefined;
 }
 
-function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
-  return JSON.stringify({
-    schemaVersion: "1",
-    projectId: input.projectId,
-    ...(input.remote === undefined ? {} : { remote: input.remote }),
-    ...(input.approval === undefined ? {} : { approval: input.approval }),
-    ...(input.userInitiated === true ? { userInitiated: true } : {}),
-  });
-}
-
-function gitDeliverySyncPath(
-  operation: GitSyncOperation,
-  phase: "preview" | "approve" | "execute",
-): string {
-  return `/api/git-delivery/${operation}/${phase}`;
+async function loadGitWorkbenchApi(
+  moduleLoadFailure: "git-sync" | "git-history" = "git-sync",
+): Promise<typeof import("./coding-workbench-lazy-fetchers")> {
+  try {
+    return await import("./coding-workbench-lazy-fetchers");
+  } catch (cause) {
+    const error = new ApiError(
+      "MODULE_LOAD_FAILED",
+      "Git could not start. Reload Keiko and try again.",
+      0,
+    );
+    error.correlationId = newClientCorrelationId();
+    error.cause = cause;
+    reportClientDiagnostic("git:module-load-failed", {
+      kind: "other",
+      correlationId: error.correlationId,
+      moduleLoadFailure,
+      errorEvidence: clientErrorEvidence(cause),
+    });
+    throw error;
+  }
 }
 
 export async function fetchGitDeliverySyncPreview(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
-  return fetchJson(
-    gitDeliverySyncPath(input.operation, "preview"),
-    {
-      method: "POST",
-      body: gitDeliverySyncBody(input),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validateGitSyncPreview,
-  );
+  const api = await loadGitWorkbenchApi();
+  return api.fetchGitSyncPreview(fetchJson, input, signal);
 }
 
 export async function fetchGitDeliverySyncExecute(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
-  return fetchJson(
-    gitDeliverySyncPath(input.operation, "execute"),
-    {
-      method: "POST",
-      body: gitDeliverySyncBody(input),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    validateGitSyncExecuteResponse,
-  );
+  const api = await loadGitWorkbenchApi();
+  return api.fetchGitSyncExecute(fetchJson, input, signal);
 }
 
 export interface GitDeliverySyncApproveResponse {
@@ -3201,11 +3191,8 @@ export async function fetchGitDeliverySyncApprove(
   input: Omit<GitDeliverySyncInput, "approval" | "userInitiated">,
   signal?: AbortSignal,
 ): Promise<GitDeliverySyncApproveResponse> {
-  return fetchJson(gitDeliverySyncPath(input.operation, "approve"), {
-    method: "POST",
-    body: gitDeliverySyncBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const api = await loadGitWorkbenchApi();
+  return api.fetchGitSyncApprove(fetchJson, input, signal);
 }
 
 /**

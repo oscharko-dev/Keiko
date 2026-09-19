@@ -10,6 +10,11 @@
 // A finished capture: base64 audio (no `data:` prefix), the chosen container MIME type, and the
 // measured clip length. The shape matches `VoiceTranscriptionRequest` so the caller can post it
 // directly to the BFF speech-to-text route.
+import type {
+  ClientVoiceCaptureReason,
+  ClientVoiceCaptureError,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
 export interface DictationCapture {
   readonly audioBase64: string;
   readonly mimeType: string;
@@ -29,8 +34,11 @@ export class DictationRecorderError extends Error {
   constructor(
     public readonly reason: DictationStartFailure,
     message: string,
+    public readonly captureReason?: ClientVoiceCaptureReason,
+    public readonly captureError?: ClientVoiceCaptureError,
+    cause?: unknown,
   ) {
-    super(message);
+    super(message, { cause });
     this.name = "DictationRecorderError";
   }
 }
@@ -44,6 +52,9 @@ export interface DictationSession {
   // it; the production recorder always sets it.
   readonly stream?: MediaStream;
   requestData?(): void;
+  // Replace silent encoded audio while keeping the same microphone and VAD stream live.
+  // Returns the new buffer's age, or undefined if speech/cancellation retained the old buffer.
+  renewSilence?(stillSilent: () => boolean): Promise<number | undefined>;
   stop(): Promise<DictationCapture>;
   cancel(): void;
 }
@@ -111,7 +122,7 @@ function selectMimeType(): string {
 }
 
 function classifyGetUserMediaError(error: unknown): DictationStartFailure {
-  const name = error instanceof Error ? error.name : "";
+  const name = error instanceof Error || error instanceof DOMException ? error.name : "";
   if (name === "NotAllowedError" || name === "SecurityError") {
     return "permission-denied";
   }
@@ -176,25 +187,32 @@ async function acquireDictationMicrophone(): Promise<MediaStream> {
   }
 }
 
+function recorderEventFailure(event: Event): DictationRecorderError {
+  const cause: unknown = "error" in event ? event.error : undefined;
+  return new DictationRecorderError(
+    "capture-failed",
+    "Audio capture failed.",
+    undefined,
+    captureErrorClass(cause),
+    cause,
+  );
+}
+
 function waitForStop(recorder: MediaRecorder): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     recorder.addEventListener("stop", () => resolve(), { once: true });
-    recorder.addEventListener(
-      "error",
-      () => reject(new DictationRecorderError("capture-failed", "Audio capture failed.")),
-      { once: true },
-    );
+    recorder.addEventListener("error", (event) => reject(recorderEventFailure(event)), {
+      once: true,
+    });
   });
 }
 
 function waitForStart(recorder: MediaRecorder): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     recorder.addEventListener("start", () => resolve(), { once: true });
-    recorder.addEventListener(
-      "error",
-      () => reject(new DictationRecorderError("capture-failed", "Audio capture failed.")),
-      { once: true },
-    );
+    recorder.addEventListener("error", (event) => reject(recorderEventFailure(event)), {
+      once: true,
+    });
   });
 }
 
@@ -260,13 +278,34 @@ function createAudioLevelMonitor(
   };
 }
 
-async function beginSession(
-  stream: MediaStream,
-  options: DictationRecorderStartOptions = {},
-): Promise<DictationSession> {
-  const mimeType = selectMimeType();
-  const recorder =
-    mimeType === "" ? new MediaRecorder(stream) : new MediaRecorder(stream, { mimeType });
+interface RecordingBuffer {
+  readonly recorder: MediaRecorder;
+  readonly chunks: Blob[];
+  readonly startedAt: number;
+}
+
+function createMediaRecorder(stream: MediaStream, mimeType: string): MediaRecorder {
+  return mimeType === "" ? new MediaRecorder(stream) : new MediaRecorder(stream, { mimeType });
+}
+
+function createRenewalRecorder(stream: MediaStream, mimeType: string): MediaRecorder {
+  try {
+    return createMediaRecorder(stream, mimeType);
+  } catch (cause) {
+    throw new DictationRecorderError(
+      "capture-failed",
+      "Audio capture renewal failed.",
+      "replacement-create-failed",
+      captureErrorClass(cause),
+      cause,
+    );
+  }
+}
+
+async function beginRecordingBuffer(
+  recorder: MediaRecorder,
+  options: DictationRecorderStartOptions,
+): Promise<RecordingBuffer> {
   const chunks: Blob[] = [];
   recorder.addEventListener("dataavailable", (event) => {
     if (event.data.size > 0) {
@@ -275,9 +314,77 @@ async function beginSession(
     }
   });
   const started = waitForStart(recorder);
+  const startedAt = Date.now();
   recorder.start(options.timesliceMs ?? DEFAULT_TIMESLICE_MS);
   await started;
-  const startedAt = Date.now();
+  return { recorder, chunks, startedAt };
+}
+
+function captureErrorClass(error: unknown): ClientVoiceCaptureError {
+  return error instanceof DictationRecorderError && error.captureError !== undefined
+    ? error.captureError
+    : nativeCaptureErrorClass(error);
+}
+
+function nativeCaptureErrorClass(error: unknown): ClientVoiceCaptureError {
+  if (!(error instanceof Error) && !(error instanceof DOMException)) return "other";
+  switch (error.name) {
+    case "TypeError":
+      return "type-error";
+    case "RangeError":
+      return "range-error";
+    case "InvalidStateError":
+      return "invalid-state";
+    case "NotSupportedError":
+      return "not-supported";
+    case "SecurityError":
+      return "security";
+    case "NotReadableError":
+      return "not-readable";
+    default:
+      return "other";
+  }
+}
+
+function stopRenewalRecorder(recorder: MediaRecorder, reason: ClientVoiceCaptureReason): void {
+  try {
+    recorder.stop();
+  } catch (error) {
+    throw new DictationRecorderError(
+      "capture-failed",
+      "Audio capture renewal failed.",
+      reason,
+      captureErrorClass(error),
+      error,
+    );
+  }
+}
+
+async function beginRenewalBuffer(
+  stream: MediaStream,
+  mimeType: string,
+  options: DictationRecorderStartOptions,
+): Promise<RecordingBuffer> {
+  const recorder = createRenewalRecorder(stream, mimeType);
+  try {
+    return await beginRecordingBuffer(recorder, options);
+  } catch (error) {
+    throw new DictationRecorderError(
+      "capture-failed",
+      "Audio capture renewal failed.",
+      "replacement-start-failed",
+      captureErrorClass(error),
+      error,
+    );
+  }
+}
+
+async function beginSession(
+  stream: MediaStream,
+  options: DictationRecorderStartOptions = {},
+): Promise<DictationSession> {
+  const mimeType = selectMimeType();
+  let capture = await beginRecordingBuffer(createMediaRecorder(stream, mimeType), options);
   // Ready = start event seen (above) AND the analyser has produced its first sample (below), so the
   // caller only invites the user to speak once capture is verifiably live. Fired at most once.
   let readyFired = false;
@@ -303,12 +410,28 @@ async function beginSession(
 
   return {
     stream,
+    async renewSilence(stillSilent): Promise<number | undefined> {
+      if (settled || !stillSilent()) return undefined;
+      const replacement = await beginRenewalBuffer(stream, mimeType, options);
+      // Overlap exceeds the VAD onset debounce: speech during replacement retains the old prefix.
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      if (settled || !stillSilent()) {
+        if (replacement.recorder.state !== "inactive")
+          stopRenewalRecorder(replacement.recorder, "replacement-stop-failed");
+        return undefined;
+      }
+      const previous = capture;
+      capture = replacement;
+      stopRenewalRecorder(previous.recorder, "previous-stop-failed");
+      previous.chunks.length = 0;
+      return Math.max(0, Date.now() - capture.startedAt);
+    },
     requestData(): void {
-      if (settled || recorder.state !== "recording") {
+      if (settled || capture.recorder.state !== "recording") {
         return;
       }
       try {
-        recorder.requestData();
+        capture.recorder.requestData();
       } catch {
         // A best-effort flush failure should not prevent the final stop from collecting audio.
       }
@@ -318,28 +441,29 @@ async function beginSession(
         throw new DictationRecorderError("capture-failed", "The recording is no longer active.");
       }
       settled = true;
-      const stopped = waitForStop(recorder);
+      const stopped = waitForStop(capture.recorder);
       try {
-        if (recorder.state === "recording") {
-          recorder.requestData();
+        if (capture.recorder.state === "recording") {
+          capture.recorder.requestData();
         }
       } catch {
         // Ignore; the final stop event still provides the authoritative flush.
       }
-      recorder.stop();
+      capture.recorder.stop();
       try {
         await stopped;
       } finally {
         levelMonitor?.stop();
         stopTracks(stream);
       }
-      const effectiveType = recorder.mimeType !== "" ? recorder.mimeType : mimeType || "audio/webm";
-      const blob = new Blob(chunks, { type: effectiveType });
+      const effectiveType =
+        capture.recorder.mimeType !== "" ? capture.recorder.mimeType : mimeType || "audio/webm";
+      const blob = new Blob(capture.chunks, { type: effectiveType });
       const audioBase64 = await blobToBase64(blob);
       return {
         audioBase64,
         mimeType: effectiveType,
-        durationMs: Math.max(1, Date.now() - startedAt),
+        durationMs: Math.max(1, Date.now() - capture.startedAt),
       };
     },
     cancel(): void {
@@ -347,8 +471,8 @@ async function beginSession(
         return;
       }
       settled = true;
-      if (recorder.state !== "inactive") {
-        recorder.stop();
+      if (capture.recorder.state !== "inactive") {
+        capture.recorder.stop();
       }
       levelMonitor?.stop();
       stopTracks(stream);
@@ -374,6 +498,9 @@ export function createBrowserDictationRecorder(): DictationRecorder {
         throw new DictationRecorderError(
           classifyGetUserMediaError(error),
           "Microphone access is unavailable.",
+          undefined,
+          captureErrorClass(error),
+          error,
         );
       }
       try {
@@ -384,6 +511,9 @@ export function createBrowserDictationRecorder(): DictationRecorder {
         throw new DictationRecorderError(
           "capture-failed",
           error instanceof Error ? error.message : "Audio capture could not start.",
+          undefined,
+          captureErrorClass(error),
+          error,
         );
       }
     },

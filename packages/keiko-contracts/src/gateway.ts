@@ -119,12 +119,16 @@ export const INFILLING_ALIGNMENTS: readonly InfillingAlignment[] = [
 //                         may be a private/RFC-1918 host (regulated bank/insurance professional
 //                         deployments). Private hosts are first-class.
 //   - "local-only"      — a voice endpoint that never leaves the Keiko host (loopback / on-device).
-export type VoiceProviderLocality = "azure-foundry" | "customer-hosted" | "local-only";
+// A gateway can disclose a voice model's role without disclosing where it routes requests.
+// Keep that state explicit instead of guessing Azure or customer residency from its URL.
+export type VoiceProviderLocality =
+  "azure-foundry" | "customer-hosted" | "local-only" | "gateway-managed";
 
 export const VOICE_PROVIDER_LOCALITIES: readonly VoiceProviderLocality[] = [
   "azure-foundry",
   "customer-hosted",
   "local-only",
+  "gateway-managed",
 ] as const;
 
 // ─── Provider endpoint protocol (wire-value unions, #3037 follow-up) ───────────
