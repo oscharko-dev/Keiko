@@ -71,12 +71,20 @@ describe("modelIdEvidence — the owning projection from a candidate model id to
     expect(modelIdEvidence(deps, modelId)).toEqual({ modelId });
   });
 
-  it("bounds a configured id over the 240-character limit to exactly 240 characters", () => {
-    const modelId = `model-${"x".repeat(300)}`;
-    const deps = depsWithConfiguredProvider(modelId);
-    expect(modelIdEvidence(deps, modelId)).toEqual({
-      modelId: modelId.slice(0, MAX_MODEL_ID_EVIDENCE_CHARS),
-    });
+  // A truncated raw id would make two long configured ids sharing a prefix indistinguishable.
+  it("digests a configured id over the 240-character bound, whole, instead of truncating it", () => {
+    const first = `model-${"x".repeat(300)}-a`;
+    const second = `model-${"x".repeat(300)}-b`;
+    const deps = {
+      config: { providers: [provider(first), provider(second)] },
+    } as unknown as UiHandlerDeps;
+
+    const firstEvidence = modelIdEvidence(deps, first);
+    const secondEvidence = modelIdEvidence(deps, second);
+
+    expect(firstEvidence.modelId).toBeUndefined();
+    expect(firstEvidence.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
+    expect(secondEvidence.modelIdDigest).not.toBe(firstEvidence.modelIdDigest);
   });
 
   it("returns undefined for an unconfigured id and never throws", () => {

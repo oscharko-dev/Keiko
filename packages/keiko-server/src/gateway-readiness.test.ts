@@ -340,7 +340,10 @@ describe("gateway readiness route", () => {
     },
   );
 
-  it("bounds a configured model id only at the 240-character activity-log projection", async () => {
+  // The full id serves provider selection and the response; the log projection stays bounded. An
+  // over-bound id is logged as a digest of the whole id, never as a truncated prefix that two long
+  // ids could share (#3557 review).
+  it("bounds a configured model id only at the activity-log projection, as a whole-id digest", async () => {
     const modelId = `coding-${"x".repeat(250)}`;
     const config: GatewayConfig = {
       ...gatewayConfig(modelId),
@@ -372,10 +375,11 @@ describe("gateway readiness route", () => {
     if ("status" in result) return;
     expect(result.modelId).toBe(modelId);
     expect(events).toHaveLength(2);
-    expect(events.map((event) => event.extra?.modelId)).toEqual([
-      modelId.slice(0, 240),
-      modelId.slice(0, 240),
-    ]);
+    expect(events.map((event) => event.extra?.modelId)).toEqual([undefined, undefined]);
+    const digests = events.map((event) => event.extra?.modelIdDigest);
+    expect(digests[0]).toMatch(/^[a-f0-9]{16}$/u);
+    expect(digests[1]).toBe(digests[0]);
+    expect(JSON.stringify(events)).not.toContain("xxxxxxxxxx");
     deps.store.close();
   });
 

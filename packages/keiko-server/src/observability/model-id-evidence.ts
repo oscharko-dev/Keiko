@@ -60,15 +60,15 @@ export function resolvedModelCapability(
 /**
  * Projects a candidate model id to Activity Log evidence. `undefined`, an empty string, or a
  * candidate naming no model the effective capability source configures yields no evidence at all
- * — never the caller's raw value. A configured id is logged raw (bounded to
- * `MAX_MODEL_ID_EVIDENCE_CHARS`) only when it also satisfies the SAME opaque-id validation
- * `activityLogEvent` applies; otherwise it is logged only as a digest of that bounded value.
+ * — never the caller's raw value. A configured id is logged raw only when it fits
+ * `MAX_MODEL_ID_EVIDENCE_CHARS` and satisfies the SAME opaque-id validation `activityLogEvent`
+ * applies. Anything else is logged as a digest of the WHOLE id: a truncated raw id would let two
+ * long ids sharing a prefix collide in the log (#3557 review).
  */
 export function modelIdEvidence(deps: UiHandlerDeps, modelId: string | undefined): ModelIdEvidence {
   if (modelId === undefined || modelId.length === 0) return {};
   if (resolvedModelCapability(deps, modelId) === undefined) return {};
-  const bounded = modelId.slice(0, MAX_MODEL_ID_EVIDENCE_CHARS);
-  return isActivityLogOpaqueIdValue(bounded, MAX_MODEL_ID_EVIDENCE_CHARS)
-    ? { modelId: bounded }
-    : { modelIdDigest: sha256Hex(bounded).slice(0, MODEL_ID_DIGEST_LENGTH) };
+  return isActivityLogOpaqueIdValue(modelId, MAX_MODEL_ID_EVIDENCE_CHARS)
+    ? { modelId }
+    : { modelIdDigest: sha256Hex(modelId).slice(0, MODEL_ID_DIGEST_LENGTH) };
 }
