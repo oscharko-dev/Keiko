@@ -78,8 +78,10 @@
 // `diagnosticSummary` fields; the same field name nested inside some unrelated object merely
 // happens to share it, carries no such promise, and takes the ordinary generic path instead.
 
-import { isClientDiagnosticFrame } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { CLIENT_ERROR_CLASSES } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  CLIENT_ERROR_CLASSES,
+  isClientDiagnosticFrame,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME,
   ACTIVITY_LOG_FRAME_FIELD_NAME,

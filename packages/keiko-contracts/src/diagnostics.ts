@@ -266,9 +266,7 @@ function isClientVoiceCaptureError(value: unknown): value is ClientVoiceCaptureE
 export function isClientDiagnosticFrame(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    /^dist\/ui\/static\/_next\/static\/chunks\/[a-z0-9_-]{8,32}\.js:[0-9]{1,8}:[0-9]{1,8}$/u.test(
-      value,
-    )
+    /^dist\/ui\/static\/_next\/static\/chunks\/[a-z0-9_-]{8,32}\.js:\d{1,8}:\d{1,8}$/u.test(value)
   );
 }
 

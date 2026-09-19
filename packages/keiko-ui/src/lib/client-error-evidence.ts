@@ -44,7 +44,7 @@ function safeFrame(line: string): string | undefined {
     (!location.startsWith("http://") && !location.startsWith("https://"))
   )
     return undefined;
-  const coordinates = /:[0-9]{1,8}:[0-9]{1,8}$/u.exec(location);
+  const coordinates = /:\d{1,8}:\d{1,8}$/u.exec(location);
   if (coordinates === null) return undefined;
   try {
     const url = new URL(location.slice(0, coordinates.index));
