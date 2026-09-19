@@ -211,6 +211,11 @@ export const Icons = {
       <path d="M13.6 14 H17" />
     </Ico>
   ),
+  stop: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />
+    </Ico>
+  ),
   expand: (p: IcoProps): ReactNode => <Ico {...p} d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5" />,
   back: (p: IcoProps): ReactNode => <Ico {...p} d="M15 6l-6 6 6 6" />,
   fwd: (p: IcoProps): ReactNode => <Ico {...p} d="M9 6l6 6-6 6" />,

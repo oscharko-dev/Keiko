@@ -1076,6 +1076,10 @@ function WorkbenchColumns({
       actions={{
         onStart: startTask,
         onPause: () => void actions.pause(),
+        onStop: () => {
+          reportClientDiagnostic("[keiko] coding workbench composer stop requested");
+          void actions.stop();
+        },
         onResume: () => {
           if (resumeMode !== null) void actions.resume(resumeMode);
         },
@@ -1251,7 +1255,6 @@ function WorkbenchColumns({
           />
           <RuntimeControls
             state={state}
-            actions={actions}
             resumeMode={resumeMode}
             resumeModes={resumeModes}
             onResumeModeChange={(mode): void => {
@@ -1492,7 +1495,8 @@ interface LiveSectionProps {
   readonly actions: CodingWorkbenchRuntimeActions;
 }
 
-interface RuntimeControlsProps extends LiveSectionProps {
+interface RuntimeControlsProps {
+  readonly state: CodingWorkbenchRuntimeState;
   readonly resumeMode: CodingWorkbenchMode | null;
   readonly resumeModes: readonly CodingWorkbenchMode[];
   readonly onResumeModeChange: (mode: CodingWorkbenchMode) => void;
@@ -1500,63 +1504,45 @@ interface RuntimeControlsProps extends LiveSectionProps {
 
 function RuntimeControls({
   state,
-  actions,
   resumeMode,
   resumeModes,
   onResumeModeChange,
 }: RuntimeControlsProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const running = activeRunState(state.run.value?.state);
   const busy = state.mutation.status === "pending";
-  if (!running) return null;
+  if (
+    state.run.value?.state !== "paused" ||
+    !operatorResumeAvailable(resumeMode, state.run.value.pauseReason)
+  ) {
+    return null;
+  }
   return (
-    <div className={styles.runtimeControls} aria-label={t("codingWorkbench.controls.title")}>
-      {state.run.value?.state === "paused" &&
-      operatorResumeAvailable(resumeMode, state.run.value.pauseReason) ? (
-        <div className={styles.resumeModeControl}>
-          <label className={styles.resumeModeLabel} htmlFor="coding-workbench-resume-mode">
-            {t("codingWorkbench.controls.resumeMode.label")}
-          </label>
-          <select
-            className={styles.resumeModeSelect}
-            id="coding-workbench-resume-mode"
-            value={resumeMode}
-            disabled={busy}
-            aria-describedby="coding-workbench-resume-mode-help"
-            onChange={(event): void => {
-              if (isCodingWorkbenchMode(event.target.value)) {
-                onResumeModeChange(event.target.value);
-              }
-            }}
-          >
-            {resumeModes.map((mode) => (
-              <option key={mode} value={mode}>
-                {modeLabel(mode, t)}
-              </option>
-            ))}
-          </select>
-          <span className="sr-only" id="coding-workbench-resume-mode-help">
-            {t("codingWorkbench.controls.resumeMode.help")}
-          </span>
-        </div>
-      ) : null}
-      <div className={styles.inlineActions}>
-        <button
-          className={cx(styles.button, styles.buttonDanger)}
-          type="button"
-          disabled={!running || busy}
-          onClick={() => void actions.stop()}
+    <div className={styles.runtimeControls}>
+      <div className={styles.resumeModeControl}>
+        <label className={styles.resumeModeLabel} htmlFor="coding-workbench-resume-mode">
+          {t("codingWorkbench.controls.resumeMode.label")}
+        </label>
+        <select
+          className={styles.resumeModeSelect}
+          id="coding-workbench-resume-mode"
+          value={resumeMode ?? undefined}
+          disabled={busy}
+          aria-describedby="coding-workbench-resume-mode-help"
+          onChange={(event): void => {
+            if (isCodingWorkbenchMode(event.target.value)) {
+              onResumeModeChange(event.target.value);
+            }
+          }}
         >
-          {t("codingWorkbench.controls.stop")}
-        </button>
-        <button
-          className={styles.button}
-          type="button"
-          disabled={!running || busy}
-          onClick={() => void actions.takeover()}
-        >
-          {t("codingWorkbench.controls.takeover")}
-        </button>
+          {resumeModes.map((mode) => (
+            <option key={mode} value={mode}>
+              {modeLabel(mode, t)}
+            </option>
+          ))}
+        </select>
+        <span className="sr-only" id="coding-workbench-resume-mode-help">
+          {t("codingWorkbench.controls.resumeMode.help")}
+        </span>
       </div>
     </div>
   );

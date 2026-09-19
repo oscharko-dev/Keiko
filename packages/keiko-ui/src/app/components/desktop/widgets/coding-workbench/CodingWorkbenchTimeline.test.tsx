@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -236,6 +236,7 @@ describe("CodingWorkbenchTimeline", () => {
     const { container } = render(
       <Timeline events={events} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
     );
+    fireEvent.click(screen.getByText("Run details"));
 
     const [tailSpacer] = spacers(container);
     // Pre-fix behaviour was `(items - end) * 64` = 5 * 64 = 320. The event default is 88, so the
@@ -261,6 +262,7 @@ describe("CodingWorkbenchTimeline", () => {
     const view = render(
       <Timeline events={events} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
     );
+    fireEvent.click(screen.getByText("Run details"));
     paintRowHeights(view.container, () => 240);
     view.rerender(
       <Timeline events={events} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
@@ -285,6 +287,7 @@ describe("CodingWorkbenchTimeline", () => {
     const { container } = render(
       <Timeline events={events} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
     );
+    fireEvent.click(screen.getByText("Run details"));
 
     const rows = container.querySelectorAll(`.${styles.timeline} > li:not([aria-hidden])`);
     expect(rows).toHaveLength(96);
@@ -405,6 +408,7 @@ describe("CodingWorkbenchTimeline", () => {
         questions={IDLE_QUESTIONS}
       />,
     );
+    fireEvent.click(screen.getByText("Run details"));
 
     expect(container.querySelector('[data-event-tone="routine"]')).not.toBeNull();
     expect(container.querySelector('[data-event-tone="attention"]')).not.toBeNull();

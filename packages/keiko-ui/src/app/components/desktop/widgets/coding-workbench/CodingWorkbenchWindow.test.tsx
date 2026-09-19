@@ -2265,11 +2265,9 @@ describe("CodingWorkbenchWindow", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
-  // 0.3.0 release audit: `RuntimeControls` rendered nothing for a paused run, and these two
-  // buttons are the ONLY call sites of `actions.stop` and `actions.takeover` in the whole UI — so
-  // a paused run offered no way to end it at all, while the server admits stop and takeover from
-  // `paused`. Pausing must not remove the operator's exits.
-  it("keeps stop and takeover reachable while a run is paused", async () => {
+  // 0.3.0 release audit: a paused run must retain an operator stop control. Keep it in the
+  // composer alongside Resume so the exit remains reachable without a second action bar.
+  it("keeps stop reachable in the composer while a run is paused", async () => {
     const user = userEvent.setup();
     const liveActions = renderWorkbench(
       liveState({
@@ -2284,8 +2282,7 @@ describe("CodingWorkbenchWindow", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop run" }));
     expect(liveActions.stop).toHaveBeenCalledOnce();
-    await user.click(screen.getByRole("button", { name: "Take over manually" }));
-    expect(liveActions.takeover).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Take over manually" })).toBeNull();
   });
 
   // A run paused FOR the operator's package-script decision offers no Resume and no resume-mode
@@ -2471,10 +2468,11 @@ describe("CodingWorkbenchWindow", () => {
     ).toBeInTheDocument();
   });
 
-  it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", () => {
+  it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", async () => {
     const events = Array.from({ length: 1_000 }, (_, index) => event(index + 1));
     runtimeHookMock.mockReturnValue({ state: liveState({ events }), actions: actions() });
     const { container } = render(<CodingWorkbenchWindow />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Run details" }));
 
     expect(
       container.querySelectorAll(

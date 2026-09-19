@@ -559,9 +559,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.eyebrow": "Operator control",
   "codingWorkbench.controls.help":
     "Delivery follows the server-confirmed mode and validated Authority Envelope. Merge remains separately approval-gated.",
-  "codingWorkbench.controls.title": "Stop or take over",
   "codingWorkbench.controls.stop": "Stop run",
-  "codingWorkbench.controls.takeover": "Take over manually",
   "codingWorkbench.controls.resumeMode.label": "Resume autonomy",
   "codingWorkbench.controls.resumeMode.help":
     "Resume with the server-confirmed current mode or a stricter mode. Widening is unavailable.",

@@ -1869,3 +1869,9 @@ details[open] > .cmpActivitySummary::after {
   margin-inline-start: auto;
   padding: 0;
 }
+
+.runStop:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--feedback-danger) 42%, transparent);
+  color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
+}

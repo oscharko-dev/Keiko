@@ -582,9 +582,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.eyebrow": "Operatorsteuerung",
   "codingWorkbench.controls.help":
     "Die Auslieferung folgt dem serverbestätigten Modus und dem validierten Authority Envelope. Merge bleibt separat genehmigungspflichtig.",
-  "codingWorkbench.controls.title": "Anhalten oder übernehmen",
   "codingWorkbench.controls.stop": "Lauf anhalten",
-  "codingWorkbench.controls.takeover": "Manuell übernehmen",
   "codingWorkbench.controls.resumeMode.label": "Autonomie beim Fortsetzen",
   "codingWorkbench.controls.resumeMode.help":
     "Setze den Lauf mit dem serverbestätigten aktuellen oder einem strengeren Modus fort. Eine Erweiterung ist nicht verfügbar.",

@@ -39,6 +39,7 @@ import styles from "./CodingWorkbenchWindow.module.css";
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CodingWorkbenchIcon = Icons.codingWorkbench;
 const MinimizeIcon = Icons.minimize;
+const StopIcon = Icons.stop;
 const FwdIcon = Icons.fwd;
 const ArrowUpIcon = Icons.arrowUp;
 const FolderIcon = Icons.folder;
@@ -63,6 +64,7 @@ export interface TaskComposerActions {
   readonly onPause: () => void;
   readonly onResume: () => void;
   readonly onSend: () => void;
+  readonly onStop: () => void;
 }
 
 function runtimePreferenceOptions(
@@ -521,29 +523,65 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
 }
 
 function ComposerControls({ input, controller, t }: ComposerViewProps): ReactNode {
-  if (input.runState === "running") return <RunningControl controller={controller} t={t} />;
+  if (input.runState === "running") {
+    return <RunningControl input={input} t={t} />;
+  }
   if (input.runState === "paused") {
     return <PausedControls input={input} controller={controller} t={t} />;
+  }
+  if (
+    input.runState === "starting" ||
+    input.runState === "ready" ||
+    input.runState === "awaiting-approval" ||
+    input.runState === "stopping"
+  ) {
+    return (
+      <div className="cmp-bar-main">
+        <StopControl input={input} t={t} />
+      </div>
+    );
   }
   return <StartControl input={input} controller={controller} t={t} />;
 }
 
-function RunningControl({ controller, t }: Omit<ComposerViewProps, "input">): ReactNode {
+function StopControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): ReactNode {
+  return (
+    <button
+      className={`cmp-icon ui-tip ${styles.runStop}`}
+      type="button"
+      data-tip={t("codingWorkbench.controls.stop")}
+      aria-label={t("codingWorkbench.controls.stop")}
+      disabled={input.mutationPending || input.runState === "stopping"}
+      onClick={input.actions.onStop}
+    >
+      <StopIcon size={14} />
+    </button>
+  );
+}
+
+function RunningControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): ReactNode {
   return (
     <div className="cmp-bar-main">
       <button
-        className="cmp-send cmp-send-cancel cmp-tip-end"
-        type={controller.submitBlocked ? "button" : "submit"}
-        data-on={!controller.submitBlocked}
+        className="cmp-icon ui-tip"
+        type="button"
         data-tip={t("codingWorkbench.composer.pause")}
         aria-label={t("codingWorkbench.composer.pause")}
-        aria-disabled={controller.submitBlocked}
-        aria-describedby={
-          controller.submitFeedback === null ? undefined : controller.submitFeedbackId
-        }
-        onClick={controller.submitBlocked ? controller.submit : undefined}
+        disabled={input.mutationPending}
+        onClick={input.actions.onPause}
       >
         <MinimizeIcon size={16} />
+      </button>
+      <button
+        className="cmp-send cmp-send-cancel cmp-tip-end"
+        type="button"
+        data-on="true"
+        data-tip={t("codingWorkbench.controls.stop")}
+        aria-label={t("codingWorkbench.controls.stop")}
+        disabled={input.mutationPending}
+        onClick={input.actions.onStop}
+      >
+        <StopIcon size={16} />
       </button>
     </div>
   );
@@ -556,6 +594,7 @@ function PausedControls({ input, controller, t }: ComposerViewProps): ReactNode 
   const sendBlocked = controller.submitBlocked || !input.canResume;
   return (
     <div className="cmp-bar-main">
+      <StopControl input={input} t={t} />
       <button
         className="cmp-icon ui-tip"
         type="button"
