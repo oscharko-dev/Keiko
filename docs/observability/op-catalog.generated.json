@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "57bf0f0fd290a2a6485d27e149e2e3d724f8beba7366308d0870b1b220633104",
+    "catalogDigest": "87c8b89423937fc55e39f524f99ec4352354b8965ed81e7deef08779a3fd808b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1781,6 +1781,96 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "client.binding.resolved",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "client-diagnostics-routes.logClientBindingResolved",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["chat-window"]
+          },
+          "referenceShape": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["uuid", "opaque", "redacted"]
+          },
+          "heuristicExempt": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["client-binding"],
+        "proofIds": ["client.binding.resolved.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:302",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:645"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "client.binding.target-missing",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "client-diagnostics-routes.logClientBindingTargetMissing",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["chat-window"]
+          },
+          "referenceShape": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["uuid", "opaque", "redacted"]
+          },
+          "heuristicExempt": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["client-binding"],
+        "proofIds": ["client.binding.target-missing.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:318",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:658"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "client.diagnostic",
         "category": "diagnostic",
         "owner": "keiko-server",
@@ -1893,8 +1983,8 @@
         "failureClasses": ["client-diagnostic"],
         "proofIds": ["client.diagnostic.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:148",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:505"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:153",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:567"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1932,8 +2022,8 @@
         "failureClasses": ["client-diagnostic-rate-limit"],
         "proofIds": ["client.diagnostic.rate-limited.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:90",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:358"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:95",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:420"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1980,8 +2070,8 @@
           "client.diagnostic.rejected.shutdown-flush"
         ],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:116",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:386"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:121",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:448"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2025,8 +2115,8 @@
         "failureClasses": ["client-stage"],
         "proofIds": ["client.stage.settled.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:256",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:536"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:261",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:598"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2070,8 +2160,8 @@
         "failureClasses": ["client-stage"],
         "proofIds": ["client.stage.started.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:240",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:518"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:245",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:580"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27265,6 +27355,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "client-binding",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["client.binding.resolved"],
+          "failure": ["client.binding.target-missing"],
+          "loss": []
+        },
+        "requiredCausalOperations": ["client.binding.resolved", "client.binding.target-missing"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["client.binding.resolved", "client.binding.target-missing"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["client.binding.resolved"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "client-diagnostic",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -35143,8 +35254,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 311,
-      "completeClassCount": 311,
+      "supportedClassCount": 312,
+      "completeClassCount": 312,
       "completeness": "complete",
       "classes": [
         {
@@ -37334,6 +37445,108 @@
                 "causeChain": false
               },
               "proofIds": ["cli.uninstall.started.persisted"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "client-binding",
+          "requirementContract": "client-binding",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end", "failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["client.binding.resolved"],
+            "failure": ["client.binding.target-missing"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "client.binding.resolved",
+              "mode": "correlation"
+            },
+            {
+              "op": "client.binding.target-missing",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["client.binding.resolved"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "client.binding.resolved",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "heuristicExempt",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "referenceShape",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["client.binding.resolved.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "client.binding.target-missing",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "heuristicExempt",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "referenceShape",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["client.binding.target-missing.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -68588,33 +68801,45 @@
       "package": "keiko-server"
     },
     {
+      "op": "client.binding.resolved",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:305",
+      "package": "keiko-server"
+    },
+    {
+      "op": "client.binding.target-missing",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:321",
+      "package": "keiko-server"
+    },
+    {
       "op": "client.diagnostic",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:151",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:156",
       "package": "keiko-server"
     },
     {
       "op": "client.diagnostic.rate-limited",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:93",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:98",
       "package": "keiko-server"
     },
     {
       "op": "client.diagnostic.rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:119",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:124",
       "package": "keiko-server"
     },
     {
       "op": "client.stage.settled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:259",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:264",
       "package": "keiko-server"
     },
     {
       "op": "client.stage.started",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:243",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:248",
       "package": "keiko-server"
     },
     {
@@ -71159,6 +71384,8 @@
     "cli.uninstall.completed",
     "cli.uninstall.failed",
     "cli.uninstall.started",
+    "client.binding.resolved",
+    "client.binding.target-missing",
     "client.diagnostic",
     "client.diagnostic.rate-limited",
     "client.diagnostic.rejected",

@@ -175,6 +175,51 @@ describe("client diagnostics loss evidence", () => {
     expect(lines("client.diagnostic")).toEqual([]);
   });
 
+  // #3557 review: both binding outcomes reach the production file sink with the complete identity.
+  it("persists a missing binding target as client.binding.target-missing", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      outcome: "target-missing",
+      referenceShape: "redacted",
+      heuristicExempt: false,
+      correlationId: "ui_chat-list-load-0002",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.target-missing");
+    expect(expectActivityLogProof("client.binding.target-missing.line", line ?? "")).toMatchObject({
+      correlationId: "ui_chat-list-load-0002",
+      errorKind: "unavailable",
+      surface: "chat-window",
+      referenceShape: "redacted",
+      heuristicExempt: false,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  it("persists a binding resolved through the reference exemption as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      outcome: "resolved",
+      referenceShape: "uuid",
+      heuristicExempt: true,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    const record = expectActivityLogProof("client.binding.resolved.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: CORRELATION_ID,
+      referenceShape: "uuid",
+      heuristicExempt: true,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
   it("persists a settled stage report as client.stage.settled, with durationMs on the envelope", async () => {
     const body = JSON.stringify({
       kind: "stage",

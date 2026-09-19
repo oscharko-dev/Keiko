@@ -58,6 +58,7 @@ import {
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 import {
   classifyRunReport,
   formatRunSummaryFromManifest,
@@ -1719,13 +1720,37 @@ function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMes
   return { messages: Array.from(payload.messages) };
 }
 
+// The correlation id of each project's last successful chat list load (#3557). A restored chat
+// window decides from that list whether its conversation still exists, and its binding evidence
+// names this id, so the load and the outcome read as one timeline in the Activity Log.
+const CHAT_LIST_CORRELATION_LIMIT = 32;
+const chatListCorrelationIds = new Map<string, string>();
+
+function rememberChatListCorrelation(projectPath: string, correlationId: string): void {
+  chatListCorrelationIds.delete(projectPath);
+  chatListCorrelationIds.set(projectPath, correlationId);
+  const oldest = chatListCorrelationIds.keys().next().value;
+  if (chatListCorrelationIds.size > CHAT_LIST_CORRELATION_LIMIT && oldest !== undefined) {
+    chatListCorrelationIds.delete(oldest);
+  }
+}
+
+/** The correlation id of the last successful chat list load for `projectPath`, if any. */
+export function chatListCorrelationId(projectPath: string): string | undefined {
+  return chatListCorrelationIds.get(projectPath);
+}
+
 export function sharedFetchChats(
   projectPath: string,
 ): Promise<{ readonly chats: readonly Chat[] }> {
   const existing = sharedChatListInflight.get(projectPath);
   if (existing !== undefined) return existing.then(cloneChatListPayload);
-  const pending = fetchChats(projectPath)
-    .then(cloneChatListPayload)
+  const correlationId = newClientCorrelationId();
+  const pending = fetchChats(projectPath, correlationId)
+    .then((payload) => {
+      rememberChatListCorrelation(projectPath, correlationId);
+      return cloneChatListPayload(payload);
+    })
     .finally(() => {
       if (sharedChatListInflight.get(projectPath) === pending) {
         sharedChatListInflight.delete(projectPath);
@@ -1758,6 +1783,7 @@ export function clearChatSessionBootstrapCacheForTests(): void {
   gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();
+  chatListCorrelationIds.clear();
   for (const entry of sharedRunSummarySyncs.values()) entry.controller.abort();
   sharedRunSummarySyncs.clear();
 }

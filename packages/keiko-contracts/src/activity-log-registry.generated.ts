@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "57bf0f0fd290a2a6485d27e149e2e3d724f8beba7366308d0870b1b220633104" as const;
+  "87c8b89423937fc55e39f524f99ec4352354b8965ed81e7deef08779a3fd808b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1682,6 +1682,92 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["cli-uninstall"],
     proofIds: ["cli.uninstall.started.persisted"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.binding.resolved",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientBindingResolved",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat-window"],
+      },
+      referenceShape: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["uuid", "opaque", "redacted"],
+      },
+      heuristicExempt: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-binding"],
+    proofIds: ["client.binding.resolved.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.binding.target-missing",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientBindingTargetMissing",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat-window"],
+      },
+      referenceShape: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["uuid", "opaque", "redacted"],
+      },
+      heuristicExempt: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["client-binding"],
+    proofIds: ["client.binding.target-missing.line"],
     releaseImpact: "patch",
   },
   {
@@ -25545,8 +25631,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 311,
-  completeClassCount: 311,
+  supportedClassCount: 312,
+  completeClassCount: 312,
   completeness: "complete",
   classes: [
     {
@@ -27714,6 +27800,108 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["cli.uninstall.started.persisted"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-binding",
+      requirementContract: "client-binding",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["client.binding.resolved"],
+        failure: ["client.binding.target-missing"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.binding.resolved",
+          mode: "correlation",
+        },
+        {
+          op: "client.binding.target-missing",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.binding.resolved"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.binding.resolved",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "heuristicExempt",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "referenceShape",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "surface",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.binding.resolved.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.binding.target-missing",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "heuristicExempt",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "referenceShape",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "surface",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.binding.target-missing.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -56901,6 +57089,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "cli.uninstall.completed": "runtime-packages",
     "cli.uninstall.failed": "runtime-packages",
     "cli.uninstall.started": "runtime-packages",
+    "client.binding.resolved": "client-diagnostics",
+    "client.binding.target-missing": "client-diagnostics",
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
     "client.diagnostic.rejected": "client-diagnostics",

@@ -4,6 +4,8 @@ import {
   ACTIVITY_LOG_READINESS_REASONS,
   ACTIVITY_LOG_READINESS_STATES,
   ACTIVITY_LOG_WRITER_KINDS,
+  CLIENT_BINDING_OUTCOMES,
+  CLIENT_BINDING_REFERENCE_SHAPES,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
@@ -14,6 +16,7 @@ import {
   CLIENT_STAGE_ORDINAL_MAX,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
   isActivityLogReadinessSnapshot,
+  isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
   isClientDiagnosticKind,
   isClientDiagnosticLossCount,
@@ -384,5 +387,67 @@ describe("clientErrorClass", () => {
   // The activity log captures a class as `\w{1,64}` before it looks the name up.
   it("holds only bounded word-shaped names", () => {
     for (const name of CLIENT_ERROR_CLASSES) expect(name).toMatch(/^\w{1,64}$/u);
+  });
+});
+
+// #3557 review: a restored window's binding outcome rides a closed report of its own, so a
+// reference lost at persistence and a target that is really gone stay distinguishable.
+describe("isClientBindingIngestRequest", () => {
+  function bindingRequest(): Record<string, unknown> {
+    return {
+      kind: "binding",
+      surface: "chat-window",
+      outcome: "target-missing",
+      referenceShape: "redacted",
+      heuristicExempt: false,
+    };
+  }
+
+  it("accepts every closed outcome and reference shape, with and without a correlation id", () => {
+    for (const outcome of CLIENT_BINDING_OUTCOMES) {
+      for (const referenceShape of CLIENT_BINDING_REFERENCE_SHAPES) {
+        expect(isClientBindingIngestRequest({ ...bindingRequest(), outcome, referenceShape })).toBe(
+          true,
+        );
+      }
+    }
+    expect(
+      isClientBindingIngestRequest({ ...bindingRequest(), correlationId: "ui_list-load-0001" }),
+    ).toBe(true);
+  });
+
+  it("accepts an exemption only for a server-issued UUID", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "uuid",
+        heuristicExempt: true,
+      }),
+    ).toBe(true);
+    for (const referenceShape of ["opaque", "redacted"]) {
+      expect(
+        isClientBindingIngestRequest({
+          ...bindingRequest(),
+          referenceShape,
+          heuristicExempt: true,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it.each([
+    ["a non-object", "binding"],
+    ["another kind", { ...{ kind: "stage" } }],
+    ["an unknown surface", { surface: "files-window" }],
+    ["an unknown outcome", { outcome: "restored" }],
+    ["an unknown reference shape", { referenceShape: "chat-123" }],
+    ["a non-boolean exemption", { heuristicExempt: "false" }],
+    ["a missing exemption", { heuristicExempt: undefined }],
+    ["an oversized correlation id", { correlationId: "c".repeat(129) }],
+    ["an undeclared field", { chatId: "chat-123" }],
+  ])("refuses %s", (_label, patch) => {
+    const value = typeof patch === "string" ? patch : { ...bindingRequest(), ...patch };
+    expect(isClientBindingIngestRequest(value)).toBe(false);
   });
 });

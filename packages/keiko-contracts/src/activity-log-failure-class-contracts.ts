@@ -477,6 +477,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-binding",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["client.binding.resolved"],
+      failure: ["client.binding.target-missing"],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.binding.resolved", "client.binding.target-missing"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.binding.resolved", "client.binding.target-missing"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.binding.resolved"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-diagnostic",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

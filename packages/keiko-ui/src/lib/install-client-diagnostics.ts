@@ -37,6 +37,7 @@
 // limit.
 
 import type {
+  ClientBindingIngestRequest,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
   ClientDiagnosticReadyState,
@@ -44,6 +45,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  type ClientDiagnosticBindingReport,
   type ClientDiagnosticMeta,
   type ClientDiagnosticStageReport,
   recordClientDiagnosticLoss,
@@ -120,6 +122,14 @@ function clientStagePostBody(report: ClientDiagnosticStageReport): ClientStageIn
       };
 }
 
+// A binding report (#3557) is closed values plus the correlation id of the request that decided it.
+function clientBindingPostBody(
+  report: ClientDiagnosticBindingReport,
+  correlationId: string | undefined,
+): ClientBindingIngestRequest {
+  return { kind: "binding", ...report, correlationId: validCorrelationId(correlationId) };
+}
+
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
 // time (not at the original `reportClientDiagnostic` call), which is close enough for an operator
 // diagnostic and avoids threading a timestamp through the sink's string-only contract.
@@ -127,14 +137,12 @@ function clientStagePostBody(report: ClientDiagnosticStageReport): ClientStageIn
 // are all typed `T | undefined` (keiko-contracts), so assigning `undefined` outright is legal — and
 // `JSON.stringify` drops an `undefined`-valued key from the wire body regardless, so an absent
 // correlation id never reaches the request at all. `loss` carries the page's counted delivery loss
-// since its last delivered report (#3532). `meta.stageReport`, when present, means `message` is
-// routine stage evidence: the structured report is sent instead, never folded into this shape.
-function clientDiagnosticPostBody(
+// since its last delivered report (#3532).
+function clientMessagePostBody(
   message: string,
   meta: ClientDiagnosticMeta | undefined,
   loss: ClientDiagnosticLossCounts | undefined,
-): ClientDiagnosticIngestRequest | ClientStageIngestRequest {
-  if (meta?.stageReport !== undefined) return clientStagePostBody(meta.stageReport);
+): ClientDiagnosticIngestRequest {
   const bounded =
     message.length > CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH
       ? message.slice(0, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)
@@ -150,6 +158,20 @@ function clientDiagnosticPostBody(
   const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];
   if (readyStateDigit === undefined) return { ...base, kind: meta?.kind };
   return { ...base, readyState: parsedSseReadyState(readyStateDigit), kind: "sse-error" };
+}
+
+// `meta.stageReport` or `meta.bindingReport`, when present, means `message` is the console text of
+// a closed report: the structured report is sent instead, never folded into the message shape.
+function clientDiagnosticPostBody(
+  message: string,
+  meta: ClientDiagnosticMeta | undefined,
+  loss: ClientDiagnosticLossCounts | undefined,
+): ClientDiagnosticIngestRequest | ClientStageIngestRequest | ClientBindingIngestRequest {
+  if (meta?.stageReport !== undefined) return clientStagePostBody(meta.stageReport);
+  if (meta?.bindingReport !== undefined) {
+    return clientBindingPostBody(meta.bindingReport, meta.correlationId);
+  }
+  return clientMessagePostBody(message, meta, loss);
 }
 
 // Process-wide (module-scope), not per-diagnostic: a flapping stream or a hostile page must not be
@@ -235,8 +257,8 @@ function sendClientDiagnostic(
   }
 }
 
-// A stage report's wire shape has no `loss` field (it carries no server-request context to hang
-// one on), so draining the ledger here would silently discard it — never taken, so it keeps
+// A stage or binding report's wire shape has no `loss` field, so draining the ledger here would
+// silently discard it — never taken, so it keeps
 // accumulating for the next message report or the pagehide flush to carry, exactly as it already
 // does today when a burst of one kind of report happens to fall between two of another.
 function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
@@ -247,7 +269,8 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
     if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
     return;
   }
-  const loss = meta?.stageReport === undefined ? takeClientDiagnosticLoss() : undefined;
+  const carriesLoss = meta?.stageReport === undefined && meta?.bindingReport === undefined;
+  const loss = carriesLoss ? takeClientDiagnosticLoss() : undefined;
   sendClientDiagnostic(message, meta, loss);
 }
 

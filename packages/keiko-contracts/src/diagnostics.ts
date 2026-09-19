@@ -475,6 +475,72 @@ export function isClientStageIngestRequest(value: unknown): value is ClientStage
   return false;
 }
 
+// ─── Restored window binding evidence (#3557) ────────────────────────────────────
+//
+// A desktop window restored from the persisted workspace binds a server-issued reference (a chat
+// window: its chat id). Whether that binding resolved, and what shape the persisted reference had,
+// is what tells a reference lost at persistence (stored as the redaction marker) from a target that
+// is really gone. A message-only report reduced every case to one opaque digest with an unknown
+// error kind (review on #3557). This closed shape carries closed values only, never the reference.
+
+export const CLIENT_BINDING_SURFACES = ["chat-window"] as const;
+export type ClientBindingSurface = (typeof CLIENT_BINDING_SURFACES)[number];
+
+export const CLIENT_BINDING_OUTCOMES = ["resolved", "target-missing"] as const;
+export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
+
+// `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
+// `opaque`: any other opaque reference.
+export const CLIENT_BINDING_REFERENCE_SHAPES = ["uuid", "opaque", "redacted"] as const;
+export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPES)[number];
+
+export interface ClientBindingIngestRequest {
+  readonly kind: "binding";
+  readonly surface: ClientBindingSurface;
+  readonly outcome: ClientBindingOutcome;
+  readonly referenceShape: ClientBindingReferenceShape;
+  // The persisted reference is a server-issued UUID that the shared secret heuristic reads as a
+  // card number: it survived persistence only through the reference-field exemption.
+  readonly heuristicExempt: boolean;
+  // The request whose answer decided the outcome (the target list load), when the client knows it.
+  readonly correlationId?: string | undefined;
+}
+
+const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "surface",
+  "outcome",
+  "referenceShape",
+  "heuristicExempt",
+  "correlationId",
+]);
+
+function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
+  return typeof value === "string" && (values as readonly string[]).includes(value);
+}
+
+// Only a server-issued UUID can be exempt from the heuristic; any other combination is refused.
+function hasConsistentBindingReference(value: Record<string, unknown>): boolean {
+  if (!isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES)) return false;
+  if (typeof value.heuristicExempt !== "boolean") return false;
+  return !value.heuristicExempt || value.referenceShape === "uuid";
+}
+
+/**
+ * True for a closed binding report. An unknown surface, outcome or reference shape, an exemption
+ * claimed for anything but a UUID, a malformed correlation id, or any undeclared field refuses the
+ * whole report, with the same fail-closed discipline as the message and stage shapes.
+ */
+export function isClientBindingIngestRequest(value: unknown): value is ClientBindingIngestRequest {
+  if (!isRecord(value) || value.kind !== "binding") return false;
+  if (Object.keys(value).some((key) => !CLIENT_BINDING_INGEST_REQUEST_KEYS.has(key))) return false;
+  if (!isOneOf(value.surface, CLIENT_BINDING_SURFACES)) return false;
+  if (!isOneOf(value.outcome, CLIENT_BINDING_OUTCOMES)) return false;
+  return (
+    hasConsistentBindingReference(value) && isOptional(value.correlationId, isCorrelationIdShape)
+  );
+}
+
 // ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────
 //
 // Whether this process can currently produce machine-reconstruction evidence. `ready` holds only

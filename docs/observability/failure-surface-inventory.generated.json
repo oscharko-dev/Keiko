@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "57bf0f0fd290a2a6485d27e149e2e3d724f8beba7366308d0870b1b220633104"
+    "catalogDigest": "87c8b89423937fc55e39f524f99ec4352354b8965ed81e7deef08779a3fd808b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 426,
-    "proofCount": 434,
-    "resolvedProofCount": 434,
-    "failureClassCount": 311,
+    "operationCount": 428,
+    "proofCount": 436,
+    "resolvedProofCount": 436,
+    "failureClassCount": 312,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -109,6 +109,8 @@
       "owners": ["keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
+        "client.binding.resolved",
+        "client.binding.target-missing",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
@@ -610,6 +612,7 @@
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
+    "client-binding": ["client-diagnostics.dependency-failure"],
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
@@ -987,6 +990,10 @@
     ],
     "cli.uninstall.started.persisted": [
       "packages/keiko-cli/src/uninstall.activity-log-proof.test.ts"
+    ],
+    "client.binding.resolved.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.binding.target-missing.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
     "client.diagnostic.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.diagnostic.rate-limited.line": [

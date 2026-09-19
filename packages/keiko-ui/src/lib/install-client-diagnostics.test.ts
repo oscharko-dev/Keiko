@@ -450,3 +450,34 @@ describe("fanOutClientDiagnostic stage evidence", () => {
     expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 3 });
   });
 });
+
+// #3557 review: a restored window's binding outcome posts its closed report with the correlation id
+// of the request that decided it, never the message body, and never drains the loss ledger.
+describe("fanOutClientDiagnostic binding evidence", () => {
+  it("posts the closed binding wire shape with the deciding request's correlation id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    recordClientDiagnosticLoss("rejectionsSuppressed", 2);
+
+    fanOutClientDiagnostic("[keiko] chat window restore target not found (reference=redacted)", {
+      correlationId: "ui_chat-list-load-0003",
+      bindingReport: {
+        surface: "chat-window",
+        outcome: "target-missing",
+        referenceShape: "redacted",
+        heuristicExempt: false,
+      },
+    });
+
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "binding",
+      surface: "chat-window",
+      outcome: "target-missing",
+      referenceShape: "redacted",
+      heuristicExempt: false,
+      correlationId: "ui_chat-list-load-0003",
+    });
+    expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 2 });
+  });
+});

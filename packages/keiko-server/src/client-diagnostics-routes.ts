@@ -30,6 +30,9 @@
 // browser-reported delivery loss is also counted in the process-wide loss ledger that the
 // `activity-log.loss` summary persists. None of those paths ever carries the refused content.
 //
+// #3557: a third shape, a binding report, carries a restored window's binding outcome
+// (`client.binding.resolved`/`client.binding.target-missing`) with closed values only.
+//
 // KEIKO-3557: this route accepts TWO closed report shapes on the same rate limit, size bound, and
 // rejection/loss accounting above. A message report (the shape this header describes) reaches
 // `client.diagnostic` — a FAILURE, always at warn. A stage report (`useWindowStageEvidence`,
@@ -43,6 +46,7 @@
 import type { IncomingMessage } from "node:http";
 
 import type {
+  ClientBindingIngestRequest,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
   ClientStageId,
@@ -51,6 +55,7 @@ import type {
   ClientStageStartedIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
   isClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
@@ -266,6 +271,63 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["client-stage"],
   proofIds: ["client.stage.settled.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review: a restored window's binding outcome, with the closed shape of its persisted
+// reference. `resolved` is the ordinary case at info; `target-missing` is the failure at warn,
+// so a reference lost at persistence (`redacted`) and a target that is really gone (`uuid`) are
+// told apart in the log instead of collapsing into one message digest with an unknown error kind.
+// Literal here, as the registry generator requires; the assignment in `clientBindingFields` fails
+// typecheck if the contracts leaf ever adds a surface or shape these do not list.
+const CLIENT_BINDING_ACTIVITY_LOG_SURFACES = ["chat-window"] as const;
+const CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES = ["uuid", "opaque", "redacted"] as const;
+
+const CLIENT_BINDING_FIELDS = {
+  surface: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: CLIENT_BINDING_ACTIVITY_LOG_SURFACES,
+  },
+  referenceShape: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES,
+  },
+  heuristicExempt: { type: "boolean", dataClass: "closed-enum", required: true },
+} as const;
+
+const CLIENT_BINDING_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.resolved",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingResolved",
+  fields: CLIENT_BINDING_FIELDS,
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.resolved.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.target-missing",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingTargetMissing",
+  fields: CLIENT_BINDING_FIELDS,
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.target-missing.line"],
   releaseImpact: "patch",
 });
 
@@ -563,6 +625,90 @@ function logClientStage(
   logClientStageSettled(request, correlationId);
 }
 
+type ClientBindingFields = ActivityLogFields<typeof CLIENT_BINDING_RESOLVED_OPERATION>;
+
+function clientBindingFields(request: ClientBindingIngestRequest): ClientBindingFields {
+  return {
+    surface: request.surface,
+    referenceShape: request.referenceShape,
+    heuristicExempt: request.heuristicExempt,
+    completeness: "complete",
+    loss: "none",
+  };
+}
+
+function logClientBindingResolved(
+  request: ClientBindingIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_BINDING_RESOLVED_OPERATION,
+      { correlationId },
+      clientBindingFields(request),
+    ),
+  );
+}
+
+function logClientBindingTargetMissing(
+  request: ClientBindingIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_BINDING_TARGET_MISSING_OPERATION,
+      { correlationId, errorKind: "unavailable" },
+      clientBindingFields(request),
+    ),
+  );
+}
+
+// The binding line carries the correlation id of the request whose answer decided it (the target
+// list load), so `keiko support analyze --correlation-id` reads that load and the outcome as one
+// timeline. Without a valid one, the ingest POST's own id applies.
+function logClientBinding(
+  request: ClientBindingIngestRequest,
+  ingestCorrelationId: string | undefined,
+): void {
+  const correlationId =
+    request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
+      ? request.correlationId
+      : correlationIdOrUnknown(ingestCorrelationId);
+  if (request.outcome === "resolved") {
+    logClientBindingResolved(request, correlationId);
+    return;
+  }
+  logClientBindingTargetMissing(request, correlationId);
+}
+
+// The three closed report shapes this route accepts. They are mutually exclusive by construction:
+// a stage or binding report carries no `message`, and each declares its own `kind` literal, which
+// the message shape's closed `kind` vocabulary never contains.
+type ClassifiedClientReport =
+  | { readonly shape: "stage"; readonly report: ClientStageIngestRequest }
+  | { readonly shape: "binding"; readonly report: ClientBindingIngestRequest }
+  | { readonly shape: "message"; readonly report: ClientDiagnosticIngestRequest };
+
+function classifyClientReport(value: unknown): ClassifiedClientReport | undefined {
+  if (isClientStageIngestRequest(value)) return { shape: "stage", report: value };
+  if (isClientBindingIngestRequest(value)) return { shape: "binding", report: value };
+  if (isClientDiagnosticIngestRequest(value)) return { shape: "message", report: value };
+  return undefined;
+}
+
+function logClientReport(
+  classified: ClassifiedClientReport,
+  ingestCorrelationId: string | undefined,
+): void {
+  if (classified.shape === "stage") {
+    logClientStage(classified.report, ingestCorrelationId);
+  } else if (classified.shape === "binding") {
+    logClientBinding(classified.report, ingestCorrelationId);
+  } else {
+    logClientDiagnostic(classified.report, ingestCorrelationId);
+  }
+}
+
 // Discriminates a rejected read (already a fully-formed `RouteResult`) from a successfully parsed
 // body, instead of duck-typing the parsed value's shape. Attacker-controlled JSON can legally
 // contain a numeric `status` field and a `body` key (e.g. `{"status":200,"body":{...}}`), which
@@ -635,15 +781,10 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     noticeRejectedReport(outcome.rejection, ctx.correlationId);
     return outcome.result;
   }
-  const parsed = outcome.value;
-  // A stage report and a message report are mutually exclusive by construction (a stage report has
-  // no `message`, so it can never satisfy `isClientDiagnosticIngestRequest`), so trying the stage
-  // shape first is a cheap discriminant, never a possible ambiguity. Both share the same rate limit,
-  // size bound, and rejection/loss accounting below — only the logger they reach differs.
-  const stageReport = isClientStageIngestRequest(parsed) ? parsed : undefined;
-  const diagnosticReport =
-    stageReport === undefined && isClientDiagnosticIngestRequest(parsed) ? parsed : undefined;
-  if (stageReport === undefined && diagnosticReport === undefined) {
+  // Every shape shares the same rate limit, size bound, and rejection/loss accounting below; only
+  // the operation it reaches differs.
+  const classified = classifyClientReport(outcome.value);
+  if (classified === undefined) {
     noticeRejectedReport("invalid-shape", ctx.correlationId);
     return badRequest("Request body is not a valid diagnostic report.", ctx.correlationId);
   }
@@ -652,10 +793,6 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     noticeRateLimitedDrop(now, ctx.correlationId);
     return { status: 204, body: null };
   }
-  if (stageReport !== undefined) {
-    logClientStage(stageReport, ctx.correlationId);
-  } else if (diagnosticReport !== undefined) {
-    logClientDiagnostic(diagnosticReport, ctx.correlationId);
-  }
+  logClientReport(classified, ctx.correlationId);
   return { status: 204, body: null };
 }

@@ -274,6 +274,22 @@ export function persistedReferenceShape(value: string): "redacted" | "uuid" | "o
   return isServerIssuedUuidReference(value) ? "uuid" : "opaque";
 }
 
+/**
+ * The body-free evidence of a restored reference (#3557): its closed shape, and whether it is a
+ * server-issued UUID the shared secret heuristic reads as a card number, i.e. one that survived
+ * persistence only through the reference-field exemption. Never the value.
+ */
+export function persistedReferenceEvidence(value: string): {
+  readonly referenceShape: "redacted" | "uuid" | "opaque";
+  readonly heuristicExempt: boolean;
+} {
+  const referenceShape = persistedReferenceShape(value);
+  return {
+    referenceShape,
+    heuristicExempt: referenceShape === "uuid" && isSecretShapedString(value),
+  };
+}
+
 function isSafeOpaqueReference(value: string): boolean {
   if (isServerIssuedUuidReference(value)) return true;
   if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH || value.startsWith("."))

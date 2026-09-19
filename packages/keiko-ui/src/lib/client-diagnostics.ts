@@ -34,6 +34,9 @@
 import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
+  type ClientBindingOutcome,
+  type ClientBindingReferenceShape,
+  type ClientBindingSurface,
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
@@ -57,12 +60,22 @@ export type ClientDiagnosticStageReport =
       readonly durationMs: number;
     };
 
+// A restored window's binding outcome (#3557), in closed values only: never the reference itself.
+// `meta.correlationId` names the request whose answer decided it.
+export interface ClientDiagnosticBindingReport {
+  readonly surface: ClientBindingSurface;
+  readonly outcome: ClientBindingOutcome;
+  readonly referenceShape: ClientBindingReferenceShape;
+  readonly heuristicExempt: boolean;
+}
+
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
+  readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;

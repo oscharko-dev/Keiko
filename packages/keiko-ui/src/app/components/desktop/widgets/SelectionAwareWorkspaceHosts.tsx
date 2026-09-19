@@ -17,9 +17,14 @@ import {
   usePublishChatWindowRuntime,
   type ChatWindowRuntimeTarget,
 } from "../windows/chatWindowActivity";
-import { sharedFetchChats, useChatSession, type ChatSessionApi } from "../hooks/useChatSession";
+import {
+  chatListCorrelationId,
+  sharedFetchChats,
+  useChatSession,
+  type ChatSessionApi,
+} from "../hooks/useChatSession";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
-import { persistedReferenceShape } from "../hooks/workspace-persistence";
+import { persistedReferenceEvidence } from "../hooks/workspace-persistence";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
@@ -222,6 +227,7 @@ const CHAT_CREATION_REQUEST_DIAGNOSTIC = "Chat creation request failed.";
 const CHAT_TITLE_UPDATE_DIAGNOSTIC = "Chat title update failed.";
 const CHAT_PROJECT_LOOKUP_DIAGNOSTIC = "Chat project lookup failed.";
 const CHAT_TARGET_MISSING_DIAGNOSTIC = "[keiko] chat window restore target not found";
+const CHAT_BINDING_RESOLVED_DIAGNOSTIC = "[keiko] chat window binding resolved";
 
 class ChatCreationRequestFailure extends Error {
   public constructor(readonly correlationId: string) {
@@ -1035,19 +1041,51 @@ function useBoundChatTitle(args: {
   }, [args]);
 }
 
+type ChatBindingOutcome = "resolved" | "target-missing";
+
+function chatBindingOutcome(
+  routing: BoundChatRouting,
+  chatId: string | undefined,
+): ChatBindingOutcome | undefined {
+  if (chatId === undefined) return undefined;
+  if (routing.targetMissing) return "target-missing";
+  return routing.activeTarget?.id === chatId ? "resolved" : undefined;
+}
+
+function chatBindingMessage(
+  outcome: ChatBindingOutcome,
+  evidence: ReturnType<typeof persistedReferenceEvidence>,
+): string {
+  const head =
+    outcome === "resolved" ? CHAT_BINDING_RESOLVED_DIAGNOSTIC : CHAT_TARGET_MISSING_DIAGNOSTIC;
+  const exempt = evidence.heuristicExempt ? ", heuristic-exempt" : "";
+  return `${head} (reference=${evidence.referenceShape}${exempt})`;
+}
+
 // A restored chat window whose conversation cannot be resolved renders "Chat not found". Without
 // evidence, a lost binding (a persisted id that no longer names the chat) looked exactly like a
-// deleted conversation. Report it once per bound id, body-free: the closed shape of the persisted
-// reference only, never the id itself.
-function useChatTargetMissingEvidence(targetMissing: boolean, chatId: string | undefined): void {
-  const reportedRef = useRef<string | undefined>(undefined);
+// deleted conversation, and a binding that resolved only through the reference-field exemption
+// looked like no restore at all (#3557 review). Report each outcome once per bound id as a typed,
+// body-free binding report: the closed shape of the persisted reference and its exemption, never
+// the id, under the correlation id of the chat list load whose answer decided the outcome.
+function useChatBindingEvidence(
+  routing: BoundChatRouting,
+  chatId: string | undefined,
+  projectPath: string | undefined,
+): void {
+  const reportedRef = useRef(new Set<string>());
+  const outcome = chatBindingOutcome(routing, chatId);
   useEffect((): void => {
-    if (!targetMissing || chatId === undefined || reportedRef.current === chatId) return;
-    reportedRef.current = chatId;
-    reportClientDiagnostic(
-      `${CHAT_TARGET_MISSING_DIAGNOSTIC} (reference=${persistedReferenceShape(chatId)})`,
-    );
-  }, [chatId, targetMissing]);
+    if (outcome === undefined || chatId === undefined) return;
+    const key = `${outcome}\u0000${chatId}`;
+    if (reportedRef.current.has(key)) return;
+    reportedRef.current.add(key);
+    const evidence = persistedReferenceEvidence(chatId);
+    reportClientDiagnostic(chatBindingMessage(outcome, evidence), {
+      correlationId: projectPath === undefined ? undefined : chatListCorrelationId(projectPath),
+      bindingReport: { surface: "chat-window", outcome, ...evidence },
+    });
+  }, [chatId, outcome, projectPath]);
 }
 
 function ChatNotFound(): ReactNode {
@@ -1335,7 +1373,7 @@ function BoundChatWindowSessionHost({
     session,
     updateCfg: ctx.updateCfg,
   });
-  useChatTargetMissingEvidence(routing.targetMissing, configuration.chatId);
+  useChatBindingEvidence(routing, configuration.chatId, session.activeProject?.path);
   useBoundChatWindowRuntime(configuration, ctx, routing, session);
   const memory = useBoundMemorySession({
     activeTarget: routing.activeTarget,

@@ -357,6 +357,103 @@ describe("POST /api/diagnostics/client", () => {
     ).toMatchObject({ completeness: "complete", loss: "event-dropped" });
   });
 
+  // #3557 review: a restored window's binding outcome is typed evidence, never a message digest.
+  describe("binding evidence", () => {
+    function bindingEvents(
+      sink: BufferedServerLogSink,
+      op: "client.binding.resolved" | "client.binding.target-missing",
+    ): readonly ServerLogEvent[] {
+      return sink.events.filter((event) => event.op === op);
+    }
+
+    it("logs a missing target at warn with a closed error kind, under the list load's correlation id", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        outcome: "target-missing",
+        referenceShape: "redacted",
+        heuristicExempt: false,
+        correlationId: "ui_chat-list-load-0001",
+      });
+
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+
+      const events = bindingEvents(sink, "client.binding.target-missing");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        level: "warn",
+        category: "diagnostic",
+        errorKind: "unavailable",
+        correlationId: "ui_chat-list-load-0001",
+        extra: { surface: "chat-window", referenceShape: "redacted", heuristicExempt: false },
+      });
+      expect(clientDiagnosticEvents(sink)).toEqual([]);
+    });
+
+    it("logs a binding that resolved through the reference exemption at info, without an error kind", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        outcome: "resolved",
+        referenceShape: "uuid",
+        heuristicExempt: true,
+      });
+
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+
+      const events = bindingEvents(sink, "client.binding.resolved");
+      expect(events).toHaveLength(1);
+      expect(events[0]?.level).toBe("info");
+      expect(events[0]?.errorKind).toBeUndefined();
+      // Without a client-supplied id, the ingest POST's own id applies.
+      expect(events[0]?.correlationId).toBe(CORRELATION_ID);
+      expect(events[0]?.extra).toMatchObject({ referenceShape: "uuid", heuristicExempt: true });
+    });
+
+    it("falls back to the ingest id when the client-supplied id is not a safe correlation id", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        outcome: "target-missing",
+        referenceShape: "uuid",
+        heuristicExempt: false,
+        correlationId: "not a safe id",
+      });
+
+      await handleClientDiagnosticIngest(context(body));
+
+      expect(bindingEvents(sink, "client.binding.target-missing")[0]?.correlationId).toBe(
+        CORRELATION_ID,
+      );
+    });
+
+    it("refuses a binding report that claims an exemption for a non-UUID reference", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        outcome: "resolved",
+        referenceShape: "opaque",
+        heuristicExempt: true,
+      });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+      expect(bindingEvents(sink, "client.binding.resolved")).toEqual([]);
+      expect(clientDiagnosticRejectedEvents(sink)[0]?.extra).toMatchObject({
+        rejection: "invalid-shape",
+      });
+    });
+  });
+
   // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`) must ride its own
   // lifecycle operation at info, never the failure-shaped `client.diagnostic` at warn — that
   // misclassification is exactly what buried real failures in a live log's warning storm.

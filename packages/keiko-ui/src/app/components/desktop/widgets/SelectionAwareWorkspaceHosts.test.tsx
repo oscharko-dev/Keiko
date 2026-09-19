@@ -99,10 +99,18 @@ const chatSessionState = vi.hoisted(() => ({
 const defaultOpenNewChat = chatSessionState.openNewChat;
 const useChatSessionMock = vi.hoisted(() => vi.fn());
 const providedChatSessions = vi.hoisted(() => [] as unknown[]);
+// The correlation id of the chat list load a restored window's binding evidence names (#3557).
+const chatListCorrelationIdMock = vi.hoisted(() =>
+  vi.fn((_projectPath: string): string | undefined => undefined),
+);
 
 vi.mock("../hooks/useChatSession", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useChatSession")>();
-  return { ...actual, useChatSession: (): unknown => useChatSessionMock() };
+  return {
+    ...actual,
+    chatListCorrelationId: chatListCorrelationIdMock,
+    useChatSession: (): unknown => useChatSessionMock(),
+  };
 });
 
 vi.mock("../context/ChatSessionContext", (): object => ({
@@ -1641,9 +1649,88 @@ describe("ChatWindowSessionHost target missing", () => {
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
         "[keiko] chat window restore target not found (reference=opaque)",
+        {
+          correlationId: undefined,
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "target-missing",
+            referenceShape: "opaque",
+            heuristicExempt: false,
+          },
+        },
       ),
     );
     expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain("chat-missing");
+  });
+
+  // #3557 review: the binding evidence names the chat list load whose answer decided it, so the
+  // load's request line and the outcome read as one timeline in the Activity Log.
+  it("names the deciding chat list load's correlation id on a missing target", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.activeProject = {
+      path: "/repo",
+      name: "Repo",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+    chatListCorrelationIdMock.mockImplementation((projectPath: string) =>
+      projectPath === "/repo" ? "ui_chat-list-load-0001" : undefined,
+    );
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-missing" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("restore target not found"),
+        expect.objectContaining({ correlationId: "ui_chat-list-load-0001" }),
+      ),
+    );
+  });
+
+  // #3557 review: a Luhn-looking server-issued UUID that survived persistence only through the
+  // reference exemption and resolved to its live chat must be told apart from no restore attempt.
+  it("reports a binding that resolved through the reference exemption, once", async (): Promise<void> => {
+    const exemptId = "1404206d-9ab6-4bca-8853-813867352087";
+    const live = chatFixture(exemptId, "Deploy status", 3);
+    chatSessionState.activeChat = live;
+    chatSessionState.chats = [live];
+    chatSessionState.loading = false;
+    const host = (
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: exemptId }} ctx={context()} />
+      </I18nProvider>
+    );
+
+    const { rerender } = render(host);
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=uuid, heuristic-exempt)",
+        {
+          correlationId: undefined,
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "resolved",
+            referenceShape: "uuid",
+            heuristicExempt: true,
+          },
+        },
+      ),
+    );
+    rerender(host);
+
+    const resolved = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).startsWith("[keiko] chat window binding resolved"),
+    );
+    expect(resolved).toHaveLength(1);
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(exemptId);
   });
 
   it("reports a binding lost to redaction once, as a redacted reference", async (): Promise<void> => {
@@ -1664,7 +1751,18 @@ describe("ChatWindowSessionHost target missing", () => {
       String(message).startsWith("[keiko] chat window restore target not found"),
     );
     expect(reports).toEqual([
-      ["[keiko] chat window restore target not found (reference=redacted)"],
+      [
+        "[keiko] chat window restore target not found (reference=redacted)",
+        {
+          correlationId: undefined,
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "target-missing",
+            referenceShape: "redacted",
+            heuristicExempt: false,
+          },
+        },
+      ],
     ]);
   });
 
@@ -1754,8 +1852,9 @@ describe("ChatWindowSessionHost target missing", () => {
     );
 
     await waitFor((): void => expect(fetchChatsMock).toHaveBeenCalledTimes(2));
-    expect(fetchChatsMock).toHaveBeenCalledWith(projectA.path);
-    expect(fetchChatsMock).toHaveBeenCalledWith(projectB.path);
+    // Each shared load carries its own correlation id (#3557), so binding evidence can name it.
+    expect(fetchChatsMock).toHaveBeenCalledWith(projectA.path, expect.any(String));
+    expect(fetchChatsMock).toHaveBeenCalledWith(projectB.path, expect.any(String));
     await act(async (): Promise<void> => {
       projectAChats.resolve({ chats: [] });
       projectBChats.resolve({ chats: [] });
