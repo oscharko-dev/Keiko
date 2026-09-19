@@ -70,10 +70,8 @@ describe("portable runtime release documentation", () => {
     expect(releaseDocs).not.toContain("coding-sidecar-v1");
     expect(releaseDocs).toContain("http-sse");
     expect(releaseDocs).toContain("upstream-raw-bytes");
-    expect(releaseDocs).toContain(
-      "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
-    );
-    expect(releaseDocs).toContain("3104c1428ec91f809e5ab86631300de41eb6952e");
+    expect(releaseDocs).toContain(approvals.sidecarRuntimes[0].protocolSchema.sha256);
+    expect(releaseDocs).toContain(approvals.sidecarRuntimes[0].upstream.commit);
   });
 
   it("distinguishes immutable upstream evidence from signed shipped evidence", () => {
