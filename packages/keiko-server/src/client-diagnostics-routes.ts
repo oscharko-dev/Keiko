@@ -140,7 +140,15 @@ const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["invalid-state", "not-supported", "security", "not-readable", "other"],
+      values: [
+        "type-error",
+        "range-error",
+        "invalid-state",
+        "not-supported",
+        "security",
+        "not-readable",
+        "other",
+      ],
     },
     voiceCaptureReason: {
       type: "string",
@@ -196,6 +204,7 @@ const CLIENT_MARKDOWN_LAYOUT_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logMarkdownLayout",
   fields: {
+    messageId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     listNumbering: {
       type: "string",
       dataClass: "closed-enum",
@@ -229,6 +238,12 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
+    moduleLoadFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["git-sync"],
+    },
     clientNoteDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     readyState: { type: "integer", dataClass: "count", required: false },
     clientKind: {
@@ -250,7 +265,15 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["invalid-state", "not-supported", "security", "not-readable", "other"],
+      values: [
+        "type-error",
+        "range-error",
+        "invalid-state",
+        "not-supported",
+        "security",
+        "not-readable",
+        "other",
+      ],
     },
     voiceCaptureReason: {
       type: "string",
@@ -592,6 +615,9 @@ function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId
     ...(request.markdownLayout === undefined
       ? {}
       : {
+          ...(request.markdownLayout.messageId === undefined
+            ? {}
+            : { messageId: request.markdownLayout.messageId }),
           listStart: request.markdownLayout.listStart,
           listIndex: request.markdownLayout.listIndex,
           depth: request.markdownLayout.depth,
@@ -618,10 +644,11 @@ function requestDiagnosticErrorKind(request: ClientDiagnosticIngestRequest): Act
   return clientDiagnosticErrorKind(request.kind);
 }
 
-function projectVoiceCapture(
+function projectClientFailure(
   request: ClientDiagnosticIngestRequest,
   extra: Record<string, unknown>,
 ): void {
+  if (request.moduleLoadFailure !== undefined) extra.moduleLoadFailure = request.moduleLoadFailure;
   if (request.voiceCaptureError !== undefined) extra.voiceCaptureError = request.voiceCaptureError;
   if (request.voiceCaptureReason !== undefined)
     extra.voiceCaptureReason = request.voiceCaptureReason;
@@ -640,7 +667,7 @@ function logClientDiagnostic(
   const extra: Record<string, unknown> = {
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
   };
-  projectVoiceCapture(request, extra);
+  projectClientFailure(request, extra);
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
   if (request.voiceDialogueStage !== undefined) {

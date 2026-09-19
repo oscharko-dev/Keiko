@@ -595,8 +595,8 @@ function MessageContent({
       <SafeMarkdownBoundary
         source={message.segments.map((segment) => segment.text).join("")}
         applyScopeId={`coding-workbench:${message.messageId}`}
-        diagnosticCorrelationId={message.messageId}
-        diagnosticParentCorrelationId={runId}
+        diagnosticCorrelationId={runId}
+        diagnosticMessageId={message.messageId}
         trailing={truncationFor(message, t)}
       />
     );

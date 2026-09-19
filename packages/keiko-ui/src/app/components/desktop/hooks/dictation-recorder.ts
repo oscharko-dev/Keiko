@@ -36,8 +36,9 @@ export class DictationRecorderError extends Error {
     message: string,
     public readonly captureReason?: ClientVoiceCaptureReason,
     public readonly captureError?: ClientVoiceCaptureError,
+    cause?: unknown,
   ) {
-    super(message);
+    super(message, { cause });
     this.name = "DictationRecorderError";
   }
 }
@@ -300,6 +301,10 @@ async function beginRecordingBuffer(
 function captureErrorClass(error: unknown): ClientVoiceCaptureError {
   if (!(error instanceof Error) && !(error instanceof DOMException)) return "other";
   switch (error.name) {
+    case "TypeError":
+      return "type-error";
+    case "RangeError":
+      return "range-error";
     case "InvalidStateError":
       return "invalid-state";
     case "NotSupportedError":
@@ -322,6 +327,7 @@ function stopRenewalRecorder(recorder: MediaRecorder, reason: ClientVoiceCapture
       "Audio capture renewal failed.",
       reason,
       captureErrorClass(error),
+      error,
     );
   }
 }
@@ -339,6 +345,7 @@ async function beginRenewalBuffer(
       "Audio capture renewal failed.",
       "replacement-start-failed",
       captureErrorClass(error),
+      error,
     );
   }
 }

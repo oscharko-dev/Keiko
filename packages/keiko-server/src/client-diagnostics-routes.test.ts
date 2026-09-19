@@ -236,6 +236,8 @@ describe("POST /api/diagnostics/client", () => {
     ["capture-bound-reached", "speech-observed", undefined],
     ["capture-bound-reached", "renewal-unsupported", undefined],
     ["capture-renewal-failed", "replacement-start-failed", "invalid-state"],
+    ["capture-renewal-failed", "replacement-start-failed", "type-error"],
+    ["capture-renewal-failed", "replacement-start-failed", "range-error"],
     ["capture-renewal-failed", "previous-stop-failed", "not-supported"],
     ["capture-renewal-failed", "replacement-stop-failed", "other"],
   ] as const)(
@@ -295,6 +297,49 @@ describe("POST /api/diagnostics/client", () => {
         parentCorrelationId: "coding-run-1",
       }),
     );
+  });
+
+  it("persists a short message identity on the coding run timeline", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "layout",
+          clientTs: CLIENT_TS,
+          kind: "markdown-layout",
+          correlationId: "coding-run-1",
+          markdownLayout: { messageId: "msg_1", listStart: 5, listIndex: 0, depth: 0 },
+        }),
+      ),
+    );
+    const lines: unknown[] = sink.lines().map((line): unknown => JSON.parse(line));
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        op: "client.markdown.layout",
+        correlationId: "coding-run-1",
+        messageId: "msg_1",
+      }),
+    );
+  });
+
+  it("persists a closed module load failure without leaking the failing URL", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private chunk URL",
+          clientTs: CLIENT_TS,
+          kind: "other",
+          correlationId: "git-sync-load-1",
+          moduleLoadFailure: "git-sync",
+        }),
+      ),
+    );
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      correlationId: "git-sync-load-1",
+      moduleLoadFailure: "git-sync",
+    });
+    expect(sink.lines().join("")).not.toContain("private chunk URL");
   });
 
   it("projects the hostile message only as a digest", async () => {

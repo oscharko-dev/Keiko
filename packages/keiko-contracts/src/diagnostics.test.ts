@@ -346,3 +346,32 @@ describe("capture diagnostic vocabulary", () => {
     ).toBe(false);
   });
 });
+
+describe("client module and markdown identity boundaries", () => {
+  const base = { message: "diagnostic", clientTs: "2026-09-19T00:00:00.000Z" };
+  it("accepts the known module and a short provider message identity", () => {
+    expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "git-sync" })).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        markdownLayout: { messageId: "msg_1", listStart: 1, listIndex: 0, depth: 0 },
+      }),
+    ).toBe(true);
+  });
+  it.each(["", "private text", "https://private.invalid", "x".repeat(129)])(
+    "rejects hostile message identity %s",
+    (messageId) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...base,
+          markdownLayout: { messageId, listStart: 1, listIndex: 0, depth: 0 },
+        }),
+      ).toBe(false);
+    },
+  );
+  it("rejects an unregistered module name", () => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure: "private module URL" }),
+    ).toBe(false);
+  });
+});

@@ -138,15 +138,27 @@ describe("createBrowserDictationRecorder", () => {
     },
   );
 
-  it.each(["replacement-start-failed", "previous-stop-failed", "replacement-stop-failed"] as const)(
-    "classifies %s without retaining the browser error text",
-    async (reason) => {
+  it.each(
+    (
+      ["replacement-start-failed", "previous-stop-failed", "replacement-stop-failed"] as const
+    ).flatMap((reason) => [
+      {
+        reason,
+        cause: new DOMException("private device detail", "InvalidStateError"),
+        captureError: "invalid-state",
+      },
+      { reason, cause: new TypeError("private device detail"), captureError: "type-error" },
+      { reason, cause: new RangeError("private device detail"), captureError: "range-error" },
+    ]),
+  )(
+    "classifies $reason / $captureError and preserves the native cause in memory",
+    async ({ reason, cause, captureError }) => {
       vi.useFakeTimers();
       stubMedia(async () => fakeStream({ stop: vi.fn() }));
       const session = await createBrowserDictationRecorder().start();
       let silent = true;
       const fail = (): never => {
-        throw new DOMException("private device detail", "InvalidStateError");
+        throw cause;
       };
       const spy =
         reason === "replacement-start-failed"
@@ -157,7 +169,8 @@ describe("createBrowserDictationRecorder", () => {
         const expected = {
           name: "DictationRecorderError",
           captureReason: reason,
-          captureError: "invalid-state",
+          captureError,
+          cause,
           message: "Audio capture renewal failed.",
         };
         if (reason === "replacement-stop-failed") silent = false;

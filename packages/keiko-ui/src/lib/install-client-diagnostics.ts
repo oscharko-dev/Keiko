@@ -129,6 +129,7 @@ function clientDiagnosticPostBody(
     voiceCaptureReason: meta.voiceCaptureReason,
     voiceCaptureError: meta.voiceCaptureError,
     markdownLayout: meta.markdownLayout,
+    moduleLoadFailure: meta.moduleLoadFailure,
     gitChangeDescription: meta.gitChangeDescription,
     workspaceTrustBinding: meta.workspaceTrustBinding,
     loss,

@@ -9,6 +9,10 @@ import type {
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  fanOutClientDiagnostic,
+  resetClientDiagnosticPostStateForTests,
+} from "@/lib/install-client-diagnostics";
 import { Timeline } from "./CodingWorkbenchTimeline";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -430,34 +434,39 @@ describe("CodingWorkbenchTimeline", () => {
   });
 });
 
-it("joins continued-list evidence to its message and coding run", () => {
-  const writer = vi.fn();
-  setClientDiagnosticWriter(writer);
+it("joins short provider message IDs through the real diagnostic transport", () => {
+  const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetchMock);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  setClientDiagnosticWriter(fanOutClientDiagnostic);
   try {
     const feed = feedWithPlan(0);
     const turns = feed.turns.map((turn) => ({
       ...turn,
       messages: turn.messages.map((message) => ({
         ...message,
+        messageId: "msg_1",
         segments: [{ kind: "text" as const, text: "5. Continued item", truncated: false }],
       })),
     }));
     render(
       <Timeline
         events={[]}
-        activity={activityLike({ ...feed, turns })}
+        activity={activityLike({ ...feed, runId: "coding-run-1", turns })}
         questions={IDLE_QUESTIONS}
       />,
     );
-    expect(writer).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        kind: "markdown-layout",
-        correlationId: "message-1",
-        parentCorrelationId: "run-1",
-      }),
-    );
+    const call = fetchMock.mock.calls.find(([url]) => url === "/api/diagnostics/client");
+    const body: unknown = JSON.parse((call?.[1] as RequestInit).body as string);
+    expect(body).toMatchObject({
+      kind: "markdown-layout",
+      correlationId: "coding-run-1",
+      markdownLayout: { messageId: "msg_1", listStart: 5 },
+    });
   } finally {
     resetClientDiagnosticWriter();
+    resetClientDiagnosticPostStateForTests();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   }
 });

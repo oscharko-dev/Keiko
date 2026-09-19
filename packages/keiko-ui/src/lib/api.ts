@@ -187,6 +187,7 @@ import type {
   PrDescriptionApplicationReason,
   PrDescriptionApplicationStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
+import { reportClientDiagnostic } from "./client-diagnostics";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
 import {
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
@@ -3151,11 +3152,33 @@ function gitDeliverySyncPath(
   return `/api/git-delivery/${operation}/${phase}`;
 }
 
+async function loadGitSyncValidators(): Promise<
+  typeof import("@oscharko-dev/keiko-contracts/runtime/git-sync")
+> {
+  try {
+    return await import("@oscharko-dev/keiko-contracts/runtime/git-sync");
+  } catch (cause) {
+    const error = new ApiError(
+      "MODULE_LOAD_FAILED",
+      "Git sync could not start. Reload Keiko and try again.",
+      0,
+    );
+    error.correlationId = newClientCorrelationId();
+    error.cause = cause;
+    reportClientDiagnostic("git-sync:validator-load-failed", {
+      kind: "other",
+      correlationId: error.correlationId,
+      moduleLoadFailure: "git-sync",
+    });
+    throw error;
+  }
+}
+
 export async function fetchGitDeliverySyncPreview(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
-  const { validateGitSyncPreview } = await import("@oscharko-dev/keiko-contracts/runtime/git-sync");
+  const { validateGitSyncPreview } = await loadGitSyncValidators();
   return fetchJson(
     gitDeliverySyncPath(input.operation, "preview"),
     {
@@ -3171,8 +3194,7 @@ export async function fetchGitDeliverySyncExecute(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
-  const { validateGitSyncExecuteResponse } =
-    await import("@oscharko-dev/keiko-contracts/runtime/git-sync");
+  const { validateGitSyncExecuteResponse } = await loadGitSyncValidators();
   return fetchJson(
     gitDeliverySyncPath(input.operation, "execute"),
     {

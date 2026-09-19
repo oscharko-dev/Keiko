@@ -246,6 +246,8 @@ function isClientVoiceCaptureReason(value: unknown): value is ClientVoiceCapture
 }
 
 export const CLIENT_VOICE_CAPTURE_ERRORS = [
+  "type-error",
+  "range-error",
   "invalid-state",
   "not-supported",
   "security",
@@ -259,13 +261,19 @@ function isClientVoiceCaptureError(value: unknown): value is ClientVoiceCaptureE
 }
 
 export interface ClientMarkdownLayout {
+  readonly messageId?: string | undefined;
   readonly listStart: number;
   readonly listIndex: number;
   readonly depth: number;
 }
 
+function isClientMessageId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
+}
+
 export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownLayout {
   if (!isRecord(value)) return false;
+  if (!isOptional(value.messageId, isClientMessageId)) return false;
   return [value.listStart, value.listIndex, value.depth].every(
     (item) =>
       typeof item === "number" && Number.isSafeInteger(item) && item >= 0 && item <= 999_999_999,
@@ -283,6 +291,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
+  readonly moduleLoadFailure?: "git-sync" | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -438,6 +447,7 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   const { gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } = value;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
+  if (value.moduleLoadFailure !== undefined && value.moduleLoadFailure !== "git-sync") return false;
   if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;

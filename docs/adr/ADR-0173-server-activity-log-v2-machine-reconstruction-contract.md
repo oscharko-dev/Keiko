@@ -865,6 +865,13 @@ request":
   structured payload, prose and an unknown path each become their marker, and only a value none of
   those checks flags survives as sent (an empty note, or a short code-like one), so the browser can
   never widen what the log admits.
+  Known browser prerequisite failures use closed structured fields: a Git-sync validator chunk
+  failure records `moduleLoadFailure: git-sync` before any Git request, with a fresh correlation ID
+  shared by the UI error and diagnostic. Markdown layout evidence may carry a separately validated,
+  bounded opaque `messageId`; Coding Workbench uses its run ID as the diagnostic correlation so
+  provider message IDs shorter than the correlation minimum remain joinable. Native recorder
+  errors retain their cause in memory, while only their closed class and capture operation cross
+  the diagnostic boundary; raw browser messages and stacks remain excluded.
   A valid original request correlation takes precedence. Reports without one, including reports
   whose supplied id fails validation, use the validated ingest request correlation; internal
   callers without either use `UNKNOWN_CORRELATION_ID`. Rate-limit notices use the ingest request

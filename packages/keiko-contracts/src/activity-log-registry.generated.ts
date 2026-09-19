@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c6383f504189f40e050412ce7fa7d22a3215368a3c4d0716b9d205bf872e2cc6" as const;
+  "46b733fe78f0304444816a636f5154f4bd4d8ca1991d2f58ccddeef693b5daaf" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1728,6 +1728,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      moduleLoadFailure: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["git-sync"],
+      },
       clientNoteDigest: {
         type: "string",
         dataClass: "digest",
@@ -1758,7 +1764,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["invalid-state", "not-supported", "security", "not-readable", "other"],
+        values: [
+          "type-error",
+          "range-error",
+          "invalid-state",
+          "not-supported",
+          "security",
+          "not-readable",
+          "other",
+        ],
       },
       voiceCaptureReason: {
         type: "string",
@@ -1974,6 +1988,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "loss-state",
         required: true,
+      },
+      messageId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
       },
       listNumbering: {
         type: "string",
@@ -25245,7 +25265,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["invalid-state", "not-supported", "security", "not-readable", "other"],
+        values: [
+          "type-error",
+          "range-error",
+          "invalid-state",
+          "not-supported",
+          "security",
+          "not-readable",
+          "other",
+        ],
       },
       voiceCaptureReason: {
         type: "string",
@@ -28036,6 +28064,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "moduleLoadFailure",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
@@ -28174,8 +28208,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "count",
               required: false,
             },
+            {
+              name: "messageId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

@@ -179,10 +179,14 @@ may renew only while the local analysis context is running and VAD has not detec
 retains the fixed recording bound. A renewal failure cannot cancel a turn already owned by final
 transcription. Renewal, bound expiry and renewal failure use the existing session-correlated Activity
 Log. Expiry records unavailable VAD, unsupported renewal or detected speech; failures identify the
-replacement-start, previous-stop or replacement-stop operation and a closed browser error class.
+replacement-start, previous-stop or replacement-stop operation and a closed browser error class,
+including native TypeError and RangeError. Wrappers retain the original error as an in-memory cause;
+only the closed class and operation enter browser diagnostics, never native messages or stacks.
 Short level-meter spikes alone never latch the VAD speech decision.
 Successful chat delivery also links its request to the durable assistant identity, so body-free
-rendering diagnostics join the same support timeline, including replay and regeneration.
+rendering diagnostics join the same support timeline, including replay and regeneration. Workbench
+Markdown evidence uses the coding run correlation and a separately validated provider message ID;
+short message IDs never stand in for transport correlation IDs.
 
 Composer dictation
 remains a distinct draft-editing feature; it never silently sends a
