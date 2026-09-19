@@ -249,6 +249,7 @@ export function useChatReferenceRebind(
   }, [attempt, error, fingerprint, loading, projectPath, projects, settled, updateCfg]);
   return {
     pending: fingerprint !== undefined && settled !== fingerprint,
-    restored: restored !== undefined && restored.chatId === chatId ? restored.restoration : undefined,
+    restored:
+      restored !== undefined && restored.chatId === chatId ? restored.restoration : undefined,
   };
 }
