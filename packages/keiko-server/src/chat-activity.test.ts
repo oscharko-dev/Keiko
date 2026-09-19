@@ -15,6 +15,7 @@ import {
   logChatCreationRejectionEvent,
   logChatRejectionEvent,
   logChatTurnStartedEvent,
+  logChatResponse,
   logGitChangeApply,
   logGitChangeDescriptionTargetDenied,
   logGitChangeTurnAuthorityEvent,
@@ -136,6 +137,30 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
       imageAttachmentCount: 1,
       imageAttachmentBytes: 2_048,
     });
+  });
+
+  it("chat.response.message — links a rendered assistant to its originating request", () => {
+    const sink = captureServerLog();
+    const response = {
+      status: 200,
+      body: {
+        messages: [
+          { id: "user-message", role: "user", content: "private question" },
+          { id: "assistant-message", role: "assistant", content: "private answer" },
+        ],
+      },
+    };
+    expect(logChatResponse(response, "chat-request")).toBe(response);
+    const [event] = sink.events;
+    const line = formatActivityLogProofLine(event ?? {});
+    expect(expectActivityLogProof("chat.response.message.causality", line)).toMatchObject({
+      correlationId: "assistant-message",
+      parentCorrelationId: "chat-request",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(sink.events).toHaveLength(1);
+    expect(line).not.toContain("private");
   });
 
   it("pr-description.chat.turn.admitted — persists the relationship id on admission", () => {

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f4af05f5a4eb5df936ac55f344ebee48cfddfda865a74cd43a7975baacf73de7"
+    "catalogDigest": "1721c9f6c39119a265408590eb98cfb5307c1407455a9b9c9f8c8a9e557cc53b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 427,
-    "proofCount": 435,
-    "resolvedProofCount": 435,
+    "operationCount": 428,
+    "proofCount": 436,
+    "resolvedProofCount": 436,
     "failureClassCount": 311,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -84,6 +84,7 @@
         "chat.compaction.facts.classified",
         "chat.creation.rejected",
         "chat.regeneration.rejected",
+        "chat.response.message",
         "chat.send.rejected",
         "chat.turn.started",
         "git-change.chat.apply",
@@ -954,6 +955,7 @@
     "chat.request.dispatch.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.logging.test.ts"
     ],
+    "chat.response.message.causality": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.response.streamed.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],

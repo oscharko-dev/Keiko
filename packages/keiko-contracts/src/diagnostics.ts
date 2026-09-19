@@ -82,6 +82,7 @@ export const CLIENT_VOICE_DIALOGUE_STAGES = [
   "delivery-cancelled",
   "delivery-rejected",
   "capture-renewed",
+  "capture-renewal-failed",
   "playback-settled",
   "playback-fallback",
   "interrupted",

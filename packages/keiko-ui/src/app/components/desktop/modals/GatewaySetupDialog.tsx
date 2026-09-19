@@ -300,9 +300,7 @@ function voiceEndpointStyleSections(
   ];
 }
 
-function voiceProviderLocalitySections(
-  t: GatewaySetupTranslate,
-): readonly [
+function voiceProviderLocalitySections(t: GatewaySetupTranslate): readonly [
   {
     readonly options: readonly { readonly value: VoiceProviderLocality; readonly label: string }[];
   },

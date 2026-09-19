@@ -3049,6 +3049,47 @@ describe("desktop chat SSE streaming handler", () => {
   // ADR-0173 D5: the streaming call site (streamAndPersist) must stamp the request's correlation id
   // into GatewayCallRequest.logContext, mirroring the buffered path, so a gateway retry line for a
   // streamed turn joins the same trail as the rest of the request.
+  it.each(["buffered", "streamed", "regenerated"])(
+    "joins %s assistant rendering to its request",
+    async (mode) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "original question");
+      seedMessage(chatId, "assistant", "original answer");
+      const original = store.listMessages(chatId).at(-1);
+      const model = streamingModel("continued list");
+      const ctx: RouteContext = {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "hello",
+            assistantMessageId: original?.id,
+          }),
+          captureRes().res,
+        ),
+        correlationId: "request-list-render-bridge",
+      };
+      const handlers = {
+        buffered: handleSendDesktopChat,
+        streamed: handleSendDesktopChatStream,
+        regenerated: handleRegenerateDesktopChat,
+      };
+      const handler = handlers[mode as keyof typeof handlers];
+      await handler(ctx, deps(model.model));
+      const assistant = store.listMessages(chatId).at(-1);
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          op: "chat.response.message",
+          correlationId: assistant?.id,
+          parentCorrelationId: ctx.correlationId,
+        }),
+      );
+    },
+  );
+
   it("threads the request correlation id into the streaming model gateway call's logContext", async () => {
     const chatId = seedChat();
     const streaming = streamingModel("hi");

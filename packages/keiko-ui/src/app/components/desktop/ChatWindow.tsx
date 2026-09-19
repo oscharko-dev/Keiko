@@ -2754,9 +2754,19 @@ function composerVoiceInterruptAction(
   voiceDialogActive: boolean,
   controller: RealtimeVoiceController,
 ): (() => void) | undefined {
-  if (batchDialogue !== undefined) return batchDialogue.interrupt;
+  if (batchDialogue !== undefined) {
+    return batchDialogue.canInterrupt ? batchDialogue.interrupt : undefined;
+  }
   if (!isVoiceInterruptReachable(voiceDialogActive, controller)) return undefined;
   return controller.interrupt;
+}
+
+function composerFinishSpeakingAction(
+  dialogue: BatchVoiceDialogue,
+  active: boolean,
+): (() => void) | undefined {
+  if (!active || dialogue.waitingForAnswer || dialogue.canInterrupt) return undefined;
+  return dialogue.dictation.phase === "recording" ? dialogue.dictation.stop : undefined;
 }
 
 function batchVoicePhase(dialogue: BatchVoiceDialogue, active: boolean): RealtimeVoicePhase {
@@ -2858,6 +2868,33 @@ function BatchVoiceStatus({
   );
 }
 
+function VoiceTranscriptStatus({
+  active,
+  transcript,
+  controller,
+  batchActive,
+  onDismiss,
+}: {
+  readonly active: boolean;
+  readonly transcript: string | undefined;
+  readonly controller: RealtimeVoiceController;
+  readonly batchActive: boolean;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  return (
+    <>
+      {active && transcript !== undefined ? (
+        <p className={styles["cmp-partial-transcript"]} aria-live="off">
+          {transcript}
+        </p>
+      ) : null}
+      {!batchActive && active && controller.phase === "error" ? (
+        <VoiceRealtimeStatusFromController controller={controller} onAfterDismiss={onDismiss} />
+      ) : null}
+    </>
+  );
+}
+
 function ComposerVoiceOverlay({
   voiceAuraActive,
   announcedVoiceHeadline,
@@ -2923,17 +2960,13 @@ function ComposerVoiceOverlay({
                 onUseFailedTranscript={onUseFailedTranscript}
               />
             ) : null}
-            {voiceDialogActive && partialUserTranscript !== undefined ? (
-              <p className={styles["cmp-partial-transcript"]} aria-live="off">
-                {partialUserTranscript}
-              </p>
-            ) : null}
-            {!batchActive && voiceDialogActive && realtimeVoiceController.phase === "error" ? (
-              <VoiceRealtimeStatusFromController
-                controller={realtimeVoiceController}
-                onAfterDismiss={onDismissVoiceError}
-              />
-            ) : null}
+            <VoiceTranscriptStatus
+              active={voiceDialogActive}
+              transcript={partialUserTranscript}
+              controller={realtimeVoiceController}
+              batchActive={batchActive}
+              onDismiss={onDismissVoiceError}
+            />
             {voiceDialogActive ? (
               <VoiceDialogAttachments
                 attachments={pendingAttachments}
@@ -2949,23 +2982,12 @@ function ComposerVoiceOverlay({
               canInterrupt={
                 batchActive ? batchDialogue.canInterrupt : realtimeVoiceController.canInterrupt
               }
-              onFinishSpeaking={
-                batchActive &&
-                batchDialogue.dictation.phase === "recording" &&
-                !batchDialogue.waitingForAnswer &&
-                !batchDialogue.canInterrupt
-                  ? batchDialogue.dictation.stop
-                  : undefined
-              }
-              onInterrupt={
-                batchActive && !batchDialogue.canInterrupt
-                  ? undefined
-                  : composerVoiceInterruptAction(
-                      batchActive ? batchDialogue : undefined,
-                      voiceDialogActive,
-                      realtimeVoiceController,
-                    )
-              }
+              onFinishSpeaking={composerFinishSpeakingAction(batchDialogue, batchActive)}
+              onInterrupt={composerVoiceInterruptAction(
+                batchActive ? batchDialogue : undefined,
+                voiceDialogActive,
+                realtimeVoiceController,
+              )}
               micMuteAvailable={!batchActive}
               voiceDialogButtonRef={voiceDialogButtonRef}
               compact={compact}

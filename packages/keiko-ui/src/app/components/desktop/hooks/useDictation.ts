@@ -203,6 +203,7 @@ export interface UseDictationOptions {
     | undefined;
   readonly postRollMs?: number | undefined;
   readonly onSilenceRenewed?: (() => void) | undefined;
+  readonly onSilenceRenewalFailed?: (() => void) | undefined;
   // Optional content-free latency sink (Plan §1). Receives only mark enum literals and millisecond
   // deltas across the capture round trip — never audio or transcript text.
   readonly latencySink?: VoiceLatencyObserverSink | undefined;
@@ -305,14 +306,18 @@ function armBatchCaptureLimit(input: {
   readonly stop: () => void;
   readonly renewed: () => void;
   readonly failed: (error: unknown) => void;
-  readonly renewable: boolean;
+  readonly renewable: () => boolean;
 }): void {
   let deadline = Date.now() + DICTATION_AUTO_STOP_MS;
   const schedule = (): void => {
     input.timer.current = setTimeout(
       () => {
         if (!input.current()) return;
-        if (!input.renewable || !input.stillSilent() || input.session.renewSilence === undefined) {
+        if (
+          !input.renewable() ||
+          !input.stillSilent() ||
+          input.session.renewSilence === undefined
+        ) {
           const remaining = deadline - Date.now();
           if (remaining > 0) input.timer.current = setTimeout(input.stop, remaining);
           else input.stop();
@@ -389,6 +394,8 @@ export function useDictation(options: UseDictationOptions): DictationController 
   >(undefined);
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const batchSpeechObservedRef = useRef(false);
+  const onSilenceRenewalFailedRef = useRef(options.onSilenceRenewalFailed);
+  onSilenceRenewalFailedRef.current = options.onSilenceRenewalFailed;
   const onSilenceRenewedRef = useRef(options.onSilenceRenewed);
   onSilenceRenewedRef.current = options.onSilenceRenewed;
   const realtimeDisconnectGraceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -753,6 +760,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
           }
           dispatch({ type: "audioLevel", level });
           if (level >= HEARD_SPEECH_LEVEL) {
+            batchSpeechObservedRef.current = true;
             dispatch({ type: "speechDetected" });
           }
         },
@@ -774,13 +782,17 @@ export function useDictation(options: UseDictationOptions): DictationController 
             session,
             timer: autoStopRef,
             stillSilent: () =>
-              !batchSpeechObservedRef.current && batchCurrent(generation) && !stoppingRef.current,
+              vadMonitorRef.current?.available === true &&
+              !batchSpeechObservedRef.current &&
+              batchCurrent(generation) &&
+              !stoppingRef.current,
             current: () => batchCurrent(generation) && !stoppingRef.current,
             stop: stopBatch,
-            renewable: vad !== undefined,
+            renewable: () => vadMonitorRef.current?.available === true,
             renewed: () => onSilenceRenewedRef.current?.(),
             failed: (error) => {
-              if (!batchCurrent(generation)) return;
+              if (!batchCurrent(generation) || stoppingRef.current) return;
+              onSilenceRenewalFailedRef.current?.();
               clearAutoStop();
               detachVad();
               session.cancel();

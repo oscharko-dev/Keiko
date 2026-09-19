@@ -30,9 +30,54 @@ function fakeRecorder(): {
 afterEach(() => {
   resetVoiceCaptureOwnerForTests();
   resetClientDiagnosticWriter();
+  vi.useRealTimers();
 });
 
 describe("turn-based Digital Twin", () => {
+  it("reports capture renewal failure under the active dialogue identity", async () => {
+    vi.useFakeTimers();
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const recorder = fakeRecorder().recorder;
+    const { result, unmount } = renderHook(() =>
+      useBatchVoiceDialogue({
+        captureOwner: "renewal-failure",
+        captureLease: Symbol.for("renewal-failure"),
+        submit: vi.fn(),
+        prepareCanonicalVoiceHasher: async () => {},
+        dictation: {
+          vad: { start: () => ({ available: true, stop: (): void => {} }) },
+          createRecorder: () => ({
+            start: async (options): Promise<DictationSession> => ({
+              ...(await recorder.start(options)),
+              stream: { getTracks: () => [] } as unknown as MediaStream,
+              renewSilence: async (): Promise<never> => {
+                throw new Error("private recorder detail");
+              },
+            }),
+          }),
+        },
+      }),
+    );
+    act(() => result.current.start());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_001);
+    });
+    expect(result.current.dictation.phase).toBe("error");
+    const started = writer.mock.calls.find(([, meta]) => meta?.voiceDialogueStage === "started");
+    expect(started?.[1]?.correlationId).toBeTypeOf("string");
+    expect(writer).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        kind: "voice-dialogue",
+        voiceDialogueStage: "capture-renewal-failed",
+        correlationId: started?.[1]?.correlationId,
+      }),
+    );
+    expect(JSON.stringify(writer.mock.calls)).not.toContain("private recorder detail");
+    unmount();
+  });
+
   it("retains a transcript when the canonical queue rejects it", async () => {
     const lease = Symbol("dialogue");
     expect(claimVoiceCapture("chat-a", lease)).toBe(true);
@@ -203,6 +248,7 @@ describe("turn-based Digital Twin", () => {
       readonly stage: string | undefined;
     }> = [];
     resetClientDiagnosticWriter();
+    vi.useRealTimers();
     setClientDiagnosticWriter((_message, meta) => {
       diagnostics.push({ correlationId: meta?.correlationId, stage: meta?.voiceDialogueStage });
       if (meta?.voiceDialogueStage === "turn-submitted")

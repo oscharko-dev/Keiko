@@ -386,6 +386,9 @@ function useBatchInterruptionVad(
           if (event === "speech-onset") interruptRef.current();
         });
         return {
+          get available(): boolean {
+            return monitor.available === true;
+          },
           stop(): void {
             stopped = true;
             monitor.stop();
@@ -447,6 +450,8 @@ export function useBatchVoiceDialogue(options: BatchVoiceDialogueOptions): Batch
     onInsert: acceptTranscript,
     captureOwner: options.captureOwner,
     captureLease: options.captureLease,
+    onSilenceRenewalFailed: () =>
+      reportBatchStage("capture-renewal-failed", flagsRef.current.sessionCorrelationId),
     onSilenceRenewed: () =>
       reportBatchStage("capture-renewed", flagsRef.current.sessionCorrelationId),
     vad,

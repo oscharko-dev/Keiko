@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f4af05f5a4eb5df936ac55f344ebee48cfddfda865a74cd43a7975baacf73de7" as const;
+  "1721c9f6c39119a265408590eb98cfb5307c1407455a9b9c9f8c8a9e557cc53b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -984,6 +984,32 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "chat.response.message",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "chat-activity.logChatResponseMessages",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["chat-turn"],
+    proofIds: ["chat.response.message.causality"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "chat.response.streamed",
     category: "gateway",
     owner: "keiko-model-gateway",
@@ -1741,6 +1767,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "delivery-failed",
           "delivery-cancelled",
           "delivery-rejected",
+          "capture-renewal-failed",
           "playback-settled",
           "playback-fallback",
           "capture-renewed",
@@ -27303,24 +27330,45 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "chat-turn",
       requirementContract: "chat-turn",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["start"],
+      lifecycleTransitions: ["start", "state"],
       lifecycleOperations: {
         start: ["chat.turn.started"],
-        state: [],
+        state: ["chat.response.message"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "chat.response.message",
+          mode: "correlation",
+        },
+        {
           op: "chat.turn.started",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["chat.turn.started"],
+      resourceSignals: ["chat.response.message", "chat.turn.started"],
       replayReferences: [],
       operations: [
+        {
+          op: "chat.response.message",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [],
+          evidenceClasses: ["completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["chat.response.message.causality"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "chat.turn.started",
           owner: "keiko-server",
@@ -57142,6 +57190,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "chat.creation.rejected": "bff",
     "chat.regeneration.rejected": "bff",
     "chat.request.dispatch": "model-gateway",
+    "chat.response.message": "bff",
     "chat.response.streamed": "model-gateway",
     "chat.send.rejected": "bff",
     "chat.turn.started": "bff",

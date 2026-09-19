@@ -238,6 +238,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "delivery-failed",
         "delivery-cancelled",
         "delivery-rejected",
+        "capture-renewal-failed",
         "playback-settled",
         "playback-fallback",
         "capture-renewed",
@@ -495,6 +496,7 @@ const VOICE_FAILURE_STAGES = new Set([
   "delivery-failed",
   "delivery-cancelled",
   "delivery-rejected",
+  "capture-renewal-failed",
 ]);
 
 function clientDiagnosticCorrelation(

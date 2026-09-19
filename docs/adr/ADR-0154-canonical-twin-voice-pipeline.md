@@ -174,7 +174,15 @@ persona mapped to that provider. It selects capture in this order:
 Turn-based capture does not claim native Realtime transcription latency. During canonical TTS, the
 same echo-cancelled recorder and local VAD capture a spoken interruption; local playback stops while
 the current recording retains the first words. An explicit Interrupt control remains available.
-Natural playback completion never restarts an already active microphone recording. Composer dictation
+Natural playback completion never restarts an already active microphone recording. Silent buffers
+may renew only while the local analysis context is running and neither VAD nor recorder level
+monitoring has observed speech. Overlapping encoders preserve onset; unavailable or suspended VAD
+retains the fixed recording bound. A renewal failure cannot cancel a turn already owned by final
+transcription. Both renewal and renewal failure use the existing session-correlated Activity Log.
+Successful chat delivery also links its request to the durable assistant identity, so body-free
+rendering diagnostics join the same support timeline, including replay and regeneration.
+
+Composer dictation
 remains a distinct draft-editing feature; it never silently sends a
 message. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
 

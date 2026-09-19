@@ -113,7 +113,7 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
 // since its last delivered report (#3532).
 function clientDiagnosticPostBody(
   message: string,
-  meta: ClientDiagnosticMeta = {},
+  meta: ClientDiagnosticMeta,
   loss: ClientDiagnosticLossCounts | undefined,
 ): ClientDiagnosticIngestRequest {
   const bounded =
@@ -206,7 +206,7 @@ function sendClientDiagnostic(
   loss: ClientDiagnosticLossCounts | undefined,
 ): void {
   try {
-    const body = clientDiagnosticPostBody(message, meta, loss);
+    const body = clientDiagnosticPostBody(message, meta ?? {}, loss);
     void bffFetchJson<undefined>("/api/diagnostics/client", {
       method: "POST",
       body: JSON.stringify(body),

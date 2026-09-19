@@ -133,6 +133,7 @@ describe("POST /api/diagnostics/client", () => {
     ["delivery-cancelled", "cancelled"],
     ["delivery-rejected", "unavailable"],
     ["delivery-failed", "internal"],
+    ["capture-renewal-failed", "internal"],
   ])("distinguishes %s as %s", async (stage, errorKind) => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(

@@ -331,7 +331,10 @@ function HighlightedCodeBlock({
       >
         <code className={codeClass}>
           {lines.map((tokens, lineIndex) => (
-            <span key={lineIndex} className="sm-code-line">
+            <span
+              key={`${lineIndex}:${tokens.map((token) => token[1]).join("")}`}
+              className="sm-code-line"
+            >
               <span className="sm-code-line-no" aria-hidden="true">
                 {lineIndex + 1}
               </span>
@@ -861,7 +864,7 @@ const EMPTY_ROOTS: readonly RepositoryReferenceRoot[] = Object.freeze([]);
 function reportListStarts(
   tree: readonly SafeMarkdownNode[],
   correlationId: string | undefined,
-  cursor = { index: 0 },
+  cursor: { index: number },
   depth = 0,
 ): void {
   for (const node of tree) {
@@ -889,7 +892,7 @@ function useMarkdownListEvidence(
   useEffect(() => {
     if (streaming || lastReported.current === tree) return;
     lastReported.current = tree;
-    reportListStarts(tree, correlationId);
+    reportListStarts(tree, correlationId, { index: 0 });
   }, [tree, streaming, correlationId]);
 }
 

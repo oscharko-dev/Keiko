@@ -71,7 +71,7 @@ function makeRecorder(opts: {
 
 // A fake VAD: captures the onEvent callback so the test can fire scripted activity, and records that
 // the monitor was started/stopped. No WebAudio.
-function makeFakeVad(): {
+function makeFakeVad(available = true): {
   vad: VoiceActivityDetector;
   fire: (event: VoiceActivityEvent) => void;
   started: () => boolean;
@@ -85,7 +85,8 @@ function makeFakeVad(): {
       didStart = true;
       onEvent = cb;
       return {
-        stop() {
+        available,
+        stop(): void {
           didStop = true;
         },
       };
@@ -595,7 +596,7 @@ describe("useDictation — capture bounds", () => {
     const base = makeStreamingRecorder();
     const renewSilence = vi.fn(async () => 0);
     const recorder: DictationRecorder = {
-      start: async (options) => ({
+      start: async (options): Promise<DictationSession> => ({
         ...(await base.recorder.start(options)),
         renewSilence,
       }),
@@ -629,6 +630,81 @@ describe("useDictation — capture bounds", () => {
     expect(transcribe).toHaveBeenCalledOnce();
     unmount();
   });
+  it("keeps the original bound when the detector cannot monitor the stream", async () => {
+    vi.useFakeTimers();
+    const vad = makeFakeVad(false);
+    const base = makeStreamingRecorder();
+    const renewSilence = vi.fn(async () => 0);
+    const { result, unmount } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: () => ({
+          start: async (options): Promise<DictationSession> => ({
+            ...(await base.recorder.start(options)),
+            renewSilence,
+          }),
+        }),
+        transcribe: async () => ({ transcript: "retained speech" }),
+        vad: vad.vad,
+        postRollMs: 0,
+      }),
+    );
+    act(() => result.current.start());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(renewSilence).not.toHaveBeenCalled();
+    expect(base.stop).toHaveBeenCalledOnce();
+    expect(result.current.transcript).toBe("retained speech");
+    unmount();
+  });
+
+  it.each([false, true])(
+    "settles renewal failure safely while finalizing=%s",
+    async (finalizing) => {
+      vi.useFakeTimers();
+      const renewal = Promise.withResolvers<number | undefined>();
+      const base = makeStreamingRecorder();
+      const failed = vi.fn();
+      const cancel = vi.fn();
+      const { result, unmount } = renderHook(() =>
+        useDictation({
+          onInsert: vi.fn(),
+          createRecorder: () => ({
+            start: async (options): Promise<DictationSession> => ({
+              ...(await base.recorder.start(options)),
+              cancel,
+              renewSilence: (): Promise<number | undefined> => renewal.promise,
+            }),
+          }),
+          transcribe: async () => ({ transcript: "retained speech" }),
+          vad: makeFakeVad().vad,
+          onSilenceRenewalFailed: failed,
+          postRollMs: 350,
+        }),
+      );
+      act(() => result.current.start());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_001);
+      });
+      if (finalizing) act(() => result.current.stop());
+      await act(async () => {
+        renewal.reject(new Error("recorder renewal failed"));
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      if (finalizing) {
+        expect(cancel).not.toHaveBeenCalled();
+        expect(base.stop).toHaveBeenCalledOnce();
+        expect(result.current.transcript).toBe("retained speech");
+        expect(failed).not.toHaveBeenCalled();
+      } else {
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(result.current.phase).toBe("error");
+        expect(failed).toHaveBeenCalledOnce();
+      }
+      unmount();
+    },
+  );
   it("auto-stops recording at the dictation limit", async () => {
     vi.useFakeTimers();
     const recorder = makeRecorder({});

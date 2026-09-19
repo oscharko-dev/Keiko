@@ -5,6 +5,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import type { RouteResult } from "./routes.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { getServerLogger, type ServerLogSink } from "./observability/index.js";
 
@@ -118,6 +119,25 @@ const CHAT_TURN_STARTED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["chat-turn"],
   proofIds: ["chat.turn.started.shape"],
+  releaseImpact: "patch",
+});
+
+const CHAT_RESPONSE_MESSAGE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.response.message",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "chat-activity.logChatResponseMessages",
+  fields: {
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-turn"],
+  proofIds: ["chat.response.message.causality"],
   releaseImpact: "patch",
 });
 
@@ -286,6 +306,47 @@ export function logChatTurnStartedEvent(
       { ...fields, completeness: "complete", loss: "none" },
     ),
   );
+}
+
+/** Connect durable assistant identities to each successful request, including replay/regeneration. */
+export function logChatResponseMessages(body: unknown, correlationId: string | undefined): void {
+  if (typeof body !== "object" || body === null || !("messages" in body)) return;
+  if (!Array.isArray(body.messages)) return;
+  const messages: readonly unknown[] = body.messages;
+  for (const message of messages) {
+    if (!isAssistantMessageIdentity(message)) continue;
+    getServerLogger().info(
+      activityLogEvent(
+        CHAT_RESPONSE_MESSAGE_OPERATION,
+        {
+          correlationId: message.id,
+          ...(correlationId === undefined || correlationId === message.id
+            ? {}
+            : { parentCorrelationId: correlationId }),
+        },
+        { completeness: "complete", loss: "none" },
+      ),
+    );
+  }
+}
+
+function isAssistantMessageIdentity(message: unknown): message is { readonly id: string } {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    "role" in message &&
+    message.role === "assistant" &&
+    "id" in message &&
+    typeof message.id === "string"
+  );
+}
+
+export function logChatResponse(
+  result: RouteResult,
+  correlationId: string | undefined,
+): RouteResult {
+  if (result.status === 200) logChatResponseMessages(result.body, correlationId);
+  return result;
 }
 
 export function logGitChangeTurnAuthorityEvent(

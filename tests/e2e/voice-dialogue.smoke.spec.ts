@@ -1221,7 +1221,19 @@ test("voice dialogue @smoke — long silent playback keeps interruption capture 
   page,
 }) => {
   await page.clock.install();
-  await page.addInitScript(`${BATCH_AUDIO_INIT} window.__holdBatchSpeech = true;`);
+  await page.addInitScript(`${BATCH_AUDIO_INIT}
+    window.__holdBatchSpeech = true;
+    navigator.mediaDevices.getUserMedia = async () => {
+      const context = new AudioContext();
+      await context.resume();
+      const stream = context.createMediaStreamDestination().stream;
+      for (const track of stream.getTracks()) {
+        const stop = track.stop.bind(track);
+        track.stop = () => { stop(); void context.close(); };
+      }
+      return stream;
+    };
+  `);
   await stubCapability(page, BATCH_VOICE_CAPABILITY);
   let transcriptions = 0;
   await page.route("**/api/voice/transcribe", (route) => {
