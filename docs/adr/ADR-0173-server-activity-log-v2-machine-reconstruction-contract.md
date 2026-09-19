@@ -916,8 +916,9 @@ request":
   - a window stage: `client.stage.started` / `client.stage.settled` at `info`. One
     client-minted correlation id per mount joins both phases, and the duration is monotonic and
     bounded to the contract's ceiling;
-  - a restored window's binding: `client.binding.resolved` at `info`, or
-    `client.binding.target-missing` at `warn` with `errorKind: unavailable`. It carries the
+  - a restored window's binding: `client.binding.resolved` at `info`,
+    `client.binding.candidates-offered` at `info`, or `client.binding.target-missing` at `warn`
+    with `errorKind: unavailable`. It carries the
     persisted reference's closed shape (`uuid`, `opaque`, `redacted`, `fingerprint`,
     `user-selected`) and whether the card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
     reference itself. No reference is exempt from that heuristic, and no stored form works around
@@ -933,12 +934,18 @@ request":
     (reference shape `fingerprint`). A snapshot an older build wrote holds the redaction marker
     without a fingerprint, which identifies nothing: no listed chat can be proven to be the one it
     named, so that window is never rebound on its own. It reports its chat missing and offers the
-    chats it may have shown (the listed chats whose ids persistence redacts); only the person's
-    choice binds it, recorded as reference shape `user-selected` under the list load that offered
-    the chat. While the project catalog loads, the window waits; when the catalog failed, or it
-    lacks the window's project, the window shows that the way it does for any chat, and the lookup
-    runs as soon as the catalog changes. A list that cannot be read decides nothing: the lookup,
-    and the legacy scan of a window without a project, run again after a bounded backoff. A list that failed is reported
+    chats it may have shown: the listed chats whose ids persistence redacts, the most recently
+    active first, each named by its title and when it was last active, so two chats with one
+    title stay apart. The offer is `client.binding.candidates-offered` with `candidateCount`,
+    zero included, under the list loads that decided it. Only the person's choice binds the
+    window, recorded as reference shape `user-selected` under the list load that offered the
+    chat. A binding found again after redaction (`fingerprint`, `user-selected`) names the chat
+    it bound to by its fingerprint (`targetFingerprint`, the form the window persists), never by
+    its id, so two choices from one list answer stay apart. While the project catalog loads, the
+    window waits; when the catalog failed, or it lacks the window's project, the window shows that
+    the way it does for any chat, and the lookup runs as soon as the catalog changes. A list that
+    cannot be read decides nothing: the fingerprint lookup, the candidate scan, and the legacy scan
+    of a window without a project run again after a bounded backoff. A list that failed is reported
     under the id its load was sent with and its closed `errorKind`, even when the transport
     failed before any response. A binding found again this way names the chat list load of its
     own lookup, never a later load of the active project. The window's own persisted id, which
@@ -976,7 +983,10 @@ browser saw. Everything on these lines is a count, a closed label, a template, o
 **For a restored window that shows "not found"**, read its `client.binding.target-missing` line.
 `referenceShape: redacted` means the reference was lost at persistence. `uuid` means the target
 is really gone. The line's correlation id, and `relatedCorrelationIds`, name the list loads the
-verdict came from; a `partial` line says how many it could not name. **For a conversation
+verdict came from; a `partial` line says how many it could not name. A window restored from a
+snapshot without a fingerprint also logs `client.binding.candidates-offered`: `candidateCount`
+says how many chats it offered, and a later `client.binding.resolved` with `referenceShape:
+user-selected` names the chat the person chose by its `targetFingerprint`. **For a conversation
 refused as not ready**, read `readinessObservation` on the rejection. `unobserved` means no check
 ran in that process. `not-ready` means a check ran and failed. Then read that check's lines: the
 on-demand probe a conversation entry point runs logs `gateway.readiness.automatic.started` /
