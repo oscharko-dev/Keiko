@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "287626fe210d4700b0ae0956428c3a9bb6f77650ab20ba5b7c56fab983243bec"
+    "catalogDigest": "b0beba861202b91ea932d09c48ebe0bf44bc3aa41d45e5fcfb2588dece723e7f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -96,7 +96,7 @@
         "pr-description.chat.turn.denied",
         "project.workspace.reconnect",
         "reference-id.exhausted",
-        "reference-id.redrawn",
+        "reference-id.issued",
         "request",
         "server.diagnostic.failure",
         "sse.run-events.resume",
@@ -1853,7 +1853,7 @@
     "process.started.configuration": ["packages/keiko-cli/src/ui.activity-log-proof.test.ts"],
     "project.workspace.reconnect.outcome": ["packages/keiko-server/src/store-handlers.test.ts"],
     "reference-id.exhausted.line": ["packages/keiko-server/src/reference-id.test.ts"],
-    "reference-id.redrawn.line": ["packages/keiko-server/src/reference-id.test.ts"],
+    "reference-id.issued.line": ["packages/keiko-server/src/reference-id.test.ts"],
     "repository.fingerprint-diff.completed.counts": [
       "packages/keiko-local-knowledge/src/repository-pod.test.ts"
     ],

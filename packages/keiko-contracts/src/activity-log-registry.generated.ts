@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "287626fe210d4700b0ae0956428c3a9bb6f77650ab20ba5b7c56fab983243bec" as const;
+  "b0beba861202b91ea932d09c48ebe0bf44bc3aa41d45e5fcfb2588dece723e7f" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1748,7 +1748,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["uuid", "opaque", "redacted", "fingerprint"],
+        values: ["uuid", "opaque", "redacted", "fingerprint", "sole-candidate"],
       },
       heuristicFlagged: {
         type: "boolean",
@@ -1809,7 +1809,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["uuid", "opaque", "redacted", "fingerprint"],
+        values: ["uuid", "opaque", "redacted", "fingerprint", "sole-candidate"],
       },
       heuristicFlagged: {
         type: "boolean",
@@ -2071,7 +2071,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       repairCorrelationId: {
         type: "string",
         dataClass: "opaque-id",
-        required: false,
+        required: true,
         maxLength: 128,
       },
     },
@@ -2115,7 +2115,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       repairCorrelationId: {
         type: "string",
         dataClass: "opaque-id",
-        required: false,
+        required: true,
         maxLength: 128,
       },
     },
@@ -2159,7 +2159,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       repairCorrelationId: {
         type: "string",
         dataClass: "opaque-id",
-        required: false,
+        required: true,
         maxLength: 128,
       },
     },
@@ -19977,10 +19977,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
-    op: "reference-id.redrawn",
+    op: "reference-id.issued",
     category: "diagnostic",
     owner: "keiko-server",
-    emitter: "reference-id.logReferenceIdRedrawn",
+    emitter: "reference-id.logReferenceIdIssued",
     fields: {
       completeness: {
         type: "string",
@@ -20008,7 +20008,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     lifecycle: "state",
     analyzerProjection: "timeline",
     failureClasses: ["reference-id"],
-    proofIds: ["reference-id.redrawn.line"],
+    proofIds: ["reference-id.issued.line"],
     releaseImpact: "patch",
   },
   {
@@ -28719,7 +28719,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "repairCorrelationId",
               type: "string",
               dataClass: "opaque-id",
-              required: false,
+              required: true,
             },
             {
               name: "stream",
@@ -28755,7 +28755,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "repairCorrelationId",
               type: "string",
               dataClass: "opaque-id",
-              required: false,
+              required: true,
             },
             {
               name: "stream",
@@ -28791,7 +28791,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "repairCorrelationId",
               type: "string",
               dataClass: "opaque-id",
-              required: false,
+              required: true,
             },
             {
               name: "stream",
@@ -50950,7 +50950,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["reference-id.redrawn"],
+        state: ["reference-id.issued"],
         end: [],
         failure: ["reference-id.exhausted"],
         loss: [],
@@ -50961,12 +50961,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
-          op: "reference-id.redrawn",
+          op: "reference-id.issued",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["reference-id.redrawn"],
+      resourceSignals: ["reference-id.issued"],
       replayReferences: [],
       operations: [
         {
@@ -51000,7 +51000,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           missingObligations: [],
         },
         {
-          op: "reference-id.redrawn",
+          op: "reference-id.issued",
           owner: "keiko-server",
           category: "diagnostic",
           lifecycle: "state",
@@ -51025,7 +51025,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             frames: false,
             causeChain: false,
           },
-          proofIds: ["reference-id.redrawn.line"],
+          proofIds: ["reference-id.issued.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -58244,7 +58244,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "process.started": "ui",
     "project.workspace.reconnect": "bff",
     "reference-id.exhausted": "bff",
-    "reference-id.redrawn": "bff",
+    "reference-id.issued": "bff",
     "repository.fingerprint-diff.completed": "memory-knowledge",
     request: "bff",
     "runtime.confinement.failed": "tools-workflows",
