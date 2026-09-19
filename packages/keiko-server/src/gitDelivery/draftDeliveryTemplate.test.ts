@@ -24,6 +24,10 @@ import {
   CHECKS_SECTION_START,
   frameDraftChecksSection,
 } from "./draftDeliveryChecks.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // Secret-shaped fixture assembled at runtime: the validator must refuse this exact shape, but the
 // source tree must not carry a literal that secret scanners flag as a credential.
@@ -468,6 +472,11 @@ describe("related-issue line, bound and logged count", () => {
     expect(f.log).toMatchObject([
       { op: "git.draft-template", correlationId, extra: { state: "ready", relatedIssueCount: 3 } },
     ]);
+    const persisted = expectActivityLogProof(
+      "git.draft-template.emitted-line",
+      formatActivityLogProofLine(f.log[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "ready", relatedIssueCount: 3 });
   });
 
   it("accepts exactly DRAFT_DELIVERY_RELATED_ISSUES_MAX unique related issues, none equal to the bound issue", async () => {

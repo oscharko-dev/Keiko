@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./evidence.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./axe.js";
 import { join } from "node:path";
+import { readActivityLogText } from "../../../scripts/lib/activity-log-files.mjs";
 
 interface ColorMode {
   readonly name: string;
@@ -238,7 +239,7 @@ function writeCommitVisualReceipt(captures: readonly unknown[], issue: 3386 | 33
 
 export function writeCommitJourneyReceipt(stateDir: string, cases: readonly string[]): void {
   expect(cases).toHaveLength(6);
-  const log = readFileSync(join(stateDir, "bff-state", "state", "logs", "server.log"), "utf8");
+  const log = readActivityLogText(join(stateDir, "bff-state", "state", "logs"));
   expect(log).not.toContain("Reviewed <script>text</script>");
   expect(log).not.toContain("VERIFIED_COMMIT_3386");
   const lines = log

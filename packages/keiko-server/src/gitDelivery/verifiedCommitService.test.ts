@@ -49,6 +49,10 @@ import type {
   VerifiedCommitServiceOptions,
 } from "./verifiedCommitTypes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // #3386 AC11: the interactive staged-diff review this service owns must never reach for #3397's
 // immutable merge-base-to-head PR snapshot service. A throwing fake proves it structurally — if
@@ -352,6 +356,11 @@ describe("verified Code-task commit service", () => {
         correlationId: "verified-commit-test",
         extra: { phase: "verification-discarded", reason: "authority-denied" },
       });
+      const persisted = expectActivityLogProof(
+        "git.verified-commit.emitted-line",
+        formatActivityLogProofLine(discarded ?? {}),
+      );
+      expect(persisted).toMatchObject({ phase: "verification-discarded" });
     },
   );
   it("invalidates a prior approved proposal when fresh verification starts and fails", async () => {
@@ -889,6 +898,14 @@ describe("productive runtime status/diff/stage lane", () => {
         }) as unknown,
       }),
     );
+    const runtimeAction = events.find(
+      (event) => event.op === "git.runtime-action" && event.extra?.phase === "stage-propose",
+    );
+    const persisted = expectActivityLogProof(
+      "git.runtime-action.emitted-line",
+      formatActivityLogProofLine(runtimeAction ?? {}),
+    );
+    expect(persisted).toMatchObject({ phase: "stage-propose", state: "ready", pathCount: 2 });
   });
 
   it("does not admit missing paths as already-staged no-ops", async () => {
@@ -1522,10 +1539,13 @@ describe("productive runtime status/diff/stage lane", () => {
         newLines: count,
       },
     };
-    expect(events.filter((event) => event.op === line.op)).toEqual([
-      expect.objectContaining(line),
-      expect.objectContaining(line),
-    ]);
+    const boundedEvents = events.filter((event) => event.op === line.op);
+    expect(boundedEvents).toEqual([expect.objectContaining(line), expect.objectContaining(line)]);
+    const persisted = expectActivityLogProof(
+      "git.runtime-diff.search-bounded.emitted-line",
+      formatActivityLogProofLine(boundedEvents[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ bound: "distance", oldLines: count, newLines: count });
   });
   it("expands a directory diff through bounded Git-owned changed paths", async () => {
     mkdirSync(join(root, "nested"));
@@ -2119,5 +2139,10 @@ describe("deny-listed paths in the run's repository", () => {
       correlationId: "verified-commit-test",
       extra: { deniedPathCount: 2 },
     });
+    const persisted = expectActivityLogProof(
+      "git.raw-status.denied-paths-excluded.emitted-line",
+      formatActivityLogProofLine(exclusions[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ deniedPathCount: 2 });
   });
 });

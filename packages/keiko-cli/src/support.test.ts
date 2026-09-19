@@ -22,9 +22,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  activityLogSegmentFileName,
+  type ActivityLogSegmentState,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   createInMemoryEvidenceStore,
   type EvidenceManifest,
@@ -36,6 +40,10 @@ import {
   SERVER_LOG_SCHEMA_VERSION,
   UI_DB_FILENAME,
 } from "@oscharko-dev/keiko-server";
+import {
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
 import { analyzeLogText } from "./support-analyze.js";
@@ -51,8 +59,6 @@ import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
 } from "./install-layout.js";
-import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
-
 const runSupportCli = runSupportCliImpl;
 
 const BUILT_CLI_ENTRY = fileURLToPath(new URL("../../../dist/cli/index.js", import.meta.url));
@@ -178,6 +184,18 @@ function writePrivateFile(path: string, text: string): void {
   writeFileSync(path, text, { mode: 0o600 });
 }
 
+// Segment names come from the shared closed grammar (keiko-contracts `activity-log-files.ts`),
+// never from a hand-written spelling that could drift from what the writer creates.
+function segmentName(index: number, state: ActivityLogSegmentState = "sealed", pid = 4242): string {
+  return activityLogSegmentFileName(
+    { startMs: Date.parse("2026-08-21T10:00:00.000Z"), pid, instanceId: "a1b2c3d4", index },
+    state,
+  );
+}
+
+// The newest file of a live Activity Log: the writer's active segment.
+const CURRENT_SEGMENT = segmentName(2, "active");
+
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
   const outChunks: string[] = [];
   const errChunks: string[] = [];
@@ -255,8 +273,6 @@ describe("parseSupportArgs", () => {
         out: undefined,
         stateDir: undefined,
         maxBytes: undefined,
-        includeUiLog: false,
-        iUnderstandUnredacted: false,
         includeEvidenceRunIds: [],
       },
     });
@@ -269,8 +285,6 @@ describe("parseSupportArgs", () => {
         "/tmp/.keiko",
         "--max-bytes",
         "100",
-        "--include-ui-log",
-        "--i-understand-this-is-unredacted",
         "--include-evidence",
         "run-a, run-b,,run-c",
       ]),
@@ -280,18 +294,23 @@ describe("parseSupportArgs", () => {
         out: "/tmp/x.jsonl",
         stateDir: "/tmp/.keiko",
         maxBytes: 100,
-        includeUiLog: true,
-        iUnderstandUnredacted: true,
         includeEvidenceRunIds: ["run-a", "run-b", "run-c"],
       },
     });
   });
 
-  it("parses --include-ui-log alone as consent NOT given (the confirmation flag is separate)", () => {
-    const parsed = parseSupportArgs(["export", "--include-ui-log"]);
-    expect(parsed.kind).toBe("export");
-    expect(parsed.kind === "export" && parsed.value.includeUiLog).toBe(true);
-    expect(parsed.kind === "export" && parsed.value.iUnderstandUnredacted).toBe(false);
+  // #3532: raw UI output can never be part of a report. The retired consent flags are refused
+  // explicitly instead of being silently ignored, alone or together.
+  it.each([
+    [["--include-ui-log"]],
+    [["--i-understand-this-is-unredacted"]],
+    [["--include-ui-log", "--i-understand-this-is-unredacted"]],
+  ])("refuses the retired ui.log flags %j as a usage error", (flags) => {
+    const parsed = parseSupportArgs(["export", ...flags]);
+    expect(parsed.kind).toBe("usage");
+    expect(parsed.kind === "usage" && parsed.message).toContain(
+      "--include-ui-log is no longer supported",
+    );
   });
 
   it("rejects a --max-bytes that is not a positive integer", () => {
@@ -397,7 +416,9 @@ describe("runSupportCli export", () => {
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-support-cli-state-"));
     outDir = mkdtempSync(join(tmpdir(), "keiko-support-cli-out-"));
-    mkdirSync(join(stateDir, "logs"), { recursive: true });
+    // Owner-only, as the product creates it: sealing and retention refuse any looser directory,
+    // so a default-mode (0755) fixture left every segment unsealed behind a write-failed notice.
+    mkdirSync(join(stateDir, "logs"), { recursive: true, mode: 0o700 });
   });
 
   afterEach(() => {
@@ -415,21 +436,26 @@ describe("runSupportCli export", () => {
     expect(supportPublicationErrorKind(error)).toBe("unknown");
   });
 
-  it("rejects a fresh Activity Log path as the support-bundle destination", async () => {
-    const outPath = join(stateDir, "logs", CURRENT_LOG_FILE_NAME);
-    const c = makeIo();
+  // #3530: every name in the Activity Log directory belongs to the store's closed grammar and its
+  // retention, so a report may be written nowhere in that directory: not over a legacy name, not
+  // under a segment's spelling, and not under any other name either.
+  it("rejects any destination inside the Activity Log directory", async () => {
+    for (const name of [ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME, CURRENT_SEGMENT, "report.jsonl"]) {
+      const outPath = join(stateDir, "logs", name);
+      const c = makeIo();
 
-    const code = await runSupportCli(
-      ["export", "--state-dir", stateDir, "--out", outPath],
-      c.io,
-      AUDIT_ENV,
-      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
-    );
+      const code = await runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        c.io,
+        AUDIT_ENV,
+        { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+      );
 
-    expect(code).toBe(1);
-    expect(c.err()).toContain("destination collides with the Activity Log");
-    expect(existsSync(outPath)).toBe(false);
-    expect(existsSync(`${outPath}.sha256`)).toBe(false);
+      expect(code).toBe(1);
+      expect(c.err()).toContain("destination collides with the Activity Log");
+      expect(existsSync(outPath)).toBe(false);
+      expect(existsSync(`${outPath}.sha256`)).toBe(false);
+    }
   });
 
   it("fails before publication when the required Activity Log directory is unavailable", async () => {
@@ -497,8 +523,7 @@ describe("runSupportCli export", () => {
     expect(manifest.sourceLogFiles).toEqual(["server-2026-08-19.log", "server.log"]);
     expect(manifest.truncatedLogFiles).toEqual([]);
     expect(manifest.skippedLogFiles).toEqual([]);
-    // Wave 6: "ui-log" is always named here unless BOTH --include-ui-log AND
-    // --i-understand-this-is-unredacted were passed — neither was, here.
+    // #3532: a legacy ui.log is never part of a report, so the manifest always names it excluded.
     expect(manifest.sectionsExcluded).toEqual(["ui-log"]);
     expect(manifest.evidenceIndexCount).toBe(2);
     // The manifest's auditSummary must carry the audit result MINUS the raw stateDir path (which
@@ -513,8 +538,8 @@ describe("runSupportCli export", () => {
     expect(first.status).toBe(0);
     const firstReports = readdirSync(outDir).filter((name) => name.endsWith(".jsonl"));
     expect(firstReports).toHaveLength(1);
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
+    writePrivateFile(
+      join(stateDir, "logs", ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME),
       `${JSON.stringify({ op: "between-built-runs", correlationId: "built-proof" })}\n`,
     );
 
@@ -552,8 +577,8 @@ describe("runSupportCli export", () => {
     const reportPath = join(outDir, reportName);
     const priorBytes = readFileSync(reportPath);
     expect(readdirSync(outDir).filter((name) => name.endsWith(".complete"))).toHaveLength(1);
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
+    writePrivateFile(
+      join(stateDir, "logs", ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME),
       `${JSON.stringify({ op: "after-built-crash", correlationId: "built-proof" })}\n`,
     );
 
@@ -583,7 +608,7 @@ describe("runSupportCli export", () => {
     expect(existsSync(`${outPath}.sha256`)).toBe(false);
     expect(c.err()).toContain("could not write the bundle: target-exists");
     expect(c.err()).not.toContain(outPath);
-    const failure = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    const failure = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -708,10 +733,9 @@ describe("runSupportCli export", () => {
 
     vi.doUnmock("node:child_process");
     vi.resetModules();
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
+    writePrivateFile(
+      join(stateDir, "logs", ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME),
       `${JSON.stringify({ op: "post-interruption-log", correlationId: "post-interruption" })}\n`,
-      { flag: "a" },
     );
     const resumed = await import("./support.js");
     const secondIo = makeIo();
@@ -739,7 +763,7 @@ describe("runSupportCli export", () => {
     ]);
     const expectedDigest = createHash("sha256").update(report).digest("hex");
     expect(readFileSync(`${outPath}.sha256`, "utf8").trim()).toBe(expectedDigest);
-    const evidence = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    const evidence = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -789,7 +813,7 @@ describe("runSupportCli export", () => {
       ),
     ).toBe(1);
     expect(secondIo.err()).toContain("local-state audit could not produce a result");
-    const recovery = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+    const recovery = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -1103,7 +1127,8 @@ describe("runSupportCli export", () => {
     const victimContent = "VICTIM-7f3a-must-never-reach-the-bundle\n";
     const victim = join(outDir, "victim.txt");
     writePrivateFile(victim, victimContent);
-    symlinkSync(victim, join(stateDir, "logs", CURRENT_LOG_FILE_NAME));
+    symlinkSync(victim, join(stateDir, "logs", CURRENT_SEGMENT));
+    linkSync(victim, join(stateDir, "logs", segmentName(1)));
     symlinkSync(victim, join(stateDir, "logs", "server-2026-08-19.log"));
     linkSync(victim, join(stateDir, "logs", "server-2026-08-18.log"));
     symlinkSync(victim, join(stateDir, "ui.log"));
@@ -1111,15 +1136,7 @@ describe("runSupportCli export", () => {
     const c = makeIo();
 
     const code = await runSupportCli(
-      [
-        "export",
-        "--state-dir",
-        stateDir,
-        "--out",
-        outPath,
-        "--include-ui-log",
-        "--i-understand-this-is-unredacted",
-      ],
+      ["export", "--state-dir", stateDir, "--out", outPath],
       c.io,
       AUDIT_ENV,
       { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
@@ -1134,14 +1151,15 @@ describe("runSupportCli export", () => {
     expect(manifest.skippedLogFiles).toEqual([
       { name: "server-2026-08-18.log", errorKind: "unsafe-target" },
       { name: "server-2026-08-19.log", errorKind: "unsafe-target" },
-      { name: CURRENT_LOG_FILE_NAME, errorKind: "unsafe-target" },
+      { name: segmentName(1), errorKind: "unsafe-target" },
+      { name: CURRENT_SEGMENT, errorKind: "unsafe-target" },
     ]);
     expect(manifest.sectionsExcluded).toEqual(["ui-log"]);
   });
 
   it("defaults stateDirSource to 'default' when neither --state-dir nor KEIKO_STATE_DIR is set", async () => {
     const cwdWithDefaultState = mkdtempSync(join(tmpdir(), "keiko-support-cli-default-"));
-    mkdirSync(join(cwdWithDefaultState, ".keiko", "logs"), { recursive: true });
+    mkdirSync(join(cwdWithDefaultState, ".keiko", "logs"), { recursive: true, mode: 0o700 });
 
     const c = makeIo();
     const code = await runSupportCli(["export"], c.io, AUDIT_ENV, {
@@ -1204,7 +1222,7 @@ describe("runSupportCli export", () => {
   });
 
   it("preserves an unterminated crash fragment for bundle analysis", async () => {
-    writePrivateFile(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), '{"ts":');
+    writePrivateFile(join(stateDir, "logs", CURRENT_SEGMENT), '{"ts":');
     const outPath = join(outDir, "terminal-fragment.jsonl");
     const c = makeIo();
 
@@ -1218,6 +1236,40 @@ describe("runSupportCli export", () => {
     expect(code).toBe(0);
     const bundle = readFileSync(outPath, "utf8");
     expect(bundle.endsWith("\n")).toBe(false);
+    expect(analyzeLogText(bundle).evidence).toMatchObject({
+      classification: "truncated",
+      truncatedLineCount: 1,
+      corruptLineCount: 0,
+    });
+  });
+
+  // #3530: recovery seals a crashed writer's segment with its torn tail intact, and newer segments
+  // follow it in the bundle, so that fragment becomes a terminated line in the MIDDLE of the report.
+  // The manifest's per-file boundaries let analysis classify it as truncated, never as corruption.
+  it("classifies a torn segment tail in the middle of a bundle as truncated, not corrupt", async () => {
+    const crashedSegment = segmentName(1);
+    const newerSegment = segmentName(2);
+    const firstRecord = JSON.stringify(validV2AnalysisRecord());
+    const newerRecord = JSON.stringify(validV2AnalysisRecord({ seq: 2 }));
+    writePrivateFile(join(stateDir, "logs", crashedSegment), `${firstRecord}\n{"ts":`);
+    writePrivateFile(join(stateDir, "logs", newerSegment), `${newerRecord}\n`);
+    const outPath = join(outDir, "mid-bundle-fragment.jsonl");
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      makeIo().io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const bundle = readFileSync(outPath, "utf8");
+    expect(bundle.endsWith(`${newerRecord}\n`)).toBe(true);
+    const manifest = JSON.parse(bundle.split("\n")[0] ?? "{}") as Record<string, unknown>;
+    expect(manifest.sourceLogFileLines).toEqual([
+      { name: crashedSegment, lineCount: 2, terminalFragment: true },
+      { name: newerSegment, lineCount: 1, terminalFragment: false },
+    ]);
     expect(analyzeLogText(bundle).evidence).toMatchObject({
       classification: "truncated",
       truncatedLineCount: 1,
@@ -1245,7 +1297,7 @@ describe("runSupportCli export", () => {
     // support-export.test.ts uses for the same scenario.
     const currentLine = (i: number): string => `{"seq":${String(i).padStart(3, "0")}}`;
     const currentText = `${Array.from({ length: 20 }, (_, i) => currentLine(i)).join("\n")}\n`;
-    writePrivateFile(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), currentText);
+    writePrivateFile(join(stateDir, "logs", CURRENT_SEGMENT), currentText);
 
     const c = makeIo();
     const code = await runSupportCli(
@@ -1266,9 +1318,9 @@ describe("runSupportCli export", () => {
     >;
 
     expect(manifest.truncatedLogFiles).toEqual(["server-2026-08-18.log"]);
-    expect(manifest.sourceLogFiles).toEqual([CURRENT_LOG_FILE_NAME]);
+    expect(manifest.sourceLogFiles).toEqual([CURRENT_SEGMENT]);
     expect(manifest.currentFileTailTruncated).toEqual({
-      name: CURRENT_LOG_FILE_NAME,
+      name: CURRENT_SEGMENT,
       droppedBytes: 192,
     });
     // The tail strategy brought the export back within budget, so budgetExceeded must be false.
@@ -1499,8 +1551,8 @@ describe("runSupportCli export", () => {
     );
   });
 
-  // Wave 6, design doc §6.3: ui.log carries the UI/BFF process's raw, unredacted stdout+stderr, so
-  // it is excluded by default — RED before this wave existed (there was no ui.log logic at all).
+  // #3532: a legacy ui.log carries raw, unredacted UI process output, so it is never read into a
+  // report — there is no flag that attaches it any more.
   function bundleLines(outPath: string): readonly Record<string, unknown>[] {
     return readFileSync(outPath, "utf8")
       .trimEnd()
@@ -1508,7 +1560,7 @@ describe("runSupportCli export", () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>);
   }
 
-  it("excludes ui.log by default: no ui-log section, and sectionsExcluded names it", async () => {
+  it("never reads a legacy ui.log into the report, and names it excluded", async () => {
     writePrivateFile(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
     const c = makeIo();
     const outPath = join(outDir, "default-no-ui-log.jsonl");
@@ -1520,35 +1572,17 @@ describe("runSupportCli export", () => {
     );
 
     expect(code).toBe(0);
+    const bundle = readFileSync(outPath, "utf8");
+    expect(bundle).not.toContain("TypeError: boom");
     const lines = bundleLines(outPath);
     expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
     expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
   });
 
-  // THE key regression-shaped assertion: one flag alone is NOT sufficient consent. Without this
-  // gate, an operator (or a script) passing only --include-ui-log would leak unredacted free text.
-  it("still excludes ui.log with ONLY --include-ui-log — the confirmation flag is not optional", async () => {
+  it("refuses the retired ui.log flags before exporting anything", async () => {
     writePrivateFile(join(stateDir, "ui.log"), "TypeError: boom at /Users/jsmith/app\n");
     const c = makeIo();
-    const outPath = join(outDir, "half-consent.jsonl");
-    const code = await runSupportCli(
-      ["export", "--state-dir", stateDir, "--out", outPath, "--include-ui-log"],
-      c.io,
-      AUDIT_ENV,
-      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
-    );
-
-    expect(code).toBe(0);
-    const lines = bundleLines(outPath);
-    expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
-    expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
-  });
-
-  it("attaches ui.log verbatim, and clears sectionsExcluded, when BOTH flags are passed", async () => {
-    const uiLogContent = "TypeError: boom at /Users/jsmith/app\n";
-    writePrivateFile(join(stateDir, "ui.log"), uiLogContent);
-    const c = makeIo();
-    const outPath = join(outDir, "full-consent.jsonl");
+    const outPath = join(outDir, "refused-ui-log.jsonl");
     const code = await runSupportCli(
       [
         "export",
@@ -1564,13 +1598,31 @@ describe("runSupportCli export", () => {
       { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
     );
 
+    expect(code).toBe(2);
+    expect(existsSync(outPath)).toBe(false);
+    expect(c.err()).toContain("--include-ui-log is no longer supported");
+  });
+
+  it("reports the exported directory's diagnostic readiness after a successful export", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "with-readiness.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
     expect(code).toBe(0);
-    const lines = bundleLines(outPath);
-    expect(lines.find((line) => line.$section === "ui-log")).toEqual({
-      $section: "ui-log",
-      content: uiLogContent,
-    });
-    expect(lines[0]?.sectionsExcluded).toEqual([]);
+    expect(c.out()).toMatch(/Diagnostic evidence: (ready|degraded|unavailable)/u);
+    // The readiness line is persisted AFTER the report, so the report stays exactly the evidence
+    // that existed when it was taken.
+    expect(readFileSync(outPath, "utf8")).not.toContain("activity-log.readiness");
+    const readiness = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "activity-log.readiness",
+    );
+    expect(readiness).toHaveLength(1);
   });
 
   it("attaches a full evidence manifest per --include-evidence runId, beyond the index count", async () => {
@@ -1626,7 +1678,7 @@ describe("runSupportCli export", () => {
 
     const report = readFileSync(outPath);
     const reportSha256 = createHash("sha256").update(report).digest("hex");
-    const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    const records = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -1673,7 +1725,7 @@ describe("runSupportCli export", () => {
         { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
       ),
     ).toBe(1);
-    const failure = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+    const failure = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -1714,7 +1766,7 @@ describe("runSupportCli export", () => {
     // printed first, contradicting the exit code.
     expect(c.out()).not.toContain("Wrote ");
     expect(c.err()).toContain("could not acknowledge publication: durability-failed");
-    const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+    const records = readPersistedActivityLog(stateDir)
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -1733,34 +1785,6 @@ describe("runSupportCli export", () => {
     });
     expect(String(records[0]?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
     expect(JSON.stringify(records[0])).not.toContain(outPath);
-  });
-
-  // `readUiLogContentOrUndefined`'s catch path: BOTH consent flags are given, but no ui.log file
-  // was ever written for this state dir (no `keiko start` has run against it) — `readFileSync`
-  // throws ENOENT, and the section must be excluded exactly like the no-consent cases above,
-  // never a thrown error out of the export.
-  it("excludes ui.log via the catch path when both flags are passed but no ui.log file exists", async () => {
-    const c = makeIo();
-    const outPath = join(outDir, "consent-no-file.jsonl");
-    const code = await runSupportCli(
-      [
-        "export",
-        "--state-dir",
-        stateDir,
-        "--out",
-        outPath,
-        "--include-ui-log",
-        "--i-understand-this-is-unredacted",
-      ],
-      c.io,
-      AUDIT_ENV,
-      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
-    );
-
-    expect(code).toBe(0);
-    const lines = bundleLines(outPath);
-    expect(lines.some((line) => line.$section === "ui-log")).toBe(false);
-    expect(lines[0]?.sectionsExcluded).toEqual(["ui-log"]);
   });
 
   // `resolveIncludedEvidenceSections`'s `deps.evidenceStore ?? evidence.createNodeEvidenceStore(...)`
@@ -1840,7 +1864,7 @@ describe("runSupportCli analyze", () => {
     );
 
     expect(code).toBe(0);
-    const evidence = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+    const evidence = readPersistedActivityLog(stateDir)
       .split("\n")
       .filter((line) => line.startsWith("{"))
       .flatMap((line) => {
@@ -1910,6 +1934,8 @@ describe("runSupportCli analyze", () => {
 
     expect(code).toBe(0);
     const parsed: Record<string, unknown> = JSON.parse(c.out()) as Record<string, unknown>;
+    // #3531: the machine form names itself and its version; every earlier field is unchanged.
+    expect(parsed).toMatchObject({ kind: "keiko.support.analyze-timeline", schemaVersion: 1 });
     expect(parsed.correlationId).toBe("req-1");
     expect(parsed.malformedLineCount).toBe(1);
     expect(Array.isArray(parsed.lines)).toBe(true);
@@ -1947,6 +1973,7 @@ describe("runSupportCli analyze", () => {
 
     expect(code).toBe(0);
     const parsed: Record<string, unknown> = JSON.parse(c.out()) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ kind: "keiko.support.analyze", schemaVersion: 1 });
     expect((parsed.timelines as { correlationId: string }[]).map((t) => t.correlationId)).toEqual([
       "req-1",
       "req-2",
@@ -1964,7 +1991,7 @@ describe("runSupportCli analyze", () => {
   it("identifies the analyzed raw-log context and warns when it is obviously stale", async () => {
     const stateDir = join(dir, ".keiko");
     const logDir = join(stateDir, "logs");
-    mkdirSync(logDir, { recursive: true });
+    mkdirSync(logDir, { recursive: true, mode: 0o700 });
     const filePath = join(logDir, "server.log");
     writeFileSync(filePath, `${JSON.stringify(validV2AnalysisRecord({ pid: 4242 }))}\n`);
 
@@ -2004,7 +2031,7 @@ describe("runSupportCli analyze", () => {
     // non-positive or non-safe-integer pid.
     const stateDir = join(dir, ".keiko");
     const logDir = join(stateDir, "logs");
-    mkdirSync(logDir, { recursive: true });
+    mkdirSync(logDir, { recursive: true, mode: 0o700 });
     const filePath = join(logDir, "server.log");
     writeFileSync(filePath, `${JSON.stringify(validV2AnalysisRecord({ pid: 0 }))}\n`);
 
@@ -2194,6 +2221,98 @@ describe("runSupportCli analyze", () => {
     expect(humanRun.out()).toContain("gateway.chat.completed");
   });
 
+  // Audit (#3531 Update Impact): --clusters --json predates the versioned machine profiles and
+  // carries no stated compatibility/deprecation path. It must stay byte-compatible (no existing
+  // reader breaks) while gaining an explicit path: a one-line stderr notice naming the versioned
+  // replacement, and proof that the replacement (keiko.support.analyze's own `clusters` member)
+  // really does carry the same data.
+  it("keeps --clusters --json byte-compatible and names its versioned replacement on stderr", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+
+    const bareRun = makeIo();
+    const bareCode = await runSupportCli(["analyze", filePath, "--clusters", "--json"], bareRun.io);
+    expect(bareCode).toBe(0);
+    const bareOut = bareRun.out();
+    const bareClusters = JSON.parse(bareOut) as unknown;
+    // Byte-compatible: still a bare array, not an object, not wrapped in kind/schemaVersion.
+    expect(Array.isArray(bareClusters)).toBe(true);
+    expect(bareOut.endsWith("\n")).toBe(true);
+    expect(bareOut.trimEnd().startsWith("[")).toBe(true);
+
+    // The one-line stderr deprecation notice, naming the versioned replacement.
+    const errLines = bareRun
+      .err()
+      .split("\n")
+      .filter((line) => line.length > 0);
+    expect(errLines).toHaveLength(1);
+    expect(errLines[0]).toContain("--clusters --json");
+    expect(errLines[0]).toContain("deprecated");
+    expect(errLines[0]).toContain("keiko.support.analyze");
+    expect(errLines[0]).toContain("v1");
+
+    // The named replacement actually carries the same data: plain --json's own `clusters` member.
+    const fullRun = makeIo();
+    const fullCode = await runSupportCli(["analyze", filePath, "--json"], fullRun.io);
+    expect(fullCode).toBe(0);
+    const full = JSON.parse(fullRun.out()) as {
+      readonly kind: string;
+      readonly schemaVersion: number;
+      readonly clusters: unknown;
+    };
+    expect(full.kind).toBe("keiko.support.analyze");
+    expect(full.schemaVersion).toBe(1);
+    expect(full.clusters).toEqual(bareClusters);
+    // Plain --json (no --clusters) is not itself deprecated: no notice on stderr.
+    expect(fullRun.err()).toBe("");
+
+    // Human --clusters (no --json) is a text report, not the unversioned machine profile: no notice.
+    const humanRun = makeIo();
+    expect(await runSupportCli(["analyze", filePath, "--clusters"], humanRun.io)).toBe(0);
+    expect(humanRun.err()).toBe("");
+  });
+
+  // Audit (#3531): analyze's JSON lacked the provenance block query and export already carry.
+  // Added additively to both analyze JSON forms: every pre-existing field stays exactly as it was.
+  it("carries provenance (productVersion, registryVersion, schemaDigest, catalogDigest) in both analyze JSON forms", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    const expectedProvenance = {
+      productVersion: KEIKO_PRODUCT_VERSION,
+      registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+      schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+      catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+    };
+
+    const wholeFileRun = makeIo();
+    expect(await runSupportCli(["analyze", filePath, "--json"], wholeFileRun.io)).toBe(0);
+    const wholeFile = JSON.parse(wholeFileRun.out()) as {
+      readonly kind: string;
+      readonly provenance: unknown;
+      readonly clusters: unknown;
+    };
+    expect(wholeFile.kind).toBe("keiko.support.analyze");
+    expect(wholeFile.provenance).toEqual(expectedProvenance);
+    // Additive: the field this audit's own test already relies on stays present and unchanged.
+    expect(wholeFile.clusters).toBeDefined();
+
+    const timelineRun = makeIo();
+    expect(
+      await runSupportCli(
+        ["analyze", filePath, "--correlation-id", "req-1", "--json"],
+        timelineRun.io,
+      ),
+    ).toBe(0);
+    const timeline = JSON.parse(timelineRun.out()) as {
+      readonly kind: string;
+      readonly provenance: unknown;
+      readonly correlationId: string;
+    };
+    expect(timeline.kind).toBe("keiko.support.analyze-timeline");
+    expect(timeline.provenance).toEqual(expectedProvenance);
+    expect(timeline.correlationId).toBe("req-1");
+  });
+
   it("prints a ReproductionSeed via --seed", async () => {
     const filePath = join(dir, "server.log");
     writeGatewayLog(filePath);
@@ -2221,6 +2340,29 @@ describe("runSupportCli analyze", () => {
     expect(humanCode).toBe(0);
     expect(humanRun.out()).toContain("correlationId=req-1");
     expect(humanRun.out()).toContain("gatewayScript:");
+  });
+
+  // #3531: --seed streams the artifact instead of loading it whole, and its digest is taken from
+  // the same pass as its analysis: the SHA-256 of the file's exact bytes, which is what `shasum`
+  // and a report's .sha256 sidecar state. A whole-file read hashed the decoded text instead, a
+  // different value whenever the artifact held a byte sequence that is not UTF-8.
+  it("states the SHA-256 of the artifact's exact bytes and its line count in a --seed", async () => {
+    const filePath = join(dir, "server.log");
+    writeGatewayLog(filePath);
+    appendFileSync(filePath, Buffer.from([0xff, 0xfe, 0x0a]));
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--correlation-id", "req-1", "--seed", "--json"],
+      c.io,
+    );
+    expect(code).toBe(0);
+    const seed = JSON.parse(c.out()) as { readonly sourceArtifact: unknown };
+    expect(seed.sourceArtifact).toEqual({
+      kind: "raw-log",
+      lineCount: 3,
+      sha256: createHash("sha256").update(readFileSync(filePath)).digest("hex"),
+    });
   });
 
   it("exits 1 for --seed when the correlation id has no timeline", async () => {

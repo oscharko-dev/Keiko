@@ -40,6 +40,10 @@ import { clearJourneyReadinessMemo, createGitDeliveryJourneyRouteGroup } from ".
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import { applicationStatus } from "./prDescriptionProjection.js";
 import { createPrDescriptionReceiptStore } from "./prDescriptionReceiptStore.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // Builds a fully-typed UiHandlerDeps (all 8 required fields), matching the `deps(overrides)`
 // pattern shared by the sibling gitDelivery route test files (e.g. actionSheetRoutes.test.ts),
@@ -321,6 +325,11 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
         extra: { runId: "run-1", recorded: false },
       });
       expect(JSON.stringify(h.events)).not.toMatch(/owner\/repository|PR_17/u);
+      const persisted = expectActivityLogProof(
+        "git.journey-outcome.recorded.emitted-line",
+        formatActivityLogProofLine(recorded ?? {}),
+      );
+      expect(persisted).toMatchObject({ runId: "run-1", recorded: false });
     } finally {
       h.cleanup();
     }
@@ -620,6 +629,11 @@ describe("journey readiness renewal after the run has settled (regression, epic 
       });
       const line = h.events.find((event) => event.op === "git.journey-readiness.refreshed");
       expect(line).toMatchObject({ level: "warn", extra: { reason: "reader-unavailable" } });
+      const persisted = expectActivityLogProof(
+        "git.journey-readiness.refreshed.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      );
+      expect(persisted).toMatchObject({ reason: "reader-unavailable" });
     } finally {
       h.cleanup();
     }

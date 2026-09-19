@@ -96,7 +96,7 @@ const LSP_JAVA_VERSION_PROBE_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["lsp-java-version-probe"],
-  proofIds: ["lsp.java-version-probe-completed.emitted-line"],
+  proofIds: ["lsp.java.version-probe.completed.emitted-line"],
   releaseImpact: "patch",
 });
 

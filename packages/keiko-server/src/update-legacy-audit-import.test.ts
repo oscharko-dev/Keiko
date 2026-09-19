@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -17,7 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { closeFileServerLogSinks } from "./observability/server-log.js";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
+import { closeFileServerLogSinks, listActivityLogFiles } from "./observability/server-log.js";
 import { importLegacyUpdateAuditSnapshot } from "./update-legacy-audit-import.js";
 
 function legacyEventId(value: number): string {
@@ -135,15 +137,46 @@ function writeLegacy(stateDir: string, lines: readonly string[]): string {
   return path;
 }
 
+// The import's own records across the whole logical log (legacy files and segments), in order;
+// the store's safe-open, seal and pin evidence is not import evidence.
 function canonicalLines(stateDir: string): Record<string, unknown>[] {
-  const path = join(stateDir, "logs", "server.log");
-  if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8")
-    .trim()
+  return readPersistedActivityLog(stateDir)
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>)
-    .filter((record) => record.op !== "server-log.safe-open");
+    .flatMap((line): Record<string, unknown>[] => {
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    })
+    .filter((record) => String(record.op).startsWith("update."));
+}
+
+// The canonical records one clean import writes, produced in a scratch state directory so a test
+// can plant them as a legacy file of an older Keiko.
+function importedRecordsFor(lines: readonly string[], scratch: string): Record<string, unknown>[] {
+  writeLegacy(scratch, lines);
+  if (importLegacyUpdateAuditSnapshot({ stateDir: scratch, level: "info" }).status !== "imported") {
+    throw new Error("expected the scratch import to succeed");
+  }
+  closeFileServerLogSinks();
+  return canonicalLines(scratch);
+}
+
+function writeLegacyLog(stateDir: string, name: string, records: readonly unknown[]): string {
+  const logs = join(stateDir, "logs");
+  mkdirSync(logs, { recursive: true, mode: 0o700 });
+  const path = join(logs, name);
+  writeFileSync(path, records.map((record) => `${JSON.stringify(record)}\n`).join(""), {
+    mode: 0o600,
+  });
+  return path;
+}
+
+function pinRecords(stateDir: string): readonly string[] {
+  const logs = join(stateDir, "logs");
+  return existsSync(logs) ? readdirSync(logs).filter((name) => name.startsWith("pin-")) : [];
 }
 
 describe("legacy update audit import", () => {
@@ -267,28 +300,27 @@ describe("legacy update audit import", () => {
 
     const first = importLegacyUpdateAuditSnapshot({ stateDir, level: "info" });
     if (first.status !== "imported") throw new Error("expected first import");
-    const before = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    closeFileServerLogSinks();
+    const before = readPersistedActivityLog(stateDir);
     const second = importLegacyUpdateAuditSnapshot({ stateDir, level: "info" });
 
     expect(second).toStrictEqual({ status: "already-imported", importId: first.importId });
-    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).toBe(before);
+    expect(readPersistedActivityLog(stateDir)).toBe(before);
     expect(existsSync(source)).toBe(true);
+    // The completion lives in a segment pinned for durable batches, so retention never ages it out.
+    expect(pinRecords(stateDir)).toHaveLength(1);
   });
 
-  it("resumes a partial canonical batch without duplicating a represented event", () => {
-    const stateDir = fixture();
-    writeLegacy(stateDir, [
+  it("resumes a partial batch an older Keiko left in its legacy log without duplicating it", () => {
+    const events = [
       JSON.stringify(legacyEvent()),
       JSON.stringify(legacyEvent({ eventId: legacyEventId(2), type: "update-offered" })),
-    ]);
-    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" }).status).toBe("imported");
-    closeFileServerLogSinks();
-    const [firstImported] = canonicalLines(stateDir);
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
-      `${JSON.stringify(firstImported)}\n`,
-      "utf8",
-    );
+    ];
+    const [firstImported] = importedRecordsFor(events, fixture());
+    const stateDir = fixture();
+    writeLegacy(stateDir, events);
+    const legacy = writeLegacyLog(stateDir, "server.log", [firstImported]);
+    const legacyBytes = readFileSync(legacy);
 
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toMatchObject({
       status: "imported",
@@ -299,33 +331,27 @@ describe("legacy update audit import", () => {
     expect(
       lines.filter((line) => line.op === "update.runtime.legacy-snapshot-imported"),
     ).toHaveLength(1);
+    // Legacy input is read-only: it is never rewritten or repaired.
+    expect(readFileSync(legacy).equals(legacyBytes)).toBe(true);
   });
 
-  it("does not credit a malformed current-log tail when a fresh process resumes import", () => {
+  it("does not credit or repair a torn legacy-log tail when a fresh process imports", () => {
     const stateDir = fixture();
     writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
     const logs = join(stateDir, "logs");
-    mkdirSync(logs);
+    mkdirSync(logs, { mode: 0o700 });
     const interrupted = '{"op":"update.runtime.event","historical":true';
-    writeFileSync(join(logs, "server.log"), interrupted, "utf8");
-    closeFileServerLogSinks();
+    writeFileSync(join(logs, "server.log"), interrupted, { encoding: "utf8", mode: 0o600 });
 
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toMatchObject({
       status: "imported",
       importedCount: 1,
     });
-    const raw = readFileSync(join(logs, "server.log"), "utf8");
-    expect(raw.startsWith(`${interrupted}\n`)).toBe(true);
-    const parsed = raw.split("\n").flatMap((line): Record<string, unknown>[] => {
-      try {
-        return [JSON.parse(line) as Record<string, unknown>];
-      } catch {
-        return [];
-      }
-    });
-    expect(parsed.filter((line) => line.op === "update.runtime.event")).toHaveLength(1);
+    expect(readFileSync(join(logs, "server.log"), "utf8")).toBe(interrupted);
+    const lines = canonicalLines(stateDir);
+    expect(lines.filter((line) => line.op === "update.runtime.event")).toHaveLength(1);
     expect(
-      parsed.filter((line) => line.op === "update.runtime.legacy-snapshot-imported"),
+      lines.filter((line) => line.op === "update.runtime.legacy-snapshot-imported"),
     ).toHaveLength(1);
   });
 
@@ -394,7 +420,9 @@ describe("legacy update audit import", () => {
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toMatchObject({
       status: "deferred",
     });
-    expect(existsSync(join(outside, "logs", "server.log"))).toBe(false);
+    expect(
+      existsSync(join(outside, "logs")) ? readdirSync(join(outside, "logs")) : [],
+    ).toStrictEqual([]);
   });
 
   it("rejects a hard-linked source", () => {
@@ -526,35 +554,37 @@ describe("legacy update audit import", () => {
     });
   });
 
-  it("recognizes an exact completion in an allowed legacy archive", () => {
+  it("re-anchors a completion that survives only in a legacy archive into a pinned batch", () => {
+    const events = [JSON.stringify(legacyEvent())];
+    const previous = importedRecordsFor(events, fixture());
     const stateDir = fixture();
-    writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
-    const first = importLegacyUpdateAuditSnapshot({ stateDir, level: "info" });
-    if (first.status !== "imported") throw new Error("expected first import");
-    closeFileServerLogSinks();
-    renameSync(
-      join(stateDir, "logs", "server.log"),
-      join(stateDir, "logs", "server-2025-01-02.log"),
-    );
+    writeLegacy(stateDir, events);
+    writeLegacyLog(stateDir, "server-2025-01-02.log", previous);
 
+    const reanchored = importLegacyUpdateAuditSnapshot({ stateDir, level: "info" });
+    expect(reanchored).toMatchObject({ status: "imported", importedCount: 1 });
+    const lines = canonicalLines(stateDir);
+    // The represented event is not appended again; only a fresh completion is.
+    expect(lines.filter((line) => line.op === "update.runtime.event")).toHaveLength(1);
+    expect(
+      lines.filter((line) => line.op === "update.runtime.legacy-snapshot-imported"),
+    ).toHaveLength(2);
+    expect(pinRecords(stateDir)).toHaveLength(1);
+
+    closeFileServerLogSinks();
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
       status: "already-imported",
-      importId: first.importId,
+      importId: reanchored.status === "imported" ? reanchored.importId : "",
     });
   });
 
   it("rejects a completion marker with extra or conflicting fields", () => {
-    const stateDir = fixture();
-    writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
-    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" }).status).toBe("imported");
-    closeFileServerLogSinks();
-    const lines = canonicalLines(stateDir);
-    const completion = lines.at(-1);
+    const events = [JSON.stringify(legacyEvent())];
+    const completion = importedRecordsFor(events, fixture()).at(-1);
     if (completion === undefined) throw new Error("expected completion");
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
-      `${JSON.stringify({ ...completion, snapshotId: "not-an-import-id" })}\n`,
-    );
+    const stateDir = fixture();
+    writeLegacy(stateDir, events);
+    writeLegacyLog(stateDir, "server.log", [{ ...completion, snapshotId: "not-an-import-id" }]);
 
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
       status: "deferred",
@@ -563,14 +593,14 @@ describe("legacy update audit import", () => {
   });
 
   it("does not credit a tampered historical event as represented migration evidence", () => {
-    const stateDir = fixture();
-    writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
-    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" }).status).toBe("imported");
-    closeFileServerLogSinks();
-    const imported = canonicalLines(stateDir).find((line) => line.op === "update.runtime.event");
+    const events = [JSON.stringify(legacyEvent())];
+    const imported = importedRecordsFor(events, fixture()).find(
+      (line) => line.op === "update.runtime.event",
+    );
     if (imported === undefined) throw new Error("expected historical event");
-    const tampered = { ...imported, status: "failed" };
-    writeFileSync(join(stateDir, "logs", "server.log"), `${JSON.stringify(tampered)}\n`);
+    const stateDir = fixture();
+    writeLegacy(stateDir, events);
+    writeLegacyLog(stateDir, "server.log", [{ ...imported, status: "failed" }]);
 
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
       status: "deferred",
@@ -583,8 +613,10 @@ describe("legacy update audit import", () => {
     writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
     const logs = join(stateDir, "logs");
     mkdirSync(logs);
-    for (let day = 1; day <= 16; day += 1) {
-      writeFileSync(join(logs, `server-2025-01-${String(day).padStart(2, "0")}.log`), "");
+    for (let day = 1; day <= 17; day += 1) {
+      writeFileSync(join(logs, `server-2025-01-${String(day).padStart(2, "0")}.log`), "", {
+        mode: 0o600,
+      });
     }
 
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
@@ -599,7 +631,7 @@ describe("legacy update audit import", () => {
     const logs = join(stateDir, "logs");
     mkdirSync(logs);
     const current = join(logs, "server.log");
-    writeFileSync(current, "");
+    writeFileSync(current, "", { mode: 0o600 });
     truncateSync(current, 32 * 1024 * 1024 + 1);
 
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
@@ -608,62 +640,66 @@ describe("legacy update audit import", () => {
     });
   });
 
-  it("bounds repeated historical migration evidence before appending", () => {
-    const stateDir = fixture();
-    writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
-    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" }).status).toBe("imported");
-    closeFileServerLogSinks();
-    const imported = canonicalLines(stateDir).find((line) => line.op === "update.runtime.event");
+  it("bounds repeated historical migration evidence before appending anything", () => {
+    const events = [JSON.stringify(legacyEvent())];
+    const imported = importedRecordsFor(events, fixture()).find(
+      (line) => line.op === "update.runtime.event",
+    );
     if (imported === undefined) throw new Error("expected historical event");
-    const crowdedLog = `${Array.from({ length: 2_050 }, () => JSON.stringify(imported)).join("\n")}\n`;
-    const logPath = join(stateDir, "logs", "server.log");
-    writeFileSync(logPath, crowdedLog);
+    const stateDir = fixture();
+    writeLegacy(stateDir, events);
+    const legacy = writeLegacyLog(
+      stateDir,
+      "server.log",
+      Array.from({ length: 2_050 }, () => imported),
+    );
+    const crowded = readFileSync(legacy);
 
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toStrictEqual({
       status: "deferred",
       reason: "destination-invalid",
     });
-    const after = readFileSync(logPath, "utf8");
-    expect(after.startsWith(crowdedLog)).toBe(true);
-    const appended = after.slice(crowdedLog.length).trim().split("\n");
-    expect(appended).toHaveLength(1);
-    expect(JSON.parse(appended[0] ?? "null")).toMatchObject({
-      op: "server-log.safe-open",
-      persistenceStatus: "opened",
-      completeness: "complete",
-      loss: "none",
-      correlationId: "unknown-correlation-id",
-    });
-    expect(after).not.toContain(stateDir);
+    expect(readFileSync(legacy).equals(crowded)).toBe(true);
+    // Inspection is read-only: nothing is written before the batch is accepted.
+    expect(listActivityLogFiles(stateDir).map((file) => file.kind)).toStrictEqual([
+      "legacy-current",
+    ]);
   });
 
-  it.each(["symlink", "hardlink"])("rejects a %s canonical current file", (kind) => {
-    const stateDir = fixture();
-    writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
-    const logs = join(stateDir, "logs");
-    mkdirSync(logs);
-    const target = join(stateDir, "foreign.log");
-    writeFileSync(target, "");
-    if (kind === "symlink") symlinkSync(target, join(logs, "server.log"));
-    else linkSync(target, join(logs, "server.log"));
+  it.each(["symlink", "hardlink"])(
+    "never reads or changes a %s planted at the legacy log name",
+    (kind) => {
+      const stateDir = fixture();
+      writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
+      const logs = join(stateDir, "logs");
+      mkdirSync(logs, { mode: 0o700 });
+      const target = join(stateDir, "foreign.log");
+      writeFileSync(target, "", { mode: 0o600 });
+      if (kind === "symlink") symlinkSync(target, join(logs, "server.log"));
+      else linkSync(target, join(logs, "server.log"));
 
-    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toMatchObject({
-      status: "deferred",
-    });
-    expect(readFileSync(target, "utf8")).toBe("");
-  });
+      // A symlink is not Activity Log evidence and is ignored; a hard-linked file at a log name is
+      // refused as a scan target and defers the import.
+      expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toMatchObject(
+        kind === "symlink"
+          ? { status: "imported" }
+          : { status: "deferred", reason: "destination-unsafe" },
+      );
+      expect(readFileSync(target, "utf8")).toBe("");
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
-    "rejects a FIFO canonical current file without blocking",
+    "ignores a FIFO at the legacy log name without blocking",
     () => {
       const stateDir = fixture();
       writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
       const logs = join(stateDir, "logs");
-      mkdirSync(logs);
+      mkdirSync(logs, { mode: 0o700 });
       execFileSync("mkfifo", [join(logs, "server.log")]);
 
       expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toMatchObject({
-        status: "deferred",
+        status: "imported",
       });
     },
   );
@@ -671,11 +707,7 @@ describe("legacy update audit import", () => {
   it("ignores valid unrelated nested log records while scanning only import evidence", () => {
     const stateDir = fixture();
     writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
-    mkdirSync(join(stateDir, "logs"));
-    writeFileSync(
-      join(stateDir, "logs", "server.log"),
-      `${JSON.stringify({ op: "unrelated", nested: { value: true } })}\n`,
-    );
+    writeLegacyLog(stateDir, "server.log", [{ op: "unrelated", nested: { value: true } }]);
 
     expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toMatchObject({
       status: "imported",
@@ -683,16 +715,18 @@ describe("legacy update audit import", () => {
     });
   });
 
-  it("defers and retains the source when a scanned log descriptor cannot be fsynced", () => {
+  it("defers, retains the source and pins nothing when the appended batch cannot be fsynced", () => {
     const stateDir = fixture();
     const source = writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
     fsFaults.failFsync = true;
 
-    expect(importLegacyUpdateAuditSnapshot({ stateDir, level: "info" })).toMatchObject({
-      status: "deferred",
-    });
+    const result = importLegacyUpdateAuditSnapshot({ stateDir, level: "info" });
+    fsFaults.failFsync = false;
+
+    expect(result).toStrictEqual({ status: "deferred", reason: "durability-uncertain" });
     expect(existsSync(source)).toBe(true);
-    expect(canonicalLines(stateDir)).toHaveLength(0);
+    // An unsynced batch is never credited: nothing is pinned, so the next launch imports again.
+    expect(pinRecords(stateDir)).toHaveLength(0);
   });
 
   it("detects source mutation after the bounded descriptor read", () => {

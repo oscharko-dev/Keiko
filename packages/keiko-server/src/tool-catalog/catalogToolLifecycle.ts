@@ -17,6 +17,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
   isErrorKind,
+  recordActivityLogLoss,
   type ActivityLogErrorKind,
   type ActivityLogEventEnvelope,
   type ActivityLogEventFields,
@@ -743,6 +744,9 @@ function writeToSink(
   try {
     writeLifecycle(sink, event);
   } catch (error) {
+    // The lifecycle line is lost from this sink: counted in the process loss ledger, and the
+    // failure itself reaches the operator diagnostic below.
+    recordActivityLogLoss("port-sink-failed");
     emitServerDiagnostic(
       diagnostics,
       serverDiagnosticFromError({

@@ -16,6 +16,8 @@
 //   9. memory-consolidation.log-port.sink-failed — keiko-memory-consolidation's own structural log port
 //  10. memory-consolidation.summary-fallback — keiko-memory-consolidation's runConsolidation fallback path
 //  11. security.macos-keychain.fallback — keiko-security's own structural log port
+//  12. quality-intelligence.capsule-store-open — keiko-server, the QI capsule resolver's store-open
+//                                         catch, which swallowed the failure before #3532
 //
 // Before this widening the gate forced exactly ONE synchronous throw through the top-level server.ts
 // catch and asserted against exactly one produced record — real coverage of the other ~100
@@ -33,15 +35,13 @@
 // sink.test.ts / consolidate.test.ts / log-port.test.ts, one per site above).
 
 import { Buffer } from "node:buffer";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const scriptPath = fileURLToPath(import.meta.url);
@@ -51,7 +51,6 @@ const SECRET_MARKER = "gate-secret-DO-NOT-LEAK";
 const ID_PATTERN = /^[A-Za-z0-9._-]{8,128}$/;
 const HOST = "127.0.0.1";
 const REPO_ROOT = resolve(here, "..");
-const GIT_EXECUTABLE = resolveHostExecutable("git", { workspaceRoot: REPO_ROOT });
 
 export const SERVER_TOP_LEVEL_SITE_ID = "server.top-level-catch";
 export const MIN_STRATIFIED_SITES = 10;
@@ -88,8 +87,8 @@ function isClassMember(node) {
 }
 
 // Class members get their own owner, `Class.member`, so two catches in different methods of one
-// class never share a key: the base-versus-head diff counts findings per owner, and a shared key
-// would let a new silent catch in one method hide behind a fixed one in another.
+// class never share a key: the legacy register counts findings per owner, and a shared key would
+// let a new silent catch in one method hide behind a fixed one in another.
 function classMemberName(member) {
   const className = member.parent.name?.text ?? "<class>";
   if (ts.isConstructorDeclaration(member)) return `${className}.constructor`;
@@ -160,6 +159,18 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
     "packages/keiko-cli/src/ui.ts:safeCliErrorKind",
     "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
+  ],
+  [
+    "packages/keiko-cli/src/ui.ts:runShutdownHook",
+    "The caught hook failure returns as its closed kind, which the process.exiting line records.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-readiness.ts:activityLogCatalogCoherent",
+    "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-logger.ts:isMandatoryActivityLogEvent",
+    "A hostile registration accessor makes the event ordinary instead of failing the emitting call.",
   ],
   [
     "packages/keiko-contracts/src/observability.ts:registrationMatchesCanonical",
@@ -245,13 +256,183 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "packages/keiko-server/src/observability/server-log.ts:safeArtifactErrorKind",
     "A hostile prototype trap is reduced to absent data inside the last-resort log sink.",
   ],
+  // #3530 segmented Activity Log store: fail-closed probes, and failure outcomes that a registered
+  // storage event persists.
   [
-    "packages/keiko-server/src/observability/server-log.ts:handleStillCurrent",
-    "A failed file-identity check invalidates the cached handle and forces a safe reopen.",
+    "packages/keiko-server/src/observability/activity-log-store.ts:regularFileStat",
+    "A vanished or unreadable entry is classified as absent from the Activity Log listing.",
   ],
   [
-    "packages/keiko-server/src/observability/server-log.ts:currentHandleIdentity",
-    "A failed file-identity check invalidates the cached handle and forces a safe reopen.",
+    "packages/keiko-server/src/observability/activity-log-store.ts:readPinRecord",
+    "An unreadable pin record protects nothing; the caller removes it and persists pin.expired invalid-record.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:processIsAlive",
+    "The catch maps the closed ESRCH result while conservatively treating unknown failures as alive.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:lastCompleteLineOp",
+    "An unparsable tail line is classified as carrying no seal line.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:lineSeq",
+    "An unparsable line is classified as carrying no sequence number.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:activityLogSegmentSeqSpan",
+    "An unreadable span is reported as unknown in the registered quota-exhaustion marker.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:activityLogFreeBytes",
+    "Free space that cannot be measured is reported as absent, never as plenty.",
+  ],
+  // #3554 store policy (review comment 4050604711 on PR #3554): every outcome below is one branch
+  // of resolveActivityLogStorePolicy's fail-safe fallback, and any branch that actually changes what
+  // governs the store is reported through the registered activity-log.policy.conflict line the very
+  // next time this process writes.
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:readActivityLogPolicyRecord",
+    "An unreadable or corrupt policy record is treated as absent; the caller republishes it, or " +
+      "adopts a live peer's record and persists activity-log.policy.conflict when it still differs.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:publishPolicy",
+    "A failed publish — including the expected exclusive-create race loss — is reported false; the " +
+      "caller re-reads the record and persists activity-log.policy.conflict when its own values differ.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:repairPolicy",
+    "A failed removal of an already-corrupt or already-gone record is not retried; the publish that " +
+      "follows, or a peer's own resolution, is what actually decides the store's governing policy.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:replacePolicy",
+    "A failed removal of the stale record does not block the replacement publish that follows; " +
+      "whether it lands or a racing peer's does, the outcome is what activity-log.policy.conflict reports.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-store.ts:resolveActivityLogStorePolicy",
+    "Any unexpected filesystem failure falls back to this process's own requested values, " +
+      "unpersisted — the same ungoverned behavior the store had before this policy existed.",
+  ],
+  // #3531 segment-manifest store: derived, rebuildable metadata. Every outcome below is counted in
+  // the registered support.manifest.rebuilt event, and nothing is ever trusted after a failure.
+  [
+    "packages/keiko-cli/src/support-segment-manifest.ts:parseSegmentManifest",
+    "A stored manifest that is not JSON is invalid; it is rebuilt from its sealed segment, never trusted.",
+  ],
+  [
+    "packages/keiko-cli/src/support-segment-manifest.ts:ensureSegmentManifestDirectory",
+    "A store that cannot be created keeps manifests in memory; support.manifest.rebuilt persists persisted=false.",
+  ],
+  [
+    "packages/keiko-cli/src/support-segment-manifest.ts:readStoredSegmentManifest",
+    "An unreadable or invalid stored manifest is rebuilt from its segment; support.manifest.rebuilt counts it.",
+  ],
+  [
+    "packages/keiko-cli/src/support-segment-scan.ts:persistManifest",
+    "A manifest that cannot be written serves the pass from memory; support.manifest.rebuilt counts the failure.",
+  ],
+  [
+    "packages/keiko-cli/src/support-segment-scan.ts:removeOrphanManifests",
+    "An orphan manifest that cannot be removed is counted by support.manifest.rebuilt and retried next pass.",
+  ],
+  // #3533 SupportIncident store: the same fail-closed probes as the Activity Log pin records.
+  [
+    "packages/keiko-server/src/observability/support-incident-store.ts:regularFileState",
+    "A vanished or unreadable entry is classified as absent from the incident store listing.",
+  ],
+  [
+    "packages/keiko-server/src/observability/support-incident-store.ts:readRecord",
+    "An unreadable incident record describes nothing; the next sweep removes it and persists support.incident.expired invalid-record.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:activeLogKey",
+    "A directory that cannot be resolved is keyed by its lexical path; opening it still fails closed.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:closeQuietly",
+    "Best-effort close of a descriptor the writer has already stopped using.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:currentSegmentSize",
+    "A failed identity read makes the caller treat the segment as mutated and fail closed.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:sharesInode",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:pathMissing",
+    "The catch classifies the closed ENOENT result of an existence probe.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:readSealedTail",
+    "An unreadable tail is persisted as tailState unknown in the registered recovery event.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:finishInterruptedSeal",
+    "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:settleOrphanDescriptor",
+    "Best-effort fsync and read-only mode on a recovered segment; the sealing rename still decides.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:recoverOrphanedSegment",
+    "The catch returns a failed recovery outcome the registered segment.recovered event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:removePinRecordQuietly",
+    "A failed removal is persisted by the registered pin.expired event and retried after a backoff.",
+  ],
+  [
+    "packages/keiko-server/src/observability/activity-log-readiness.ts:storageCheck",
+    "A throwing storage check becomes the closed storage-check-failed reason the readiness line persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:listingOrUndefined",
+    "An unlistable directory becomes a storage-unavailable outcome the registered pin events persist.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:tightenLegacyFile",
+    "A legacy file that cannot be narrowed stays in place; the retention event persists the failure.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:removeRetentionTarget",
+    "A failed deletion is persisted by the registered retention event and retried after a backoff.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:withdrawSegment",
+    "A segment left in place is this process's abandoned segment; maintenance seals it with evidence.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:restrictSealedMode",
+    "Best-effort read-only mode after a successful seal; the segment stays owner-private.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:descriptorAtPath",
+    "A failed identity read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:persistPostWriteMutation",
+    "The mutation evidence stays queued; the caller reports the event whose location is unknown.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:createPin",
+    "The catch returns the closed storage-unavailable rejection the registered pin.created event persists.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:ownedDirectory",
+    "A failed ownership read is the fail-closed false result of this trust-boundary predicate.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:batchIsWritable",
+    "An unformattable batch is deferred to its caller before any line is written.",
+  ],
+  [
+    "packages/keiko-server/src/observability/server-log.ts:syncActiveSegment",
+    "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
   ],
 ]);
 
@@ -344,79 +525,137 @@ export function unregisteredFailurePathViolations(source, path = "fixture.ts") {
   return findings;
 }
 
-function findingSignature(finding) {
-  return `${finding.kind}:${finding.owner}`;
+// ─── The legacy failure-path register (#3540) ───────────────────────────────────────────────────
+//
+// The catch-clause rule runs over EVERY production TypeScript file under packages/ on every run; no
+// base ref and no diff decides what is checked. Failure paths that predate this full-tree rule are
+// listed per file, enclosing owner and kind in a committed register that may only shrink: a finding
+// beyond its register count fails the gate wherever it is, and a register entry the tree no longer
+// has fails it too, until `--prune-register` lowers the entry. Nothing adds to the register; a new
+// failure path is fixed, or reviewed into REVIEWED_FAILURE_PATH_EXEMPTIONS with its reason.
+
+export const FAILURE_PATH_REGISTER_PATH = "docs/observability/legacy-failure-path-register.json";
+const FAILURE_PATH_KINDS = new Set(["unregistered-catch", "raw-console-catch"]);
+const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "coverage", "out", "__tests__"]);
+
+function isProductionTypeScript(path) {
+  return path.endsWith(".ts") && !path.endsWith(".d.ts") && !path.endsWith(".test.ts");
 }
 
-// Findings in the head revision of one file that its base revision did not already have.
-export function newFailurePathFindings(baseSource, headSource, path) {
-  const baseCounts = Map.groupBy(
-    unregisteredFailurePathViolations(baseSource, path),
-    findingSignature,
+function collectTypeScript(repoRoot, relative, out) {
+  for (const entry of readdirSync(resolve(repoRoot, relative), { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || SKIPPED_DIRECTORIES.has(entry.name)) continue;
+    const path = `${relative}/${entry.name}`;
+    if (entry.isDirectory()) collectTypeScript(repoRoot, path, out);
+    else if (entry.isFile() && isProductionTypeScript(path)) out.push(path);
+  }
+}
+
+// Code-unit order: the same on every host and locale, which `localeCompare` is not.
+function compareCodeUnits(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+// Every production TypeScript file on disk, tracked or not, in code-unit order.
+export function productionTypeScriptFiles(repoRoot = REPO_ROOT) {
+  const out = [];
+  collectTypeScript(repoRoot, "packages", out);
+  return out.toSorted(compareCodeUnits);
+}
+
+export function scanFailurePaths(repoRoot = REPO_ROOT) {
+  return productionTypeScriptFiles(repoRoot).flatMap((path) =>
+    unregisteredFailurePathViolations(readFileSync(resolve(repoRoot, path), "utf8"), path),
   );
-  return unregisteredFailurePathViolations(headSource, path).filter((finding) => {
-    const signature = findingSignature(finding);
-    const matches = baseCounts.get(signature);
-    if (matches === undefined || matches.length === 0) return true;
-    matches.pop();
-    return false;
-  });
 }
 
-function gitText(args, cwd = REPO_ROOT) {
-  return execFileSync(GIT_EXECUTABLE, args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+function failurePathKey(entry) {
+  return `${entry.path}\u0000${entry.owner}\u0000${entry.kind}`;
 }
 
-function resolveGateBaseCommit(repoRoot) {
-  const configured = process.env.GITHUB_BASE_REF;
-  const candidates = [
-    ...(configured === undefined ? [] : [`origin/${configured}`, configured]),
-    "origin/dev",
-    "dev",
-  ];
-  for (const candidate of candidates) {
-    try {
-      return gitText(["rev-parse", "--verify", `${candidate}^{commit}`], repoRoot).trim();
-    } catch {
-      // Try the next deterministic local spelling of the PR base.
-    }
-  }
-  throw new Error("error-observability-base-ref-unavailable");
+function validRegisterEntry(entry) {
+  return (
+    typeof entry === "object" &&
+    entry !== null &&
+    typeof entry.path === "string" &&
+    entry.path.startsWith("packages/") &&
+    typeof entry.owner === "string" &&
+    FAILURE_PATH_KINDS.has(entry.kind) &&
+    Number.isSafeInteger(entry.count) &&
+    entry.count > 0 &&
+    Object.keys(entry).length === 4
+  );
 }
 
-function changedProductionTypeScriptFiles(repoRoot, baseCommit) {
-  return gitText(
-    ["diff", "--name-only", "--diff-filter=ACMR", baseCommit, "--", "packages"],
-    repoRoot,
-  )
-    .split("\n")
-    .filter(
-      (path) =>
-        path.endsWith(".ts") &&
-        !path.endsWith(".d.ts") &&
-        !path.endsWith(".test.ts") &&
-        !path.includes("/__tests__/"),
+// Fails closed on any shape but the exact one `--prune-register` writes: sorted, unique, positive.
+export function parseFailurePathRegister(text) {
+  const parsed = JSON.parse(text);
+  const entries = parsed?.entries;
+  const valid =
+    parsed?.schemaVersion === 1 &&
+    Object.keys(parsed).length === 2 &&
+    Array.isArray(entries) &&
+    entries.every(validRegisterEntry) &&
+    entries.every(
+      (entry, index) => index === 0 || failurePathKey(entries[index - 1]) < failurePathKey(entry),
     );
+  if (!valid) throw new Error("error-observability-register-invalid");
+  return entries;
 }
 
-function baseFileSource(repoRoot, baseCommit, path) {
-  try {
-    return gitText(["show", `${baseCommit}:${path}`], repoRoot);
-  } catch {
-    return "";
-  }
+export function serializeFailurePathRegister(entries) {
+  return `${JSON.stringify({ schemaVersion: 1, entries }, null, 2)}\n`;
 }
 
-export function unregisteredFailurePathDiffViolations(repoRoot = REPO_ROOT) {
-  const baseCommit = resolveGateBaseCommit(repoRoot);
-  return changedProductionTypeScriptFiles(repoRoot, baseCommit).flatMap((path) => {
-    const headSource = readFileSync(resolve(repoRoot, path), "utf8");
-    return newFailurePathFindings(baseFileSource(repoRoot, baseCommit, path), headSource, path);
+// Findings the register does not cover, and register entries the tree no longer holds in full.
+export function failurePathRegisterDiff(findings, entries) {
+  const found = Map.groupBy(findings, failurePathKey);
+  const registered = new Map(entries.map((entry) => [failurePathKey(entry), entry.count]));
+  const unregistered = [...found].flatMap(([key, sites]) =>
+    sites.length > (registered.get(key) ?? 0) ? sites : [],
+  );
+  const stale = entries.filter(
+    (entry) => (found.get(failurePathKey(entry))?.length ?? 0) < entry.count,
+  );
+  return { unregistered, stale };
+}
+
+// Lowers every entry to what the tree still holds and drops the ones it no longer has. It never
+// raises a count or adds an entry, so pruning cannot register a new failure path.
+export function prunedFailurePathRegister(findings, entries) {
+  const found = Map.groupBy(findings, failurePathKey);
+  return entries.flatMap((entry) => {
+    const count = Math.min(entry.count, found.get(failurePathKey(entry))?.length ?? 0);
+    return count > 0 ? [{ ...entry, count }] : [];
   });
+}
+
+function readFailurePathRegister(repoRoot) {
+  return parseFailurePathRegister(
+    readFileSync(resolve(repoRoot, FAILURE_PATH_REGISTER_PATH), "utf8"),
+  );
+}
+
+export function failurePathRegisterViolations(repoRoot = REPO_ROOT) {
+  const { unregistered, stale } = failurePathRegisterDiff(
+    scanFailurePaths(repoRoot),
+    readFailurePathRegister(repoRoot),
+  );
+  return [
+    ...unregistered,
+    ...stale.map((entry) => ({ ...entry, line: 0, kind: "stale-register-entry" })),
+  ];
+}
+
+export function pruneFailurePathRegister(repoRoot = REPO_ROOT) {
+  const entries = readFailurePathRegister(repoRoot);
+  const pruned = prunedFailurePathRegister(scanFailurePaths(repoRoot), entries);
+  writeFileSync(
+    resolve(repoRoot, FAILURE_PATH_REGISTER_PATH),
+    serializeFailurePathRegister(pruned),
+  );
+  return { before: entries.length, after: pruned.length };
 }
 
 function distPath(pkg, file) {
@@ -956,6 +1195,58 @@ function makeKeychainFallbackProbe() {
   };
 }
 
+// #3532: the Quality Intelligence capsule resolver used to swallow a knowledge-store open failure
+// and degrade silently to QI_CAPSULE_UNAVAILABLE. The failure is now reported once, on the operator
+// diagnostic path, before the resolver degrades to its empty result.
+function makeQualityIntelligenceCapsuleStoreProbe() {
+  const correlationId = `gate-qi-capsule-${randomUUID()}`;
+  return {
+    id: "quality-intelligence.capsule-store-open",
+    async run() {
+      const mod = await import(distPath("keiko-server", "qualityIntelligence/capsuleAdapter.js"));
+      const root = mkdtempSync(join(tmpdir(), "keiko-gate-qi-capsule-"));
+      try {
+        // A regular file where the knowledge-store directory belongs makes every open fail.
+        writeFileSync(join(root, "local-knowledge"), "occupied");
+        const records = [];
+        const resolver = mod.makeCapsuleResolver(
+          { uiDbPath: join(root, "ui.db"), diagnostics: { record: (r) => records.push(r) } },
+          correlationId,
+        );
+        const documents = resolver?.capsule("gate-capsule");
+        check(
+          Array.isArray(documents) && documents.length === 0,
+          "qi capsule resolver did not degrade to an empty result",
+        );
+        resolver?.close();
+        return records;
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    assertShape(record) {
+      check(
+        record.correlationId === correlationId,
+        `qi capsule correlationId: ${record.correlationId}`,
+      );
+      check(
+        record.operation === "quality-intelligence.capsule-source",
+        `qi capsule operation: ${record.operation}`,
+      );
+      check(record.source === "qi.capsule-adapter", `qi capsule source: ${record.source}`);
+      check(
+        record.message ===
+          "Quality Intelligence could not open the knowledge store for a capsule source.",
+        `qi capsule message: ${record.message}`,
+      );
+      check(
+        typeof record.errorClass === "string" && record.errorClass.length > 0,
+        "qi capsule errorClass missing",
+      );
+    },
+  };
+}
+
 export const SITE_PROBES = [
   makeSinkTerminalTeeProbe(),
   makeMemoryGetProbe(),
@@ -967,6 +1258,7 @@ export const SITE_PROBES = [
   makeConsolidationLogPortProbe(),
   makeConsolidationSummaryFallbackProbe(),
   makeKeychainFallbackProbe(),
+  makeQualityIntelligenceCapsuleStoreProbe(),
 ];
 
 async function runProbe(probe, exercised) {
@@ -1004,15 +1296,21 @@ async function runServerTopLevelSite(exercised) {
   }
 }
 
-// The static check diffs against the PR base commit. Tests of the probe wiring pass their own
-// findings, so they do not depend on how much Git history the checkout carries.
-export async function main(findStaticViolations = unregisteredFailurePathDiffViolations) {
+// The static check scans the whole tree against the legacy register. Tests of the probe wiring pass
+// their own findings, so they do not depend on the tree they run in.
+export async function main(findStaticViolations = failurePathRegisterViolations) {
   const staticViolations = findStaticViolations();
   if (staticViolations.length > 0) {
     const sites = staticViolations
-      .map((finding) => `${finding.path}:${String(finding.line)} (${finding.kind})`)
+      .map(
+        (finding) => `${finding.path}:${String(finding.line)} ${finding.owner} (${finding.kind})`,
+      )
       .join(", ");
-    fail(`new unregistered failure path(s): ${sites}`);
+    fail(
+      `failure path(s) outside ${FAILURE_PATH_REGISTER_PATH}: ${sites}. Record the failure through ` +
+        "the owning log port or rethrow it; a stale-register-entry means a listed path is gone: run " +
+        "`node scripts/check-error-observability.mjs --prune-register` and commit the smaller register.",
+    );
   }
   const exercised = [];
   await runServerTopLevelSite(exercised);
@@ -1030,7 +1328,14 @@ export async function main(findStaticViolations = unregisteredFailurePathDiffVio
 
 if (process.argv[1] === scriptPath) {
   try {
-    await main();
+    if (process.argv.includes("--prune-register")) {
+      const { before, after } = pruneFailurePathRegister();
+      console.log(
+        `check:error-observability register pruned: ${String(before)} -> ${String(after)} entries.`,
+      );
+    } else {
+      await main();
+    }
   } catch (error) {
     fail(`unexpected gate error: ${String(error?.stack ?? error)}`);
   }

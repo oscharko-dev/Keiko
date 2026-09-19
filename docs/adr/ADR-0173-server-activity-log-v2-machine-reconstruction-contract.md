@@ -25,12 +25,41 @@ exclusive claim of the dated name, and verified
 single-link archive handles before retention unlink. The residual same-user pathname race is explicit
 and does not authorize unbounded growth.
 
+Amended by #3530 on 2026-09-18: bounded immutable segments replace the single shared
+`server.log`, its UTC-daily archives and count-only retention (D14). Each process appends only to its
+own active segment; sealed segments are read-only and never rewritten. Retention is bounded by bytes
+and age across every segment and legacy file, with crash recovery, retention pins under a reserved
+quota, and closed body-free evidence for sealing, recovery, retention, pressure and pins.
+`server-log.rotation` and `server-log.capacity-warning` are retired.
+
+Amended by #3554 on 2026-09-18: several cooperating processes sharing one `logs/` directory
+previously resolved `KEIKO_LOG_RETENTION_BYTES`/`_DAYS`/`KEIKO_LOG_PIN_QUOTA_BYTES` purely from their
+own env, so the byte bound above held only per process, not across them (D14). One closed-grammar
+`store-policy.json` record now holds the values every cooperating process actually enforces: the
+first process to find no valid record publishes it, race-safe; every later process applies the
+STORED values regardless of its own env and records one `activity-log.policy.conflict` line per
+process lifetime when they differ; a process may replace a stale or corrupt record only while it is
+the directory's sole live writer.
+
 Amended by #3529 on 2026-09-17: the heuristic operation inventory is now a non-authoritative
 migration view. Canonical TypeScript-resolved registrations form the versioned production registry,
 derive exact emitter types, and are revalidated at the serialization boundary. Persisted v2
 identity now includes registry/schema digests and safe build/release/platform/capability dimensions;
 readers classify compatibility and sequence integrity explicitly instead of treating every
 parseable or partially identified line as valid v2 evidence.
+
+Amended by #3532 on 2026-09-18: every production process now reaches the registry-validated writer
+or reports that it cannot (D6). Lost events are counted in one bounded, closed ledger and persisted
+as summaries. Diagnostic readiness is a closed state that `/api/health`, `keiko status`,
+`keiko support export` and the desktop footer report. Every exit leaves one `process.exiting` line,
+and a fatal crash leaves `process.fatal` (D7). The raw `ui.log` channel is retired, and the support
+bundle never carries it (D8, D9).
+
+Amended by #3531 on 2026-09-18: `keiko support query` and selective `keiko support export` read the
+segmented log in bounded memory through derived, rebuildable per-segment manifests, and select an
+operation's whole registered causal closure or report it `insufficient`; required evidence is never
+cut to fit a budget (D16). `keiko support analyze` reads its input through the same bounded line
+reader.
 
 ## Context
 
@@ -89,7 +118,7 @@ complete v2 identity below; no producer may set or override any of it:
 - `seq: number` — allocated from one module-level counter shared by every `ActiveLog` in the
   process (not one counter per resolved log directory), so a process writing to more than one
   state directory still stamps one monotonic sequence, never two independently-numbered ones.
-  Survives UTC day boundaries and every `ActiveLog` reinitialization; resets only on process
+  Survives segment seals and every `ActiveLog` reinitialization; resets only on process
   restart.
   Reserved because it is the ordering primitive (D2) — if a caller could set `extra.seq`, ordering
   claims would be forgeable.
@@ -132,7 +161,7 @@ the tuple alone.
 
 **The sequence is monotonic and may contain gaps.** Each non-filtered
 `createFileSinkFacade.write` invocation reserves one identity before boundary handling or opening the
-file. The first record that invocation actually persists — safe-open evidence, rotation/retention
+file. The first record that invocation actually persists — safe-open evidence, segment or retention
 evidence, or the caller record — uses that reserved identity; any additional records allocate their
 identities immediately before their physical writes. An opening or write failure never rolls an
 identity back. Two callers racing the same failure therefore cannot reuse the number that follows it;
@@ -140,7 +169,7 @@ a missing number is the strictly safer failure than a repeated one. A gap marks 
 subsequent evidence write that could not persist its next record. On a clean exit the associated
 failure is accounted for by `reportServerLogFailure`, which emits a throttled, independent-channel
 stderr notice (`server-log.write-failed`) whose `suppressedNotices` count accounts for the failed
-sink invocations, so the throttle hides the failure's *repetition*, never its *scale*. That
+sink invocations, so the throttle hides the failure's _repetition_, never its _scale_. That
 notice travels a fixed **channel order**, each one independent of the one before it: the **file
 sink** is the primary write path and is what the notice reports on; failing that, the **stderr
 notice** carries the redacted classification (`op`, `failedOp`, `correlationId`, `errorKind`,
@@ -154,10 +183,10 @@ the next unthrottled failure notice, or, if none arrives first, flushed once by
 test teardown) before the counter is cleared. **The stated limit**: a hard kill the process never
 gets to handle — `SIGKILL`, a container OOM-kill, power loss — skips shutdown entirely, and whatever
 count was still open in that instant is lost with it. The channel layering has the same honest
-ceiling, not a stronger one: if the file sink, the stderr notice, *and* the `process.emitWarning`
+ceiling, not a stronger one: if the file sink, the stderr notice, _and_ the `process.emitWarning`
 fallback are all unavailable in the same instant (for example, stderr is gone and nothing in the
 process is listening for `'warning'`), the notice is lost — three independent channels are not an
-infinite one. The `seq` gap itself still marks that a write failed even then; only the *count* of how
+infinite one. The `seq` gap itself still marks that a write failed even then; only the _count_ of how
 many is not recoverable after that kind of exit. Exact accounting across every conceivable process
 exit or channel failure was never a promise this design can keep, and this ADR states that limit
 rather than the stricter claim the code cannot back.
@@ -191,7 +220,7 @@ protected target and preserve the single-log contract. Once isolation has been p
 open failure is retried only through the established control-state log.
 
 This is a placement rule, not a second logging system. The control root receives the existing
-`ServerLogSink` at `logs/server.log`, so D1-D13, correlation, redaction, rotation, retention, and
+`ServerLogSink` at `logs/`, so D1-D14, correlation, redaction, segments, retention, and
 the generated op vocabulary apply unchanged. Install-layout normalization is persisted there
 before a corrected internal path is consumed, and its correlation id joins the complete command
 lifecycle. Audit records start and completion/failure without writing into the audited tree.
@@ -390,6 +419,133 @@ rejects broad or unknown scope, duplicates, stale/expired records, and any extra
 to authorize prohibited fields, silent loss, or incomplete evidence. Exemptions cannot modify an
 operation schema or reduce a supported class's sufficiency requirement.
 
+**One command enforces the contract permanently.** `npm run check:activity-log` builds the packages
+and then evaluates the complete registered inventory on every run by composing the checks that own
+each rule: `check:op-catalog` (registry, exemptions, failure-class coverage, failure-surface
+inventory, proof and scenario resolution), `test:activity-log-scenarios` (executes the curated
+scenario matrix the inventory resolves), `check:error-observability`, `arch:check` with
+`arch:check:negative`, and `check:release-impact`. Required CI runs that exact command. It takes no
+changed-file input, so diff awareness can never narrow what it proves. That includes the catch
+rule of `check:error-observability`: it scans every production file on every run, and the failure
+paths that predate the full-tree rule sit in a committed register that may only shrink
+(`docs/observability/legacy-failure-path-register.json`); nothing adds to it. The exemption validator also
+requires the record's owner to be the operation's owning package and its expiry to lie at most 180
+days ahead, so no record is unowned or permanent.
+
+**Every production process has a writer, and a missing one is visible (#3532).** The registry is
+authoritative only when every production emitter reaches the sink that enforces it. The
+process-wide logger therefore resolves the runtime state directory exactly as the CLI does: a
+non-empty `KEIKO_STATE_DIR`, resolved against the working directory when relative, else
+`<cwd>/.keiko`. So `keiko run`, `keiko memory`, `keiko evaluate` and every other command that never
+set the variable write the same Activity Log that `keiko start` in that directory would.
+
+- A logger that writes nothing exists only when a test installs it explicitly: the vitest setup
+  files set a global test-writer symbol.
+- A production process whose log directory cannot be opened gets an unavailable logger. It counts
+  every event it receives as lost, and it is rebuilt on the next event instead of being memoised.
+- The log's own evidence bypasses the `KEIKO_LOG_LEVEL` threshold: `process.started`,
+  `process.exiting`, `process.fatal`, `activity-log.readiness`, `activity-log.loss`, and every
+  `lifecycle: "loss"` registration. `silent` can quiet the log. It can never hide that the log was
+  quieted or that it lost data.
+
+Domain packages keep their own injected port (`SecurityLogSink`, `KnowledgeLogSink`,
+`MemoryVaultLogSink`, `ConsolidationLogSink`, `ModelGatewayLogSink`). The composition roots hand
+every port the process sink. `keiko memory` hands it to the memory vault and security ports. The
+Gateways built by CLI model resolution, `keiko run`, the prompt enhancer and `keiko evaluate` write
+through it, and so does the Quality Intelligence capsule store. `cli.audit.*` is now registered
+like every other operation. Before this, those lines were unregistered plain objects that the
+production sink refused.
+
+**The port pattern for a new package (BYOA #482).** A package that performs work follows five rules:
+
+1. It declares its own `<Package>LogSink { write(event) }` port.
+2. It builds its events with `activityLogEvent` from its own registrations.
+3. It receives the process sink from the server or CLI composition root. It never constructs a file
+   sink and never reads `KEIKO_STATE_DIR` itself.
+4. It isolates its sink. A throwing `write` is caught and counted as `port-sink-failed` in the loss
+   ledger, every time and not only the first. An event handed to a port with no sink wired is
+   counted as `port-unwired`, so a missed composition edge is visible instead of silent.
+5. It reports a failing sink once per sink instance, on the independent process-warning channel.
+
+**Loss is counted, never silent (#3532).** One bounded, process-wide loss ledger lives in the
+contracts leaf, so every layer can reach it without a dependency edge that points the wrong way.
+It is a fixed record of saturating counters, never a queue and never content. Each counter has a
+closed reason:
+
+- the logger: a failed write, or no writer at all;
+- a schema rejection;
+- a persistence failure;
+- a failed diagnostic sink or domain-port sink;
+- the BFF's rejected and rate-suppressed browser reports;
+- the browser's own evicted, throttled, failed and cap-suppressed reports;
+- events the CLI collector dropped;
+- a summary that could not be written.
+
+The server persists the counters as an `activity-log.loss` summary: on a heartbeat when the
+counters changed, and always at exit, so a clean shutdown also proves that nothing was lost. A
+summary that cannot be written only increments its own counter, so the accounting never recurses
+into the failing sink. The browser counts its own side in the same closed vocabulary. It sends the
+counts with its next report and once more when the page is hidden. The BFF adds them to its ledger
+and records them on the `client.diagnostic` line.
+
+**Readiness is a closed, observable state (#3532).** Each process evaluates whether it can currently
+produce reconstruction evidence. The result is one of three states: `ready`, `degraded` or
+`unavailable`. It carries three more facts:
+
+- the closed reasons: `catalog-mismatch`, `sink-unwritable`, `storage-pressure`,
+  `budget-exceeded`, `port-unwired`, `level-silent` and `storage-check-failed` (a storage check that
+  throws is reduced to this reason and its error is dropped, so readiness never freezes on a stale
+  state and never carries a path);
+- the writer kind: `production-file`, `test-injected` or `unavailable`;
+- the lost-event total.
+
+The startup evaluation runs before the server listens. It persists its `activity-log.readiness` line
+through the durable append path, so the probe is a real write, not a permission check. A failed write
+means `unavailable`, with the reason `sink-unwritable`. Storage conditions come from the segment
+store's own health report (`activityLogStorageHealth`), which covers the segment store's state:
+writability, byte budget and pressure, including blocked retention. Segment manifests (D16) are not a
+readiness input: they are derived metadata, rebuilt whenever missing or stale, and never on the path
+that writes or reads evidence, so their state cannot make evidence unwritable or unreadable;
+`keiko support manifest verify` reports it. The heartbeat re-evaluates without a probe
+and logs every transition. A persistence loss since the last evaluation degrades readiness with
+`sink-unwritable`. `GET /api/health` returns the snapshot as `diagnostics`. `keiko status` prints
+it, and so does `keiko support export` for the exported directory. The desktop footer shows a
+degraded or unavailable state with its reasons.
+
+**Sufficiency is proven compositionally (#3532).** Four mechanisms close the gap between declared
+and demonstrated evidence. Each is derived from the registry, never maintained beside it.
+
+- **Contract-level proofs.** A proof id (`<op>.<suffix>`) resolves only through a literal
+  `expectActivityLogProof` or `expectActivityLogStderrProof` call in a test of the owning package.
+  The call asserts a line that the real formatter produced: `formatRegisteredServerLogLine`, or the
+  file sink itself. It checks this build's v2 identity and the registered fields, so a captured
+  event object can never stand in for a persisted line. The generator reports an unresolved,
+  misplaced, non-literal or unregistered proof as a violation.
+- **The failure-surface inventory.** `docs/observability/failure-surface-inventory.generated.json`
+  maps every operation to one of nine product surfaces through a closed rule table (owner package
+  plus emitter-module prefix). It maps every owner to its log port, and every failure class to a
+  `<surface>.<mode>` scenario, where the mode is `rejection`, `dependency-failure`, `crash` or
+  `loss`. The autonomy mode is closed context on events, not a matrix multiplier. The inventory
+  holds only what the catalog does not carry, and `check:op-catalog` pins it byte for byte.
+- **Per-failure-class sufficiency.** `keiko support analyze` projects every observed class to
+  `complete`, `degraded` or `insufficient`. The closed reasons are `DIAGNOSTIC_SUFFICIENCY_REASONS`
+  in the contracts, and there is one status rule, `diagnosticSufficiencyStatus`. The projection is
+  derived generically from the class's lifecycle and causal declarations. Artifact integrity,
+  parent correlation, the class's causal start on a failure's correlation, an unknown failure
+  correlation, own-line partial evidence and Activity Log evidence loss all feed it. Loss is
+  attributed to the named dropped operation, to the reporting package's classes for a port sink
+  failure, or else to the reporting process lifetime. A product loss that its own loss line fully
+  evidences keeps the report complete. The projection is carried by `--json`, `--seed` and
+  `support.analyze.classified`.
+- **A curated end-to-end scenario matrix.** For each surface and each applicable mode,
+  `tests/activity-log-scenarios` drives a production entry point through the real file writer. The
+  support analyzer must then reach `complete` (`expectActivityLogScenario`). Every failure class
+  maps to the scenario of its surface and mode, and no class gets its own journey.
+
+A registration never declares `frames` or `causeChain` required. Redaction omits an empty array, so
+a required one would reject the ordinary failure without Keiko frames or a cause. The generator
+reports that declaration as `registration-omitted-field-required`.
+
 ### D7 — Process lifecycle events give the log a subject
 
 Before this contract, the log recorded what happened but never which process, running which
@@ -413,7 +569,21 @@ rather than a separate `process.config` line avoids a second, always-co-occurrin
 that is knowable at the exact same instant `process.started` already fires. Feature flags remain an
 explicitly named, out-of-scope-for-this-epic follow-up.
 
-### D8 — The support artifact is one JSON-Lines file; `ui.log` is excluded by default
+Every exit leaves exactly one `process.exiting` line (#3532). A fatal uncaught exception or
+unhandled rejection writes three lines in order, then the process exits:
+
+1. `process.fatal`, which goes to the resolved runtime state directory even when no server was ever
+   built;
+2. the exit loss summary;
+3. `process.exiting` with the reason `fatal-exception`.
+
+A server error takes the same path. Each other exit records its own closed reason: `sigint`,
+`sigterm`, `sighup`, `server-close` or `shutdown-request`. A `process.exit` fallback records
+`process-exit` when no other path ran first. A process-wide latch makes the first recorded reason
+the only one, so the close that a crash causes is never relabelled. The lines carry the classified
+error kind and Keiko-code frames only.
+
+### D8 — The support artifact is one JSON-Lines file; the raw `ui.log` is never part of it
 
 **Format.** One `.jsonl` file, not an archive. `server.log` is already valid JSONL and every line
 is already redacted at write time, so wrapping it in a zip or tar format would re-redact nothing
@@ -428,16 +598,22 @@ byte-for-byte copy of a real `server*.log` line — oldest file first. Nothing a
 re-transformed, so a re-encoding bug cannot introduce a leak into lines that were already safe on
 disk.
 
-**`ui.log` is excluded by default.** That channel is a verified, acknowledged-unredacted operator
-stream (`${error.name}: ${error.message}`, raw). A customer-facing export tool that blends a
-redacted structured stream with an unredacted free-text one in the same artifact would undermine the
-body-free contract by construction. `ui.log` is therefore always listed in the manifest's
-`sectionsExcluded`, with an explicit `--include-ui-log --i-understand-this-is-unredacted`
-double-confirmation flag (both flags required together) for an operator who has made an informed
-decision to attach it anyway. The manifest always records whether it was included — never silently.
-This opt-in gate is not removed once the fatal-crash-path fix (D3's neighbor, Wave 2) stops new
-`ui.log` lines from carrying raw messages, because a bundle exported later can still be exported
-against a `stateDir` whose history predates that fix.
+**The raw `ui.log` is retired, and never part of a report (#3532).** Earlier versions of
+`keiko start` copied the detached UI process's raw stdout and stderr into `<stateDir>/ui.log`. That
+channel was free text, including raw error messages, so it could never meet the body-free contract.
+A customer-facing export that mixes it with the redacted structured stream would undermine the
+contract by construction.
+
+The UI process's stdio is now ignored. Every diagnostic it produces already reaches the Activity
+Log, and a crash that happens before the first log line is still recorded: `process.fatal` falls
+back to the resolved state directory (D7). When the UI does not become healthy, `keiko start` names
+a closed outcome (`process-exited` or `health-timeout`) instead of pointing at a raw log.
+
+The former opt-in flags (`--include-ui-log --i-understand-this-is-unredacted`) are refused as a
+usage error rather than ignored. An existing `ui.log` from an earlier version is left in place,
+never read into a report, and removed with the rest of the runtime state by
+`keiko uninstall --state`. The manifest still names `ui-log` in
+`sectionsExcluded`, so a reader of an old or a new bundle sees the same, explicit exclusion.
 
 **Size bounds.** Capped by an overall export byte ceiling; files are dropped oldest-first when the
 ceiling is exceeded, and every drop is recorded in
@@ -452,20 +628,24 @@ in the manifest's `currentFileTailTruncated` (name and dropped-byte count only, 
 Two new commands under one `support` command family (not `bundle export` / `log:analyze` — a single
 coherent noun groups the artifact producer and its own consumer under one verb space):
 
-- `keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N] [--include-ui-log
-  --i-understand-this-is-unredacted] [--include-evidence RUNID[,RUNID...]]` composes existing,
+- `keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N]
+  [--include-evidence RUNID[,RUNID...]]` composes existing,
   already-hardened pieces — the evidence index listing, the local-state audit summary, a redacted
   config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a concatenation of
-  the current log plus retained daily archives and compatible legacy rotation files, each read
+  every Activity Log file in logical-log order (legacy files, then sealed and active segments, D14),
+  selected oldest-first within the byte budget, each read
   through a no-follow, private, single-link regular-file descriptor (a symlink, hard link, or
   non-regular entry at a log name is skipped by name with its closed refusal kind, never read
   through) — into one manifest-led
   `.jsonl` bundle, plus a
   `<output>.sha256` integrity sidecar (D12). No new redaction logic is written for the bulk of the
-  file — every log line copied in is a line that was already redacted at write time. `ui.log` (a
-  verified, acknowledged-unredacted operator stream) is excluded by default and requires both new
-  flags together to attach (D8); `--include-evidence` attaches the full `EvidenceStore` manifest
-  for each named run id, beyond the index-only summary, for deep replay.
+  file — every log line copied in is a line that was already redacted at write time. A legacy raw
+  `ui.log` is never read into the bundle, and the retired flags that once attached it are refused
+  (D8). `--include-evidence` attaches the full `EvidenceStore` manifest for each named run id,
+  beyond the index-only summary, for deep replay. After a successful export, the command evaluates
+  the exported directory's diagnostic readiness (D6) and prints it. That readiness line is persisted
+  after the report is written, so the report stays exactly the evidence that existed when it was
+  taken.
 - `keiko support analyze FILE [--correlation-id ID] [--json]` reconstructs three complementary
   views from the same parsed lines, because `correlationId` alone cannot carry everything an agent
   needs to reconstruct: a **per-correlation timeline** for every line that carries a
@@ -552,15 +732,15 @@ parsed successfully.
 
 The compatibility and deprecation contract is explicit:
 
-| Input or contract surface                                                                                      | Contract state / analyzer classification | Required behavior                                                                                      | Retirement condition                                                                                                                                             |
-| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Complete v2 identity with current registry/schema/catalog and `supported`/`active`                             | `supported`                              | Validate the registered operation, exact fields, closed vocabularies, bounds, and sequence integrity. | A breaking change requires a new versioned compatibility contract; it is never inferred from shape.                                                              |
-| Parseable pre-v2 line with no v2 identity                                                                      | `legacy-supported` / `legacy`            | Preserve, order by file position, count, and warn exactly once per analysis.                          | Reviewed release-impact/support baselines plus bounded retention prove no supported input can contain it; remove reader/tests/docs together.                      |
-| Unknown schema version or mismatched registry/schema/catalog identity                                          | `unsupported-version` / `unsupported`    | Preserve the classification but exclude the record from trusted current reconstruction.              | No implicit coercion; analyze with the matching versioned contract.                                                                                               |
-| Invalid JSON away from a terminal fragment, invalid types/ranges, or invalid current-registry operation/fields | `corrupt`                                | Report and exclude from trusted reconstruction.                                                       | Never demote to legacy because a prefix or subset parsed.                                                                                                         |
-| Unterminated terminal fragment or explicitly declared truncation                                               | `truncated`                              | Preserve the surviving evidence and report that it is not complete.                                  | Remains explicit; no reader may silently normalize it away.                                                                                                       |
-| Partial v2 identity, missing required evidence, declared `incomplete`, or non-`active` writer capability       | `incomplete`                             | Report the missing evidence/capability and refuse a complete-reconstruction claim.                    | Only a complete record emitted under the current contract is supported; readers do not synthesize missing fields.                                                 |
-| Predecessor literal scanner                                                                                    | migration-only                           | May inventory migration candidates but authorizes no operation.                                      | Remove only when all production producers use canonical typed registration/emission and authoritative generation reports no legacy production dependency.        |
+| Input or contract surface                                                                                      | Contract state / analyzer classification | Required behavior                                                                                     | Retirement condition                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete v2 identity with current registry/schema/catalog and `supported`/`active`                             | `supported`                              | Validate the registered operation, exact fields, closed vocabularies, bounds, and sequence integrity. | A breaking change requires a new versioned compatibility contract; it is never inferred from shape.                                                       |
+| Parseable pre-v2 line with no v2 identity                                                                      | `legacy-supported` / `legacy`            | Preserve, order by file position, count, and warn exactly once per analysis.                          | Reviewed release-impact/support baselines plus bounded retention prove no supported input can contain it; remove reader/tests/docs together.              |
+| Unknown schema version or mismatched registry/schema/catalog identity                                          | `unsupported-version` / `unsupported`    | Preserve the classification but exclude the record from trusted current reconstruction.               | No implicit coercion; analyze with the matching versioned contract.                                                                                       |
+| Invalid JSON away from a terminal fragment, invalid types/ranges, or invalid current-registry operation/fields | `corrupt`                                | Report and exclude from trusted reconstruction.                                                       | Never demote to legacy because a prefix or subset parsed.                                                                                                 |
+| Unterminated terminal fragment or explicitly declared truncation                                               | `truncated`                              | Preserve the surviving evidence and report that it is not complete.                                   | Remains explicit; no reader may silently normalize it away.                                                                                               |
+| Partial v2 identity, missing required evidence, declared `incomplete`, or non-`active` writer capability       | `incomplete`                             | Report the missing evidence/capability and refuse a complete-reconstruction claim.                    | Only a complete record emitted under the current contract is supported; readers do not synthesize missing fields.                                         |
+| Predecessor literal scanner                                                                                    | migration-only                           | May inventory migration candidates but authorizes no operation.                                       | Remove only when all production producers use canonical typed registration/emission and authoritative generation reports no legacy production dependency. |
 
 The other closed evidence vocabularies are equally versioned: `completeness` is exactly
 `complete | partial | unknown`; `loss` is exactly
@@ -705,52 +885,296 @@ The agent-reading step this adds: **for a failed request**, read `routeTemplate`
 `reason`, then look for a `client.diagnostic` line sharing the `correlationId` to learn what the
 browser saw. Everything on these lines is a count, a closed label, a template, or an id.
 
-### D14 — Daily rotation remains bounded and uses the OS-user filesystem boundary
+### D14 — Bounded immutable segments under the OS-user filesystem boundary
 
-Until immutable byte-bounded segments replace it, the current persistence format keeps the existing
-UTC-day bound: `server.log` becomes one `server-YYYY-MM-DD.log` archive at the next write after a
-day boundary, and the oldest closed-grammar archives are pruned until exactly the configured
-`retentionDays` window remains (seven by default). A candidate name is admitted only when its date is
-a real ISO calendar day; suffixes, stages, backups, malformed dates, and unrelated files are never
-retention targets. A successor storage design must replace this bound in the same revision rather
-than remove it first.
+The Activity Log is one logical log stored as immutable segments in one closed-grammar directory,
+`<stateDir>/logs/`. Segments replaced the single shared `server.log`, its UTC-daily archives and
+count-only retention in #3530. A byte bound and an age bound hold at every revision; a successor
+storage design must replace them in the same revision rather than remove them first.
 
-The trust boundary is the operating-system user. The configured state/log directory is accepted only
-while it remains owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected owner's
-inherited ACL on Windows). Directory device/inode identity is captured and rechecked before and after
-every link, rename, and unlink. Retention opens each target without following its final symlink and
-requires a regular, owner-matched, private, single-link file whose descriptor and pathname identities
-agree immediately before unlink. The cached append descriptor retains D2's `ensureHandle`/
-`handleStillCurrent` stale-inode protection before and after every caller write.
+**Layout.** The grammar lives in `keiko-contracts` (`activity-log-files.ts`). The writer and every
+reader import it; nothing restates it.
 
-Cross-process archive publication uses `link(2)` as a non-replacing winner primitive. `EEXIST`
-means a peer already published the destination; Keiko verifies and preserves it rather than
-overwriting it. The winner (or a peer observing the same two-link inode) removes only the current
-name, leaving the archive as a single-link file. Rename is reachable only for filesystem error codes
-that explicitly classify hard links as unsupported. Ordinary permission, I/O, link-count, unsafe
-target, and identity failures do not enter that fallback.
+| Name                                                     | Meaning                                                                |
+| -------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `activity-<start>-<pid>-<instance>-<index>.active.jsonl` | The active segment of one process instance. Only that process appends. |
+| `activity-<start>-<pid>-<instance>-<index>.jsonl`        | A sealed segment: read-only (`0400`), never rewritten.                 |
+| `server-YYYY-MM-DD.log`, `server.log`                    | Legacy files of the retired daily rotation. Read-only.                 |
+| `pin-<24 hex>.json`                                      | A retention-pin record.                                                |
+| `store-policy.json`                                      | The store's one governing policy record (#3554); never log content.   |
 
-Every boundary attempt produces body-free typed `server-log.rotation` evidence once persistence is
-available: closed persistence/rotation/retention outcomes and reasons plus archived, pruned, and
-retained counts. Mutation failures are partial `durability-failed` evidence and never escape into
-the product operation that triggered the write.
+`<start>` is the segment's UTC start time (`YYYYMMDDTHHMMSSmmmZ`), `<pid>` and `<instance>` are the
+envelope's process identity, and `<index>` counts that instance's segments from `000001`. Sealing
+drops only `.active`, so a segment keeps one id for its whole life. The logical order is the legacy
+archives by day, then the legacy current file, then segments by start time and owning process.
+Within one process instance the order is exact; across processes the start time is a best-effort
+hint, exactly like `ts` (D2).
+
+**Writing and sealing.** Each process creates its own active segment with an exclusive create and
+never opens another instance's active segment for writing, so no two processes append to one file.
+A segment is sealed:
+
+- when the next line would exceed `KEIKO_LOG_SEGMENT_BYTES`;
+- when it is older than `KEIKO_LOG_SEGMENT_SECONDS`, measured by the wall clock or the monotonic
+  clock, whichever is further (a backwards wall-clock step beyond five seconds seals it with
+  `clock-change`);
+- at shutdown;
+- on a pin request.
+
+Sealing writes a final `activity-log.segment.sealed` line and fsyncs. The line carries the seal reason, the seq range (which ends with the seal line's own seq), the line count and byte size of the lines before it, the duration, the dropped-event count and the configured limits. Sealing then publishes the sealed name with the guarded primitive described under
+**Trust boundary** and makes the file read-only. A seal that fails leaves the file under its active
+name; the writer never appends to it again, and the next maintenance pass recovers it. Lines over
+8 KiB are still replaced by `server-log.line-dropped`.
+
+**Recovery.** At startup and before every new segment, the writer seals orphaned active segments. A
+segment is orphaned when:
+
+- its owner has exited, or its pid now belongs to this process;
+- it is older than two segment windows and unwritten for one (pid reuse);
+- it is this instance's own abandoned segment.
+
+Recovery seals the file as it is: a partial final line is kept and reported (`tailState:
+"truncated"`, `truncatedBytes`), and valid lines are never rewritten. An interrupted seal whose seal
+line is already present is only completed. Every recovery is `activity-log.segment.recovered`
+evidence with lifecycle `loss`.
+
+**Retention and the bound.** Retention runs at startup and before every new segment, never
+deferred. It counts every file in the grammar: legacy files, sealed segments, pin records, and every
+active segment at its reservation, the larger of its size and the segment size. Oldest first, it
+deletes the unprotected sealed and legacy files that are past `KEIKO_LOG_RETENTION_DAYS`. It then
+deletes as many more as the `KEIKO_LOG_RETENTION_BYTES` budget requires, including the reservation of
+the segment about to open.
+
+- **Deletion.** Every deletion is the guarded, identity-bound unlink of `removeSafeArtifactFile`. A
+  failed deletion is counted and retried after a 60-second backoff; the next candidate is tried
+  meanwhile.
+- **Admission.** A new segment is admitted only when the unprotected total, including its
+  reservation, fits the budget. Admission is checked again after the exclusive create. Concurrent
+  processes can therefore observe the same free reservation only while their new segments are still
+  empty, and the loser withdraws its segment.
+- **Budget exceeded.** When the budget cannot be met, the event is dropped and counted, and
+  `activity-log.pressure` reports `budget-exceeded`.
+- **Evidence.** Each pass that deletes or fails to delete is `activity-log.retention.pruned`
+  evidence.
+
+Total disk use is therefore at most the byte budget plus the pin quota.
+
+**One governing policy across processes (#3554).** The five variables above are read from each
+process's own env, so several cooperating processes — a long-running server plus a one-off CLI
+invocation, or two server instances across a restart — could previously enforce retention under
+different views of the budget: a smaller one could prune segments a larger one relied on to keep,
+and a larger one was never capped by a stricter peer's limit. `store-policy.json` (deliberately
+outside the grammar above and never read as log content) now holds the retention bytes/days and pin
+quota every cooperating process enforces. The first process that finds no valid record publishes its
+own, race-safe through the same exclusive-create primitive pin records use. Every later process
+applies the STORED values, whatever its own env says, and — when they differ — records one
+`activity-log.policy.conflict` line per process lifetime: the differing setting names, and the
+stored and requested values, as closed and bounded fields. A process may replace a stale or corrupt
+record only while it is the store's sole live writer (every other active segment belongs to a
+confirmed-exited instance), which is what lets a changed `KEIKO_LOG_RETENTION_BYTES` take effect on
+the next clean restart without letting a stray concurrent process silently override a running
+server's governance. Every maintenance pass re-reads the record before it deletes anything, so a
+process that held no active segment while the record was replaced (an idle server) adopts the new
+values on its next pass instead of pruning under its first read. Segment size/age stay per-writer settings, clamped against the governing
+retention bytes with the same invariant as before. Total disk use is therefore at most the ONE
+governing byte budget plus the pin quota, even when cooperating processes' own env values disagree.
+
+**Pins.** `pinActivityLogWindow` protects one of two scopes until an expiry of at most 3650 days:
+
+- a time window of up to seven days, across every process instance, including segments sealed later
+  inside it;
+- up to 64 named segments.
+
+At most 64 pins are active. The pin record is published before the current segment is sealed, so
+the next retention pass honors it. Pinned sealed segments count against `KEIKO_LOG_PIN_QUOTA_BYTES`,
+oldest pin first, and only while the quota lasts. A pin the quota cannot hold is still recorded with
+`quotaStatus: "exceeded"`. Its unprotected remainder produces one `activity-log.pin.quota-exhausted`
+loss marker with segment counts, bytes and the seq span. Expired and invalid pin records are removed with `activity-log.pin.expired`. `releaseActivityLogPin` removes a pin before its expiry, for example once its incident was reported or dismissed; the same line records it with `expiryReason: "released"`. Neither pin function ever throws: an unlistable directory or a failed removal is a closed, evidenced rejection, because both are reachable from a sink's own write path. #3530 provides the primitive; #3533 decides when and what to pin.
+The legacy update-audit import pins its durable batch (`reason: "durable-batch"`).
+
+**Pressure and health.** `activity-log.pressure` records transitions between these closed states:
+
+- `low-disk-space`: free space is below the larger of four segments and 64 MiB;
+- `disk-full`: a write failed with `ENOSPC`, `EDQUOT` or `EFBIG`;
+- `backpressure`;
+- `budget-exceeded`;
+- `retention-blocked`;
+- `cleared`.
+
+The line carries the dropped-event count and the used, budget, pin-quota and free bytes. Writing
+never stalls silently. `activityLogStorageHealth(stateDir)` returns a read-only snapshot: one
+listing, the pin records and one `statfs`. Diagnostic readiness (#3532) consumes it.
+
+**Configuration.** Five environment variables bound the store. Each value must be a positive decimal
+integer inside its bounds. Any other value falls back to the default, so a typo never disables the
+bound.
+
+| Variable                    | Default | Bounds                                                     |
+| --------------------------- | ------- | ---------------------------------------------------------- |
+| `KEIKO_LOG_SEGMENT_BYTES`   | 8 MiB   | At least 32 KiB; at most a quarter of the retention budget |
+| `KEIKO_LOG_SEGMENT_SECONDS` | 3600    | 1 to 604800                                                |
+| `KEIKO_LOG_RETENTION_BYTES` | 256 MiB | At least 64 KiB                                            |
+| `KEIKO_LOG_RETENTION_DAYS`  | 14      | 1 to 3650                                                  |
+| `KEIKO_LOG_PIN_QUOTA_BYTES` | 64 MiB  | At least 1 byte                                            |
+
+Segments stay uncompressed. A sealed segment is directly readable by `keiko support analyze` and by
+line tools, and the byte budget already bounds disk use.
+
+**Calibration (#3532).** The defaults were checked against the traces of the 29 failure scenarios,
+each run through the real file writer in one process. Together they wrote 128 lines and 95,305 bytes:
+2 to 20 lines and 1,400 to 15,076 bytes per scenario (median 2,534 bytes), 745 bytes per line on
+average. The largest trace, the memory-knowledge loss scenario, is 20 lines and 15,076 bytes. At that
+line size an 8 MiB segment holds about 11,000 lines, and the 256 MiB budget about 360,000. The
+64 MiB pin quota holds about 4,400 incident traces of the largest measured size. No default had to
+grow. The report-size cap belongs to #3534, which is not part of this change; for reference, a 1 MiB
+cap would leave more than 60 times the largest trace.
+
+**Legacy input.** Existing `server.log` and `server-YYYY-MM-DD.log` files are read-only legacy
+segments. They count toward the budget, age out under the same retention, and are never rewritten or
+appended to. `server-log.rotation` and `server-log.capacity-warning` are retired; lines that carry
+them stay readable as legacy evidence.
+
+**Trust boundary.** The trust boundary is the operating-system user. The log directory is accepted
+only while it remains owner-matched, non-redirected, and owner-only (`0700` on POSIX; the selected
+owner's inherited ACL on Windows). Maintenance refuses to list, recover, or prune through a
+redirected directory. Directory device/inode identity is captured and rechecked before and after
+every link, rename, and unlink. Every target is opened without following its final symlink. It must
+be a regular, owner-matched, private, single-link file whose descriptor and pathname identities agree
+immediately before the mutation.
+
+Publication of a sealed name uses `link(2)` as a non-replacing primitive and then removes the active
+name, leaving the sealed segment as a single-link file. `EEXIST` means the sealed name already
+exists; Keiko verifies and preserves it rather than overwriting it. Rename is reachable only for
+filesystem error codes that explicitly classify hard links as unsupported. Ordinary permission, I/O,
+link-count, unsafe-target, and identity failures do not enter that fallback. Mutation failures are
+body-free evidence and never escape into the product operation that triggered the write.
 
 **Residual same-user race.** Node exposes no portable descriptor-relative link/rename/unlink API,
 and a filesystem without hard links offers no portable no-replace rename. The rename fallback
-therefore first claims the dated name with an exclusive no-follow create: a concurrent rotation that
-loses the claim preserves the winner's archive, and the winner's rename can replace only its own
-empty claim. Every link, rename, and unlink carries the device/inode of a source descriptor its
-caller holds open until the helper returns, and the mutation helper acts on the name only while it
-still has that identity. The held descriptor keeps the inode allocated: Linux file systems hand a
-freed inode number to the next file at once, so an identity without a holder could match the
-replacement. A process that finalizes a peer's hard-link winner can therefore never delete the
-`server.log` a concurrent writer has just recreated, and no link or rename publishes a file that
-replaced the verified one. A process
-already executing as the same OS user can still act in the narrow interval between pathname checks.
-Owner-private directories, held descriptors, pre/post identity checks, the hard-link winner, closed
-names, and target-handle verification narrow and detect that interval; they do not claim to
-eliminate it. This residual is part of the stated OS-user threat model and is never
-a reason to disable or defer bounded retention.
+therefore first claims the destination name with an exclusive no-follow create. A concurrent
+publication that loses the claim preserves the winner's file, and the winner's rename can replace
+only its own empty claim.
+
+Every link, rename, and unlink carries the device/inode of a source descriptor that its caller holds
+open until the helper returns. The mutation helper acts on the name only while it still has that
+identity. The held descriptor keeps the inode allocated: Linux file systems hand a freed inode number
+to the next file at once, so an identity without a holder could match the replacement. A process
+that completes a peer's interrupted seal can therefore never delete a file that replaced the
+verified one, and no link or rename publishes such a file.
+
+A process already executing as the same OS user can still act in the narrow interval between
+pathname checks. Owner-private directories, held descriptors, pre/post identity checks, the
+non-replacing link, closed names, and target-handle verification narrow and detect that interval.
+They do not claim to eliminate it. This residual is part of the stated OS-user threat model and is
+never a reason to disable or defer bounded retention.
+
+### D15 — Local support incidents are a body-free descriptor over pinned evidence
+
+An incident is a control artifact over the Activity Log, not a second log (#3533). A local candidate
+is created automatically for a registered failure operation logged at `error` with at least one
+supported failure class, or explicitly by the user (`keiko support incident report`); a closed
+`trigger` records which. Eligibility derives from the registry, never from a UI-side list. A process
+evaluates at most one failure per defectFingerprint every SUPPORT_INCIDENT_SUPPRESSION_MS and, across
+every fingerprint together, at most MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE per rolling minute.
+The first bound loses no evidence (the fingerprint's own candidate already pins its window), but the
+second can drop a defect Keiko has never seen before, purely because the shared cap was already
+spent; that case is evidenced as `support.incident.rejected` (`evaluation-rate-limited`), throttled
+to at most one line per suppression window so a storm reports the loss once rather than flooding the
+log with one line per dropped evaluation (#3533 audit).
+
+On the registered-failure trigger, the window's Activity Log retention pin (15 minutes before, 5
+minutes after, through D14's pin primitive, across every process instance) is published
+synchronously, in the same turn as the triggering write — before any later maintenance pass, this
+process's own next segment admission or another process sharing the state directory, can run against
+an unprotected window. Only the rest of candidate creation — deduplication, the quota check, and the
+record write — runs outside the logging call; it never transfers data. A duplicate or a rejected
+candidate releases the pin its trigger already published instead of leaving it to sit until its own
+TTL. The residual race a synchronous publish cannot fully close on its own — a concurrent process's
+retention removing a sealed segment in the narrow gap between observing the window and the pin
+actually covering it — is detected by comparing that snapshot to the pin's own outcome and reported
+as the pin's `evidenceLostBeforePin`, so the window is never reported as a clean "pinned" when part
+of it was already lost. No causal-closure computation happens at pin time; a later selective export
+chooses the closure from the pinned window.
+
+Two identifiers serve two purposes. `incidentId` is random and names one occurrence.
+`defectFingerprint` is deterministic and versioned over allowlisted stable inputs (owning surface,
+operation, closed `errorKind`, normalized Keiko frame signature) and carries no time, process,
+instance, host, user or path value; it groups recurrences for deduplication and fix linkage. A change
+to its inputs or algorithm bumps the algorithm version; a golden-value test enforces that.
+
+The descriptor has a strict public projection and a richer, still body-free private projection from
+the same record; both expose the sufficiency status, and only the private one carries reasons and
+coverage. The store is owner-private, closed-grammar and quota-bounded (32 open candidates, 8 of them
+reserved for explicit reports, 4 KiB each), and candidates expire after 14 days.
+
+Both the defectFingerprint dedup rule and the count quotas hold atomically across every process
+sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
+processes could each read as "still free": a registered failure claims its fingerprint's own
+`fingerprint-<64 hex>.claim` file by exclusive-create before it decides duplicate-or-new, and every
+candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics from slot 0 up, user
+reports from the top down, so the reserve holds without a shared counter) before its record is
+written. Both claim grammars are recognized by the same `parseSupportIncidentFileName` the
+repair/uninstall ownership predicate already calls, so state-paths.ts needed no change to own them.
+A claim releases with its record on dismissal or expiry. Between a claim and its record, and between
+a record's exclusive create and its bytes, another process can see a claim without a record or an
+unreadable record at any moment, so such a file is treated as in flight until it is older than a
+one-minute grace by its own mtime: a second occurrence of the same defect deduplicates onto the id
+the claim names instead of taking the claim over, and neither the orphan sweep nor torn-record
+recovery removes it. Only an older file has lost its writer (a crash in that gap) and is swept,
+against a fresh, per-claim read taken at sweep time, never a snapshot taken earlier in the same
+pass. An occurrence that finds an abandoned claim the sweep could not remove, or a claim still torn
+on a second read, gives up as `store-unavailable` rather than publish a second candidate.
+Acknowledge, dismiss and report remain explicit human actions; nothing is disclosed automatically.
+
+### D16 — Queries select whole causal closures through derived segment manifests
+
+`keiko support query`, selective `keiko support export` and incident resolution share one streaming
+engine (#3531). It never loads a whole segment or the whole log. It streams candidate segments line
+by line and retains only the selected events, up to a report budget.
+
+**Manifests are derived metadata, not a second log.** Each sealed segment has one manifest in the
+owner-private, closed-grammar store `<stateDir>/activity-log-manifests/`
+(`manifest-<segmentId>.json`, at most 256 KiB). It carries the schema and catalog versions, the safe
+time range, the process and sequence ranges, the registered categories, operations, error kinds and
+failure classes with counts, the loss and integrity state, a Bloom filter over the correlation keys
+(hash bits only) and a SHA-256 digest. An `incidentId` or `defectFingerprint` appears only when a
+registered operation that declares that field carries it; a sealed segment is never touched to add
+one. Every value is a pure function of the segment's bytes and the build's catalog, so deleting the
+store and rebuilding it reproduces every manifest byte for byte. A stored manifest is accepted only
+when it re-serializes to its own bytes and its digest matches; anything else is rebuilt. Only the
+query, export and rebuild commands write manifests, never the Activity Log writer, and each pass
+removes the manifests of segments that retention deleted, so the store follows the log's own bound.
+
+**Residual same-user manifest forging.** The trust boundary is the same OS user as D14's segments.
+A process already executing as that user could hand-edit a stored manifest — for example, to make
+it falsely claim a segment holds none of a query's correlation keys — and pair the edit with a
+digest recomputed over the forged content, so the manifest's own self-consistency check accepts it:
+the digest binds a manifest to its own bytes, not to the segment it describes. A forged manifest can
+therefore hide a segment from a routine query or export, which trusts a stored manifest without
+re-deriving it from the segment every time. It cannot alter the segment itself: the segment's own
+bytes, and the digest a fresh derivation would compute from them, stay exactly what the writer
+sealed. `keiko support manifest verify` detects the forgery by deriving every manifest again,
+directly from its segment, and reporting any stored manifest that differs from that derivation.
+This residual is part of the same OS-user threat model D14 already states and is never a reason to
+disable or defer manifests.
+
+**A closure is selected whole.** A correlation, an incident or a defect fingerprint selects the
+registered causal closure: the roots, every ancestor over `parentCorrelationId` and every
+descendant, and never an unrelated correlation. A narrow context adds only the uncorrelated process
+signals of the closure's own process lifetimes within a configured window (default 5 seconds). A
+user-reported incident also selects its pinned window and takes every correlation in it as a root.
+
+**Nothing required is truncated.** A closure that does not fit the budget returns no events and is
+`insufficient` with `report-budget-exceeded`; evidence retention removed is
+`evidence-not-retained`; an unreadable candidate segment is `segment-unreadable`. Only optional
+context may be dropped, declared as `context-truncated`. Every result carries its provenance,
+integrity, coverage, loss and truncation, and exactly one sufficiency status from the per-class
+projection `keiko support analyze` uses.
+
+**No database.** Manifests and streaming meet the measured need: a checked-in long-history test
+bounds peak memory and proves that manifest-pruned segment bodies are never opened. A database
+requires recorded measurements that manifests are insufficient and an explicit re-scope of epic
+#3527.
 
 ### D12 — Relation to prior decisions
 
@@ -799,7 +1223,7 @@ a reason to disable or defer bounded retention.
   that same spirit: every log line it carries was already redacted before this contract existed
   (`redactLogFields`'s choke point, unchanged here), and the one field this contract adds outside
   that pipeline — the manifest's `auditSummary`, built from the `AuditResult` `keiko audit
-  local-state` already produces — is redacted by a dedicated projection in
+local-state` already produces — is redacted by a dedicated projection in
   `buildSupportBundleManifest` (`support-export.ts`) that drops `AuditResult.stateDir` before the
   manifest is ever assembled, because that field echoes the absolute directory the audit ran
   against and can embed the operator's OS username on a real machine. That projection is a
@@ -807,8 +1231,7 @@ a reason to disable or defer bounded retention.
   `auditSummary` through `redactLogFields` itself — `AuditResult` is a typed value, not a log line,
   so the log envelope's choke point does not apply to it. The manifest's `stateDirSource`
   closed-union label already carries everything an agent needs from that field (default vs.
-  override), so nothing is lost. Its integrity sidecar (a `sha256` file alongside the bundle, Wave
-  6) exists because the
+  override), so nothing is lost. Its integrity sidecar (a `sha256` file alongside the bundle, Wave 6) exists because the
   bundle crosses a real trust boundary — customer machine → support ticket → agent — the same
   boundary ADR-0048's confidentiality tiers were written to reason about.
 
@@ -848,6 +1271,14 @@ rather than left implicit across the Decision section:
 8. **For a failed or slow request** (landed Wave 5), read the `request` line's `routeTemplate`,
    `queryParamNames`, `responseBytes` and `aborted`, the stream's `sse.stream.closed` `reason`, and
    any `client.diagnostic` line that shares the request's `correlationId` (D13).
+9. **Before trusting an absence**, read the same process lifetime's `activity-log.readiness` lines
+   (state, closed reasons, writer) and its `activity-log.loss` summaries (lost events per closed
+   reason, written when the counters change and always at exit) (D6). A timeline gap during a period with a non-zero loss
+   count is lost evidence, not evidence that nothing happened.
+10. **For one operation in a long history**, run `keiko support query --correlation-id <id> --json`
+    (or `--incident`, `--defect-fingerprint`) instead of reading whole segments. It returns the
+    operation's whole registered causal closure with its sufficiency, or `insufficient` with a
+    closed reason when the closure does not fit or is no longer retained (D16).
 
 ## Consequences
 
@@ -864,14 +1295,16 @@ rather than left implicit across the Decision section:
   `suppressedNotices` counts failed sink invocations; it is not an exact persisted-gap counter when
   one invocation attempted more than one record (D2).
 - Retained pre-v2 log lines are a real compatibility case, not an oversight: a line written before
-  this contract shipped can still appear in the long-lived current file or a legacy rotation
-  archive. The analyzer never drops or misorders such a line — it orders it by file position, counts
+  this contract shipped can still appear in a retained legacy `server.log` or
+  `server-YYYY-MM-DD.log` file. The analyzer never drops or misorders such a line — it orders it by file position, counts
   it in `legacyLineCount`, and surfaces exactly one `warnings[]` entry naming that count (D9, D10).
   An agent must read `warnings[]` before trusting that every line in a bundle came from an ordered
   v2 process lifetime.
-- Daily rotation and retention remain a real bound until immutable segments replace them (D14).
-  Cross-process publication cannot replace a winning archive, pruning cannot select a non-grammar
-  name or an unverified target, and every outcome is reconstructable from typed body-free evidence.
+- Bounded immutable segments are the disk bound (D14): total use is at most the byte budget plus
+  the pin quota. No process appends to another process's segment, publication never replaces an
+  existing name, pruning cannot select a non-grammar name or an unverified target, a crash-torn tail
+  is reported rather than rewritten, and every outcome is reconstructable from typed body-free
+  evidence.
   The documented residual same-user pathname race is a limit of Node's portable filesystem API,
   not permission to remove the bound.
 - Process lifecycle events (`process.started`/`process.heartbeat`/`process.exiting`) carry no
@@ -881,9 +1314,13 @@ rather than left implicit across the Decision section:
 - The no-source-maps decision (D3) means reading a frame meaningfully requires building the exact
   tagged version the customer ran; this is a documented, deliberate cost, not a gap to be quietly
   worked around by enabling source maps later without amending this ADR.
-- `ui.log`'s default exclusion (D8) keeps the body-free contract intact by default, at the cost of
-  an operator needing an explicit double-confirmation flag for the (rare, informed) case where they
-  want it included anyway.
+- Retiring the raw `ui.log` (D8) removes the one free-text channel beside the body-free log. The
+  cost is that an operator can no longer read a UI process's raw console output after the fact.
+  Anything worth reconstructing has to be recorded as a registered, body-free Activity Log line,
+  which is the contract this ADR sets for every change.
+- Loss and readiness are counts and closed states, never content (D6). An operator learns that
+  evidence was lost, how much and why, but never what the lost lines said. The ledger saturates
+  instead of growing, so a storm of failures can never itself exhaust memory.
 - The op catalog's closed vocabulary (D6) is enforced at the literal's origin, not at every
   forwarding call: a positional helper that cannot be statically resolved to a literal is recorded
   as `<dynamic>` at its own call site rather than failing generation, on the condition that every

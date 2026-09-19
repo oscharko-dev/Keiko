@@ -18,6 +18,10 @@ import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { Clock } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // Wraps the shared createScriptedGatewayClock (replay.ts) with the extra instrumentation these
 // tests need: a `sleeps` log of every ms actually slept, and an `advance` escape hatch for the
@@ -137,6 +141,12 @@ describe("executeWithRetry", () => {
       expect(exhausted).toHaveLength(1);
       expect(exhausted[0]?.extra).toMatchObject({ reason, attempt: expectedCalls });
       expect(exhausted[0]?.extra).not.toHaveProperty("delayMs");
+      const persisted = expectActivityLogProof(
+        "gateway.retry.exhausted.emitted-line",
+        formatActivityLogProofLine(exhausted[0] ?? {}),
+      );
+      expect(persisted).toMatchObject({ reason, attempt: expectedCalls });
+      expect(persisted).not.toHaveProperty("delayMs");
     },
   );
 

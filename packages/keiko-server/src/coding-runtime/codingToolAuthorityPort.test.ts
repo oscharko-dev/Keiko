@@ -25,6 +25,10 @@ import {
   type CodingRuntimeCapabilityDelegationInput,
 } from "./runtimeAuthorityService.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const DIGEST = "a".repeat(64);
 const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
@@ -567,6 +571,11 @@ describe("CodingToolAuthorityPort", () => {
       }),
     ]);
     expect(log.lines().join("\n")).not.toContain("private.example.test");
+    const persisted = expectActivityLogProof(
+      "coding-runtime.tool-authority.denied.emitted-line",
+      formatActivityLogProofLine(log.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ action: "connector", effectiveMode: "governed-assist" });
   });
   it.each(["governed-assist", "supervised-coding"] as const)(
     "keeps approved commit delivery available after narrowing to %s",

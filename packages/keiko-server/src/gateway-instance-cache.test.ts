@@ -14,6 +14,10 @@ import {
   type BufferedServerLogSink,
   type ServerLogThreshold,
 } from "./observability/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 function config(): GatewayConfig {
   return parseGatewayConfig({
@@ -205,6 +209,15 @@ describe("gateway instance cache activity log", () => {
       },
       configResolvedEvent(),
     ]);
+    const persisted = expectActivityLogProof(
+      "gateway.instance.reset.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      reason: "generation-changed",
+      generation: 1,
+      lifecycleReset: true,
+    });
   });
 
   it("separates a same-generation rebind from a reset", () => {
@@ -233,6 +246,11 @@ describe("gateway instance cache activity log", () => {
       loss: "none",
       reason: "rebound",
     });
+    const persisted = expectActivityLogProof(
+      "gateway.instance.bound.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "rebound", generation: 0, lifecycleReset: false });
   });
 
   it("keeps the steady-state reuse out of the log at info and reports it at debug", () => {
@@ -248,6 +266,11 @@ describe("gateway instance cache activity log", () => {
     expect(gatewayForRuntimeConfig(source)).toBe(reused);
     expect(atDebug.events.map((event) => event.op)).toEqual(["gateway.instance.reused"]);
     expect(atDebug.events[0]?.level).toBe("debug");
+    const persisted = expectActivityLogProof(
+      "gateway.instance.reused.line",
+      formatActivityLogProofLine(atDebug.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ generation: 7 });
   });
 
   it("warns once when the runtime config disappears and stays quiet while it is still absent", () => {
@@ -280,6 +303,11 @@ describe("gateway instance cache activity log", () => {
         },
       },
     ]);
+    const persisted = expectActivityLogProof(
+      "gateway.instance.unavailable.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "config-withdrawn", generation: 3 });
   });
 
   it("names a never-configured install apart from a withdrawn config, and recovery apart from both", () => {

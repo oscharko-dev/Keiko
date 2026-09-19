@@ -3,11 +3,12 @@
 // "does the redactor work" (log-redaction.test.ts owns that) but "which fields of the record are
 // allowed to become log fields at all".
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   defaultServerDiagnosticSink,
@@ -21,9 +22,9 @@ import {
 } from "./observability/index.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
-  const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8").trim();
+  const raw = readPersistedActivityLog(stateDir).trim();
   const records = raw.split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-  const activity = records.find((record) => record.op !== "server-log.safe-open");
+  const activity = records.find((record) => record.op === "server.diagnostic.failure");
   if (activity === undefined) throw new Error("activity record missing");
   return activity;
 }

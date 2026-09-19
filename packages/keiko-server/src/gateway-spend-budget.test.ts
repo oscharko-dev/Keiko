@@ -14,6 +14,10 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const capability: ModelCapability = {
   id: "spend-fixture",
@@ -70,7 +74,7 @@ function budget(
   return result;
 }
 
-function expectStructuredRejection(reason: string): void {
+function expectStructuredRejection(reason: string, correlationId: string): void {
   const event = events.at(-1);
   expect(event?.op).toBe("gateway.spend.rejected");
   expect(event?.extra?.reason).toBe(reason);
@@ -79,6 +83,11 @@ function expectStructuredRejection(reason: string): void {
   if (!Array.isArray(frames)) throw new TypeError("expected rejection frames");
   expect(frames.length).toBeGreaterThan(0);
   expect(Array.isArray(event?.extra?.causeChain)).toBe(true);
+  const persisted = expectActivityLogProof(
+    "gateway.spend.rejected.line",
+    formatActivityLogProofLine(event ?? {}),
+  );
+  expect(persisted).toMatchObject({ correlationId, reason });
 }
 
 function incompleteUsageToolCallStream(): Response {
@@ -139,12 +148,12 @@ describe("shared persistent model spend admission", () => {
     expect(() =>
       budget().reserve({ ...capability, pricing: undefined }, request, "pricing-rejection"),
     ).toThrow("spend-pricing-unavailable");
-    expectStructuredRejection("spend-pricing-unavailable");
+    expectStructuredRejection("spend-pricing-unavailable", "pricing-rejection");
 
     expect(() => budget("0").reserve(capability, request, "budget-rejection")).toThrow(
       "spend-budget-exceeded",
     );
-    expectStructuredRejection("spend-budget-exceeded");
+    expectStructuredRejection("spend-budget-exceeded", "budget-rejection");
   });
 
   it("admits zero output only for a validated embedding capability", () => {
@@ -178,6 +187,16 @@ describe("shared persistent model spend admission", () => {
     // and a successful model response was replaced by a raw error. The reserved upper bound stays
     // charged -- the conservative outcome -- and the settlement line names the failure.
     const hold = budget().reserve(capability, request, "unpriceable-usage");
+    const reservation = events.find((event) => event.op === "gateway.spend.reserved");
+    const reservedProof = expectActivityLogProof(
+      "gateway.spend.reserved.line",
+      formatActivityLogProofLine(reservation ?? {}),
+    );
+    expect(reservedProof).toMatchObject({
+      correlationId: "unpriceable-usage",
+      reservedNanoUsd: 120_000_000_000,
+      ceilingNanoUsd: 150_000_000_000,
+    });
     expect(() => {
       hold.settle({ ...response.usage, promptTokens: Number.MAX_SAFE_INTEGER });
     }).not.toThrow();
@@ -189,6 +208,16 @@ describe("shared persistent model spend admission", () => {
       boundExceeded: false,
     });
     expect(typeof settlement?.extra?.measurementErrorKind).toBe("string");
+    const settledProof = expectActivityLogProof(
+      "gateway.spend.settled.line",
+      formatActivityLogProofLine(settlement ?? {}),
+    );
+    expect(settledProof).toMatchObject({
+      correlationId: "unpriceable-usage",
+      chargedNanoUsd: 120_000_000_000,
+      measured: false,
+      boundExceeded: false,
+    });
   });
 
   it("does not enforce a qualification ceiling when no spend budget is configured", async () => {
@@ -270,6 +299,16 @@ describe("shared persistent model spend admission", () => {
     const event = events.find((candidate) => candidate.op === "gateway.spend.ceiling");
     expect(event?.level).toBe("info");
     expect(event?.extra).toMatchObject({
+      disposition: "raised",
+      ceilingNanoUsd: 500_000_000_000,
+      configuredNanoUsd: 500_000_000_000,
+    });
+    const persisted = expectActivityLogProof(
+      "gateway.spend.ceiling.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      correlationId: "after-restart",
       disposition: "raised",
       ceilingNanoUsd: 500_000_000_000,
       configuredNanoUsd: 500_000_000_000,

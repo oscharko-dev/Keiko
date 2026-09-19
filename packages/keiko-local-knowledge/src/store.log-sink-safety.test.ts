@@ -19,6 +19,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeLogEvent, KnowledgeLogSink } from "./knowledge-log.js";
 import { openKnowledgeStore } from "./store.js";
@@ -164,6 +168,11 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
       errorKind: "read-failed",
       extra: { reopenState: "reopened" },
     });
+    const persistedQuarantine = expectActivityLogProof(
+      "knowledge.store.quarantined.recovery",
+      formatActivityLogProofLine(quarantineEvents[0] ?? {}),
+    );
+    expect(persistedQuarantine).toMatchObject({ reopenState: "reopened" });
 
     const encryptionEvents: KnowledgeLogEvent[] = [];
     expect(() => {
@@ -176,5 +185,12 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
     expect(encryptionEvents.map((event) => event.op)).toStrictEqual([
       "knowledge.store.encryption-rejected",
     ]);
+    const persistedEncryptionRejected = expectActivityLogProof(
+      "knowledge.store.encryption-rejected.mode",
+      formatActivityLogProofLine(encryptionEvents[0] ?? {}),
+    );
+    expect(persistedEncryptionRejected).toMatchObject({
+      protectionMode: "encrypted-key-provider",
+    });
   });
 });

@@ -17,6 +17,10 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  activityLogSegmentFileName,
+  formatActivityLogSegmentId,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { runRepairCli, type RepairCliDeps } from "./repair.js";
 import { ATLASSIAN_CREDENTIAL_ARTIFACTS, defaultUiDataDir } from "./state-paths.js";
 import { runLauncherCli } from "./launcher.js";
@@ -1224,6 +1228,67 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(modeOf(evidence)).toBe(0o600);
     expect(modeOf(qi)).toBe(0o600);
     expect(modeOf(join(stateDir, "evidence"))).toBe(0o700);
+  });
+
+  // #3530: a sealed Activity Log segment is read-only (0o400). Repair tightens by removing bits
+  // only, so it leaves that stricter owner-only mode alone and never makes a sealed segment writable
+  // again, while a group/world-readable log file loses exactly the bits beyond owner-only.
+  it("keeps a sealed Activity Log segment read-only while tightening loose log files", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    const logsDir = join(stateDir, "logs");
+    mkdirSync(logsDir, { mode: 0o700 });
+    const identity = {
+      startMs: Date.parse("2026-09-18T10:00:00.000Z"),
+      pid: 4242,
+      instanceId: "a1b2c3d4",
+      index: 1,
+    };
+    const sealed = join(logsDir, activityLogSegmentFileName(identity, "sealed"));
+    const looseSealed = join(
+      logsDir,
+      activityLogSegmentFileName({ ...identity, index: 2 }, "sealed"),
+    );
+    const active = join(logsDir, activityLogSegmentFileName({ ...identity, index: 3 }, "active"));
+    for (const path of [sealed, looseSealed, active]) writeFileSync(path, "{}\n", "utf8");
+    chmodSync(sealed, 0o400);
+    chmodSync(looseSealed, 0o444);
+    chmodSync(active, 0o644);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(c.out()).toContain("[fixed] Runtime state artifacts");
+    expect(modeOf(sealed)).toBe(0o400);
+    expect(modeOf(looseSealed)).toBe(0o400);
+    expect(modeOf(active)).toBe(0o600);
+  });
+
+  // #3531: segment manifests are private Activity Log metadata; an operator file beside them is not.
+  it("narrows segment manifests like the other private stores and leaves foreign files", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = seedStateDir(root);
+    const manifests = join(stateDir, "activity-log-manifests");
+    mkdirSync(manifests, { mode: 0o700 });
+    const segmentId = formatActivityLogSegmentId({
+      startMs: Date.parse("2026-09-18T10:00:00.000Z"),
+      pid: 4242,
+      instanceId: "a1b2c3d4",
+      index: 1,
+    });
+    const manifest = join(manifests, `manifest-${segmentId}.json`);
+    const foreign = join(manifests, "operator-notes.txt");
+    for (const path of [manifest, foreign]) writeFileSync(path, "{}\n", "utf8");
+    chmodSync(manifest, 0o644);
+    chmodSync(foreign, 0o644);
+
+    const c = makeIo();
+    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
+    expect(modeOf(manifest)).toBe(0o600);
+    expect(modeOf(foreign)).toBe(0o644);
   });
 
   it("tightens the sealed credential and Figma vaults", (ctx) => {

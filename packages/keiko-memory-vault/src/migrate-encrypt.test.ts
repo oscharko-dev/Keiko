@@ -13,6 +13,10 @@ import { insertMemoryRow } from "./memories.js";
 import { encryptExistingContent } from "./migrate-encrypt.js";
 import { makeRecord, memId, openTestDb, TEST_CIPHER } from "./_support.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -72,6 +76,12 @@ describe("encryptExistingContent — memory-vault.store.encryption-migrated even
     expect(typeof rowsMigrated).toBe("number");
     expect(rowsMigrated as number).toBeGreaterThanOrEqual(1);
     expect(typeof event?.durationMs).toBe("number");
+    const persisted = expectActivityLogProof(
+      "memory-vault.store.encryption-migrated.rows",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ fromScope: "plaintext", toScope: "encrypted" });
+    expect(persisted.rowsMigrated).toBe(rowsMigrated);
 
     const row = db.prepare("SELECT body FROM memories WHERE id = ?").get("m1") as {
       readonly body: string;

@@ -3,7 +3,7 @@
 // hardened pieces: the caller supplies an `AuditResult` (the same in-process value
 // `auditLocalStateResult` in ./audit.ts produces for `keiko audit local-state --json`) and an
 // `evidenceIndexCount` (from `listEvidence` in @oscharko-dev/keiko-evidence). NO new redaction
-// logic is written here: every server*.log line is already redacted at write time
+// logic is written here: every Activity Log line is already redacted at write time
 // (packages/keiko-server/src/observability/server-log.ts's `formatServerLogLine`), so this module
 // reads and concatenates raw bytes rather than re-parsing and re-serializing them — re-encoding an
 // already-safe line risks introducing exactly the leak the redaction choke point exists to
@@ -19,6 +19,10 @@ import { closeSync, fstatSync, lstatSync, readFileSync, readSync, readdirSync } 
 import { dirname, join } from "node:path";
 import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import {
+  orderActivityLogFileNames,
+  readableActivityLogFileNames,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import {
   openSafeArtifactFile,
@@ -33,30 +37,19 @@ import type { AuditResult } from "./audit.js";
 // byte is exactly as safe as `readVerbatimLogLines`'s existing full-file `split("\n")`.
 const NEWLINE_BYTE = 0x0a;
 
-export const CURRENT_LOG_FILE_NAME = "server.log";
-
-// `lifecycle.ts`'s `logFile()` writes the UI/BFF process's raw, unredacted stdout+stderr here
-// (`<stateDir>/ui.log`) — an acknowledged-unredacted operator channel, distinct from the redacted
-// `server*.log` stream above. Named once here so the double-confirmation gate in `support.ts` and
-// this module's own section builder never risk drifting on the literal.
-export const UI_LOG_FILE_NAME = "ui.log";
-
-// The one `sectionsExcluded` member Wave 6 introduces: always present unless the operator passed
-// BOTH `--include-ui-log` AND `--i-understand-this-is-unredacted` on `keiko support export`
-// (design doc §6.3) — a single flag is never sufficient consent. `support.ts` decides the gate (it
-// owns argv); this constant keeps the section tag and the exclusion label byte-identical between
-// the two files that need it.
+// The one `sectionsExcluded` member. Every report names the retired raw `ui.log` channel as
+// excluded (#3532): earlier versions wrote the UI child's raw output there, a legacy file is never
+// read into a report, and `support.ts` refuses the retired `--include-ui-log` flags.
 export const UI_LOG_SECTION = "ui-log";
 
-// The current activity log can grow until #3530 supplies bounded append-only segments. Keep each
-// export independently bounded at 50MB; --max-bytes on the CLI overrides this ceiling.
+// The Activity Log store is itself bounded (#3530), but its default byte budget is larger than one
+// support bundle should be. Keep each export independently bounded at 50MB, selected per segment
+// oldest-first; --max-bytes on the CLI overrides this ceiling.
 export const DEFAULT_MAX_BUNDLE_BYTES = 50 * 1024 * 1024;
 
 // Versions the JSONL bundle FORMAT itself (line 1 is always the manifest; every subsequent line is
 // a verbatim log line) — independent of the log envelope's own schema version below.
 export const BUNDLE_FORMAT_VERSION = 1;
-
-const ROTATED_LOG_FILE_PATTERN = /^server-(\d{4}-\d{2}-\d{2})\.log$/;
 
 export interface LogFileInfo {
   readonly name: string;
@@ -92,9 +85,8 @@ export function describeErrorKind(error: unknown): string {
   return error instanceof Error ? error.constructor.name : "Error";
 }
 
-// The state directory: the trust root the server's own writer opens `<stateDir>/logs/server*.log`
-// under (server-log.ts `resolveActiveLog`), so a symlinked `logs` directory is refused here exactly
-// as the writer refuses it.
+// The state directory: the trust root every Activity Log file is read under, so a symlinked `logs`
+// directory is refused here exactly as the writer refuses it.
 function activityLogTrustedRoot(logPath: string): string {
   return dirname(dirname(logPath));
 }
@@ -121,7 +113,7 @@ function withVerifiedLogDescriptor<T>(
   }
 }
 
-/** Reads a whole log file (a server*.log, or the opt-in ui.log) through a verified descriptor. */
+/** Reads a whole Activity Log file through a verified descriptor. */
 export function readVerifiedLogText(path: string, trustedRoot: string): string {
   return withVerifiedLogDescriptor(path, trustedRoot, (descriptor) =>
     readFileSync(descriptor, "utf8"),
@@ -164,28 +156,6 @@ function toLogFileInfoOrSkip(
   }
 }
 
-interface RotatedMatch {
-  readonly name: string;
-  readonly day: string;
-}
-
-function rotatedMatchOrUndefined(name: string): RotatedMatch | undefined {
-  const match = ROTATED_LOG_FILE_PATTERN.exec(name);
-  return match === null ? undefined : { name, day: match[1] ?? "" };
-}
-
-function sortedRotatedNames(names: readonly string[]): readonly string[] {
-  const matches: RotatedMatch[] = [];
-  for (const name of names) {
-    const match = rotatedMatchOrUndefined(name);
-    if (match !== undefined) matches.push(match);
-  }
-  // Explicit collator over the ISO day for legacy rotation archives: the ordering decides which
-  // file is copied first, and "oldest first" is part of the bundle contract.
-  matches.sort((a, b) => a.day.localeCompare(b.day, "en-US"));
-  return matches.map((m) => m.name);
-}
-
 export interface LogFileDiscovery {
   readonly files: readonly LogFileInfo[];
   // Entries `readdirSync` returned but that vanished before they could be opened — a concurrent
@@ -195,10 +165,12 @@ export interface LogFileDiscovery {
   readonly skippedLogFiles: readonly SkippedLogFile[];
 }
 
-// Lists compatible legacy archives plus the current server.log, oldest archive first and current
-// last — exactly the order copied into the bundle. A missing logs directory (a state dir that
-// predates any server run, or one the operator moved) yields an empty result rather than throwing:
-// the bundle is still worth producing, just without log content.
+// Lists every Activity Log file in logical-log order — legacy archives by day, the legacy
+// `server.log`, then sealed and active segments by start time and owning process — exactly the
+// order copied into the bundle. The closed name grammar and the order come from the one shared
+// contract the writer uses; retention-pin records and operator files are never exported. A missing
+// logs directory (a state dir that predates any server run, or one the operator moved) yields an
+// empty result rather than throwing: the bundle is still worth producing, just without log content.
 export function discoverServerLogFiles(logsDir: string): LogFileDiscovery {
   let names: readonly string[];
   try {
@@ -206,9 +178,10 @@ export function discoverServerLogFiles(logsDir: string): LogFileDiscovery {
   } catch {
     return { files: [], skippedLogFiles: [] };
   }
-  const ordered = names.includes(CURRENT_LOG_FILE_NAME)
-    ? [...sortedRotatedNames(names), CURRENT_LOG_FILE_NAME]
-    : sortedRotatedNames(names);
+  // One name per segment: a seal caught between its link and unlink must not be exported twice.
+  const ordered = readableActivityLogFileNames(orderActivityLogFileNames(names)).map(
+    (file) => file.name,
+  );
   const files: LogFileInfo[] = [];
   const skippedLogFiles: SkippedLogFile[] = [];
   for (const name of ordered) {
@@ -225,7 +198,7 @@ export function discoverServerLogFiles(logsDir: string): LogFileDiscovery {
 export interface LogFileSelection {
   readonly kept: readonly LogFileInfo[];
   readonly truncatedLogFiles: readonly string[];
-  // Set when the current (never-dropped) file alone still exceeds the residual budget once every
+  // Set when the newest (never-dropped) file alone still exceeds the residual budget once every
   // droppable file has been dropped: the byte budget `readKeptFiles` should give that file's own
   // tail reader instead of reading it whole. `undefined` when every kept file already fits
   // `maxBytes` read in full — nothing needs a tail read.
@@ -362,12 +335,24 @@ function readTailLinesOrSkip(
   }
 }
 
+// One source file's contribution to the bundle: how many lines it added and whether its last line
+// was an unterminated fragment (a crashed writer's torn tail). The bundle joins every file's lines,
+// so without these boundaries the analyzer could only recognise a fragment at the very end of the
+// bundle and would misread a torn tail of an earlier segment as corruption.
+export interface SourceLogFileLines {
+  readonly name: string;
+  readonly lineCount: number;
+  readonly terminalFragment: boolean;
+}
+
 export interface ReadKeptFilesResult {
   readonly contentLines: readonly string[];
   // True when the final copied source line was not newline-terminated. The bundle writer preserves
   // this boundary so the analyzer can distinguish a writer-crash fragment from terminated corrupt
   // JSON after the source lines have been assembled behind the bundle metadata.
   readonly terminalFragment: boolean;
+  // One entry per file that contributed lines, in bundle order.
+  readonly sourceLogFileLines: readonly SourceLogFileLines[];
   // Relative names only, from `LogFileInfo.name` — never the absolute `LogFileInfo.path`.
   readonly skippedLogFiles: readonly SkippedLogFile[];
   // Set when the current file's tail was read instead of its full content — see
@@ -400,6 +385,7 @@ export function readKeptFiles(
 ): ReadKeptFilesResult {
   const contentLines: string[] = [];
   const skippedLogFiles: SkippedLogFile[] = [];
+  const sourceLogFileLines: SourceLogFileLines[] = [];
   let currentFileTailTruncated: CurrentFileTailTruncated | undefined;
   let budgetExceeded = false;
   let terminalFragment = false;
@@ -413,7 +399,14 @@ export function readKeptFiles(
       continue;
     }
     for (const line of lookup.lines) contentLines.push(line);
-    if (lookup.lines.length > 0) terminalFragment = lookup.terminalFragment;
+    if (lookup.lines.length > 0) {
+      terminalFragment = lookup.terminalFragment;
+      sourceLogFileLines.push({
+        name: file.name,
+        lineCount: lookup.lines.length,
+        terminalFragment: lookup.terminalFragment,
+      });
+    }
     if (lookup.tail !== undefined) {
       currentFileTailTruncated = lookup.tail;
       budgetExceeded = lookup.lines.length === 0;
@@ -422,6 +415,7 @@ export function readKeptFiles(
   return {
     contentLines,
     terminalFragment,
+    sourceLogFileLines,
     skippedLogFiles,
     currentFileTailTruncated,
     budgetExceeded,
@@ -502,6 +496,9 @@ export interface SupportBundleManifest {
   readonly stateDirSource: "default" | "env-override";
   readonly redactionAttested: true;
   readonly sourceLogFiles: readonly string[];
+  // Per-file line counts and unterminated-tail flags, in the same order as the content lines, so
+  // `support analyze` classifies a torn tail of ANY source file as truncated rather than corrupt.
+  readonly sourceLogFileLines: readonly SourceLogFileLines[];
   readonly truncatedLogFiles: readonly string[];
   // Set when the current (never-dropped) log file's full content did not fit `--max-bytes`, so
   // only its tail (the newest bytes, advanced to the next line boundary so the first exported line
@@ -518,12 +515,8 @@ export interface SupportBundleManifest {
   // absolute paths) alongside the fs error kind that caused the skip. Distinct from
   // `truncatedLogFiles`: those were dropped on purpose for the size budget; these were simply gone.
   readonly skippedLogFiles: readonly SkippedLogFile[];
-  // Names every optional section this export did NOT attach — Wave 6. Currently the only member
-  // this manifest can ever carry is `"ui-log"` (§6.3): it is present whenever `support.ts`'s
-  // double-confirmation gate did not pass (either flag absent, or present alone), and ALWAYS —
-  // never merely when the operator happened to ask — so a reader of the manifest can tell the
-  // channel's status without knowing whether it was ever requested. Empty exactly when the gate
-  // passed and the section was attached.
+  // Names every optional section this export did NOT attach. The only member is `"ui-log"`, and it
+  // is always present: the raw `ui.log` channel is retired (#3532) and never read into a report.
   readonly sectionsExcluded: readonly string[];
   readonly auditSummary: RedactedAuditSummary;
   readonly evidenceIndexCount: number;
@@ -556,6 +549,7 @@ export interface ManifestInput {
   readonly installMode: string;
   readonly stateDirSource: "default" | "env-override";
   readonly sourceLogFiles: readonly string[];
+  readonly sourceLogFileLines: readonly SourceLogFileLines[];
   readonly truncatedLogFiles: readonly string[];
   readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
   readonly budgetExceeded: boolean;
@@ -564,8 +558,8 @@ export interface ManifestInput {
   readonly evidenceIndexCount: number;
   readonly storeFingerprints: readonly StoreFingerprint[];
   readonly storesUnavailable: readonly StoreUnavailableEntry[];
-  // Computed by `support.ts` from its own double-confirmation gate (this module stays pure/argv-
-  // free — file banner) and passed straight through to `SupportBundleManifest.sectionsExcluded`.
+  // Supplied by `support.ts` (this module stays pure and argv-free) and passed straight through to
+  // `SupportBundleManifest.sectionsExcluded`.
   readonly sectionsExcluded: readonly string[];
 }
 
@@ -615,6 +609,7 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
     stateDirSource: input.stateDirSource,
     redactionAttested: true,
     sourceLogFiles: input.sourceLogFiles,
+    sourceLogFileLines: input.sourceLogFileLines,
     truncatedLogFiles: input.truncatedLogFiles,
     currentFileTailTruncated: input.currentFileTailTruncated,
     budgetExceeded: input.budgetExceeded,
@@ -631,24 +626,11 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
   };
 }
 
-// ─── Wave 6 sections: ui-log (opt-in), config-snapshot (always), evidence-manifest (opt-in) ────
+// ─── Sections: config-snapshot (always), evidence-manifest (opt-in) ────────────────────────────
 //
 // Each is one `$section`-tagged JSONL record, exactly like the manifest itself (§6.1) — never
 // re-transformed content mixed into the manifest object, so a bug in one section's assembly can
 // never corrupt another's.
-
-// Attached only when `support.ts`'s double-confirmation gate (`--include-ui-log` AND
-// `--i-understand-this-is-unredacted`, both required) passes and `<stateDir>/ui.log` has content.
-// `content` is the file's bytes verbatim — `ui.log` is free text, not JSONL, so there is no
-// per-line shape to preserve the way the raw server-log content lines do.
-export interface SupportBundleUiLogSection {
-  readonly $section: "ui-log";
-  readonly content: string;
-}
-
-export function buildUiLogSection(content: string): SupportBundleUiLogSection {
-  return { $section: "ui-log", content };
-}
 
 // Always attached (never flag-gated): a snapshot of Keiko's own resolved `KEIKO_*` runtime
 // configuration, already passed through `redactLogFields` by the caller (`support.ts`) before this
@@ -682,8 +664,8 @@ export function buildEvidenceManifestSection(
   return { $section: "evidence-manifest", runId, manifest };
 }
 
-// Line 1 (the manifest), then any Wave 6 `$section` records (config-snapshot always, ui-log and
-// evidence-manifest only when their gates pass), then every already-read content line, in file
+// Line 1 (the manifest), then any Wave 6 `$section` records (config-snapshot always, evidence-manifest
+// only for a requested run), then every already-read content line, in file
 // order. The manifest is built from `readKeptFiles`'s result (see `support.ts`'s
 // `runSupportExport`) so its `sourceLogFiles`/`skippedLogFiles` reflect what was actually read, not
 // merely what was kept after the size budget — never touches an already-copied line's bytes.

@@ -27,7 +27,11 @@ import {
   type TaskType,
 } from "@oscharko-dev/keiko-harness";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import { createEvaluationModelProvider, type EvaluationConfigLoader } from "./model-provider.js";
+import {
+  createEvaluationModelProvider,
+  type EvaluationConfigLoader,
+  type EvaluationModelProviderDeps,
+} from "./model-provider.js";
 import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
 import { checkSurfaceParity, type SurfaceParityDeps } from "./surface-parity.js";
 import {
@@ -67,6 +71,8 @@ export interface EvalRunnerDeps {
   readonly surfaceParity?: SurfaceParityDeps | undefined;
   // Optional live-config loader injected by higher layers that own local credential vault access.
   readonly configLoader?: EvaluationConfigLoader | undefined;
+  // The Activity Log port the live Model Gateway writes through (#3532), injected by the CLI.
+  readonly gatewayLogSink?: EvaluationModelProviderDeps["logSink"];
 }
 
 export interface EvalRunOptions {
@@ -112,6 +118,7 @@ function resolveModelPort(
     ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
     ...(deps.env === undefined ? {} : { env: deps.env }),
     ...(deps.configLoader === undefined ? {} : { configLoader: deps.configLoader }),
+    ...(deps.gatewayLogSink === undefined ? {} : { logSink: deps.gatewayLogSink }),
   });
 }
 

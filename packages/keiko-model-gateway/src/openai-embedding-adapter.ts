@@ -82,7 +82,7 @@ const EMBEDDING_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-request"],
-  proofIds: ["embedding.request-dispatch.emitted-line"],
+  proofIds: ["embedding.request.dispatch.emitted-line"],
 });
 
 const EMBEDDING_REQUEST_FAILED_OPERATION = defineActivityLogOperation({
@@ -96,7 +96,7 @@ const EMBEDDING_REQUEST_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-request"],
-  proofIds: ["embedding.request-failed.emitted-line"],
+  proofIds: ["embedding.request.failed.emitted-line"],
 });
 
 const EMBEDDING_REQUEST_MINIMAL_RETRY_OPERATION = defineActivityLogOperation({
@@ -115,7 +115,7 @@ const EMBEDDING_REQUEST_MINIMAL_RETRY_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-request"],
-  proofIds: ["embedding.request-minimal-retry.emitted-line"],
+  proofIds: ["embedding.request.minimal-shape-retry.emitted-line"],
 });
 
 const EMBEDDING_REQUEST_MINIMAL_FAILED_OPERATION = defineActivityLogOperation({
@@ -128,7 +128,7 @@ const EMBEDDING_REQUEST_MINIMAL_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-request"],
-  proofIds: ["embedding.request-minimal-failed.emitted-line"],
+  proofIds: ["embedding.request.minimal-shape-failed.emitted-line"],
 });
 
 const EMBEDDING_ENDPOINT_STRICT_MEMOIZED_OPERATION = defineActivityLogOperation({
@@ -141,7 +141,7 @@ const EMBEDDING_ENDPOINT_STRICT_MEMOIZED_OPERATION = defineActivityLogOperation(
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-compatibility"],
-  proofIds: ["embedding.endpoint-strict-memoized.emitted-line"],
+  proofIds: ["embedding.endpoint.strict-shape-memoized.emitted-line"],
 });
 
 const EMBEDDING_BATCH_DISPATCH_OPERATION = defineActivityLogOperation({
@@ -154,7 +154,7 @@ const EMBEDDING_BATCH_DISPATCH_OPERATION = defineActivityLogOperation({
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-batch"],
-  proofIds: ["embedding.batch-dispatch.emitted-line"],
+  proofIds: ["embedding.batch.dispatch.emitted-line"],
 });
 
 const EMBEDDING_BATCH_INVALID_RESPONSE_OPERATION = defineActivityLogOperation({
@@ -179,7 +179,7 @@ const EMBEDDING_BATCH_INVALID_RESPONSE_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-batch"],
-  proofIds: ["embedding.batch-invalid-response.emitted-line"],
+  proofIds: ["embedding.batch.invalid-response.emitted-line"],
 });
 
 const EMBEDDING_BATCH_DEGRADE_SKIPPED_OPERATION = defineActivityLogOperation({
@@ -203,7 +203,7 @@ const EMBEDDING_BATCH_DEGRADE_SKIPPED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-compatibility"],
-  proofIds: ["embedding.batch-degrade-skipped.emitted-line"],
+  proofIds: ["embedding.batch.degrade-skipped.emitted-line"],
 });
 
 const EMBEDDING_BATCH_DEGRADING_OPERATION = defineActivityLogOperation({
@@ -216,7 +216,7 @@ const EMBEDDING_BATCH_DEGRADING_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-compatibility"],
-  proofIds: ["embedding.batch-degrading.emitted-line"],
+  proofIds: ["embedding.batch.degrading-to-scalar.emitted-line"],
 });
 
 const EMBEDDING_BATCH_DEGRADE_INCONCLUSIVE_OPERATION = defineActivityLogOperation({
@@ -235,7 +235,7 @@ const EMBEDDING_BATCH_DEGRADE_INCONCLUSIVE_OPERATION = defineActivityLogOperatio
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-compatibility"],
-  proofIds: ["embedding.batch-degrade-inconclusive.emitted-line"],
+  proofIds: ["embedding.batch.degrade-inconclusive.emitted-line"],
 });
 
 const EMBEDDING_BATCH_DEGRADED_OPERATION = defineActivityLogOperation({
@@ -250,7 +250,7 @@ const EMBEDDING_BATCH_DEGRADED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-compatibility"],
-  proofIds: ["embedding.batch-degraded.emitted-line"],
+  proofIds: ["embedding.batch.degraded-to-scalar.emitted-line"],
 });
 
 const EMBEDDING_BATCH_SCALAR_MEMO_HIT_OPERATION = defineActivityLogOperation({
@@ -263,7 +263,7 @@ const EMBEDDING_BATCH_SCALAR_MEMO_HIT_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-compatibility"],
-  proofIds: ["embedding.batch-scalar-memo-hit.emitted-line"],
+  proofIds: ["embedding.batch.scalar-memo-hit.emitted-line"],
 });
 
 const EMBEDDING_BATCH_MINIMAL_RETRY_OPERATION = defineActivityLogOperation({
@@ -282,7 +282,7 @@ const EMBEDDING_BATCH_MINIMAL_RETRY_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-batch"],
-  proofIds: ["embedding.batch-minimal-retry.emitted-line"],
+  proofIds: ["embedding.batch.minimal-shape-retry.emitted-line"],
 });
 
 const EMBEDDING_BATCH_ARRAY_UNSUPPORTED_OPERATION = defineActivityLogOperation({
@@ -302,7 +302,7 @@ const EMBEDDING_BATCH_ARRAY_UNSUPPORTED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-batch"],
-  proofIds: ["embedding.batch-array-unsupported.emitted-line"],
+  proofIds: ["embedding.batch.array-unsupported.emitted-line"],
 });
 
 const EMBEDDING_LADDER_DEADLINE_OPERATION = defineActivityLogOperation({
@@ -315,7 +315,7 @@ const EMBEDDING_LADDER_DEADLINE_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-scalar-ladder"],
-  proofIds: ["embedding.ladder-deadline.emitted-line"],
+  proofIds: ["embedding.scalar-ladder.deadline-expired.emitted-line"],
 });
 
 const EMBEDDING_LADDER_ITEM_FAILED_OPERATION = defineActivityLogOperation({
@@ -328,7 +328,7 @@ const EMBEDDING_LADDER_ITEM_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["embedding-scalar-ladder"],
-  proofIds: ["embedding.ladder-item-failed.emitted-line"],
+  proofIds: ["embedding.scalar-ladder.item-failed.emitted-line"],
 });
 
 const EMBEDDING_LADDER_ITEM_COMPLETED_OPERATION = defineActivityLogOperation({
@@ -344,7 +344,7 @@ const EMBEDDING_LADDER_ITEM_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-scalar-ladder"],
-  proofIds: ["embedding.ladder-item-completed.emitted-line"],
+  proofIds: ["embedding.scalar-ladder.item-completed.emitted-line"],
 });
 
 const EMBEDDING_LADDER_COMPLETED_OPERATION = defineActivityLogOperation({
@@ -357,7 +357,7 @@ const EMBEDDING_LADDER_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["embedding-scalar-ladder"],
-  proofIds: ["embedding.ladder-completed.emitted-line"],
+  proofIds: ["embedding.scalar-ladder.completed.emitted-line"],
 });
 
 function embeddingEndpointDigest(endpoint: string): string {

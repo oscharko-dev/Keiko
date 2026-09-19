@@ -12,7 +12,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityLogEvent,
   activityLogEventRegistration,
+  activityLogLossCounters,
   defineActivityLogOperation,
+  resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
@@ -24,6 +26,10 @@ import {
   type SecurityLogEvent,
   type SecurityLogSink,
 } from "./log-port.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const CORRELATION_WRAPPER_FIXTURE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -236,6 +242,14 @@ describe("emitSecurityLogEvent", () => {
         failureKind: "ENOSPC",
       },
     });
+    const persisted = expectActivityLogProof(
+      "security.log.sink-failed.body-free",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      droppedOpDigest: "764c7a89e99dae45",
+      failureKind: "ENOSPC",
+    });
   });
 
   it("keeps writing subsequent lines a recovered sink can take", () => {
@@ -346,5 +360,37 @@ describe("SecurityLogEvent", () => {
       "op",
       "status",
     ]);
+  });
+});
+
+// #3532: the process warning is once per sink, but the process loss ledger counts every line a
+// failing sink loses, so a quiet log can be told apart from a log that stopped working.
+describe("emitSecurityLogEvent loss accounting", () => {
+  it("counts every line a dead sink loses in the process loss ledger", () => {
+    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    resetActivityLogLossCountersForTests();
+    const dead: SecurityLogSink = {
+      write: (): never => {
+        throw new Error("sink is down");
+      },
+    };
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        emitSecurityLogEvent(dead, { category: "security", op: "security.keychain.fallback" });
+      }
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(3);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
+
+  it("counts an event handed to an unwired port as lost", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      emitSecurityLogEvent(undefined, { category: "security", op: "security.keychain.fallback" });
+      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
   });
 });

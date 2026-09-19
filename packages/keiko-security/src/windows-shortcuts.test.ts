@@ -22,6 +22,10 @@ import {
   type WindowsShortcutDefinition,
   type WindowsShortcutSpawnFn,
 } from "./windows-shortcuts.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const DEFINITION: WindowsShortcutDefinition = {
   targetPath: String.raw`C:\Users\pilot\AppData\Local\Programs\Keiko\Keiko.exe`,
@@ -216,7 +220,8 @@ describe("definition read/write entry points on the win32 route", () => {
     ).toThrow(WindowsSystemBinaryMissingError);
     expect(spawnFn).not.toHaveBeenCalled();
     expect(write).toHaveBeenCalledOnce();
-    expect(vi.mocked(write).mock.calls[0]?.[0]).toEqual({
+    const readMissingEvent = vi.mocked(write).mock.calls[0]?.[0];
+    expect(readMissingEvent).toEqual({
       level: "error",
       category: "diagnostic",
       op: "security.windows-shortcut.system-binary-missing",
@@ -227,6 +232,14 @@ describe("definition read/write entry points on the win32 route", () => {
         completeness: "complete",
         loss: "none",
       },
+    });
+    const persisted = expectActivityLogProof(
+      "security.windows-shortcut.system-binary-missing.mode",
+      formatActivityLogProofLine(readMissingEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      failureKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+      mode: "read",
     });
   });
 
@@ -299,6 +312,12 @@ describe("definition read/write entry points on the win32 route", () => {
         errorKind: "unsafe-target",
       }),
     );
+    const rootRefusedReadEvent = vi.mocked(sink.write).mock.calls[0]?.[0];
+    const persistedRead = expectActivityLogProof(
+      "security.windows-shortcut.system-root-refused.mode",
+      formatActivityLogProofLine(rootRefusedReadEvent ?? {}),
+    );
+    expect(persistedRead).toMatchObject({ mode: "read" });
 
     // The pre-existing 4-arg call shape (every current external caller) omits the sink entirely;
     // the refusal must still throw rather than depend on a sink being wired.

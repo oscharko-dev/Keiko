@@ -20,6 +20,10 @@ import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-wor
 import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {
   VerificationRunnerError,
@@ -1216,6 +1220,16 @@ describe("production managed worktree tools", () => {
         },
       }),
     );
+    const notRunEvent = log.find((event) => event.op === "coding-runtime.verification");
+    const persisted = expectActivityLogProof(
+      "coding-runtime.verification.emitted-line",
+      formatActivityLogProofLine(notRunEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      state: "not-run",
+      stepCount: 1,
+      steps: ["typecheck:script-missing"],
+    });
   });
 
   // PR #3452 review: the orchestrator lets a run-level cancellation win in the overall status, but
@@ -2394,6 +2408,17 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     expect(rerank?.correlationId).toBe("run-h1-search");
     expect(JSON.stringify(rerank)).not.toContain("parseConfig");
     expect(JSON.stringify(rerank)).not.toContain("src/b.ts");
+    const persisted = expectActivityLogProof(
+      "coding-runtime.repository-rerank.emitted-line",
+      formatActivityLogProofLine(rerank ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      runId: "run-h1-search",
+      ranking: "hybrid",
+      indexFreshness: "fresh",
+      rerankedHits: 1,
+      lexicalHits: 1,
+    });
   });
 
   it("denies a workspace-denylisted path as a completed domain outcome, never invented coverage", async () => {
@@ -2728,7 +2753,12 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
       authorityRef: { runId, envelopeDigest: DIGEST },
       modelId: "coding-safe-model",
       childModelPortFactory: () => {
-        throw new Error("private child configuration failure");
+        // A real thrown failure here often chains a lower-level cause (a rejected fetch, a parse
+        // error); carrying one keeps this fixture representative and gives the proof below a
+        // non-empty `causeChain` to assert on.
+        throw new Error("private child configuration failure", {
+          cause: new Error("private child configuration cause"),
+        });
       },
       activityLog: { write: (event): void => void events.push(event) },
     });
@@ -2747,6 +2777,17 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
       },
     });
     expect(JSON.stringify(events)).not.toContain("private child configuration failure");
+    expect(JSON.stringify(events)).not.toContain("private child configuration cause");
+    const persisted = expectActivityLogProof(
+      "coding-runtime.tool-availability.failed.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      runId,
+      optionalTool: "keiko_child_agent",
+      stage: "child-model-resolution",
+      reason: "configuration-resolution-failed",
+    });
   });
 });
 
@@ -2916,10 +2957,20 @@ describe("verification waiting on the operator's package-script trust decision",
       { decision: "workspace-script-trust" },
       { decision: "workspace-script-trust", outcome: "accepted" },
     ]);
-    expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
+    const decisionEvent = log.find((event) => event.op === "coding-runtime.operator-decision");
+    expect(decisionEvent).toMatchObject({
       level: "info",
       correlationId: "run-verification-3",
       extra: { decision: "workspace-script-trust", state: "settled", reason: "granted" },
+    });
+    const persisted = expectActivityLogProof(
+      "coding-runtime.operator-decision.emitted-line",
+      formatActivityLogProofLine(decisionEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      decision: "workspace-script-trust",
+      state: "settled",
+      reason: "granted",
     });
   });
 

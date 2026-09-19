@@ -26,6 +26,7 @@ import {
   activityLogEvent,
   classifyErrorKind,
   defineActivityLogOperation,
+  recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type KnowledgeLogLevel = "debug" | "info" | "warn" | "error";
@@ -180,10 +181,17 @@ export function emitKnowledgeLogEvent(
   sink: KnowledgeLogSink | undefined,
   event: KnowledgeLogEvent,
 ): void {
-  if (sink === undefined) return;
+  if (sink === undefined) {
+    // An unwired port loses the event it was handed; the loss is counted like any other (#3532).
+    recordActivityLogLoss("port-unwired");
+    return;
+  }
   try {
     sink.write(event);
   } catch (cause) {
+    // Every failure is a lost line and is counted in the process loss ledger; only the stderr
+    // notice below is limited to once per sink.
+    recordActivityLogLoss("port-sink-failed");
     reportFailedKnowledgeLogSink(sink, event.op, cause);
   }
 }

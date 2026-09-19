@@ -3,15 +3,15 @@
 // existing, hardened pieces into one redacted `.jsonl` bundle: the in-process `AuditResult`
 // `keiko audit local-state --json` already produces, the evidence-index count from
 // `listEvidence`, and a verbatim copy of `<state-dir>/logs/server*.log`. `analyze` groups a
-// bundle's (or a raw server.log's) lines by correlationId into reconstructed timelines.
+// bundle's (or a raw Activity Log file's) lines by correlationId into reconstructed timelines.
 //
 // This file owns argv parsing, stdout/stderr, environment/state-dir resolution, and calling the
 // audit/evidence subsystems. The exporter's and analyzer's own logic — file discovery, size-budget
 // selection, manifest assembly, parsing, grouping, ordering, rendering — lives in
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
-import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
@@ -19,6 +19,13 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
   type ActivityLogFields,
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_DIRECTORY_NAME,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+  DIAGNOSTIC_SUFFICIENCY_REASONS,
+  DIAGNOSTIC_SUFFICIENCY_STATUSES,
+  parseActivityLogFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -58,8 +65,9 @@ import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
 import {
-  analyzeLogText,
-  buildReproductionSeed,
+  ACTIVITY_LOG_EVIDENCE_INTEGRITY,
+  analyzeLogLines,
+  buildReproductionSeedFromAnalysis,
   findTimeline,
   hasIssueToPrJourneyOps,
   renderGatewayReplayScriptFixture,
@@ -67,81 +75,110 @@ import {
   renderHumanClusters,
   renderHumanReproductionSeed,
   renderHumanTimeline,
-  type ActivityLogEvidenceClassification,
+  timelineSufficiency,
   type AnalyzeAllResult,
   type ProcessSummary,
   type SourceKind,
   type SupportAnalyzeOptions,
   type LogTimeline,
   type OpCluster,
+  type ActivityLogTextLine,
   type ReproductionSeed,
+  type ReproductionSeedSource,
 } from "./support-analyze.js";
+import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
+import { runSupportIncidentCli } from "./support-incident.js";
+import {
+  parseSupportManifestArgs,
+  parseSupportQueryArgs,
+  runSupportManifestCli,
+  runSupportQueryCli,
+  SUPPORT_QUERY_USAGE,
+  type SupportManifestArgs,
+  type SupportQueryArgs,
+  type SupportSelectorArgs,
+} from "./support-query-cli.js";
+import {
+  collectSelectedLogContent,
+  parseSupportExportSelector,
+  type SupportBundleSelection,
+} from "./support-selective-export.js";
 import {
   buildConfigSnapshotSection,
   buildEvidenceManifestSection,
   buildSupportBundleManifest,
-  buildUiLogSection,
   bundleSha256Hex,
   bundleText,
-  CURRENT_LOG_FILE_NAME,
   DEFAULT_MAX_BUNDLE_BYTES,
   describeErrorKind,
   discoverServerLogFiles,
   readKeptFiles,
-  readVerifiedLogText,
   selectLogFilesWithinBudget,
   serializeBundleLines,
   sha256SidecarPath,
-  UI_LOG_FILE_NAME,
   UI_LOG_SECTION,
   type CurrentFileTailTruncated,
   type SkippedLogFile,
+  type SourceLogFileLines,
   type SupportBundleConfigSnapshotSection,
   type SupportBundleEvidenceManifestSection,
-  type SupportBundleUiLogSection,
 } from "./support-export.js";
 
 const USAGE = `Usage:
   keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N]
-                        [--include-ui-log --i-understand-this-is-unredacted]
                         [--include-evidence RUNID[,RUNID...]]
+                        [--incident ID | --correlation-id ID | --defect-fingerprint SHA256]
   keiko support analyze FILE [--correlation-id ID] [--json] [--clusters]
                         [--seed] [--emit-fixture PATH]
+  keiko support incident list|show|preview|report|dismiss [ID] [--state-dir PATH] [--json]
+  keiko support query ... and keiko support manifest rebuild|verify (keiko support query --help)
 
 export writes a redacted .jsonl support bundle: a manifest line (local-state audit summary,
 evidence-index count, exactly which log files were copied, and a redacted schema/integrity
 fingerprint for each of the ui, local-knowledge, and memory-vault stores found under --state-dir),
 an always-present config-snapshot section (Keiko's own resolved KEIKO_* runtime configuration,
-redacted), then every line of <state-dir>/logs/server*.log, copied byte-for-byte. A store that has
+redacted), then every line of the Activity Log under <state-dir>/logs/ (its sealed and active
+segments plus any legacy server*.log files, oldest first), copied byte-for-byte. A store that has
 never been used from this state dir, or that cannot be opened (corrupt, or a vault key the
 operator has not supplied), is named in the manifest's storesUnavailable instead of failing the
 export. Default --out is ./keiko-support-<timestamp>.jsonl (colons replaced with '-'); default
 --max-bytes is 50MB — the oldest log files are dropped first when the cap would be exceeded, and
-always named in the manifest's truncatedLogFiles. The current log file is never dropped; if it
+always named in the manifest's truncatedLogFiles. The newest log file is never dropped; if it
 alone still exceeds the cap, only its tail is exported instead, named in the manifest's
-currentFileTailTruncated. A <output>.sha256 sidecar carries a SHA-256 digest of the bundle's bytes.
+currentFileTailTruncated. sourceLogFileLines records each copied file's line count and whether it
+ended in a torn line, so analyze reports such a tail as truncated rather than corrupt.
+With --incident, --correlation-id or --defect-fingerprint the report is selective: it carries only
+that selection's registered causal closure plus a narrow process context, copied verbatim, and the
+manifest's selection member states its versioned diagnostic sufficiency. A selection that does not
+fit --max-bytes or cannot be found is never cut: nothing is written and the command exits 1.
+A <output>.sha256 sidecar carries a SHA-256 digest of the bundle's bytes.
 Publication exclusively creates the report and sidecar and never replaces an existing destination.
 If a process stops mid-publication, rerun the same explicit --out command; for the default output,
 rerun from the same working directory. Keiko recovers the durable prior bytes before taking a new
 clock or log snapshot, or fails closed when the bounded recovery slot conflicts.
 
-<state-dir>/ui.log (the UI/BFF process's raw, unredacted stdout+stderr) is excluded by default and
-always named in the manifest's sectionsExcluded — attaching it requires BOTH --include-ui-log AND
---i-understand-this-is-unredacted; either flag alone still excludes it. --include-evidence attaches
-the FULL EvidenceStore manifest for each listed runId (beyond the index-only summary above) for
-deep replay; a runId that does not exist under --state-dir contributes no section.
+A legacy <state-dir>/ui.log (raw UI process output written by earlier versions) is never read into
+a report and is always named in the manifest's sectionsExcluded; every diagnostic the UI process
+produces is an Activity Log line. --include-evidence attaches the FULL EvidenceStore manifest for
+each listed runId (beyond the index-only summary above) for deep replay; a runId that does not
+exist under --state-dir contributes no section. After a successful export the command reports the
+state directory's diagnostic readiness (ready, degraded or unavailable, with closed reasons).
 
-analyze reads FILE (a support bundle or a raw server.log — auto-detected), groups its lines by
-correlationId, and prints one reconstructed timeline per id. Each process lifetime is ordered by
-seq; lifetimes are ordered by the position of their first line in the file, because the log
-envelope promises no order across processes. The default and per-correlation reports identify the
-resolved input file, an inferable raw-log state directory, newest valid event and instance, and
-whether the raw log is current and apparently active. A raw log more than five minutes behind the
-analysis clock is reported as stale; bundles are historical artifacts and are never presented as
-live processes.
+analyze reads FILE (a support bundle or one raw Activity Log file — auto-detected), groups its
+lines by correlationId, and prints one reconstructed timeline per id.
+Each process lifetime is ordered by seq; lifetimes are ordered by the position of their first line
+in the file, because the log envelope promises no order across processes. The default and
+per-correlation reports identify the resolved input file, an inferable raw-log state directory,
+newest valid event and instance, and whether the raw log is current and apparently active. A raw
+log more than five minutes behind the analysis clock is reported as stale; bundles are historical
+artifacts and are never presented as live processes.
 --correlation-id narrows to a single id; --json emits the machine-readable form. --clusters prints
 a whole-file view of every parsed line grouped by (category, op, errorKind), independent of
---correlation-id: a count and up to 5 sample correlation ids per group. --seed (requires
+--correlation-id: a count and up to 5 sample correlation ids per group. --clusters --json is a
+deprecated, unversioned bare array kept byte-compatible for existing readers; it prints a one-line
+stderr deprecation notice on every use naming its versioned replacement, the clusters member of
+plain --json (kind keiko.support.analyze, schemaVersion 1), which carries the same data inside a
+versioned envelope. --seed (requires
 --correlation-id) prints a ReproductionSeed — a gatewayScript/httpRequest/storeFingerprint/
 indexingJob/issueToPrJourney/stackFrames/causeChain reconstruction for that one correlationId, plus
 a warnings field naming exactly what could not be reconstructed and why. --emit-fixture PATH (requires
@@ -208,7 +245,7 @@ const CLI_SUPPORT_EXPORT_FAILED_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["cli-support-export"],
-  proofIds: ["cli.support.export.install-layout-refusal"],
+  proofIds: ["cli.support.export.failed.install-layout-refusal"],
   releaseImpact: "patch",
 });
 
@@ -330,18 +367,22 @@ function prepareSupportInstallLayoutEvidence(
 }
 
 const SUPPORT_LOG_STALE_AFTER_MS = 5 * 60_000;
-const SERVER_LOG_FILE_PATTERN = /^server(?:-\d{4}-\d{2}-\d{2})?\.log$/;
 
 interface ExportArgs {
   readonly out: string | undefined;
   readonly stateDir: string | undefined;
   readonly maxBytes: number | undefined;
-  // Both required together to attach <state-dir>/ui.log — a single flag is never sufficient
-  // consent (design doc §6.3). See `runSupportExport`'s `uiLogIncluded`.
-  readonly includeUiLog: boolean;
-  readonly iUnderstandUnredacted: boolean;
   readonly includeEvidenceRunIds: readonly string[];
+  // #3531: a closure selector makes the report selective; `undefined` exports the whole log.
+  readonly selector?: SupportSelectorArgs | undefined;
 }
+
+// The flags that once attached the raw `ui.log` (#3532). They are refused explicitly rather than
+// ignored, so an operator who still passes them learns that no report can carry raw UI output.
+const RETIRED_UI_LOG_FLAGS: readonly string[] = [
+  "--include-ui-log",
+  "--i-understand-this-is-unredacted",
+];
 
 interface AnalyzeArgs {
   readonly file: string;
@@ -360,7 +401,13 @@ export type ParsedSupportArgs =
   | { readonly kind: "help" }
   | { readonly kind: "usage"; readonly message: string }
   | { readonly kind: "export"; readonly value: ExportArgs }
-  | { readonly kind: "analyze"; readonly value: AnalyzeArgs };
+  | { readonly kind: "analyze"; readonly value: AnalyzeArgs }
+  // #3533: local incident candidates; the incident module parses its own arguments.
+  | { readonly kind: "incident"; readonly args: readonly string[] }
+  // #3531: streaming machine queries and the rebuildable segment manifests.
+  | { readonly kind: "query-help" }
+  | { readonly kind: "query"; readonly value: SupportQueryArgs }
+  | { readonly kind: "manifest"; readonly value: SupportManifestArgs };
 
 type ParseResult<T> =
   | { readonly kind: "help" }
@@ -384,8 +431,21 @@ function parseIncludeEvidenceIds(raw: string | undefined): readonly string[] {
     .filter((id) => id.length > 0);
 }
 
-function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
+// The answers that need no flag parsing: help, and the refusal of a retired ui.log flag.
+function exportArgsEarlyResult(args: readonly string[]): ParseResult<ExportArgs> | undefined {
   if (args.includes("--help") || args.includes("-h")) return { kind: "help" };
+  if (!RETIRED_UI_LOG_FLAGS.some((flag) => args.includes(flag))) return undefined;
+  return {
+    kind: "usage",
+    message:
+      "keiko support export: --include-ui-log is no longer supported; raw UI output is never " +
+      `part of a support report. Every UI diagnostic is in the Activity Log.\n${USAGE}`,
+  };
+}
+
+function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
+  const early = exportArgsEarlyResult(args);
+  if (early !== undefined) return early;
   const out = flagValue(args, "--out");
   const stateDir = flagValue(args, "--state-dir");
   const maxBytesRaw = flagValue(args, "--max-bytes");
@@ -403,15 +463,18 @@ function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
       message: `keiko support export: --max-bytes must be a positive integer.\n${USAGE}`,
     };
   }
+  const selection = parseSupportExportSelector(args);
+  if (selection.kind === "usage") {
+    return { kind: "usage", message: `keiko support export: ${selection.message}\n${USAGE}` };
+  }
   return {
     kind: "ok",
     value: {
       out,
       stateDir,
       maxBytes,
-      includeUiLog: args.includes("--include-ui-log"),
-      iUnderstandUnredacted: args.includes("--i-understand-this-is-unredacted"),
       includeEvidenceRunIds: parseIncludeEvidenceIds(includeEvidenceRaw),
+      selector: selection.selector,
     },
   };
 }
@@ -473,6 +536,21 @@ export function parseSupportArgs(args: readonly string[]): ParsedSupportArgs {
     const parsed = parseAnalyzeArgs(rest);
     return parsed.kind === "ok" ? { kind: "analyze", value: parsed.value } : parsed;
   }
+  if (subcommand === "incident") return { kind: "incident", args: rest };
+  return parseQuerySubcommand(subcommand, rest);
+}
+
+function parseQuerySubcommand(subcommand: string, rest: readonly string[]): ParsedSupportArgs {
+  if (subcommand === "query") {
+    const parsed = parseSupportQueryArgs(rest);
+    if (parsed.kind === "help") return { kind: "query-help" };
+    return parsed.kind === "ok" ? { kind: "query", value: parsed.value } : parsed;
+  }
+  if (subcommand === "manifest") {
+    const parsed = parseSupportManifestArgs(rest);
+    if (parsed.kind === "help") return { kind: "query-help" };
+    return parsed.kind === "ok" ? { kind: "manifest", value: parsed.value } : parsed;
+  }
   return { kind: "usage", message: `keiko support: unknown subcommand: ${subcommand}\n${USAGE}` };
 }
 
@@ -493,13 +571,15 @@ export function resolveOutPath(cwd: string, outArg: string | undefined, generate
   return isAbsolute(value) ? value : resolve(cwd, value);
 }
 
+// Nothing but the Activity Log store may create files in its directory: a report written there could
+// take a segment's name, and retention owns every closed-grammar name in it.
 function supportDestinationCollidesWithActivityLog(
   cwd: string,
   stateDir: string,
   outArg: string | undefined,
 ): boolean {
   if (outArg === undefined) return false;
-  return resolve(cwd, outArg) === resolve(stateDir, "logs", CURRENT_LOG_FILE_NAME);
+  return dirname(resolve(cwd, outArg)) === resolve(stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
 }
 
 // Never throws: a missing or unreadable evidence directory means zero evidence to report, never a
@@ -540,9 +620,12 @@ function resolveExportInstallMode(server: Awaited<ReturnType<typeof loadServer>>
 }
 
 interface LogContent {
+  // #3531: set for a selective export; named in the bundle manifest's `selection` member.
+  readonly selection?: SupportBundleSelection | undefined;
   readonly contentLines: readonly string[];
   readonly terminalFragment: boolean;
   readonly sourceLogFiles: readonly string[];
+  readonly sourceLogFileLines: readonly SourceLogFileLines[];
   readonly truncatedLogFiles: readonly string[];
   readonly currentFileTailTruncated: CurrentFileTailTruncated | undefined;
   readonly budgetExceeded: boolean;
@@ -571,6 +654,7 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
     contentLines: read.contentLines,
     terminalFragment: read.terminalFragment,
     sourceLogFiles,
+    sourceLogFileLines: read.sourceLogFileLines,
     truncatedLogFiles: selection.truncatedLogFiles,
     currentFileTailTruncated: read.currentFileTailTruncated,
     budgetExceeded: read.budgetExceeded,
@@ -578,7 +662,7 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
   };
 }
 
-// Content-free, same discipline as readAnalyzeSource: an fs error's message can quote the path it
+// Content-free, same discipline as streamAnalyzeSource: an fs error's message can quote the path it
 // was writing (AGENTS.md §7). Reports `describeErrorKind`'s result — the fs error's own `code`
 // (ENOENT/EACCES/EROFS) when it has one, since a Node fs error is always a plain `Error` and
 // `error.constructor.name` is therefore always just `"Error"`, telling an operator nothing the
@@ -892,7 +976,10 @@ const SUPPORT_EXPORT_PUBLICATION_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["support-publication", "support-publication-acknowledgement"],
-  proofIds: ["support.export.publication-evidence", "support.export.commit-last"],
+  proofIds: [
+    "support.export.publication.publication-evidence",
+    "support.export.publication.commit-last",
+  ],
   releaseImpact: "patch",
 });
 
@@ -924,6 +1011,23 @@ const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
     incompleteLineCount: { type: "integer", dataClass: "count", required: true },
     sequenceAnomalyCount: { type: "integer", dataClass: "count", required: true },
     malformedLineCount: { type: "integer", dataClass: "count", required: true },
+    // #3532: the per-failure-class sufficiency projection of the analyzed artifact.
+    sufficiency: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...DIAGNOSTIC_SUFFICIENCY_STATUSES],
+    },
+    sufficiencyReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 17,
+      values: [...DIAGNOSTIC_SUFFICIENCY_REASONS],
+    },
+    completeClassCount: { type: "integer", dataClass: "count", required: true },
+    degradedClassCount: { type: "integer", dataClass: "count", required: true },
+    insufficientClassCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -931,30 +1035,9 @@ const SUPPORT_ANALYZE_CLASSIFICATION_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["support-analysis"],
-  proofIds: ["support.analyze.classification-evidence"],
+  proofIds: ["support.analyze.classified.classification-evidence"],
   releaseImpact: "patch",
 });
-
-type SupportAnalysisIntegrity = Pick<
-  ActivityLogFields<typeof SUPPORT_ANALYZE_CLASSIFICATION_OPERATION>,
-  "completeness" | "loss"
->;
-
-// ADR-0173 D10's closed vocabularies, derived from the analyzer's own verdict instead of the
-// constructor defaults. Only supported or legacy evidence (which implies no malformed line) is
-// complete; a truncated or corrupt artifact is a known, counted subset whose unreadable bytes stand
-// where a record should be; unsupported lines are preserved but excluded; incomplete identity or
-// writer evidence means completeness cannot be established at all.
-const SUPPORT_ANALYSIS_INTEGRITY: Readonly<
-  Record<ActivityLogEvidenceClassification, SupportAnalysisIntegrity>
-> = {
-  supported: { completeness: "complete", loss: "none" },
-  legacy: { completeness: "complete", loss: "none" },
-  unsupported: { completeness: "partial", loss: "none" },
-  corrupt: { completeness: "partial", loss: "event-dropped" },
-  truncated: { completeness: "partial", loss: "event-dropped" },
-  incomplete: { completeness: "unknown", loss: "none" },
-};
 
 type SupportPublicationEvidenceFields = ActivityLogFields<
   typeof SUPPORT_EXPORT_PUBLICATION_OPERATION
@@ -1077,7 +1160,14 @@ function emitSupportAnalysisEvidence(
           incompleteLineCount: result.evidence.incompleteLineCount,
           sequenceAnomalyCount: result.evidence.sequenceAnomalies.length,
           malformedLineCount: result.malformedLineCount,
-          ...SUPPORT_ANALYSIS_INTEGRITY[result.evidence.classification],
+          sufficiency: result.sufficiency.status,
+          ...(result.sufficiency.reasons.length === 0
+            ? {}
+            : { sufficiencyReasons: result.sufficiency.reasons }),
+          completeClassCount: result.sufficiency.coverage.completeClassCount,
+          degradedClassCount: result.sufficiency.coverage.degradedClassCount,
+          insufficientClassCount: result.sufficiency.coverage.insufficientClassCount,
+          ...ACTIVITY_LOG_EVIDENCE_INTEGRITY[result.evidence.classification],
         },
       ),
     );
@@ -1227,6 +1317,7 @@ function logContentManifestFields(
 ): Pick<
   ManifestInput,
   | "sourceLogFiles"
+  | "sourceLogFileLines"
   | "truncatedLogFiles"
   | "currentFileTailTruncated"
   | "budgetExceeded"
@@ -1234,41 +1325,12 @@ function logContentManifestFields(
 > {
   return {
     sourceLogFiles: logContent.sourceLogFiles,
+    sourceLogFileLines: logContent.sourceLogFileLines,
     truncatedLogFiles: logContent.truncatedLogFiles,
     currentFileTailTruncated: logContent.currentFileTailTruncated,
     budgetExceeded: logContent.budgetExceeded,
     skippedLogFiles: logContent.skippedLogFiles,
   };
-}
-
-// A missing, unreadable, or unsafe ui.log (no `keiko start` has ever run against this state dir, a
-// permission error, or a symlink/hard link/non-regular entry the verified read refuses) means there
-// is nothing to attach — never a failed export, and never a read through a link. The manifest's
-// `sectionsExcluded` still names the section.
-function readUiLogContentOrUndefined(stateDir: string): string | undefined {
-  try {
-    return readVerifiedLogText(join(stateDir, UI_LOG_FILE_NAME), stateDir);
-  } catch {
-    return undefined;
-  }
-}
-
-// The double-confirmation gate (design doc §6.3): BOTH `--include-ui-log` AND
-// `--i-understand-this-is-unredacted` must be present — a single flag is never sufficient consent.
-// `excluded` is true whenever the section was NOT attached (gate failed, OR the gate passed but
-// there was no content to attach), so the manifest's `sectionsExcluded` can always name "ui-log"
-// except in the one case it was genuinely included.
-interface UiLogInclusion {
-  readonly section: SupportBundleUiLogSection | undefined;
-  readonly excluded: boolean;
-}
-
-function resolveUiLogInclusion(stateDir: string, args: ExportArgs): UiLogInclusion {
-  const consented = args.includeUiLog && args.iUnderstandUnredacted;
-  const content = consented ? readUiLogContentOrUndefined(stateDir) : undefined;
-  return content === undefined
-    ? { section: undefined, excluded: true }
-    : { section: buildUiLogSection(content), excluded: false };
 }
 
 // A `KEIKO_`-prefixed env name is collected with the prefix fused on, so `redactLogFields`'s
@@ -1359,18 +1421,13 @@ async function resolveIncludedEvidenceSections(
 }
 
 // Assembles every Wave 6 `$section` record in the bundle's fixed order: config-snapshot (always),
-// then each requested evidence-manifest, then ui-log last (when its gate passed) — content
-// verbatim, so it sits closest to the raw log lines that follow it.
+// then each requested evidence-manifest. No section ever carries raw UI output (#3532).
 function assembleWave6Sections(
   env: EnvSource,
   server: Awaited<ReturnType<typeof loadServer>>,
-  uiLog: UiLogInclusion,
   evidenceSections: readonly SupportBundleEvidenceManifestSection[],
 ): readonly unknown[] {
-  const configSnapshot = resolveConfigSnapshotSection(env, server);
-  return uiLog.section === undefined
-    ? [configSnapshot, ...evidenceSections]
-    : [configSnapshot, ...evidenceSections, uiLog.section];
+  return [resolveConfigSnapshotSection(env, server), ...evidenceSections];
 }
 
 async function recordRolledBackRecovery(
@@ -1464,9 +1521,21 @@ interface FreshSupportData {
   readonly server: LoadedServer;
   readonly auditSummary: Awaited<ReturnType<typeof auditLocalStateResult>>;
   readonly stores: Awaited<ReturnType<LoadedServer["collectStoreFingerprints"]>>;
-  readonly uiLog: UiLogInclusion;
   readonly evidenceSections: readonly SupportBundleEvidenceManifestSection[];
   readonly generatedAtDate: Date;
+}
+
+// The whole log (oldest files dropped first to fit --max-bytes), or, with a selector, only the
+// selection's causal closure, which is never cut to fit (#3531).
+async function collectExportLogContent(
+  args: ExportArgs,
+  stateDir: string,
+  io: CliIo,
+  server: LoadedServer,
+): Promise<LogContent | number> {
+  const maxBytes = args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES;
+  if (args.selector === undefined) return collectLogContent(join(stateDir, "logs"), maxBytes);
+  return collectSelectedLogContent(args.selector, stateDir, maxBytes, io, server);
 }
 
 async function collectFreshSupportData(
@@ -1476,13 +1545,11 @@ async function collectFreshSupportData(
   deps: SupportCliDeps,
   context: FreshSupportExportContext,
 ): Promise<FreshSupportData | number> {
-  const logContent = collectLogContent(
-    join(context.stateDir, "logs"),
-    args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
-  );
+  const server = await loadServer();
+  const logContent = await collectExportLogContent(args, context.stateDir, io, server);
+  if (typeof logContent === "number") return logContent;
   const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? join(context.stateDir, "evidence");
   const evidenceIndexCount = await resolveEvidenceIndexCount(evidenceDir, deps);
-  const server = await loadServer();
   try {
     const activityLog = server.createFileServerLogSink(context.stateDir);
     activityLog.close?.();
@@ -1500,7 +1567,6 @@ async function collectFreshSupportData(
   }
   reportStoreFingerprintProgress(io);
   const stores = await server.collectStoreFingerprints({ stateDir: context.stateDir, env });
-  const uiLog = resolveUiLogInclusion(context.stateDir, args);
   const evidenceSections = await resolveIncludedEvidenceSections(
     evidenceDir,
     args.includeEvidenceRunIds,
@@ -1512,7 +1578,6 @@ async function collectFreshSupportData(
     server,
     auditSummary,
     stores,
-    uiLog,
     evidenceSections,
     generatedAtDate: context.now(),
   };
@@ -1527,16 +1592,19 @@ async function publishFreshSupportExport(
 ): Promise<number> {
   const data = await collectFreshSupportData(args, io, env, deps, context);
   if (typeof data === "number") return data;
-  const manifest = buildSupportBundleManifest({
+  const baseManifest = buildSupportBundleManifest({
     ...processProvenance(data.server, data.generatedAtDate, context.stateDirSource),
     ...logContentManifestFields(data.logContent),
     auditSummary: data.auditSummary,
     evidenceIndexCount: data.evidenceIndexCount,
     storeFingerprints: data.stores.fingerprints,
     storesUnavailable: data.stores.unavailable,
-    sectionsExcluded: data.uiLog.excluded ? [UI_LOG_SECTION] : [],
+    // A legacy raw `ui.log` is never read into a report; the manifest keeps naming it as excluded.
+    sectionsExcluded: [UI_LOG_SECTION],
   });
-  const sections = assembleWave6Sections(env, data.server, data.uiLog, data.evidenceSections);
+  const selection = data.logContent.selection;
+  const manifest = selection === undefined ? baseManifest : { ...baseManifest, selection };
+  const sections = assembleWave6Sections(env, data.server, data.evidenceSections);
   const lines = serializeBundleLines(manifest, sections, data.logContent.contentLines);
   const outPath = resolveOutPath(context.cwd, args.out, data.generatedAtDate);
   const publication = publishSupportBundle(
@@ -1578,7 +1646,7 @@ async function runSupportExport(
     return recoveredSupportExportExitCode(recovery, stateDir, io, publicationContext);
   }
   if (recovery.status === "rolled-back") await recordRolledBackRecovery(recovery, stateDir);
-  return publishFreshSupportExport(args, io, env, deps, {
+  const exitCode = await publishFreshSupportExport(args, io, env, deps, {
     cwd,
     now,
     stateDir,
@@ -1586,6 +1654,22 @@ async function runSupportExport(
     publication: publicationContext,
     recoveryState: recovery.status,
   });
+  if (exitCode === 0) await reportSupportReadiness(stateDir, env, io);
+  return exitCode;
+}
+
+// `keiko support export` also states the exported directory's diagnostic readiness (#3532). The
+// self-check persists its own `activity-log.readiness` line after the export, so the report it just
+// wrote stays exactly the evidence that existed when it was taken. This command inspects a state
+// directory it does not serve, so its own logger's wiring is not part of that directory's answer.
+async function reportSupportReadiness(stateDir: string, env: EnvSource, io: CliIo): Promise<void> {
+  const snapshot = (await loadServer()).checkActivityLogReadiness({
+    stateDir,
+    env,
+    scope: "directory",
+  });
+  const reasons = snapshot.reasons.length === 0 ? "" : ` (${snapshot.reasons.join(", ")})`;
+  io.out(`Diagnostic evidence: ${snapshot.readiness}${reasons}.\n`);
 }
 
 function reportMissingCorrelationId(correlationId: string, io: CliIo): number {
@@ -1593,11 +1677,13 @@ function reportMissingCorrelationId(correlationId: string, io: CliIo): number {
   return 1;
 }
 
+// A raw Activity Log file sits directly in `<state-dir>/logs/` under the closed grammar (a segment or
+// a legacy server*.log); anything else gives no state directory to infer.
 function inferAnalyzedStateDir(filePath: string, sourceKind: SourceKind): string | undefined {
   const logDirectory = dirname(filePath);
   return sourceKind === "raw-log" &&
-    basename(logDirectory) === "logs" &&
-    SERVER_LOG_FILE_PATTERN.test(basename(filePath))
+    basename(logDirectory) === ACTIVITY_LOG_DIRECTORY_NAME &&
+    parseActivityLogFileName(basename(filePath)) !== undefined
     ? dirname(logDirectory)
     : undefined;
 }
@@ -1728,15 +1814,51 @@ function renderAnalysisContext(context: SupportAnalysisContext): string {
   return `${lines.join("\n")}\n\n`;
 }
 
+// The versioned machine forms of `analyze --json` (#3531). Each names itself and its version ahead of
+// the fields the unversioned output already had, which stay unchanged, so an earlier reader (such as
+// `keiko investigate --from-timeline`) keeps working.
+const SUPPORT_ANALYZE_KIND = "keiko.support.analyze";
+const SUPPORT_ANALYZE_TIMELINE_KIND = "keiko.support.analyze-timeline";
+const SUPPORT_ANALYZE_SCHEMA_VERSION = 1;
+
+// The same provenance shape `keiko support query` and `export`'s selection carry (#3531 audit):
+// which build and registry produced this analysis, so a report read later, or on another machine,
+// can be judged against the exact catalog that classified it. Additive: every existing field of
+// both JSON forms stays unchanged.
+interface SupportAnalyzeProvenance {
+  readonly productVersion: string;
+  readonly registryVersion: number;
+  readonly schemaDigest: string;
+  readonly catalogDigest: string;
+}
+
+function analyzeProvenance(): SupportAnalyzeProvenance {
+  return {
+    productVersion: KEIKO_PRODUCT_VERSION,
+    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+  };
+}
+
 function emitSingleTimeline(
   timeline: LogTimeline,
-  malformedLineCount: number,
+  result: AnalyzeAllResult,
   context: SupportAnalysisContext,
   json: boolean,
   io: CliIo,
 ): number {
   if (json) {
-    io.out(`${JSON.stringify({ ...timeline, malformedLineCount, analysisContext: context })}\n`);
+    const payload = {
+      kind: SUPPORT_ANALYZE_TIMELINE_KIND,
+      schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION,
+      provenance: analyzeProvenance(),
+      ...timeline,
+      malformedLineCount: result.malformedLineCount,
+      sufficiency: timelineSufficiency(result, timeline),
+      analysisContext: context,
+    };
+    io.out(`${JSON.stringify(payload)}\n`);
   } else {
     io.out(`${renderAnalysisContext(context)}${renderHumanTimeline(timeline)}`);
   }
@@ -1744,9 +1866,14 @@ function emitSingleTimeline(
 }
 
 function emitAllTimelines(result: SupportAnalysisReport, json: boolean, io: CliIo): number {
+  const payload = {
+    kind: SUPPORT_ANALYZE_KIND,
+    schemaVersion: SUPPORT_ANALYZE_SCHEMA_VERSION,
+    provenance: analyzeProvenance(),
+  };
   io.out(
     json
-      ? `${JSON.stringify(result)}\n`
+      ? `${JSON.stringify({ ...payload, ...result })}\n`
       : `${renderAnalysisContext(result.analysisContext)}${renderHumanAllTimelines(result)}`,
   );
   return 0;
@@ -1756,22 +1883,75 @@ function emitAllTimelines(result: SupportAnalysisReport, json: boolean, io: CliI
 // of --correlation-id (support-analyze.ts's `renderHumanClusters` docstring reserves it for
 // exactly this flag). Emits the bare `OpCluster[]` under --json, never nested inside a larger
 // envelope, since this is deliberately a focused report, not a slice of the default output.
+//
+// That bare array predates the versioned machine profiles (#3531) and stays byte-compatible: no
+// reader of it breaks. But it is itself unversioned, with no stated compatibility or deprecation
+// path (#3531 Update Impact) — and `keiko support analyze --json`'s own `clusters` member (kind
+// `keiko.support.analyze`, schemaVersion 1) now carries exactly the same `OpCluster[]` data inside
+// a versioned envelope. `--clusters --json` is therefore the explicit deprecation path itself: keep
+// the array exactly as it was, and name the versioned replacement on stderr every time it is used.
 function emitClusters(clusters: readonly OpCluster[], json: boolean, io: CliIo): number {
+  if (json) {
+    io.err(
+      "keiko support analyze: --clusters --json is a deprecated, unversioned bare array; use " +
+        `the clusters member of keiko support analyze --json (${SUPPORT_ANALYZE_KIND} v` +
+        `${String(SUPPORT_ANALYZE_SCHEMA_VERSION)}) instead.\n`,
+    );
+  }
   io.out(json ? `${JSON.stringify(clusters)}\n` : renderHumanClusters(clusters));
   return 0;
 }
 
-// Single return statement by design (sonarjs/function-return-type): both arms assign the same
-// declared `string | number` union before one trailing return, rather than returning from inside
-// each branch, so the function's return shape reads as one type instead of two.
-function readAnalyzeSource(filePath: string, io: CliIo): string | number {
-  let result: string | number;
+// Records what a reproduction seed states about its source while the analysis streams it (#3531):
+// the SHA-256 of the artifact's exact bytes, its line count, and its first line (a bundle's
+// manifest line). Digest and analysis come from the same pass, so they describe one snapshot.
+class SeedSourceObserver {
+  private readonly hash = createHash("sha256");
+  private lineCount = 0;
+  private firstLine: string | undefined;
+
+  public readonly observeChunk = (chunk: Uint8Array): void => {
+    this.hash.update(chunk);
+  };
+
+  public *observeLines(lines: Iterable<ActivityLogTextLine>): Generator<ActivityLogTextLine> {
+    for (const line of lines) {
+      if (this.lineCount === 0) this.firstLine = line.text;
+      this.lineCount += 1;
+      yield line;
+    }
+  }
+
+  public source(): ReproductionSeedSource {
+    return {
+      lineCount: this.lineCount,
+      sha256: this.hash.digest("hex"),
+      firstLine: this.firstLine,
+    };
+  }
+}
+
+// Streams FILE through the bounded line reader (#3531) instead of loading it whole. A failure to
+// open or read it is reported content-free: the closed cause kind, never an fs message, which can
+// quote the path (AGENTS.md §7). Any other error propagates.
+function streamAnalyzeSource(
+  filePath: string,
+  options: SupportAnalyzeOptions,
+  io: CliIo,
+  observer?: SeedSourceObserver,
+): AnalyzeAllResult | number {
+  let result: AnalyzeAllResult | number;
   try {
-    result = readFileSync(filePath, "utf8");
+    const lines = readActivityLogFileLines(() => openSync(filePath, "r"), {
+      onChunk: observer?.observeChunk,
+    });
+    result = analyzeLogLines(
+      observer === undefined ? lines : observer.observeLines(lines),
+      options,
+    );
   } catch (error) {
-    // Content-free: an fs error's message can quote the path it was reading (AGENTS.md §7).
-    const kind = error instanceof Error ? error.constructor.name : "Error";
-    io.err(`keiko support analyze: could not read ${filePath} — ${kind}\n`);
+    if (!(error instanceof ActivityLogReadError)) throw error;
+    io.err(`keiko support analyze: could not read ${filePath} — ${error.causeKind}\n`);
     result = 1;
   }
   return result;
@@ -1869,12 +2049,11 @@ function emitSeedResult(
 // builds one `ReproductionSeed`, optionally writes the fixture derived from its `gatewayScript`,
 // then reports according to which of the two flags were actually requested.
 function runSeedAndFixture(
-  text: string,
-  args: AnalyzeArgs,
-  cwd: string,
-  io: CliIo,
-  options: SupportAnalyzeOptions,
+  analysis: AnalyzeAllResult,
+  source: ReproductionSeedSource,
+  context: AnalyzedSupportResultContext,
 ): number {
+  const { args, cwd, io, options } = context;
   const correlationId = args.correlationId;
   if (correlationId === undefined) {
     // Unreachable in practice: parseAnalyzeArgs rejects --seed/--emit-fixture without
@@ -1883,7 +2062,13 @@ function runSeedAndFixture(
     io.err(`keiko support analyze: --seed/--emit-fixture require --correlation-id.\n${USAGE}`);
     return 2;
   }
-  const seed = buildReproductionSeed(text, correlationId, new Date(), options);
+  const seed = buildReproductionSeedFromAnalysis(
+    analysis,
+    source,
+    correlationId,
+    new Date(),
+    options,
+  );
   if (seed === undefined) return reportMissingCorrelationId(correlationId, io);
 
   const fixtureOutcome = emitFixtureIfRequested(seed, args.emitFixture, correlationId, cwd, io);
@@ -1954,7 +2139,6 @@ async function persistSupportAnalysisEvidence(
 }
 
 interface AnalyzedSupportResultContext {
-  readonly text: string;
   readonly args: AnalyzeArgs;
   readonly cwd: string;
   readonly filePath: string;
@@ -1972,7 +2156,12 @@ async function emitAnalyzedSupportResult(
     return 1;
   if (context.args.clusters) return emitClusters(result.clusters, context.args.json, context.io);
   if (context.args.seed || context.args.emitFixture !== undefined) {
-    return runSeedAndFixture(context.text, context.args, context.cwd, context.io, context.options);
+    // The seed states its source's digest and line count, so it streams the artifact once more
+    // and records both from the same pass as its analysis (#3531).
+    const observer = new SeedSourceObserver();
+    const analysis = streamAnalyzeSource(context.filePath, context.options, context.io, observer);
+    if (typeof analysis === "number") return analysis;
+    return runSeedAndFixture(analysis, observer.source(), context);
   }
   const report = buildAnalysisReport(result, context.filePath, context.deps);
   if (context.args.correlationId === undefined) {
@@ -1984,7 +2173,7 @@ async function emitAnalyzedSupportResult(
   }
   return emitSingleTimeline(
     timeline,
-    result.malformedLineCount,
+    result,
     report.analysisContext,
     context.args.json,
     context.io,
@@ -1999,15 +2188,15 @@ async function runSupportAnalyze(
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
   const filePath = isAbsolute(args.file) ? args.file : resolve(cwd, args.file);
-  const text = readAnalyzeSource(filePath, io);
-  if (typeof text === "number") return text;
-
-  const basic = analyzeLogText(text);
+  const basic = streamAnalyzeSource(filePath, {}, io);
+  if (typeof basic === "number") return basic;
   const options = await loadToolAnalysisOptions(basic, io);
   const result =
-    options.toolLifecycleValidator === undefined ? basic : analyzeLogText(text, options);
+    options.toolLifecycleValidator === undefined
+      ? basic
+      : streamAnalyzeSource(filePath, options, io);
+  if (typeof result === "number") return result;
   return emitAnalyzedSupportResult(result, {
-    text,
     args,
     cwd,
     filePath,
@@ -2035,6 +2224,17 @@ export async function runSupportCli(
   }
   if (parsed.kind === "export") {
     return runSupportExport(parsed.value, io, env, deps);
+  }
+  if (parsed.kind === "incident") {
+    return runSupportIncidentCli(parsed.args, io, env, { cwd: deps.cwd });
+  }
+  if (parsed.kind === "query-help") {
+    io.out(SUPPORT_QUERY_USAGE);
+    return 0;
+  }
+  if (parsed.kind === "query") return runSupportQueryCli(parsed.value, io, env, { cwd: deps.cwd });
+  if (parsed.kind === "manifest") {
+    return runSupportManifestCli(parsed.value, io, env, { cwd: deps.cwd });
   }
   return runSupportAnalyze(parsed.value, io, env, deps);
 }

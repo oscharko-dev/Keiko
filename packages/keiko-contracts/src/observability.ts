@@ -26,10 +26,101 @@ import { containsAbsolutePath } from "./text-safety.js";
 export {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
+  ACTIVITY_LOG_FAILURE_SURFACES,
+  ACTIVITY_LOG_OPERATION_SURFACES,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  type ActivityLogFailureSurface,
 } from "./activity-log-registry.generated.js";
 export { ACTIVITY_LOG_OPERATION_REGISTRY };
+// The Activity Log directory's closed file-name grammar travels with the runtime observability
+// contract, so every reader that already imports this entry point shares the writer's grammar.
+export {
+  ACTIVITY_LOG_DIRECTORY_NAME,
+  ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
+  ACTIVITY_LOG_PIN_ID_PATTERN,
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
+  activityLogPinFileName,
+  activityLogSegmentFileName,
+  compareActivityLogFileNames,
+  formatActivityLogSegmentId,
+  isActivityLogOwnedFileName,
+  orderActivityLogFileNames,
+  parseActivityLogFileName,
+  parseActivityLogPinFileName,
+  parseActivityLogSegmentId,
+  readableActivityLogFileNames,
+  type ActivityLogFileName,
+  type ActivityLogLegacyArchiveFileName,
+  type ActivityLogLegacyCurrentFileName,
+  type ActivityLogSegmentFileName,
+  type ActivityLogSegmentIdentity,
+  type ActivityLogSegmentState,
+} from "./activity-log-files.js";
+export {
+  ACTIVITY_LOG_LOSS_REASONS,
+  activityLogLossCounters,
+  activityLogLossTotal,
+  isActivityLogLossReason,
+  recordActivityLogLoss,
+  resetActivityLogLossCountersForTests,
+  type ActivityLogLossCounters,
+  type ActivityLogLossReason,
+} from "./activity-log-loss.js";
+// The body-free SupportIncident descriptor (#3533) is a selection artifact over this log, so it
+// travels with the same runtime entry point instead of a parallel package surface.
+export {
+  DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+  DEFECT_FINGERPRINT_PATTERN,
+  MAX_DEFECT_FINGERPRINT_FRAMES,
+  MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
+  MAX_SUPPORT_INCIDENT_RECORD_BYTES,
+  SUPPORT_INCIDENT_DIRECTORY_NAME,
+  SUPPORT_INCIDENT_EVIDENCE_INTEGRITY,
+  SUPPORT_INCIDENT_ID_PATTERN,
+  SUPPORT_INCIDENT_PIN_STATUSES,
+  SUPPORT_INCIDENT_SCHEMA_VERSION,
+  SUPPORT_INCIDENT_SLOT_COUNT,
+  SUPPORT_INCIDENT_STATES,
+  SUPPORT_INCIDENT_TRIGGERS,
+  SUPPORT_INCIDENT_UNATTRIBUTED,
+  UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
+  defectFingerprintPreimage,
+  isDefectFingerprint,
+  isSupportIncidentId,
+  isSupportIncidentSurface,
+  normalizeKeikoFrame,
+  normalizeKeikoFrameSignature,
+  parseSupportIncidentFileName,
+  parseSupportIncidentFingerprintClaimFileName,
+  parseSupportIncidentRecord,
+  parseSupportIncidentSlotClaimFileName,
+  supportIncidentBuild,
+  supportIncidentFileName,
+  supportIncidentFingerprintClaimFileName,
+  supportIncidentPrivateProjection,
+  supportIncidentPublicProjection,
+  supportIncidentSlotClaimFileName,
+  type DefectFingerprintInput,
+  type SupportIncident,
+  type SupportIncidentBuild,
+  type SupportIncidentCorrelation,
+  type SupportIncidentCoverage,
+  type SupportIncidentEvidence,
+  type SupportIncidentEvidenceIntegrity,
+  type SupportIncidentFingerprint,
+  type SupportIncidentPin,
+  type SupportIncidentPinStatus,
+  type SupportIncidentPrivateProjection,
+  type SupportIncidentPublicProjection,
+  type SupportIncidentRecord,
+  type SupportIncidentSegmentReference,
+  type SupportIncidentState,
+  type SupportIncidentSufficiency,
+  type SupportIncidentSurface,
+  type SupportIncidentTrigger,
+  type SupportIncidentWindow,
+} from "./support-incident.js";
 
 /**
  * The shape an error KIND may take: a leading letter, then up to 63 more letters, digits,
@@ -151,6 +242,61 @@ export type ActivityLogCompatibilityState = (typeof ACTIVITY_LOG_COMPATIBILITY_S
 export const ACTIVITY_LOG_WRITER_CAPABILITY_STATES = ["active", "degraded", "unavailable"] as const;
 export type ActivityLogWriterCapabilityState =
   (typeof ACTIVITY_LOG_WRITER_CAPABILITY_STATES)[number];
+
+// Diagnostic sufficiency of reconstruction evidence (#3532), projected per failure class by
+// `keiko support analyze` and carried by support incidents. Closed: an analyzer, an incident and a
+// report all speak exactly these statuses and reasons. Insufficient: required evidence or causal
+// closure is missing. Degraded: localization and replay remain possible, but a closed warning or a
+// bounded loss exists. Complete: neither.
+export const DIAGNOSTIC_SUFFICIENCY_STATUSES = ["complete", "degraded", "insufficient"] as const;
+export type DiagnosticSufficiencyStatus = (typeof DIAGNOSTIC_SUFFICIENCY_STATUSES)[number];
+
+// The last three are selection reasons (#3531): a causal closure that does not fit the report
+// budget, a selection whose evidence retention already removed (or never held), and a candidate
+// segment that could not be read. None is ever answered by truncating the selection.
+export const DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_REASONS = [
+  "no-registered-evidence",
+  "no-registered-failure",
+  "corrupt-evidence",
+  "parent-correlation-missing",
+  "lifecycle-start-missing",
+  "report-budget-exceeded",
+  "evidence-not-retained",
+  "segment-unreadable",
+] as const;
+
+export const DIAGNOSTIC_SUFFICIENCY_DEGRADED_REASONS = [
+  "truncated-evidence",
+  "unsupported-evidence",
+  "incomplete-evidence",
+  "sequence-anomaly",
+  "activity-log-loss",
+  "events-dropped",
+  "correlation-unknown",
+  "evidence-partial",
+  // #3531: optional pre/post context was dropped so the complete causal closure fits the budget.
+  "context-truncated",
+] as const;
+
+export const DIAGNOSTIC_SUFFICIENCY_REASONS = [
+  ...DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_REASONS,
+  ...DIAGNOSTIC_SUFFICIENCY_DEGRADED_REASONS,
+] as const;
+export type DiagnosticSufficiencyReason = (typeof DIAGNOSTIC_SUFFICIENCY_REASONS)[number];
+
+const DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_SET: ReadonlySet<string> = new Set(
+  DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_REASONS,
+);
+
+/** The one status rule: any insufficient reason wins, any other reason degrades, none is complete. */
+export function diagnosticSufficiencyStatus(
+  reasons: readonly DiagnosticSufficiencyReason[],
+): DiagnosticSufficiencyStatus {
+  if (reasons.some((reason) => DIAGNOSTIC_SUFFICIENCY_INSUFFICIENT_SET.has(reason))) {
+    return "insufficient";
+  }
+  return reasons.length > 0 ? "degraded" : "complete";
+}
 
 export function isActivityLogErrorKind(value: unknown): value is ActivityLogErrorKind {
   return (
@@ -470,6 +616,44 @@ const ACTIVITY_LOG_REDUCER_OWNED_FIELDS: ReadonlySet<string> = new Set([
   "routeTemplate",
 ]);
 export const ACTIVITY_LOG_FRAME_FIELD_NAME = "frames";
+export const ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME = "causeChain";
+
+/**
+ * The array fields persisted-line redaction reduces element by element and OMITS when nothing
+ * survives (an error without Keiko frames, an error without a cause). A registration therefore
+ * never declares them required: a required one would make every such failure persist a line that
+ * fails its own registration. The op-catalog generator rejects that declaration.
+ */
+export const ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES = [
+  ACTIVITY_LOG_FRAME_FIELD_NAME,
+  ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME,
+] as const;
+
+/**
+ * The envelope fields the central sink stamps on every persisted record (ADR-0173 D1). Redaction
+ * drops a producer field with one of these names before the merge, so a registration never declares
+ * one: its value would be silently replaced by the sink's own (a skill catalog digest once persisted
+ * as the log format's catalog digest). The op-catalog generator rejects that declaration.
+ */
+export const ACTIVITY_LOG_RESERVED_FIELD_NAMES = [
+  "ts",
+  "level",
+  "category",
+  "op",
+  "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
+  "pid",
+  "instanceId",
+  "seq",
+] as const;
 
 function isBodyFreeMachineValue(value: string): boolean {
   if (value.length === 0 || value.startsWith("{") || value.startsWith("<")) return false;
@@ -646,6 +830,11 @@ const ACTIVITY_LOG_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
 const ACTIVITY_LOG_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/u;
 export const ACTIVITY_LOG_UNKNOWN_CORRELATION_ID = "unknown-correlation-id";
 
+/** True for a value of the one correlation-id shape every Activity Log envelope accepts. */
+export function isActivityLogCorrelationId(value: unknown): value is string {
+  return typeof value === "string" && ACTIVITY_LOG_CORRELATION_ID.test(value);
+}
+
 function validOptionalCorrelationId(value: string | undefined): boolean {
   return value === undefined || ACTIVITY_LOG_CORRELATION_ID.test(value);
 }
@@ -807,6 +996,18 @@ function activityLogEventRejection(event: object): ActivityLogEventFailureKind |
   return ACTIVITY_LOG_EVENT_FAILURE_KIND_SET.has(rejection)
     ? (rejection as ActivityLogEventFailureKind)
     : undefined;
+}
+
+/**
+ * True when the persisted-event validation will refuse this event: it carries the body-free
+ * rejection sentinel `activityLogEvent` substitutes for invalid fields, or it was never bound to a
+ * registration at all. A cheap marker read, so a logger can count the loss before the sink drops it.
+ */
+export function activityLogEventWillBeRejected(event: object): boolean {
+  return (
+    activityLogEventRejection(event) !== undefined ||
+    activityLogEventRegistration(event) === undefined
+  );
 }
 
 const ACTIVITY_LOG_EVENT_KEYS: ReadonlySet<string> = new Set([

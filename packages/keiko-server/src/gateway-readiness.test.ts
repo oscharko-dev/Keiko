@@ -24,6 +24,10 @@ import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -263,6 +267,25 @@ describe("gateway readiness route", () => {
       op: "gateway.readiness.automatic.completed",
       correlationId: "coding-readiness-0001",
       extra: { modelId: "coding-chat", overallStatus: "ready", probeCount: 2 },
+    });
+    const startedProof = expectActivityLogProof(
+      "gateway.readiness.automatic.started.line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(startedProof).toMatchObject({
+      correlationId: "coding-readiness-0001",
+      modelId: "coding-chat",
+      probeCount: 2,
+    });
+    const completedProof = expectActivityLogProof(
+      "gateway.readiness.automatic.completed.line",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+    expect(completedProof).toMatchObject({
+      correlationId: "coding-readiness-0001",
+      modelId: "coding-chat",
+      overallStatus: "ready",
+      probeCount: 2,
     });
     deps.store.close();
   });

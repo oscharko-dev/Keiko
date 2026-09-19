@@ -15,6 +15,10 @@ import { createGitChangeSnapshotService } from "./gitChangeSnapshotService.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
 import { formatServerLogLine } from "./observability/server-log.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const roots: string[] = [];
 const correlationId = "snapshot-regression";
@@ -572,12 +576,26 @@ describe("immutable Git change snapshot production", () => {
     const captureLog = events.find((event) => event.op === "git.snapshot.capture");
     if (captureLog === undefined) throw new Error("capture log missing");
     expect(formatServerLogLine(captureLog)).toContain('"fileCount":1');
+    const persistedCapture = expectActivityLogProof(
+      "git.snapshot.capture.outcome",
+      formatActivityLogProofLine(captureLog),
+    );
+    expect(persistedCapture).toMatchObject({ outcome: "complete", fileCount: 1 });
     expect(await service.recheck(initial.reference ?? "", input)).toMatchObject({
       state: "current",
     });
     git(workspace.root, "commit", "-am", "move head");
     expect(await service.recheck(initial.reference ?? "", input)).toMatchObject({ state: "stale" });
     expect(service.read(initial.reference ?? "", accessScope, correlationId)).toBeUndefined();
+    const recheckEvents = events.filter((event) => event.op === "git.snapshot.recheck");
+    expect(recheckEvents.map((event) => event.extra?.state)).toEqual(["current", "stale"]);
+    const [firstRecheck] = recheckEvents;
+    if (firstRecheck === undefined) throw new Error("expected a recheck event");
+    const persistedRecheck = expectActivityLogProof(
+      "git.snapshot.recheck.state",
+      formatActivityLogProofLine(firstRecheck),
+    );
+    expect(persistedRecheck).toMatchObject({ state: "current" });
   });
 
   // B2-8 — a throwaway comparison (e.g. gitChangeRoutes.ts's connect/refresh handlers, which only

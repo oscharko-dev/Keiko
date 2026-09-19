@@ -8,9 +8,12 @@ records why the underlying fields exist and what each one does and does not prom
 
 ## The recipe: artifact → seed → replay → red/green test
 
-1. **Get the artifact.** Either a raw `<stateDir>/logs/server.log`, or a full bundle from
-   `keiko support export --out bundle.jsonl` (the bundle additionally carries store fingerprints
-   and a manifest; the analyzer auto-detects which kind it was handed).
+1. **Get the artifact.** Either one raw Activity Log file from `<stateDir>/logs/` (a segment or a
+   legacy file), or a full bundle from `keiko support export --out bundle.jsonl`. The bundle joins
+   every segment in logical order and additionally carries store fingerprints and a manifest; the
+   analyzer auto-detects which kind it was handed. When the correlation id or incident is already
+   known, `keiko support export --correlation-id <id> --out bundle.jsonl` (or `--incident <id>`)
+   writes only that operation's registered causal closure, which keeps a long history small.
 2. **Find the correlation id.** `keiko support analyze bundle.jsonl` prints every timeline in the
    file; `keiko support analyze bundle.jsonl --correlation-id <id> --json` narrows to one and emits
    it as a machine-readable `LogTimeline`. See [`README.md`](README.md#worked-example-keiko-support-analyze)

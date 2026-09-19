@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { logDescription } from "./prDescriptionProjection.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import { PrDescriptionFailure } from "./prDescriptionTypes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 // The activity envelope uses the closed global error taxonomy while the precise body-free failure
 // class remains available in `extra.failureKind` for reconstruction and clustering.
@@ -26,6 +30,11 @@ describe("prDescriptionProjection — logDescription failure classification", ()
     expect(line?.level).toBe("warn");
     expect(line?.errorKind).toBe("internal");
     expect(line?.extra?.failureKind).toBe("TypeError");
+    const persisted = expectActivityLogProof(
+      "git.pr-description.emitted-line",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(persisted).toMatchObject({ phase: "apply", reason: "provider-failed" });
   });
 
   it("carries a failure's closed detail code onto the line (#3390, rehearsal run-20)", () => {

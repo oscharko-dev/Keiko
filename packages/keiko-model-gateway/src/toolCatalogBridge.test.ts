@@ -20,6 +20,10 @@ import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolC
 import { OpenAiAdapter } from "./openai-adapter.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
 const CONFIG: ModelProviderConfig = {
@@ -490,6 +494,25 @@ describe("gateway bridge trust and compatibility boundaries", () => {
         droppedPathCount: 0,
       },
     });
+    const projectedPersisted = expectActivityLogProof(
+      "gateway.tool-catalog.projected.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(projectedPersisted).toMatchObject({ compatibility: "bound", offerRemainingMs: 30_000 });
+    const callBoundPersisted = expectActivityLogProof(
+      "gateway.tool-catalog.call-bound.emitted-line",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+    expect(callBoundPersisted).toMatchObject({ toolCount: 1 });
+    const rejectedPersisted = expectActivityLogProof(
+      "gateway.tool-catalog.rejected.emitted-line",
+      formatActivityLogProofLine(events.at(-1) ?? {}),
+    );
+    expect(rejectedPersisted).toMatchObject({
+      phase: "response",
+      status: "invalid",
+      reason: "invalid-arguments",
+    });
   });
 
   it("retains reported usage when invalid tool arguments reject an HTTP 200 response", async () => {
@@ -616,6 +639,11 @@ describe("native extensions (question/todowrite, #3414 follow-up)", () => {
       "gateway.tool-catalog.native-passthrough",
     ]);
     expect(JSON.stringify(events)).not.toContain("todos");
+    const passthroughPersisted = expectActivityLogProof(
+      "gateway.tool-catalog.native-passthrough.emitted-line",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+    expect(passthroughPersisted).toMatchObject({ toolCount: 1 });
   });
 
   it("still rejects an unoffered, non-extension alias against an opencode advertisement", () => {

@@ -8,6 +8,10 @@ import {
 import { journeyFixture } from "./journeyOutcomeTest/_support.js";
 import { gitDeliveryObservationFailure } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { GitJourneyFactsResult } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 function fixture(): {
   source: ReturnType<typeof journeyFixture>;
@@ -85,6 +89,12 @@ describe("read-only journey observation owner", () => {
     expect(JSON.stringify(f.logs)).not.toMatch(
       /https:|owner\/repository|outsideRegion|finalBody|approvalToken/u,
     );
+    const observed = f.logs.find((event) => event.extra?.phase === "observed");
+    const persisted = expectActivityLogProof(
+      "git.journey-observation.emitted-line",
+      formatActivityLogProofLine(observed ?? {}),
+    );
+    expect(persisted).toMatchObject({ phase: "observed", state: "awaiting-ready-approval" });
   });
   it("does not refresh CI for an already merged PR and observes delayed issue closure", async () => {
     const f = fixture();

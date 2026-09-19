@@ -1,9 +1,10 @@
-import { Buffer } from "node:buffer";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { logHasGracefulProcessExit, readLogSuffix } from "../installable-package-smoke.mjs";
+import { activityLogSegmentFileName } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { logHasGracefulProcessExit } from "../installable-package-smoke.mjs";
+import { activityLogSnapshot, readActivityLogSince } from "../lib/activity-log-files.mjs";
 
 function line(event) {
   return `${JSON.stringify(event)}\n`;
@@ -59,16 +60,34 @@ describe("logHasGracefulProcessExit", () => {
     );
   });
 
-  it("reads the log suffix as bytes so a multibyte prefix cannot hide the appended exit", () => {
+  // #3530: the stop proof reads only what the stop appended to the segmented Activity Log, by
+  // bytes and by stable segment id, so an earlier restart's exit cannot satisfy it, a multibyte
+  // prefix cannot hide the new exit, and a seal between the snapshot and the read is not re-read.
+  it("inspects only what the stop appended, across a seal and a new segment", () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-smoke-log-"));
-    const logPath = join(dir, "server.log");
+    const identity = {
+      startMs: Date.parse("2026-09-18T10:00:00.000Z"),
+      pid: 4242,
+      instanceId: "a1b2c3d4",
+      index: 1,
+    };
+    const active = join(dir, activityLogSegmentFileName(identity, "active"));
     try {
-      const prefix = '{"message":"é"}\n';
-      const suffix = line({ op: "process.exiting", reason: "sigterm" });
-      writeFileSync(logPath, prefix + suffix);
-      const offset = Buffer.byteLength(prefix);
-      expect(logHasGracefulProcessExit(readLogSuffix(logPath, offset))).toBe(true);
-      expect(logHasGracefulProcessExit(readLogSuffix(logPath, 0).slice(offset))).toBe(false);
+      writeFileSync(
+        active,
+        `{"message":"é"}\n${line({ op: "process.exiting", reason: "sigterm" })}`,
+      );
+      const snapshot = activityLogSnapshot(dir);
+      expect(logHasGracefulProcessExit(readActivityLogSince(dir, snapshot))).toBe(false);
+
+      appendFileSync(active, line({ op: "process.heartbeat", extra: { rssBytes: 1 } }));
+      renameSync(active, join(dir, activityLogSegmentFileName(identity, "sealed")));
+      expect(logHasGracefulProcessExit(readActivityLogSince(dir, snapshot))).toBe(false);
+      writeFileSync(
+        join(dir, activityLogSegmentFileName({ ...identity, index: 2 }, "active")),
+        line({ op: "process.exiting", reason: "sigterm" }),
+      );
+      expect(logHasGracefulProcessExit(readActivityLogSince(dir, snapshot))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

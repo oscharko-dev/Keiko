@@ -69,3 +69,14 @@ regexes = [
   '''\["credential-like token", "sk-proj-abcdef0123456789"\],''',
   '''\["authorization-shaped token", "Bearer-abcdef0123456789xyz"\],''',
 ]
+
+[[allowlists]]
+description = "PR #3554: the RFC 6455 section 1.2 example Sec-WebSocket-Key (base64 of the public string `the sample nonce`) as a literal in the history of the live-dictation proof test. The generic-api-key rule reads `TEST_WS_KEY = ...` as a key. No credential was involved, and the fixture now derives the value from the RFC's nonce at runtime, so the squash-merged tree carries no literal. Scoped by content, not by commit, so it holds for any history shape: only that exact public test-vector line in that one file is exempt, and every other finding in the file remains enforced."
+condition = "AND"
+paths = [
+  '''packages/keiko-server/src/voice-live-dictation\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''const TEST_WS_KEY = "dGhlIHNhbXBsZSBub25jZQ=="; // RFC 6455 §1\.2 example Sec-WebSocket-Key\.''',
+]

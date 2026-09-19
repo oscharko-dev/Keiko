@@ -38,15 +38,20 @@ operations, arbitrary metadata, nested objects, missing required fields, unbound
 unknown error/loss states fail closed. Persisted v2 records also require the sink-owned version and
 digest dimensions, compatibility/writer state, and complete `(pid, instanceId, seq)` identity.
 Tests for changed behavior assert the emitted line and the support-analyzer projection. Regenerate
-and check the catalog with `npm run generate:op-catalog` and `npm run check:op-catalog`; error-path
-changes also run `npm run check:error-observability` during the verification phase.
+the catalog with `npm run generate:op-catalog`, then run `npm run check:activity-log`, the Activity
+Log implementation gate, which required CI runs unchanged. Every run builds the packages and
+evaluates the complete registered inventory by composing `check:op-catalog`,
+`test:activity-log-scenarios` (the curated end-to-end scenario matrix), `check:error-observability`,
+`arch:check`, `arch:check:negative`, and `check:release-impact`; it takes no changed-file input, so
+a narrower change set never narrows what it proves.
 
 The generated registry also publishes the stable implementation-obligation categories and the
 failure-class coverage matrix consumed by permanent quality gates. Its release expectation is
 100% complete. Exemptions are not comments or wildcards: the sole registry exemption contract is
-limited to one registered operation/failure-class pair and requires an owner, technical reason,
-linked tracking issue, unavoidable platform or durability boundary, and expiry. It cannot permit
-unknown fields, prohibited data, silent loss, or incomplete evidence.
+limited to one registered operation/failure-class pair and requires the operation's owning package
+as owner, a technical reason, a linked tracking issue, an unavoidable platform or durability
+boundary, and an expiry at most 180 days ahead. It cannot permit unknown fields, prohibited data,
+silent loss, or incomplete evidence.
 
 Keep this contract converged in one change. A runtime change that affects Activity Log behavior
 updates the owning implementation, its failure-first regression, emitted-line and analyzer/replay
@@ -55,12 +60,14 @@ as applicable. Saved support reports remain local artifacts written to a user-se
 publishing or attaching one to GitHub or another external system requires separate explicit user
 authority and is never part of logging or export.
 
-Activity Log storage must remain bounded on every intermediate change. The current daily-file
-implementation publishes one immutable `server-YYYY-MM-DD.log` archive per UTC boundary and retains
-only the configured number of closed-grammar archives. Filesystem mutation is limited to verified
-owner-private, non-redirected directories and opened regular owner-matched targets. Cross-process
-rotation uses a non-replacing hard-link winner; rename is permitted only when the filesystem reports
-hard links unsupported. Any successor segment design must replace this bound atomically rather than
+Activity Log storage must remain bounded on every intermediate change. The Activity Log is stored as
+immutable segments in `<stateDir>/logs/` (ADR-0173 D14). Each process appends only to its own active
+segment, sealed segments are read-only, and retention bounds every segment and legacy file by bytes
+and age, so total use stays within the byte budget plus the pin quota. Filesystem mutation is
+limited to verified owner-private, non-redirected directories and opened regular owner-matched
+targets, and only on names in the closed grammar of `keiko-contracts` `activity-log-files.ts`.
+Publication never replaces an existing name; rename is permitted only when the filesystem reports
+hard links unsupported. Any successor storage design must replace this bound atomically rather than
 remove it first.
 
 ## Pull requests

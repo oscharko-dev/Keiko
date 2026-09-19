@@ -59,6 +59,10 @@ import {
 import { resolveProjectWorkspace } from "./execution.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionApplicationService } from "./prDescriptionTypes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const PREVIEW = "/api/git-delivery/pr-description/preview";
 const REVIEW = "/api/git-delivery/pr-description/review";
@@ -512,15 +516,30 @@ describe("pr-description routes — validation (#3399)", () => {
   // the description authority is even consulted — the workspace's live remote is the only
   // repository this route may ever generate a description for or mutate.
   it("refuses a well-formed ownerAndRepo that does not match this project's own Git remote", async () => {
-    const handler = createHandlePrDescriptionPreview(optionsWithFixtureService());
+    const events: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
+    const handler = createHandlePrDescriptionPreview(optionsWithFixtureService({ activityLog }));
     const res = await handler(
-      ctxFor(PREVIEW, body({ ownerAndRepo: "someone-else/other-repo", language: "en" })),
+      {
+        ...ctxFor(PREVIEW, body({ ownerAndRepo: "someone-else/other-repo", language: "en" })),
+        correlationId: "corr-pr-description-repository-mismatch",
+      },
       deps(),
     );
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({
       error: { code: "GIT_DELIVERY_PR_DESCRIPTION_REPOSITORY_MISMATCH" },
     });
+    const mismatch = events.find((event) => event.op === "pr-description.repository.mismatch");
+    expect(mismatch).toMatchObject({
+      correlationId: "corr-pr-description-repository-mismatch",
+      errorKind: "permission-denied",
+    });
+    const persisted = expectActivityLogProof(
+      "pr-description.repository.mismatch.emitted-line",
+      formatActivityLogProofLine(mismatch ?? {}),
+    );
+    expect(persisted).toMatchObject({ op: "pr-description.repository.mismatch" });
   });
 });
 
@@ -849,6 +868,16 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
     }
     expect(JSON.stringify(events)).not.toContain("Human template");
     expect(JSON.stringify(events)).not.toContain("Closes #42");
+    const startedPersisted = expectActivityLogProof(
+      "pr-description.apply.started.emitted-line",
+      formatActivityLogProofLine(applyOps[0] ?? {}),
+    );
+    expect(startedPersisted).toMatchObject({ hasProposalId: true });
+    const succeededPersisted = expectActivityLogProof(
+      "pr-description.apply.succeeded.emitted-line",
+      formatActivityLogProofLine(applyOps[1] ?? {}),
+    );
+    expect(succeededPersisted).toMatchObject({ op: "pr-description.apply.succeeded" });
   });
 
   it("emits started then blocked when the approval was never issued", async () => {
@@ -862,10 +891,17 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
 
     await applyHandler(ctxFor(APPLY, body({ proposalId })), deps());
 
-    const applyOps = events
-      .filter((event) => event.op.startsWith("pr-description.apply."))
-      .map((event) => event.op);
-    expect(applyOps).toEqual(["pr-description.apply.started", "pr-description.apply.blocked"]);
+    const applyEvents = events.filter((event) => event.op.startsWith("pr-description.apply."));
+    expect(applyEvents.map((event) => event.op)).toEqual([
+      "pr-description.apply.started",
+      "pr-description.apply.blocked",
+    ]);
+    const blocked = applyEvents.find((event) => event.op === "pr-description.apply.blocked");
+    const persisted = expectActivityLogProof(
+      "pr-description.apply.blocked.emitted-line",
+      formatActivityLogProofLine(blocked ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "approval-invalid" });
   });
 
   // #3399 (epic #3384 correction 4): the model-egress denial is a security decision — it must
@@ -912,6 +948,68 @@ describe("pr-description routes — apply-lifecycle activity log (AGENTS.md §8 
     expect(denial?.correlationId).toBe("corr-model-egress-1");
     expect(denial?.errorKind).toBe("permission-denied");
     expect(JSON.stringify(events)).not.toContain("owner/repo");
+    const persisted = expectActivityLogProof(
+      "pr-description.model-egress.denied.emitted-line",
+      formatActivityLogProofLine(denial ?? {}),
+    );
+    expect(persisted).toMatchObject({ op: "pr-description.model-egress.denied" });
+  });
+});
+
+// `PrDescriptionApplicationService.executeApproved` settles to "observed" or "blocked" only (its type
+// says so), so `pr-description.apply.failed` marks the one remaining failure path: an apply whose
+// promise rejects instead of settling. The route closes the lifecycle with that line and rethrows, so
+// the top-level catch still answers with the opaque 500 while the timeline never ends at "started".
+// Driven through the documented `serviceFactory` seam with a service whose apply rejects.
+describe("pr-description routes — an apply that rejects is logged as failed and rethrown (#3399)", () => {
+  it("writes pr-description.apply.failed and lets the rejection reach the top-level catch", async () => {
+    const held = await fixture.service.preview({ language: "en" });
+    if (held.outcome !== "preview") throw new Error("missing actual preview");
+    const { preview } = held;
+    const rejectingService: PrDescriptionApplicationService = {
+      preview: () => Promise.resolve({ outcome: "preview", preview }),
+      previewArtifact: () => Promise.resolve({ outcome: "preview", preview }),
+      holdDraftArtifact: () => undefined,
+      reviewDraft: () => undefined,
+      review: () => undefined,
+      issueApproval: () => undefined,
+      matchesApproval: () => false,
+      consumeApproval: () => ({}),
+      executeApproved: () => Promise.reject(new Error("forced apply rejection")),
+      reconcile: () => Promise.resolve({ outcome: "preview", preview }),
+      invalidate: (): void => undefined,
+    };
+    const events: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
+    const applyHandler = createHandlePrDescriptionApply({
+      execution: { activityLog },
+      serviceFactory: () => rejectingService,
+    });
+
+    await expect(
+      applyHandler(
+        {
+          ...ctxFor(APPLY, body({ proposalId: preview.proposalId })),
+          correlationId: "corr-pr-description-apply-failed",
+        },
+        deps(),
+      ),
+    ).rejects.toThrow("forced apply rejection");
+
+    const applyEvents = events.filter((event) => event.op.startsWith("pr-description.apply."));
+    expect(applyEvents.map((event) => event.op)).toEqual([
+      "pr-description.apply.started",
+      "pr-description.apply.failed",
+    ]);
+    const failed = applyEvents.find((event) => event.op === "pr-description.apply.failed");
+    expect(failed?.correlationId).toBe("corr-pr-description-apply-failed");
+    expect(failed?.level).toBe("warn");
+    expect(failed?.errorKind).toBe("internal");
+    const persisted = expectActivityLogProof(
+      "pr-description.apply.failed.emitted-line",
+      formatActivityLogProofLine(failed ?? {}),
+    );
+    expect(persisted).toMatchObject({ op: "pr-description.apply.failed" });
   });
 });
 

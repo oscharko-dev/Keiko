@@ -16,6 +16,10 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { readCitationExcerpt } from "./conversation/citation-excerpts.js";
 import {
   insertDocumentTextRow,
@@ -389,7 +393,29 @@ describe("legacy plaintext store migration", () => {
     expect(readAllStoreBytes(dbPath).includes(Buffer.from(CONTEXT_PREFIX, "utf8"))).toBe(true);
 
     // Re-open with a key provider → forward migration seals every content row, then VACUUMs.
-    const encrypted = openKnowledgeStore({ dbPath, protection: encryptedProtection(7) });
+    const migrationEvents: KnowledgeLogEvent[] = [];
+    const migrationLogSink: KnowledgeLogSink = {
+      write: (event): void => {
+        migrationEvents.push(event);
+      },
+    };
+    const encrypted = openKnowledgeStore({
+      dbPath,
+      protection: encryptedProtection(7),
+      logSink: migrationLogSink,
+    });
+    const migratedLine = migrationEvents.find((event) => event.op === "store.encryption-migrated");
+    expect(migratedLine).toMatchObject({
+      extra: { fromScope: "plaintext", toScope: "reconstructive-columns/v3" },
+    });
+    const persistedMigration = expectActivityLogProof(
+      "store.encryption-migrated.scope",
+      formatActivityLogProofLine(migratedLine ?? {}),
+    );
+    expect(persistedMigration).toMatchObject({
+      fromScope: "plaintext",
+      toScope: "reconstructive-columns/v3",
+    });
     try {
       expect(
         readDocumentTextRow(
@@ -1092,6 +1118,16 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
     // #2906 round-3 review: persistent busy is now classified, not just thrown-PRAGMA failures.
     expect(degraded?.errorKind).toBe("durability-failed");
     expect(degraded?.extra?.failureKind).toBe("checkpoint-busy");
+
+    const persisted = expectActivityLogProof(
+      "store.encryption-checkpoint-degraded.state",
+      formatActivityLogProofLine(degraded ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      attempts: 3,
+      checkpointState: "busy",
+      failureKind: "checkpoint-busy",
+    });
   });
 
   it("throws KnowledgeStoreError when the checkpoint reports a partial checkpoint (busy=0, checkpointed < log)", () => {

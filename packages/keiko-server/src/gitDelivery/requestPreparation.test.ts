@@ -31,6 +31,10 @@ import {
   type GitDeliveryRepositoryReadFailure,
 } from "./requestPreparation.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 function workspaceAt(root: string): WorkspaceInfo {
   return {
@@ -191,6 +195,11 @@ describe("prepareGitDeliveryRequest — repository-mismatch activity log line", 
     expect(extra?.failureKind).toBe("GitLazyFetchGuardUnsupportedError");
     expect(Array.isArray(extra?.frames)).toBe(true);
     expect(Array.isArray(extra?.causeChain)).toBe(true);
+    const persisted = expectActivityLogProof(
+      "git.delivery.repository.mismatch.emitted-line",
+      formatActivityLogProofLine(mismatchEvent ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "GitLazyFetchGuardUnsupportedError" });
   });
 });
 
@@ -238,10 +247,16 @@ describe("gitDeliveryAuthorityContinuityGuard — one admission line per operati
     expect([guard(), guard(), guard()]).toEqual([true, true, true]);
     const admitted = events.filter((event) => event.op === "git.delivery.authority.admitted");
     expect(admitted.map((event) => event.extra?.phase)).toEqual(["admission", "continuity"]);
+    const admittedPersisted = expectActivityLogProof(
+      "git.delivery.authority.admitted.emitted-line",
+      formatActivityLogProofLine(admitted[0] ?? {}),
+    );
+    expect(admittedPersisted).toMatchObject({ operation: "push", phase: "admission" });
 
     revoked = true;
     expect(guard()).toBe(false);
-    expect(events.filter((event) => event.op === "git.delivery.authority.denied")).toEqual([
+    const denied = events.filter((event) => event.op === "git.delivery.authority.denied");
+    expect(denied).toEqual([
       expect.objectContaining({
         extra: {
           completeness: "complete",
@@ -252,5 +267,14 @@ describe("gitDeliveryAuthorityContinuityGuard — one admission line per operati
         },
       }),
     ]);
+    const deniedPersisted = expectActivityLogProof(
+      "git.delivery.authority.denied.emitted-line",
+      formatActivityLogProofLine(denied[0] ?? {}),
+    );
+    expect(deniedPersisted).toMatchObject({
+      operation: "push",
+      phase: "continuity",
+      reason: "accepted-run-unavailable",
+    });
   });
 });

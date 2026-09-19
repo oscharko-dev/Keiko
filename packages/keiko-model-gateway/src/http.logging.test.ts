@@ -7,6 +7,10 @@
 import { describe, expect, it } from "vitest";
 import { gatewayFetch, OutboundHttpEgressError } from "./http.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
@@ -71,6 +75,15 @@ describe("gatewayFetch — activity log", () => {
       timeoutMs: 4_000,
     });
     expect(started.extra).not.toHaveProperty("endpointDigest");
+    const startedPersisted = expectActivityLogProof(
+      "http.gateway.fetch.started.emitted-line",
+      formatActivityLogProofLine(started),
+    );
+    expect(startedPersisted).toMatchObject({
+      endpointClass: "hostname",
+      method: "POST",
+      requestBytes: 33,
+    });
     // The body is measured, never carried; the query string carried a key.
     expect(JSON.stringify(started)).not.toContain("private document text");
     expect(JSON.stringify(started)).not.toContain("sk-live");
@@ -191,6 +204,15 @@ describe("gatewayFetch — activity log", () => {
       transport: "injected",
     });
     expect(planned.extra).not.toHaveProperty("endpointDigest");
+    const plannedPersisted = expectActivityLogProof(
+      "http.gateway.egress.planned.emitted-line",
+      formatActivityLogProofLine(planned),
+    );
+    expect(plannedPersisted).toMatchObject({
+      endpointClass: "hostname",
+      proxied: false,
+      transport: "injected",
+    });
     // The query string carried a key; it must not reach the line.
     expect(JSON.stringify(planned)).not.toContain("sk-live");
   });
@@ -210,6 +232,11 @@ describe("gatewayFetch — activity log", () => {
     expect(completed.level).toBe("info");
     expect(completed.status).toBe(200);
     expect(typeof completed.durationMs).toBe("number");
+    const completedPersisted = expectActivityLogProof(
+      "http.gateway.fetch.completed.emitted-line",
+      formatActivityLogProofLine(completed),
+    );
+    expect(completedPersisted).toMatchObject({ status: 200, endpointClass: "hostname" });
 
     const errLog = recorder();
     await gatewayFetch("https://gateway.example/v1/x", {
@@ -315,6 +342,11 @@ describe("gatewayFetch — activity log", () => {
     expect(failed.errorKind).toBe("permission-denied");
     expect(failed.extra?.endpointClass).toBe("loopback");
     expect(failed.extra).not.toHaveProperty("endpointDigest");
+    const failedPersisted = expectActivityLogProof(
+      "http.gateway.fetch.failed.emitted-line",
+      formatActivityLogProofLine(failed),
+    );
+    expect(failedPersisted).toMatchObject({ endpointClass: "loopback" });
     expect(JSON.stringify(failed)).not.toContain("127.0.0.1");
     expect(ops(log.events)).not.toContain("http.gateway.fetch.completed");
   });

@@ -22,17 +22,28 @@
 // the browser — and a dropped report is still counted, mirroring `server-log.ts`'s own
 // `reportServerLogFailure` throttle-and-count-suppressed shape: the first drop after a quiet window
 // is logged immediately, later drops in the same window are counted silently, and the count is
-// flushed on the next window's first drop.
+// flushed on the next window's first drop — or, at the latest, by
+// `flushClientDiagnosticsIngestCounts` when the process shuts down (#3532).
+//
+// Every refused report (malformed JSON, a shape the contract rejects, an oversized or cancelled
+// body) gets its own throttled `client.diagnostic.rejected` line, and every drop, rejection and
+// browser-reported delivery loss is also counted in the process-wide loss ledger that the
+// `activity-log.loss` summary persists. None of those paths ever carries the refused content.
 
 import type { IncomingMessage } from "node:http";
 
-import type { ClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts";
+import type {
+  ClientDiagnosticIngestRequest,
+  ClientDiagnosticLossCounts,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  recordActivityLogLoss,
   type ActivityLogErrorKind,
   type ActivityLogFields,
+  type ActivityLogLossReason,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
@@ -68,6 +79,12 @@ const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.noticeRateLimitedDrop",
   fields: {
     suppressedDrops: { type: "integer", dataClass: "count", required: false },
+    trigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["window", "shutdown-flush"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -77,6 +94,38 @@ const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
   failureClasses: ["client-diagnostic-rate-limit"],
   proofIds: ["client.diagnostic.rate-limited.line"],
   releaseImpact: "patch",
+});
+
+const CLIENT_DIAGNOSTIC_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.diagnostic.rejected",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.noticeRejectedReport",
+  fields: {
+    rejection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["invalid-json", "invalid-shape", "too-large", "cancelled"],
+    },
+    suppressedRejections: { type: "integer", dataClass: "count", required: false },
+    trigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["window", "shutdown-flush"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-diagnostic-rejection"],
+  proofIds: ["client.diagnostic.rejected.line", "client.diagnostic.rejected.shutdown-flush"],
+  releaseImpact: "minor",
 });
 
 const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
@@ -93,7 +142,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["boundary", "unhandled-rejection", "sse-error", "other"],
+      values: ["boundary", "unhandled-rejection", "window-error", "sse-error", "other"],
     },
     action: {
       type: "string",
@@ -118,6 +167,11 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
     },
     repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },
+    clientPostsThrottled: { type: "integer", dataClass: "count", required: false },
+    clientPostsFailed: { type: "integer", dataClass: "count", required: false },
+    clientRejectionsSuppressed: { type: "integer", dataClass: "count", required: false },
+    clientErrorsSuppressed: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -143,45 +197,145 @@ let rateLimiter: InlineCompletionRateLimiter = createInlineCompletionRateLimiter
 
 const DROP_NOTICE_WINDOW_MS = 60_000;
 
-interface DropNoticeState {
-  readonly lastAt: number | null;
-  readonly suppressed: number;
+type ClientDiagnosticRejection = ActivityLogFields<
+  typeof CLIENT_DIAGNOSTIC_REJECTED_OPERATION
+>["rejection"];
+
+// One throttle for rate-limited drops and one per refusal reason: the first of each after a quiet
+// window is logged immediately, later ones in the same window are counted, and the count rides on
+// the next window's first line of the same kind or on the shutdown flush.
+interface NoticeThrottle {
+  lastAt: number | null;
+  suppressed: number;
 }
 
-let dropNotice: DropNoticeState = { lastAt: null, suppressed: 0 };
+function quietThrottle(): NoticeThrottle {
+  return { lastAt: null, suppressed: 0 };
+}
 
-/** Test-only: puts the shared rate limiter and drop-notice counter back to a clean start. */
+const CLIENT_DIAGNOSTIC_REJECTIONS: readonly ClientDiagnosticRejection[] = [
+  "invalid-json",
+  "invalid-shape",
+  "too-large",
+  "cancelled",
+];
+
+function quietRejectionThrottles(): Map<ClientDiagnosticRejection, NoticeThrottle> {
+  return new Map(CLIENT_DIAGNOSTIC_REJECTIONS.map((rejection) => [rejection, quietThrottle()]));
+}
+
+let dropNotice = quietThrottle();
+let rejectionNotices = quietRejectionThrottles();
+
+/** Test-only: puts the shared rate limiter and notice counters back to a clean start. */
 export function resetClientDiagnosticsIngestStateForTests(): void {
   rateLimiter = createInlineCompletionRateLimiter(CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG);
-  dropNotice = { lastAt: null, suppressed: 0 };
+  dropNotice = quietThrottle();
+  rejectionNotices = quietRejectionThrottles();
 }
 
-function dropNoticeThrottled(now: number): boolean {
-  if (dropNotice.lastAt === null) return false;
-  const elapsed = now - dropNotice.lastAt;
-  return elapsed >= 0 && elapsed < DROP_NOTICE_WINDOW_MS;
-}
-
-// Reports a rate-limited drop exactly once per window, carrying how many further drops that same
-// window suppressed — never the report content, which was never admitted past the limiter.
-function noticeRateLimitedDrop(now: number, correlationId: string | undefined): void {
-  if (dropNoticeThrottled(now)) {
-    dropNotice = { lastAt: dropNotice.lastAt, suppressed: dropNotice.suppressed + 1 };
-    return;
+function rejectionThrottle(rejection: ClientDiagnosticRejection): NoticeThrottle {
+  let throttle = rejectionNotices.get(rejection);
+  if (throttle === undefined) {
+    throttle = quietThrottle();
+    rejectionNotices.set(rejection, throttle);
   }
-  const suppressed = dropNotice.suppressed;
-  dropNotice = { lastAt: now, suppressed: 0 };
+  return throttle;
+}
+
+// True when this occurrence falls inside the open window: it is counted instead of logged.
+function suppressedByThrottle(throttle: NoticeThrottle, now: number): boolean {
+  if (throttle.lastAt !== null) {
+    const elapsed = now - throttle.lastAt;
+    if (elapsed >= 0 && elapsed < DROP_NOTICE_WINDOW_MS) {
+      throttle.suppressed += 1;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Opens a new window and hands back the count the previous window suppressed.
+function openThrottleWindow(throttle: NoticeThrottle, now: number | null): number {
+  const suppressed = throttle.suppressed;
+  throttle.lastAt = now;
+  throttle.suppressed = 0;
+  return suppressed;
+}
+
+function writeRateLimitedNotice(
+  correlationId: string | undefined,
+  suppressed: number,
+  trigger: "window" | "shutdown-flush",
+): void {
   getServerLogger().warn(
     activityLogEvent(
       CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION,
       { correlationId: correlationIdOrUnknown(correlationId), errorKind: "rate-limited" },
       {
         ...(suppressed > 0 ? { suppressedDrops: suppressed } : {}),
+        trigger,
         completeness: "complete",
         loss: "event-dropped",
       },
     ),
   );
+}
+
+// Reports a rate-limited drop exactly once per window, carrying how many further drops that same
+// window suppressed — never the report content, which was never admitted past the limiter.
+function noticeRateLimitedDrop(now: number, correlationId: string | undefined): void {
+  recordActivityLogLoss("client-rate-suppressed");
+  if (suppressedByThrottle(dropNotice, now)) return;
+  writeRateLimitedNotice(correlationId, openThrottleWindow(dropNotice, now), "window");
+}
+
+function writeRejectedNotice(
+  correlationId: string | undefined,
+  rejection: ClientDiagnosticRejection,
+  suppressed: number,
+  trigger: "window" | "shutdown-flush",
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_DIAGNOSTIC_REJECTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "invalid-request" },
+      {
+        rejection,
+        ...(suppressed > 0 ? { suppressedRejections: suppressed } : {}),
+        trigger,
+        completeness: "complete",
+        loss: "event-dropped",
+      },
+    ),
+  );
+}
+
+// Reports a refused report once per window with the closed refusal reason; the refused bytes were
+// never parsed into an event and never reach the log.
+function noticeRejectedReport(
+  rejection: ClientDiagnosticRejection,
+  correlationId: string | undefined,
+): void {
+  recordActivityLogLoss("client-rejected");
+  const now = Date.now();
+  const throttle = rejectionThrottle(rejection);
+  if (suppressedByThrottle(throttle, now)) return;
+  writeRejectedNotice(correlationId, rejection, openThrottleWindow(throttle, now), "window");
+}
+
+/**
+ * Writes the counts the open throttle windows are still holding. Called once on the shutdown path
+ * before the process-exit evidence, so a storm that ended in a quiet window is never lost with the
+ * process: the trailing counts reach the log instead of waiting for a next window that never comes.
+ */
+export function flushClientDiagnosticsIngestCounts(): void {
+  const drops = openThrottleWindow(dropNotice, null);
+  if (drops > 0) writeRateLimitedNotice(undefined, drops, "shutdown-flush");
+  for (const [rejection, throttle] of rejectionNotices) {
+    const suppressed = openThrottleWindow(throttle, null);
+    if (suppressed > 0) writeRejectedNotice(undefined, rejection, suppressed, "shutdown-flush");
+  }
 }
 
 export function clientDiagnosticNoteDigest(message: string): string {
@@ -193,9 +347,37 @@ type ClientDiagnosticKind = NonNullable<ClientDiagnosticIngestRequest["kind"]>;
 const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
   boundary: "internal",
   "unhandled-rejection": "internal",
+  "window-error": "internal",
   "sse-error": "unavailable",
   other: "unknown",
 } as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
+
+// The browser's own delivery loss, as closed counts: each is added to the process loss ledger and
+// projected onto the `client.diagnostic` line under its own count field.
+const CLIENT_LOSS_PROJECTION = [
+  ["bufferEvicted", "client-buffer-evicted", "clientBufferEvicted"],
+  ["postsThrottled", "client-post-throttled", "clientPostsThrottled"],
+  ["postsFailed", "client-post-failed", "clientPostsFailed"],
+  ["rejectionsSuppressed", "client-rejection-suppressed", "clientRejectionsSuppressed"],
+  ["errorsSuppressed", "client-error-suppressed", "clientErrorsSuppressed"],
+] as const satisfies readonly (readonly [
+  keyof ClientDiagnosticLossCounts,
+  ActivityLogLossReason,
+  string,
+])[];
+
+function projectClientLoss(
+  loss: ClientDiagnosticLossCounts | undefined,
+  extra: Record<string, unknown>,
+): void {
+  if (loss === undefined) return;
+  for (const [key, reason, field] of CLIENT_LOSS_PROJECTION) {
+    const count = loss[key];
+    if (count === undefined || count === 0) continue;
+    recordActivityLogLoss(reason, count);
+    extra[field] = count;
+  }
+}
 
 function clientDiagnosticErrorKind(
   kind: ClientDiagnosticIngestRequest["kind"],
@@ -226,6 +408,7 @@ function logClientDiagnostic(
     extra.repositoryId = request.workspaceTrustBinding.repositoryId;
     extra.workspaceId = request.workspaceTrustBinding.workspaceId;
   }
+  projectClientLoss(request.loss, extra);
   const correlationId =
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId
@@ -249,7 +432,11 @@ function logClientDiagnostic(
 // logger entirely. A tagged union makes that collision structurally impossible: the tag is set by
 // this module, never derived from the parsed value.
 type BodyReadOutcome =
-  | { readonly kind: "rejected"; readonly result: RouteResult }
+  | {
+      readonly kind: "rejected";
+      readonly result: RouteResult;
+      readonly rejection: ClientDiagnosticRejection;
+    }
   | { readonly kind: "parsed"; readonly value: unknown };
 
 function badRequest(message: string, correlationId: string | undefined): RouteResult {
@@ -272,6 +459,7 @@ async function readClientDiagnosticBody(
     if (error instanceof RequestBodyTooLargeError) {
       return {
         kind: "rejected",
+        rejection: "too-large",
         result: {
           status: 413,
           body: errorBody(
@@ -285,6 +473,7 @@ async function readClientDiagnosticBody(
     if (error instanceof RequestBodyCancelledError) {
       return {
         kind: "rejected",
+        rejection: "cancelled",
         result: { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") },
       };
     }
@@ -295,6 +484,7 @@ async function readClientDiagnosticBody(
   } catch {
     return {
       kind: "rejected",
+      rejection: "invalid-json",
       result: badRequest("Request body is not valid JSON.", correlationId),
     };
   }
@@ -302,9 +492,13 @@ async function readClientDiagnosticBody(
 
 export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<RouteResult> {
   const outcome = await readClientDiagnosticBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.result;
+  if (outcome.kind === "rejected") {
+    noticeRejectedReport(outcome.rejection, ctx.correlationId);
+    return outcome.result;
+  }
   const parsed = outcome.value;
   if (!isClientDiagnosticIngestRequest(parsed)) {
+    noticeRejectedReport("invalid-shape", ctx.correlationId);
     return badRequest("Request body is not a valid diagnostic report.", ctx.correlationId);
   }
   const now = Date.now();

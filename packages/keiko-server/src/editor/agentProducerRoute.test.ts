@@ -57,6 +57,10 @@ import {
 } from "../index.js";
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type {
   ScriptTrustDecision,
   VerificationRunInput,
@@ -496,6 +500,18 @@ function expectSucceededToolOutcome(
   ]);
 }
 
+// Kept as its own top-level helper (rather than inlined at the one call site) so the reachability
+// test above stays under the file's complexity ceiling: the proof call itself needs no branching,
+// only the definedness guard every other `event ?? {}` sidesteps elsewhere in this file.
+function proveProducerTurnCompletedLine(event: ServerLogEvent | undefined): void {
+  if (event === undefined) throw new Error("expected an editor.producer-turn.completed event");
+  const proven = expectActivityLogProof(
+    "editor.producer-turn.completed.emitted-line",
+    formatActivityLogProofLine(event),
+  );
+  expect(proven).toMatchObject({ outcome: "completed", toolCallCount: 1 });
+}
+
 beforeEach(async () => {
   editorAgentRegistry.reset();
   editorAgentAuthorityRegistry.reset();
@@ -553,6 +569,7 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
       },
     });
     expect(JSON.stringify(completed)).not.toContain("reachability probe");
+    proveProducerTurnCompletedLine(completed);
 
     expect(response.body.catalog).toMatchObject({
       profile: { id: "editor", version: 1 },

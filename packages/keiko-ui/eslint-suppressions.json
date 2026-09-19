@@ -72,7 +72,7 @@
   },
   "src/app/components/desktop/Footer.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 2
+      "count": 1
     },
     "max-lines-per-function": {
       "count": 1

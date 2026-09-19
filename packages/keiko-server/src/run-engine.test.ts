@@ -4,7 +4,7 @@
 // passed). No model port is exercised (verify never calls a model); the rejected model port
 // asserts that property.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,7 @@ import type { VerificationReport } from "@oscharko-dev/keiko-verification";
 import type { NetworkIsolationProbe } from "./editor/verificationExecution.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
 import { writeToolCatalogQualificationObservation } from "../../../scripts/lib/tool-catalog-qualification-observation.mjs";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -638,7 +639,7 @@ describe("run terminal outcome reaches server.log without any SSE consumer (#290
   });
 
   function readServerLogLines(): readonly Record<string, unknown>[] {
-    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    const raw = readPersistedActivityLog(stateDir);
     return raw
       .split("\n")
       .filter((line) => line.length > 0)

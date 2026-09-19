@@ -17,13 +17,21 @@ import {
 import {
   activityLogSchemaDigest,
   activityLogSchemaDigestMaterial,
+  formatGeneratedJson,
+  generateActivityLogFailureSurfaceInventory,
   generateOpCatalog,
   generateTypedActivityLogRegistry,
   validateActivityLogFailureClassContracts,
   validateActivityLogRegistryExemptions,
 } from "../generate-op-catalog.mjs";
+import { failureSurfaceInventoryDrift } from "../lib/activity-log-failure-surface-inventory.mjs";
+import { withTypedRegistryFixture } from "./support/typed-registry-fixture.mjs";
 import {
-  newFailurePathFindings,
+  failurePathRegisterDiff,
+  parseFailurePathRegister,
+  prunedFailurePathRegister,
+  scanFailurePaths,
+  serializeFailurePathRegister,
   unregisteredFailurePathViolations,
 } from "../check-error-observability.mjs";
 import {
@@ -40,6 +48,12 @@ import {
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(repoRoot, "docs", "observability", "op-catalog.generated.json");
+const INVENTORY_PATH = join(
+  repoRoot,
+  "docs",
+  "observability",
+  "failure-surface-inventory.generated.json",
+);
 // Coverage instrumentation makes a complete repository scan take more than two minutes on the
 // smallest CI workers. This is a harness deadline, not a product latency budget; cache the one
 // immutable result and keep that unavoidable scan bounded without letting the global 15-second
@@ -90,33 +104,9 @@ function withFixturePackage(pkgName, fileContents, check) {
   }
 }
 
-function withTypedRegistryFixture(pkgName, fileContents, check) {
-  const root = mkdtempSync(join(tmpdir(), "typed-op-registry-fixture-"));
-  try {
-    const contractsDir = join(root, "packages", "keiko-contracts", "src");
-    const emitterDir = join(root, "packages", pkgName, "src");
-    mkdirSync(contractsDir, { recursive: true });
-    mkdirSync(emitterDir, { recursive: true });
-    writeFileSync(
-      join(contractsDir, "observability.ts"),
-      [
-        "export function defineActivityLogOperation<const T>(value: T): T { return value; }",
-        "export function activityLogEvent<const T>(registration: T, _envelope: object, fields: Record<string, unknown>) {",
-        '  return { ...fields, contractKind: "activity-log-event" as const, registration };',
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    writeFileSync(join(emitterDir, "fixture.ts"), fileContents, "utf8");
-    check(root);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
 const EXEMPTION_OPERATION_FIXTURE = {
   op: "fixture.registry.completed",
+  owner: "keiko-contracts",
   failureClasses: ["fixture-failure"],
 };
 
@@ -131,7 +121,7 @@ function validExemption(overrides = {}) {
     owner: "keiko-contracts",
     reason: "The fixture platform cannot expose this proof signal.",
     trackingIssue: 3529,
-    expiresOn: "2030-01-01",
+    expiresOn: "2026-12-31",
     ...overrides,
   };
 }
@@ -182,6 +172,13 @@ describe("Activity Log registry exemptions", () => {
     ["missing issue", { trackingIssue: undefined }, "exemption-invalid", "trackingIssue"],
     ["broad operation", { operation: "*" }, "exemption-invalid", "operation"],
     ["expired", { expiresOn: "2026-09-16" }, "exemption-expired", "2026-09-16"],
+    ["effectively permanent", { expiresOn: "2027-03-17" }, "exemption-permanent", "2027-03-17"],
+    [
+      "owned by another package",
+      { owner: "keiko-server" },
+      "exemption-owner-mismatch",
+      "keiko-server",
+    ],
     [
       "unknown operation",
       { operation: "fixture.registry.unknown" },
@@ -421,22 +418,85 @@ describe("new failure-path observability", () => {
     ).toEqual(["Store.constructor", "Store.get value", "Store.load", "Store.save", "Store.flush"]);
   });
 
+  // #3540: the rule runs over the whole tree against a register of legacy failure paths that may
+  // only shrink; no base ref or diff decides what is checked.
   it("does not let a fixed catch in one method hide a new one in another", () => {
-    const base = [
-      "class Store {",
-      "  load() { try { run(); } catch {} }",
-      "  save() { try { run(); } catch (error) { reportFailure(error); } }",
-      "}",
-    ].join("\n");
+    const path = "packages/fixture/src/store.ts";
+    const register = [{ path, owner: "Store.load", kind: "unregistered-catch", count: 1 }];
     const head = [
       "class Store {",
       "  load() { try { run(); } catch (error) { reportFailure(error); } }",
       "  save() { try { run(); } catch {} }",
       "}",
     ].join("\n");
-    expect(newFailurePathFindings(base, head, "packages/fixture/src/store.ts")).toEqual([
+    const { unregistered, stale } = failurePathRegisterDiff(
+      unregisteredFailurePathViolations(head, path),
+      register,
+    );
+    expect(unregistered).toEqual([
       expect.objectContaining({ owner: "Store.save", kind: "unregistered-catch" }),
     ]);
+    expect(stale).toEqual([expect.objectContaining({ owner: "Store.load" })]);
+  });
+
+  it("fails a second silent catch in a registered owner, and prunes only downward", () => {
+    const path = "packages/fixture/src/store.ts";
+    const register = [{ path, owner: "load", kind: "unregistered-catch", count: 1 }];
+    const findings = unregisteredFailurePathViolations(
+      "function load() { try { a(); } catch {} try { b(); } catch {} }",
+      path,
+    );
+    expect(failurePathRegisterDiff(findings, register).unregistered).toHaveLength(2);
+    expect(prunedFailurePathRegister(findings, register)).toEqual(register);
+    expect(prunedFailurePathRegister(findings.slice(0, 1), [{ ...register[0], count: 3 }])).toEqual(
+      register,
+    );
+    expect(prunedFailurePathRegister([], register)).toEqual([]);
+  });
+
+  it("accepts only the exact register shape that pruning writes", () => {
+    const entry = { path: "packages/a/src/x.ts", owner: "f", kind: "unregistered-catch", count: 1 };
+    const later = { ...entry, owner: "g" };
+    expect(parseFailurePathRegister(serializeFailurePathRegister([entry, later]))).toEqual([
+      entry,
+      later,
+    ]);
+    for (const entries of [
+      [later, entry],
+      [entry, entry],
+      [{ ...entry, count: 0 }],
+      [{ ...entry, extra: true }],
+      [{ ...entry, kind: "other" }],
+      [{ ...entry, path: "src/x.ts" }],
+    ]) {
+      expect(() => parseFailurePathRegister(serializeFailurePathRegister(entries))).toThrow(
+        "error-observability-register-invalid",
+      );
+    }
+  });
+
+  it("scans every production file on disk, tracked or not, and skips tests and build output", () => {
+    const root = mkdtempSync(join(tmpdir(), "failure-path-scan-"));
+    try {
+      const silent = "export function run(): void { try { go(); } catch {} }\n";
+      for (const path of [
+        "packages/pkg/src/a.ts",
+        "packages/pkg/src/a.test.ts",
+        "packages/pkg/src/b.d.ts",
+        "packages/pkg/src/__tests__/c.ts",
+        "packages/pkg/dist/d.ts",
+        "packages/pkg/node_modules/e/index.ts",
+        "packages/pkg/.next/f.ts",
+      ]) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), silent, "utf8");
+      }
+      expect(scanFailurePaths(root).map((finding) => finding.path)).toEqual([
+        "packages/pkg/src/a.ts",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("permits only an exact reviewed cleanup boundary", () => {
@@ -788,6 +848,76 @@ describe("op catalog drift", () => {
     );
   });
 
+  // #3532: the sink stamps these envelope names and redaction drops a producer value for them, so a
+  // skill catalog digest once persisted as the log format's own and a PR-description schema version
+  // as the envelope's.
+  it.each(["catalogDigest", "schemaVersion", "productVersion", "writerCapability"])(
+    "rejects a registration that declares the reserved envelope field %s",
+    (fieldName) => {
+      withTypedRegistryFixture(
+        "zzz-fixture-reserved-field",
+        [
+          'import { activityLogEvent, defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+          "const operation = defineActivityLogOperation({",
+          '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+          '  op: "fixture.registry.reserved-field", category: "diagnostic",',
+          '  owner: "zzz-fixture-reserved-field", emitter: "fixture",',
+          `  fields: { ${fieldName}: { type: "string", dataClass: "opaque-id", required: true, maxLength: 64 } },`,
+          '  causal: "correlation", lifecycle: "state", analyzerProjection: "timeline",',
+          '  failureClasses: ["fixture-failure"], proofIds: ["fixture.registry.reserved-field.line"],',
+          '  releaseImpact: "patch",',
+          "});",
+          "activityLogEvent(operation, {}, {});",
+          "",
+        ].join("\n"),
+        (root) => {
+          const registry = generateTypedActivityLogRegistry(root, []);
+          expect(registry.operations).toEqual([]);
+          expect(registry.violations).toContainEqual(
+            expect.objectContaining({
+              code: "registration-reserved-field",
+              site: "packages/zzz-fixture-reserved-field/src/fixture.ts:2",
+              detail: `fields.${fieldName}`,
+            }),
+          );
+        },
+      );
+    },
+  );
+
+  // #3532: persisted-line redaction omits an empty frames/causeChain array, so a required one
+  // rejected every failure line without Keiko frames or a cause (found twice in production).
+  it.each(["frames", "causeChain"])("rejects a registration that requires %s", (fieldName) => {
+    withTypedRegistryFixture(
+      "zzz-fixture-required-omitted-field",
+      [
+        'import { activityLogEvent, defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        "const operation = defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+        '  op: "fixture.registry.omitted-field", category: "diagnostic",',
+        '  owner: "zzz-fixture-required-omitted-field", emitter: "fixture",',
+        `  fields: { ${fieldName}: { type: "string-array", dataClass: "opaque-id", required: true, maxLength: 64, maxItems: 4 } },`,
+        '  causal: "correlation", lifecycle: "failure", analyzerProjection: "failure-cluster",',
+        '  failureClasses: ["fixture-failure"], proofIds: ["fixture.registry.omitted-field.line"],',
+        '  releaseImpact: "patch",',
+        "});",
+        "activityLogEvent(operation, {}, {});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root, []);
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({
+            code: "registration-omitted-field-required",
+            site: "packages/zzz-fixture-required-omitted-field/src/fixture.ts:2",
+            detail: `fields.${fieldName}`,
+          }),
+        );
+      },
+    );
+  });
+
   it("rejects an emitted event whose descriptor is not a discovered registration", () => {
     withTypedRegistryFixture(
       "zzz-fixture-unregistered-emission",
@@ -903,6 +1033,36 @@ describe("op catalog drift", () => {
     expect(regenerated).toEqual(checkedIn);
   });
 
+  // #3532: the failure-surface inventory is a generated view over the same typed registry, pinned
+  // byte for byte so a new operation, a moved proof or a reformatted file cannot leave it stale.
+  it(
+    "matches the checked-in failure-surface inventory byte for byte",
+    async () => {
+      const generated = await formatGeneratedJson(
+        generateActivityLogFailureSurfaceInventory(repoRoot, generateCurrentTypedRegistry()),
+      );
+      expect(
+        failureSurfaceInventoryDrift(generated, readFileSync(INVENTORY_PATH, "utf8")),
+      ).toBeUndefined();
+    },
+    REPOSITORY_SCAN_TEST_TIMEOUT_MS,
+  );
+
+  it("names the stale inventory when its checked-in bytes drift from the generator", () => {
+    const checkedIn = readFileSync(INVENTORY_PATH, "utf8");
+    const tampered = checkedIn.replace('"lifecycle-crash"', '"lifecycle-crashed"');
+    expect(tampered).not.toBe(checkedIn);
+    expect(failureSurfaceInventoryDrift(checkedIn, tampered)).toMatch(
+      /failure-surface-inventory\.generated\.json is stale/u,
+    );
+    expect(failureSurfaceInventoryDrift(checkedIn, `${checkedIn}\n`)).toMatch(/is stale/u);
+    expect(failureSurfaceInventoryDrift(checkedIn, checkedIn)).toBeUndefined();
+  });
+
+  it("has no failure-surface inventory violations", () => {
+    expect(JSON.parse(readFileSync(INVENTORY_PATH, "utf8")).violations).toEqual([]);
+  });
+
   it("does not recursively rediscover the generated runtime registry", () => {
     const catalog = generateCurrentOpCatalog();
     expect(
@@ -945,7 +1105,12 @@ describe("op catalog drift", () => {
     () => {
       const coverage = generateCurrentTypedRegistry().failureClassCoverage;
       const byFailureClass = new Map(coverage.classes.map((entry) => [entry.failureClass, entry]));
-      expect(byFailureClass.get("activity-log-capacity")?.lossSignals).toEqual([]);
+      // A state-only class projects no loss signal; the pin class projects exactly its one
+      // registered loss marker (#3530 retired the capacity class this pin first sat on).
+      expect(byFailureClass.get("activity-log-retention")?.lossSignals).toEqual([]);
+      expect(byFailureClass.get("activity-log-pin")?.lossSignals).toEqual([
+        "activity-log.pin.quota-exhausted",
+      ]);
       expect(byFailureClass.get("activity-log-contract")?.lossSignals).toEqual([
         "server-log.line-dropped",
         "server-log.write-failed",

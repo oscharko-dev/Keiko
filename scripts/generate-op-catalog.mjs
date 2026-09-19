@@ -75,12 +75,19 @@ import {
   ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
   ACTIVITY_LOG_LIFECYCLE_PHASES,
   ACTIVITY_LOG_LOSS_STATES,
+  ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES,
+  ACTIVITY_LOG_RESERVED_FIELD_NAMES,
   ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
   ACTIVITY_LOG_RELEASE_IMPACTS,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
 } from "../packages/keiko-contracts/dist/observability.js";
 import { ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS } from "../packages/keiko-contracts/dist/activity-log-failure-class-contracts.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
+import { generateFailureSurfaceInventory } from "./lib/activity-log-failure-surface-inventory.mjs";
+import {
+  ACTIVITY_LOG_FAILURE_SURFACES,
+  FAILURE_SURFACE_INVENTORY_RELATIVE_PATH,
+} from "./lib/activity-log-failure-surfaces.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import {
   TOOL_CATALOG_OPERATIONS_PATH,
@@ -155,12 +162,18 @@ const EXEMPTION_KEYS = new Set([
 ]);
 const EXEMPTION_BOUNDARIES = new Set(ACTIVITY_LOG_EXEMPTION_BOUNDARIES);
 const EXEMPTION_DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+// An exemption is a reviewed, temporary exception: its owner is the package that owns the
+// registered operation, and its expiry lies inside one bounded review window, so a record can be
+// neither unowned nor effectively permanent.
 const ACTIVITY_LOG_EXEMPTION_SCHEMA = {
   schemaVersion: 1,
   scope: "exact-operation-and-failure-class",
   boundaries: ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
   required: [...EXEMPTION_KEYS],
   maximumEntries: 64,
+  owner: "registered-operation-owner",
+  maximumValidityDays: 180,
 };
 
 // A well-formed op: lowercase dot-separated segments, each starting with a letter, hyphens
@@ -622,10 +635,38 @@ function exemptionScopeViolation(exemption, operations, index) {
       "Scope the exemption to a failure class declared by the selected operation.",
     );
   }
+  if (exemption.owner !== operation.owner) {
+    return exemptionViolation(
+      "exemption-owner-mismatch",
+      index,
+      exemption.owner,
+      "Assign the exemption to the package that owns the registered operation.",
+    );
+  }
   return undefined;
 }
 
-function validateExemptionEntry(exemption, index, operations, today, ids) {
+function exemptionValidityViolation(exemption, index, window) {
+  if (exemption.expiresOn < window.today) {
+    return exemptionViolation(
+      "exemption-expired",
+      index,
+      exemption.expiresOn,
+      "Remove the expired exemption or complete the linked remediation before release.",
+    );
+  }
+  if (exemption.expiresOn > window.latestExpiry) {
+    return exemptionViolation(
+      "exemption-permanent",
+      index,
+      exemption.expiresOn,
+      `Set an expiry at most ${String(ACTIVITY_LOG_EXEMPTION_SCHEMA.maximumValidityDays)} days ahead; renew only through a new review.`,
+    );
+  }
+  return undefined;
+}
+
+function validateExemptionEntry(exemption, index, operations, window, ids) {
   const violations = [];
   const invalidField = invalidExemptionField(exemption);
   if (invalidField !== undefined) {
@@ -649,16 +690,8 @@ function validateExemptionEntry(exemption, index, operations, today, ids) {
     );
   }
   ids.add(exemption.id);
-  if (exemption.expiresOn < today) {
-    violations.push(
-      exemptionViolation(
-        "exemption-expired",
-        index,
-        exemption.expiresOn,
-        "Remove the expired exemption or complete the linked remediation before release.",
-      ),
-    );
-  }
+  const validityViolation = exemptionValidityViolation(exemption, index, window);
+  if (validityViolation !== undefined) violations.push(validityViolation);
   const scopeViolation = exemptionScopeViolation(exemption, operations, index);
   if (scopeViolation !== undefined) violations.push(scopeViolation);
   return violations;
@@ -677,10 +710,17 @@ export function validateActivityLogRegistryExemptions(exemptions, operations, no
       ),
     ];
   }
-  const today = now.toISOString().slice(0, 10);
+  const window = {
+    today: now.toISOString().slice(0, 10),
+    latestExpiry: new Date(
+      now.valueOf() + ACTIVITY_LOG_EXEMPTION_SCHEMA.maximumValidityDays * MILLISECONDS_PER_DAY,
+    )
+      .toISOString()
+      .slice(0, 10),
+  };
   const ids = new Set();
   return exemptions.flatMap((exemption, index) =>
-    validateExemptionEntry(exemption, index, operations, today, ids),
+    validateExemptionEntry(exemption, index, operations, window, ids),
   );
 }
 
@@ -911,12 +951,53 @@ function registrationLiteral(context, node, site) {
   return undefined;
 }
 
+// Persisted-line redaction omits an empty `frames`/`causeChain` array, so a registration that
+// declares one required would reject every failure line without Keiko frames or a cause (#3532:
+// found twice as separate product defects). The rule is registry-wide so the class cannot recur.
+function rejectRequiredOmittedWhenEmptyField(context, site, fields) {
+  const name = ACTIVITY_LOG_OMITTED_WHEN_EMPTY_FIELD_NAMES.find(
+    (fieldName) => fields[fieldName]?.required === true,
+  );
+  if (name === undefined) return false;
+  context.violations.push({
+    ...registryViolation(
+      "registration-omitted-field-required",
+      site,
+      "Declare frames and causeChain optional: redaction omits an empty array, so a required one rejects every failure line without Keiko frames or a cause.",
+    ),
+    detail: `fields.${name}`,
+  });
+  return true;
+}
+
+// The sink stamps the envelope names itself and redaction drops a producer value for any of them, so
+// a registered field with one of those names never reaches the line as declared (#3532: a skill
+// catalog digest persisted as the log format's own catalog digest, a PR-description schema version as
+// the envelope's).
+function rejectReservedEnvelopeField(context, site, fields) {
+  const name = ACTIVITY_LOG_RESERVED_FIELD_NAMES.find(
+    (fieldName) => fields[fieldName] !== undefined,
+  );
+  if (name === undefined) return false;
+  context.violations.push({
+    ...registryViolation(
+      "registration-reserved-field",
+      site,
+      "Rename the field: the sink stamps a reserved envelope field of that name and redaction drops a producer value for it.",
+    ),
+    detail: `fields.${name}`,
+  });
+  return true;
+}
+
 function collectTypedRegistration(context, sourceFile, node) {
   if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
   const value = registrationLiteral(context, node, site);
   if (value === undefined) return;
   if (rejectInvalidRegistrationField(context, site, value)) return;
+  if (rejectRequiredOmittedWhenEmptyField(context, site, value.fields)) return;
+  if (rejectReservedEnvelopeField(context, site, value.fields)) return;
   const invalidGlobalField = invalidGlobalFieldOverride(value.fields);
   if (invalidGlobalField !== undefined) {
     pushInvalidRegistration(
@@ -990,6 +1071,26 @@ function addMissingEmitterViolations(context) {
       ),
       detail: operation.op,
     });
+  }
+}
+
+// An operation is emitted only inside its owner package, which reaches the log through its own
+// port. An emission from any other package bypasses that owning port, whatever it imports.
+function addOwnerBypassViolations(context) {
+  for (const operation of context.operations) {
+    const ownerRoot = `packages/${operation.owner}/`;
+    for (const site of operation.emitterSites) {
+      if (site.startsWith(ownerRoot)) continue;
+      context.violations.push({
+        ...registryViolation(
+          "emission-outside-owner",
+          site,
+          "Emit the operation inside its owner package through that package's log port, or move " +
+            "the registration to the package that emits it.",
+        ),
+        detail: operation.op,
+      });
+    }
   }
 }
 
@@ -1468,6 +1569,7 @@ export function generateTypedActivityLogRegistry(
   collectTypedSites(context, sourceFiles, collectTypedEmission);
   addDuplicateRegistrationViolations(context);
   addMissingEmitterViolations(context);
+  addOwnerBypassViolations(context);
 
   const sortedOperations = operations.toSorted((left, right) =>
     compareCodepoints(left.op, right.op),
@@ -1517,7 +1619,18 @@ function runtimeOperationContract(operation) {
   };
 }
 
-function runtimeRegistryModule(typedRegistry) {
+// The failure-surface inventory's op -> surface mapping, as product runtime needs it (support
+// incidents fingerprint a defect by its owning surface). Derived from the same inventory the JSON
+// view is written from, so the two can never disagree.
+export function activityLogOperationSurfaces(inventory) {
+  return Object.fromEntries(
+    inventory.surfaces
+      .flatMap((entry) => entry.operations.map((op) => [op, entry.surface]))
+      .toSorted(([left], [right]) => compareCodepoints(left, right)),
+  );
+}
+
+export function runtimeRegistryModule(typedRegistry, inventory) {
   const operationRegistry = typedRegistry.operations.map(runtimeOperationContract);
   return [
     "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
@@ -1526,6 +1639,9 @@ function runtimeRegistryModule(typedRegistry) {
     `export const ACTIVITY_LOG_CATALOG_DIGEST = "${typedRegistry.catalogDigest}" as const;`,
     `export const ACTIVITY_LOG_OPERATION_REGISTRY = ${JSON.stringify(operationRegistry, null, 2)} as const;`,
     `export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = ${JSON.stringify(typedRegistry.failureClassCoverage, null, 2)} as const;`,
+    `export const ACTIVITY_LOG_FAILURE_SURFACES = ${JSON.stringify(ACTIVITY_LOG_FAILURE_SURFACES)} as const;`,
+    "export type ActivityLogFailureSurface = (typeof ACTIVITY_LOG_FAILURE_SURFACES)[number];",
+    `export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLogFailureSurface>> = ${JSON.stringify(activityLogOperationSurfaces(inventory), null, 2)};`,
     "",
   ].join("\n");
 }
@@ -2310,28 +2426,72 @@ export function generateOpCatalog(repoRoot = REPO_ROOT) {
   };
 }
 
-async function main() {
-  const catalog = generateOpCatalog();
-  const operationsBytes = await toolCatalogOperationsBytes(REPO_ROOT);
-  const catalogBytes = await format(`${JSON.stringify(catalog, null, 2)}\n`, {
+// The failure-surface inventory (#3532) is a view over the typed registry this generator derives,
+// so it is regenerated and drift-pinned together with the catalog, never maintained by hand.
+export function generateActivityLogFailureSurfaceInventory(
+  repoRoot = REPO_ROOT,
+  typedRegistry = generateTypedActivityLogRegistry(repoRoot),
+) {
+  return generateFailureSurfaceInventory(repoRoot, typedRegistry);
+}
+
+export async function formatGeneratedJson(value) {
+  return format(`${JSON.stringify(value, null, 2)}\n`, {
     parser: "json",
     printWidth: 100,
     tabWidth: 2,
   });
-  const runtimeRegistryBytes = await format(runtimeRegistryModule(catalog.typedRegistry), {
-    parser: "typescript",
-    printWidth: 100,
-    tabWidth: 2,
-  });
+}
+
+async function writeGeneratedFiles(catalog, inventory) {
+  const operationsBytes = await toolCatalogOperationsBytes(REPO_ROOT);
+  const catalogBytes = await formatGeneratedJson(catalog);
+  const inventoryBytes = await formatGeneratedJson(inventory);
+  const runtimeRegistryBytes = await format(
+    runtimeRegistryModule(catalog.typedRegistry, inventory),
+    {
+      parser: "typescript",
+      printWidth: 100,
+      tabWidth: 2,
+    },
+  );
   const outPath = join(REPO_ROOT, ...OUTPUT_RELATIVE_PATH.split("/"));
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, catalogBytes, "utf8");
+  writeFileSync(
+    join(REPO_ROOT, ...FAILURE_SURFACE_INVENTORY_RELATIVE_PATH.split("/")),
+    inventoryBytes,
+    "utf8",
+  );
   writeFileSync(
     join(REPO_ROOT, ...RUNTIME_REGISTRY_RELATIVE_PATH.split("/")),
     runtimeRegistryBytes,
     "utf8",
   );
   writeFileSync(join(REPO_ROOT, TOOL_CATALOG_OPERATIONS_PATH), operationsBytes, "utf8");
+}
+
+function reportInventory(inventory) {
+  const { summary } = inventory;
+  console.log(
+    `  failure-surface inventory: ${String(summary.resolvedProofCount)}/${String(summary.proofCount)} ` +
+      `proofs and ${String(summary.resolvedScenarioCount)}/${String(summary.scenarioCount)} ` +
+      `scenarios resolved, ${String(inventory.violations.length)} violation(s). ` +
+      `Wrote ${FAILURE_SURFACE_INVENTORY_RELATIVE_PATH}.`,
+  );
+  if (inventory.violations.length > 0) {
+    console.error(
+      `  failure-surface inventory violations: ${JSON.stringify(inventory.violations)}`,
+    );
+    process.exitCode = 1;
+  }
+}
+
+async function main() {
+  const catalog = generateOpCatalog();
+  const inventory = generateActivityLogFailureSurfaceInventory(REPO_ROOT, catalog.typedRegistry);
+  await writeGeneratedFiles(catalog, inventory);
+  reportInventory(inventory);
   const dynamicCount = catalog.legacyDiscovery.dynamicCount;
   console.log(
     `generate:op-catalog OK — ${catalog.entries.length} legacy entries ` +

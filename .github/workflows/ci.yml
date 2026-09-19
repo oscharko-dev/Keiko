@@ -398,8 +398,6 @@ jobs:
         # from packages/keiko-server/dist. Move this step above the build and it fails closed with
         # "could not be loaded" rather than silently skipping the invariant.
         run: npm run check:e2e-suite-wiring
-      - run: npm run arch:check
-      - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
       - name: Lexical workspace-search latency gate (enterprise retrieval M3)
@@ -451,6 +449,14 @@ jobs:
         # dependency-review policy and check:workspace-supply-chain reject — so it is fetched here
         # and verified against a pinned SHA-256, the same way the Sonar Scanner CLI is obtained.
         run: npm run provision:usearch
+      - name: Activity Log implementation gate
+        # The one documented local command, run unchanged (after the USearch runtime, which a
+        # scenario may drive). Over the full registered inventory it composes registry/inventory
+        # drift with proof and scenario resolution (check:op-catalog), the curated scenario matrix
+        # (test:activity-log-scenarios), the error-observability probes of the REAL built BFF,
+        # arch:check with its negative fixtures, and check:release-impact. It builds the packages
+        # first, so no check judges stale output, and runs every check even after one fails.
+        run: npm run check:activity-log
       - name: Knowledge M2 closeout gate (Knowledge M2.8, Epic #2556)
         # The wave's anti-false-green artifact. Re-runs the six substrate proofs (ANN activation,
         # one reranker transport importer, the evaluation fold, the retrieval-context wire snapshot,
@@ -458,13 +464,6 @@ jobs:
         # and compares the committed docs/qa/knowledge-m2-substrate-evidence.md against a freshly
         # rendered one, failing closed on drift. Uses the compiled dist built by `npm run typecheck`.
         run: npm run check:knowledge-m2-closeout
-      - name: Server error observability gate (RB-6, GEN-OBS-DIAGNOSTICS-901)
-        # Drives the REAL built BFF: forces a handler throw and asserts the top-level catch returns an
-        # opaque 500 that carries a correlation id (body + X-Keiko-Correlation-Id header), routes the
-        # redacted cause to the operator diagnostic sink keyed by that id, never leaks the raw cause,
-        # and honours a UI-supplied id. Goes RED against a bare `.catch(() => {})` that drops the id or
-        # the diagnostic. Uses the compiled keiko-server dist built by `npm run typecheck` above.
-        run: npm run check:error-observability
       - name: Context quality gate (ADR-0052, context-engineering PR1)
         # Runs after `npm run typecheck` (which builds packages), so the compiled keiko-contracts,
         # keiko-workflows, keiko-workspace, and keiko-security dist the gate imports are present —

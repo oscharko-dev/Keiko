@@ -95,7 +95,7 @@ const LSP_PROCESS_OWNERSHIP_CHANGED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["lsp-process-ownership"],
-  proofIds: ["lsp.process-ownership-changed.emitted-line"],
+  proofIds: ["lsp.process.ownership.changed.emitted-line"],
   releaseImpact: "patch",
 });
 

@@ -5,7 +5,6 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -39,6 +38,7 @@ import {
   writeToolCatalogQualificationObservation,
 } from "./lib/tool-catalog-qualification-observation.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { activityLogFiles, readActivityLogText } from "./lib/activity-log-files.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const MAX_DISTINCT_CONNECTIONS = 4_096;
@@ -454,14 +454,21 @@ export function buildJourneyReport(input) {
   };
 }
 
+function journeyActivityLogDirectory(stateDir) {
+  return join(stateDir, "activity", "logs");
+}
+
+// Retains every Activity Log segment of the journey, in logical order, as one JSONL artifact before
+// the ephemeral state directory is deleted; the digest covers exactly the retained bytes.
 export function retainJourneyActivityLog(context) {
-  const source = join(context.stateDir, "activity", "logs", "server.log");
-  if (!existsSync(source)) return { status: "missing" };
+  const logsDir = journeyActivityLogDirectory(context.stateDir);
+  if (activityLogFiles(logsDir).length === 0) return { status: "missing" };
+  const text = readActivityLogText(logsDir);
   mkdirSync(dirname(context.evidencePath), { recursive: true });
-  copyFileSync(source, `${context.evidencePath}.activity.jsonl`);
+  writeFileSync(`${context.evidencePath}.activity.jsonl`, text);
   return {
     status: "retained",
-    sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
+    sha256: createHash("sha256").update(text).digest("hex"),
   };
 }
 
@@ -512,9 +519,11 @@ export function readH1SearchEvidence(stateDir) {
 }
 
 function readActivityRecords(stateDir) {
-  const path = join(stateDir, "activity", "logs", "server.log");
-  if (!existsSync(path) || statSync(path).size > MAX_ACTIVITY_LOG_BYTES) return undefined;
-  const records = readFileSync(path, "utf8")
+  const logsDir = journeyActivityLogDirectory(stateDir);
+  const files = activityLogFiles(logsDir);
+  const totalBytes = files.reduce((sum, file) => sum + file.sizeBytes, 0);
+  if (files.length === 0 || totalBytes > MAX_ACTIVITY_LOG_BYTES) return undefined;
+  const records = readActivityLogText(logsDir)
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => {

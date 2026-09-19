@@ -21,17 +21,29 @@
 // an error pass `clientErrorSummary(error)`, which yields its class and nothing else.
 //
 // The optional second argument is metadata ABOUT the report, not content: the correlation id of the
-// server request and closed body-free identities needed to reconstruct a response disposition. It
-// rides alongside `message` rather than being folded into it so transports can preserve typed wire
-// fields instead of parsing a caller-specific string convention.
+// server request, the closed kind of failure that raised it, and closed body-free identities needed
+// to reconstruct a response disposition. It rides alongside `message` rather than being folded into
+// it so transports can preserve typed wire fields instead of parsing a caller-specific string
+// convention.
+//
+// LOSS IS COUNTED, NEVER SILENT (#3532). Every diagnostic this page could not deliver — evicted from
+// the bounded pre-transport buffer, dropped by the transport's throttle, lost with a failed POST, or
+// suppressed beyond a per-session reporting cap — is counted here under a closed key. The transport
+// sends the counts with its next report, and the server adds them to its own loss ledger.
 
-import type {
-  ClientDiagnosticGitChangeDescription,
-  ClientDiagnosticWorkspaceTrustBinding,
+import {
+  CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
+  CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
+  type ClientDiagnosticGitChangeDescription,
+  type ClientDiagnosticKind,
+  type ClientDiagnosticLossCountKey,
+  type ClientDiagnosticLossCounts,
+  type ClientDiagnosticWorkspaceTrustBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
+  readonly kind?: ClientDiagnosticKind | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }
@@ -50,9 +62,44 @@ const PENDING_LIMIT = 100;
 
 const pending: PendingDiagnostic[] = [];
 
+// Bounded by construction: one saturating counter per closed key, never a queue of records.
+const lossCounts = new Map<ClientDiagnosticLossCountKey, number>();
+
+/** Count `count` diagnostics this page lost under one closed reason. Never throws. */
+export function recordClientDiagnosticLoss(key: ClientDiagnosticLossCountKey, count = 1): void {
+  if (!Number.isSafeInteger(count) || count <= 0) return;
+  const next = (lossCounts.get(key) ?? 0) + count;
+  lossCounts.set(key, Math.min(CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX, next));
+}
+
+/**
+ * Hands the counted loss to a transport and clears it, or returns undefined when nothing was lost.
+ * A transport whose delivery then fails gives the counts back with `restoreClientDiagnosticLoss`.
+ */
+export function takeClientDiagnosticLoss(): ClientDiagnosticLossCounts | undefined {
+  if (lossCounts.size === 0) return undefined;
+  const counts: Partial<Record<ClientDiagnosticLossCountKey, number>> = {};
+  for (const [key, count] of lossCounts) counts[key] = count;
+  lossCounts.clear();
+  return counts;
+}
+
+/** Returns counts a failed delivery could not hand to the server. */
+export function restoreClientDiagnosticLoss(counts: ClientDiagnosticLossCounts | undefined): void {
+  if (counts === undefined) return;
+  for (const key of CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS) {
+    // An absent key restores nothing: passing its `undefined` on would take the default count.
+    const count = counts[key];
+    if (count !== undefined) recordClientDiagnosticLoss(key, count);
+  }
+}
+
 function bufferUntilTransportArrives(message: string, meta?: ClientDiagnosticMeta): void {
   pending.push({ message, meta });
-  if (pending.length > PENDING_LIMIT) pending.shift();
+  if (pending.length > PENDING_LIMIT) {
+    pending.shift();
+    recordClientDiagnosticLoss("bufferEvicted");
+  }
 }
 
 let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
@@ -87,6 +134,7 @@ export function setClientDiagnosticWriter(next: ClientDiagnosticWriter): void {
 export function resetClientDiagnosticWriter(): void {
   writer = bufferUntilTransportArrives;
   pending.length = 0;
+  lossCounts.clear();
 }
 
 type SseStreamCloseReason = "connecting" | "closed" | "unknown";

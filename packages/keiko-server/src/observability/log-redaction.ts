@@ -79,7 +79,11 @@
 // happens to share it, carries no such promise, and takes the ordinary generic path instead.
 
 import { CLIENT_ERROR_CLASSES } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { ACTIVITY_LOG_FRAME_FIELD_NAME } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME,
+  ACTIVITY_LOG_FRAME_FIELD_NAME,
+  ACTIVITY_LOG_RESERVED_FIELD_NAMES,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import { redactRoutePath } from "./route-template.js";
 import { FRAME_SHAPE_PATTERN, PACKAGE_DIR_NAMES } from "./stack-frames.js";
@@ -132,25 +136,9 @@ const MAX_GUARDED_CAUSE_CHAIN_ELEMENTS = 5;
 // instrumentation site naturally carries `durationMs` or `httpStatus` in its field list, and
 // dropping those would be a silent footgun. The formatter simply applies the envelope after `extra`,
 // so the envelope wins when both are present and `extra` fills the gap when it is not.
-const RESERVED_FIELD_NAMES = new Set<string>([
-  "ts",
-  "level",
-  "category",
-  "op",
-  "schemaVersion",
-  "registryVersion",
-  "schemaDigest",
-  "catalogDigest",
-  "buildClass",
-  "releaseClass",
-  "platformClass",
-  "productVersion",
-  "compatibilityState",
-  "writerCapability",
-  "pid",
-  "instanceId",
-  "seq",
-]);
+// The sink-stamped envelope names live in the contract, where the op-catalog generator also rejects a
+// registration that declares one; this pass drops a producer value for any of them.
+const RESERVED_FIELD_NAMES = new Set<string>(ACTIVITY_LOG_RESERVED_FIELD_NAMES);
 
 // Whole-name matches only, normalised to lowercase with `_` and `-` removed.
 const DENIED_FIELD_NAMES = new Set<string>([
@@ -615,7 +603,7 @@ function redactGuardedArrayField(
 ): string[] | undefined {
   if (depth !== MAX_LOG_FIELD_DEPTH || !Array.isArray(fieldValue)) return undefined;
   if (name === ACTIVITY_LOG_FRAME_FIELD_NAME) return redactKeikoFrames(fieldValue);
-  if (name === "causeChain") return redactCauseChain(fieldValue);
+  if (name === ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME) return redactCauseChain(fieldValue);
   return undefined;
 }
 

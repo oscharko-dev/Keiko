@@ -1,13 +1,16 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activityLogEvent,
   activityLogEventRegistration,
+  activityLogLossCounters,
   defineActivityLogOperation,
+  resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
 import { REDACTED_KEY } from "./log-redaction.js";
 import {
   LOG_FAILURE_NOTICE_WINDOW_MS,
@@ -18,6 +21,7 @@ import {
 } from "./server-log.js";
 import type { ServerLogEvent, ServerLogSink } from "./server-log.js";
 import {
+  activityLogWriterState,
   createServerLogger,
   getServerLogger,
   nullServerLogger,
@@ -389,23 +393,29 @@ describe("process-wide server logger", () => {
     vi.unstubAllEnvs();
   });
 
-  it("writes nothing when no state directory is configured", () => {
+  it("writes nothing only under the explicitly injected test writer", () => {
     vi.stubEnv("KEIKO_STATE_DIR", "");
+    expect(activityLogWriterState()).toEqual({ writer: "test-injected", stateDir: undefined });
     expect(() => {
       getServerLogger().error({ category: "indexing", op: "x" });
     }).not.toThrow();
   });
 
-  it("recovers after the activity-log directory becomes writable", () => {
+  it("counts every event an unavailable logger drops and recovers once the directory is writable", () => {
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     writeFileSync(join(stateDir, "logs"), "occupied");
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     stderr.mockClear();
+    resetActivityLogLossCountersForTests();
 
     expect(() => {
       getServerLogger().error({ category: "indexing", op: "unreachable-after-init-failure" });
     }).not.toThrow();
-    expect(getServerLogger().level).toBe("silent");
+    // The unavailable logger never pretends to be quiet: it keeps the configured threshold, every
+    // event it receives is counted as lost, and the process reports no production writer.
+    expect(getServerLogger().level).toBe("debug");
+    expect(activityLogLossCounters()["logger-unavailable"]).toBeGreaterThanOrEqual(1);
+    expect(activityLogWriterState().writer).toBe("unavailable");
     expect(stderrNotice(stderr.mock.calls[0]?.[0])).toMatchObject({
       op: "server-log.write-failed",
       failedOp: "server-log.initialize",
@@ -427,9 +437,7 @@ describe("process-wide server logger", () => {
     );
 
     expect(recovered.level).toBe("debug");
-    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).toContain(
-      '"eventId":"event-init-recovered"',
-    );
+    expect(readPersistedActivityLog(stateDir)).toContain('"eventId":"event-init-recovered"');
     expect(stderr).toHaveBeenCalledTimes(1);
   });
 
@@ -438,7 +446,7 @@ describe("process-wide server logger", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     stderr.mockClear();
     getServerLogger().warn({ category: "indexing", op: "test.unregistered-operation" });
-    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    const raw = readPersistedActivityLog(stateDir);
     expect(raw).toContain('"op":"server-log.safe-open"');
     expect(raw).toContain('"writerCapability":"active"');
     expect(raw).not.toContain("test.unregistered-operation");
@@ -465,7 +473,7 @@ describe("process-wide server logger", () => {
         }),
       );
 
-    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    const raw = readPersistedActivityLog(stateDir);
     expect(raw).toContain('"op":"update.runtime.event"');
     expect(raw).toContain('"eventId":"event-child-bound-registered"');
     expect(raw).not.toContain("undeclaredChildField");

@@ -3,6 +3,7 @@ import {
   activityLogErrorKindOr,
   activityLogEvent,
   defineActivityLogOperation,
+  recordActivityLogLoss,
   type ActivityLogFields,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -17,11 +18,11 @@ import {
 } from "./observability/error-classification.js";
 import { closeReasonVocabulary, redactLogFields } from "./observability/log-redaction.js";
 import { redactRoutePath } from "./observability/route-template.js";
+import { reportServerLogFailure, type ServerLogEvent } from "./observability/server-log.js";
 import {
-  createFileServerLogSink,
-  reportServerLogFailure,
-  type ServerLogEvent,
-} from "./observability/server-log.js";
+  createActivityLogSink,
+  resolveActivityLogStateDir,
+} from "./observability/server-logger.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
@@ -124,7 +125,7 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["server-diagnostic"],
-  proofIds: ["server-diagnostic.activity-log-line"],
+  proofIds: ["server.diagnostic.failure.activity-log-line"],
   releaseImpact: "patch",
 });
 
@@ -267,10 +268,11 @@ export interface ServerDiagnosticSink {
   readonly record: (record: ServerDiagnosticRecord) => void;
 }
 
-// The default sink writes one structured JSON line to stderr AND — when the server is running
-// under the CLI (KEIKO_STATE_DIR is set) — appends the same record to `<stateDir>/logs/server.log`.
-// The two-track design is deliberate: unit tests that capture the sink via UiHandlerDeps.diagnostics
-// keep observing stderr, while the shipped server writes a file the operator can read directly.
+// The default sink writes one structured JSON line to stderr AND appends the same record to the
+// Activity Log of the runtime state directory (`KEIKO_STATE_DIR`, else the CLI's default
+// `<cwd>/.keiko`). The two-track design is deliberate: unit tests that capture the sink via
+// UiHandlerDeps.diagnostics keep observing stderr, while the shipped server writes a file the
+// operator can read directly. Only an explicitly injected test writer skips the file track.
 //
 // This sink is the sanitizing choke point for the two ids a hostile or buggy producer can shape:
 // `sanitizeDiagnosticRecord` runs HERE, on the writer, so a record handed straight to `.record()`
@@ -431,29 +433,29 @@ function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEv
   );
 }
 
-// Lazy file-log writer. Resolved from KEIKO_STATE_DIR, so the CLI wiring (which sets that env for
-// the child server) picks up the file sink without any explicit bootstrap call — a defense in
-// depth alongside UiServerDeps.activityLog: diagnostics emitted by code paths that do not go
-// through createUiServer (background workers, capsule preflights) still reach the same file. The
-// resolution is cached against the state directory it was resolved FOR, so a changed
-// KEIKO_STATE_DIR rebuilds instead of writing to the previous process's file.
+// Lazy file-log writer. Resolved exactly like the process-wide logger (`KEIKO_STATE_DIR`, else the
+// CLI's default state directory), so diagnostics emitted by code paths that do not go through
+// createUiServer (background workers, capsule preflights) still reach the same file — and a process
+// without `KEIKO_STATE_DIR` no longer drops them silently. The resolution is cached against the
+// state directory it was resolved FOR, so a changed KEIKO_STATE_DIR rebuilds instead of writing to
+// the previous process's file. Only an explicitly injected test writer keeps records stderr-only.
 interface ActivityLogTarget {
-  readonly stateDir: string;
+  readonly stateDir: string | undefined;
   readonly write: (record: ServerDiagnosticRecord) => void;
 }
 
 let activityLogTarget: ActivityLogTarget | null = null;
 
-function buildActivityLogTarget(stateDir: string): ActivityLogTarget {
-  if (stateDir === "") {
+function buildActivityLogTarget(stateDir: string | undefined): ActivityLogTarget {
+  if (stateDir === undefined) {
     return {
       stateDir,
       write: (): void => {
-        // No state directory: writes stay stderr-only.
+        // Explicit test writer: records stay on the stderr track the test observes.
       },
     };
   }
-  const sink = createFileServerLogSink(stateDir);
+  const sink = createActivityLogSink(stateDir);
   return {
     stateDir,
     write: (record: ServerDiagnosticRecord): void => {
@@ -465,6 +467,7 @@ function buildActivityLogTarget(stateDir: string): ActivityLogTarget {
       try {
         sink.write(diagnosticActivityLogEvent(record));
       } catch (error) {
+        recordActivityLogLoss("diagnostic-sink-failed");
         reportServerLogFailure(error, {
           correlationId: record.correlationId,
           loss: "event-dropped",
@@ -475,14 +478,15 @@ function buildActivityLogTarget(stateDir: string): ActivityLogTarget {
 }
 
 function appendDiagnosticToActivityLog(record: ServerDiagnosticRecord): void {
-  const stateDir = process.env.KEIKO_STATE_DIR ?? "";
-  if (activityLogTarget?.stateDir !== stateDir) {
+  const stateDir = resolveActivityLogStateDir();
+  if (activityLogTarget === null || activityLogTarget.stateDir !== stateDir) {
     try {
       activityLogTarget = buildActivityLogTarget(stateDir);
     } catch (error) {
       // Same contract as getServerLogger(): record() never throws into the operation it describes.
-      // The failed open is reported body-free and throttled, and is retried on the next record.
+      // The failed open is counted, reported body-free and throttled, and retried on the next record.
       activityLogTarget = null;
+      recordActivityLogLoss("diagnostic-sink-failed");
       reportServerLogFailure(error, {
         op: "server-log.initialize",
         correlationId: record.correlationId,
@@ -666,6 +670,10 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   // record's own `code` (the same closed value the browser response already carries); this one
   // summary covers every rejection reason emitted through emitVoiceValidationRejected.
   "Voice dictation request rejected during request validation.",
+  // #3532: the Quality Intelligence capsule resolver used to swallow a knowledge-store open or read
+  // failure and degrade silently to QI_CAPSULE_UNAVAILABLE.
+  "Quality Intelligence could not open the knowledge store for a capsule source.",
+  "Quality Intelligence could not read a capsule source from the knowledge store.",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];
@@ -828,15 +836,25 @@ function sanitizeDiagnosticRecord(record: ServerDiagnosticRecord): ServerDiagnos
 }
 
 // Emits a diagnostic record through the provided sink (falling back to the default stderr sink).
-// Never throws — a diagnostic sink failure must not compound the original request failure.
+// Never throws — a diagnostic sink failure must not compound the original request failure. It is
+// not silent either (#3532): the lost record is counted in the process loss ledger and reported
+// once, body-free and throttled, on the independent stderr channel. The correlation id is read
+// through the same fail-closed accessor the classifier uses, so a hostile record cannot turn the
+// report itself into a second failure.
 export function emitServerDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   record: ServerDiagnosticRecord,
 ): void {
   try {
     (sink ?? defaultServerDiagnosticSink).record(sanitizeDiagnosticRecord(record));
-  } catch {
-    // A logging failure is never allowed to escalate into a second, unhandled failure.
+  } catch (error) {
+    recordActivityLogLoss("diagnostic-sink-failed");
+    const correlationId = safeProperty(record, "correlationId");
+    reportServerLogFailure(error, {
+      op: "server.diagnostic.failure",
+      ...(typeof correlationId === "string" ? { correlationId } : {}),
+      loss: "event-dropped",
+    });
   }
 }
 

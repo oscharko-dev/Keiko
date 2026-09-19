@@ -25,9 +25,18 @@ import {
 } from "node:fs";
 import { Buffer } from "node:buffer";
 import { isAbsolute, join, resolve, sep } from "node:path";
+import {
+  SUPPORT_INCIDENT_DIRECTORY_NAME,
+  isActivityLogOwnedFileName,
+  parseSupportIncidentFileName,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { assertRealpathContained } from "./launcher-paths.js";
+import {
+  ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
+  isSegmentManifestFileName,
+} from "./support-segment-manifest-names.js";
 import { LauncherError } from "./launcher-platforms.js";
 
 export const DEFAULT_STATE_DIR_NAME = ".keiko";
@@ -390,7 +399,8 @@ export function classifyPid(
 //     updates/runtime-state.json            keiko-server  update-local-state.ts
 //     updates/update-audit.jsonl            keiko-server  update-local-state.ts
 //     updates/snapshots/<id>/manifest.json  keiko-server  update-local-state.ts
-//     logs/server.log, legacy server-<date>.log archives keiko-server  observability/server-log.ts
+//     logs/activity-*.jsonl segments, pin-*.json keiko-server  observability/server-log.ts
+//     logs/server.log, server-<date>.log      legacy Activity Log files (read-only, aged out)
 //
 // The sealed `*.vault` ciphertext and its `*.key` keyfile (the env/keychain-tier fallback,
 // ADR-0046) are the most confidentiality-critical artifacts here, so they are first-class
@@ -438,9 +448,6 @@ const TOOL_RESULT_ARTIFACT_SUFFIX = ".tool-result.txt"; // keiko-evidence tool-r
 const PRODUCER_TEMP_SUFFIX = ".tmp"; // atomic-save temp files (`<target>.<random>.tmp`)
 const PRODUCER_TEMP_TOKEN = /^[A-Za-z0-9._-]{8,}$/u;
 const SECRET_VAULT_TEMP_FILE = /^\.secret-vault\.[1-9]\d*\.[0-9a-f]{16}\.tmp$/u;
-const SERVER_LOG_FILE = "server.log"; // keiko-server/src/observability/server-log.ts (createFileServerLogSink)
-// Compatibility ownership for archives created before #3528 retired path-based rotation.
-const SERVER_LOG_ARCHIVE_FILE = /^server-\d{4}-\d{2}-\d{2}\.log$/u;
 const QI_OWNED_SUFFIXES = [
   ".qi.json", // keiko-evidence/src/qualityIntelligence/store.ts
   ".candidates.json", // keiko-evidence/src/qualityIntelligence/candidatesArtifact.ts
@@ -464,7 +471,8 @@ export type RuntimeStateCategory =
   | "evidence"
   | "quality-intelligence"
   | "update-recovery"
-  | "activity-log";
+  | "activity-log"
+  | "support-incident";
 
 // A SQLite store file plus its exact WAL/SHM sidecars and `.corrupt.<ts>` quarantine copies
 // — and ONLY those. Matching is exact-name or a known dotted suffix, never a bare `${base}-`
@@ -591,8 +599,11 @@ function isEditorHotExitVaultFile(name: string): boolean {
   );
 }
 
+// The Activity Log directory's closed grammar is a shared contract (keiko-contracts
+// `activity-log-files.ts`), not a duplicated constant: segments, retention-pin records, and the
+// legacy server.log / server-<date>.log files the store reads and ages out.
 function isServerLogFile(name: string): boolean {
-  return name === SERVER_LOG_FILE || SERVER_LOG_ARCHIVE_FILE.test(name);
+  return isActivityLogOwnedFileName(name);
 }
 
 function dirHasSqliteFamilyArtifact(absDir: string, base: string): boolean {
@@ -730,15 +741,34 @@ const updateSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
-// `logs/` owns `server.log` plus legacy `server-<date>.log` archives from the retired rotation
-// implementation. Classified rather than `whole`: an operator file dropped into
+// `logs/` owns the Activity Log's segments, retention-pin records, and legacy `server.log` /
+// `server-<date>.log` files. Classified rather than `whole`: an operator file dropped into
 // `logs/`, or an unexpected nested directory, must be retained rather than claimed by
 // `repair`/`uninstall` — a `whole` subtree here would let anything placed under `logs/` get
 // chmod'd or removed as if Keiko had written it (#2902 PR review).
+// `support-incidents/` holds the local SupportIncident candidates (#3533). Its closed file grammar is
+// the contract's (`incident-<32 hex>.json`), so an operator file dropped there stays foreign.
+const supportIncidentsSubtree: OwnedSubtree = {
+  category: "support-incident",
+  whole: false,
+  ownsFile: (name) => parseSupportIncidentFileName(name) !== undefined,
+  childSubtree: NO_CHILD,
+};
+
 const logsSubtree: OwnedSubtree = {
   category: "activity-log",
   whole: false,
   ownsFile: isServerLogFile,
+  childSubtree: NO_CHILD,
+};
+
+// `activity-log-manifests/` holds the derived, rebuildable per-segment manifests of the Activity Log
+// (#3531). Classified, never `whole`: only the closed `manifest-<segmentId>.json` grammar is owned,
+// so an operator file or directory placed there is retained, never narrowed or deleted.
+const activityLogManifestsSubtree: OwnedSubtree = {
+  category: "activity-log",
+  whole: false,
+  ownsFile: isSegmentManifestFileName,
   childSubtree: NO_CHILD,
 };
 
@@ -767,6 +797,8 @@ const TOP_LEVEL_CHILD_SUBTREES: ReadonlyMap<string, OwnedSubtree> = new Map([
   [EDITOR_HOT_EXIT_SUBDIR, editorHotExitSubtree],
   [UPDATE_SUBDIR, updateSubtree],
   [LOGS_SUBDIR, logsSubtree],
+  [SUPPORT_INCIDENT_DIRECTORY_NAME, supportIncidentsSubtree],
+  [ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME, activityLogManifestsSubtree],
 ]);
 
 function topLevelChildSubtree(name: string, absPath: string): OwnedSubtree | undefined {

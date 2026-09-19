@@ -30,7 +30,10 @@ import {
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { withActivityLogCorrelation } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  recordActivityLogLoss,
+  withActivityLogCorrelation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 // The version constant comes from the contracts LEAF, not the keiko-sdk barrel:
 // the sdk package eagerly re-exports harness/workflows/evidence/gateway/
 // evaluations, so importing SDK_VERSION from it loaded the entire product graph
@@ -128,6 +131,32 @@ function pendingSecurityLogEvent(
   };
 }
 
+// One sink per state directory, built on first use.
+function cachedSecuritySink(
+  sinks: Map<string, SecurityLogSink>,
+  stateDir: string,
+  factory: CliSecurityLogSinkFactory,
+): SecurityLogSink {
+  let sink = sinks.get(stateDir);
+  if (sink === undefined) {
+    sink = factory(stateDir);
+    sinks.set(stateDir, sink);
+  }
+  return sink;
+}
+
+// #3532: the events an unavailable sink drops, including the one in flight, are counted in the
+// process loss ledger and named on the warning, so evidence is never lost without saying how much.
+function recordDroppedSecurityEvents(
+  pending: PendingSecurityLogEvent[],
+  inFlight: number,
+  cause: unknown,
+): void {
+  const dropped = pending.splice(0).length + inFlight;
+  recordActivityLogLoss("collector-dropped", dropped);
+  warnSecurityLogSinkUnavailable(cause, dropped);
+}
+
 function deferredSecurityLogCollector(
   invocationCorrelationId?: string,
 ): DeferredSecurityLogCollector {
@@ -138,22 +167,20 @@ function deferredSecurityLogCollector(
   let unavailable = false;
 
   const drain = async (): Promise<void> => {
+    // The event being written when a failure strikes is lost too; it is counted with the rest.
+    let inFlight = 0;
     try {
-      fileSinkFactory ??= (await loadServer()).createFileServerLogSink;
+      fileSinkFactory ??= (await loadServer()).createActivityLogSink;
       while (pending.length > 0) {
         const next = pending.shift();
         if (next === undefined) continue;
-        let sink = sinks.get(next.stateDir);
-        if (sink === undefined) {
-          sink = fileSinkFactory(next.stateDir);
-          sinks.set(next.stateDir, sink);
-        }
-        sink.write(next.event);
+        inFlight = 1;
+        cachedSecuritySink(sinks, next.stateDir, fileSinkFactory).write(next.event);
+        inFlight = 0;
       }
     } catch (cause) {
       unavailable = true;
-      pending.splice(0);
-      warnSecurityLogSinkUnavailable(cause);
+      recordDroppedSecurityEvents(pending, inFlight, cause);
     }
   };
 
@@ -205,7 +232,7 @@ async function runWithDeferredSecurityLog(
   return result;
 }
 
-function warnSecurityLogSinkUnavailable(cause: unknown): void {
+function warnSecurityLogSinkUnavailable(cause: unknown, droppedEvents: number): void {
   const errorKind = securityErrorKind(cause);
   try {
     process.emitWarning(
@@ -213,7 +240,7 @@ function warnSecurityLogSinkUnavailable(cause: unknown): void {
       {
         type: "KeikoActivityLog",
         code: "KEIKO_CLI_SECURITY_LOG_SINK_UNAVAILABLE",
-        detail: `errorKind=${errorKind}`,
+        detail: `errorKind=${errorKind} droppedEvents=${String(droppedEvents)}`,
       },
     );
   } catch {
@@ -263,8 +290,8 @@ function runSupportCommand(rest: readonly string[], io: CliIo, env: EnvSource): 
   if (rest[0] !== "export" || installLayoutOverrideEvidence(env) === undefined) {
     return runSupportCli(rest, io, env);
   }
-  return loadServer().then(({ createFileServerLogSink }) =>
-    runSupportCli(rest, io, env, { activityLogSinkFactory: createFileServerLogSink }),
+  return loadServer().then(({ createActivityLogSink }) =>
+    runSupportCli(rest, io, env, { activityLogSinkFactory: createActivityLogSink }),
   );
 }
 
@@ -284,8 +311,10 @@ function runLifecycleCommand(
   env: EnvSource,
 ): number | Promise<number> {
   const layoutEvidence = installLayoutOverrideEvidence(env);
-  const needsDeferredLog =
-    (process.platform === "win32" && rest.includes("--open")) || layoutEvidence !== undefined;
+  // #3532: start, stop and restart emit stop/escalation evidence on every platform, not only
+  // Windows, so they always receive the deferred sink. It loads the server graph only when an
+  // event is actually written; `status` emits nothing and keeps its synchronous fast path.
+  const needsDeferredLog = command !== "status" || layoutEvidence !== undefined;
   if (!needsDeferredLog) return runLifecycleCli(command, rest, io, env);
   return runWithDeferredSecurityLog(
     (securityLogSinkFactory) => runLifecycleCli(command, rest, io, env, { securityLogSinkFactory }),

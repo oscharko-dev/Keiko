@@ -412,7 +412,7 @@ describe("buildReproductionSeed — httpRequest, indexingJob, storeFingerprint",
     );
     expect(rawSeed.storeFingerprint).toBeUndefined();
     expect(rawSeed.warnings).toContain(
-      "a raw server.log carries no store fingerprints — export a support bundle " +
+      "a raw Activity Log file carries no store fingerprints — export a support bundle " +
         "(`keiko support export`) to include them",
     );
   });

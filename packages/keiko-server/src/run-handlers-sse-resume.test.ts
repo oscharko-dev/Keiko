@@ -15,6 +15,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry, QueueEventSink } from "./index.js";
 import { handleAllRunEvents } from "./run-handlers.js";
 import type { StreamEvent } from "./sink.js";
@@ -380,6 +384,35 @@ describe("GET /api/runs/events resume cursors (user finding #2456)", () => {
     const { deps, fireClose } = connect(registry, "http://localhost/api/runs/events");
 
     expect(logSink.events.some((event) => event.op === "sse.run-events.resume")).toBe(false);
+    fireClose();
+    deps.store.close();
+  });
+
+  // Registry-linked executable proof (#3532): the same resume-decision line above, read back
+  // through the real formatter/registry path so `sse.run-events.resume.line` resolves against a
+  // production-computed event (this task's rule 1: no hand-built event or registration object).
+  it("persists sse.run-events.resume as a registered Activity Log proof line", () => {
+    const logSink = captureServerLog();
+    const registry = createRunRegistry();
+    registerRunWithEvents(registry, "run-resumed-proof", [0, 1]);
+    const { deps, fireClose } = connect(
+      registry,
+      "http://localhost/api/runs/events?resume=run-resumed-proof:0",
+    );
+
+    const event = logSink.events.find((entry) => entry.op === "sse.run-events.resume");
+    if (event === undefined) throw new Error("expected a resume-decision event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("sse.run-events.resume.line", line);
+    expect(persisted).toMatchObject({
+      category: "http",
+      correlationId: "corr-resume-1",
+      resumedRuns: 1,
+      liveOnlyRuns: 0,
+      fullReplayRuns: 0,
+      completeness: "complete",
+      loss: "none",
+    });
     fireClose();
     deps.store.close();
   });

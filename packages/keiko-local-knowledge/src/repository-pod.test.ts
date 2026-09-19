@@ -30,6 +30,10 @@ import type {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";
 import { documentIdFor } from "./discovery/types.js";
 import {
@@ -562,6 +566,11 @@ describe("repository pod fingerprint-diff activity log", () => {
       moved: 0,
       unchanged: 0,
     });
+    const persistedInitial = expectActivityLogProof(
+      "repository.fingerprint-diff.completed.counts",
+      formatActivityLogProofLine(initialLine ?? {}),
+    );
+    expect(persistedInitial).toMatchObject({ added: 4, changed: 0, removed: 0 });
 
     events.length = 0;
     writeFileSync(

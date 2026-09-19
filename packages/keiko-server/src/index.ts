@@ -448,7 +448,54 @@ export {
 // crash handler — never at module scope, where it would cost real startup time against
 // GEN-PERF-CLI-001's budget.
 export { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+
+// #3533 — local SupportIncident candidates. `keiko support incident` lists, resolves, previews,
+// records (Report a problem), and dismisses them through these. The automatic trigger runs inside
+// the Activity Log file sink; `recordRegisteredFailureIncident` is its entry for a caller that
+// holds one registered failure event's body-free facts.
+export {
+  dismissSupportIncident,
+  listSupportIncidents,
+  readSupportIncident,
+  recordRegisteredFailureIncident,
+  recordUserReportedIncident,
+  supportIncidentSegmentFiles,
+  type SupportIncidentCreation,
+  type SupportIncidentDismissal,
+  type SupportIncidentSegmentFile,
+} from "./observability/support-incident.js";
 export { contentFreeErrorClass, describeError } from "./diagnostics-log.js";
+
+// #3532 — product-wide Activity Log wiring. `createActivityLogSink` is the level-gated production
+// sink every CLI composition site uses for lifecycle and loss evidence (mandatory evidence is never
+// filtered by KEIKO_LOG_LEVEL); the readiness functions run the startup self-check and its heartbeat
+// refresh; the loss summary persists the process-wide loss ledger; and the client-diagnostics flush
+// writes the BFF's trailing suppressed counts before the process exits.
+export {
+  createActivityLogSink,
+  isMandatoryActivityLogEvent,
+  type ActivityLogSinkOptions,
+} from "./observability/server-logger.js";
+export {
+  checkActivityLogReadiness,
+  currentActivityLogReadiness,
+  refreshActivityLogReadiness,
+  type ActivityLogReadinessOptions,
+  type ActivityLogReadinessScope,
+  type ActivityLogStorageHealthProvider,
+} from "./observability/activity-log-readiness.js";
+export {
+  persistActivityLogLossSummary,
+  type ActivityLogLossSummaryOutcome,
+  type ActivityLogLossSummaryTrigger,
+} from "./observability/activity-log-loss-summary.js";
+export { flushClientDiagnosticsIngestCounts } from "./client-diagnostics-routes.js";
+export { resolveRuntimeStateDir } from "./observability/runtime-state-dir.js";
+// The one process-wide Activity Log port every domain package is handed (#3532). CLI commands that
+// compose domain packages in-process (`keiko memory`, `keiko run`, the workflow commands, `keiko
+// evaluate --live`) pass it to the vault and the Model Gateway exactly like the BFF does, so their
+// evidence reaches the runtime state directory's Activity Log instead of an unwired no-op.
+export { processServerLogSink, type ProcessServerLogSink } from "./process-log-sink.js";
 
 // Install-mode detection for `keiko-cli`'s process-lifecycle (`process.started`) and
 // support-bundle manifest fields. `detectUpdateInstallMode`/`productionUpdateFacts` are exported

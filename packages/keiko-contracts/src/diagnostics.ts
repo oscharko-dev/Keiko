@@ -58,14 +58,39 @@ export const LINUX_GATEWAY_DIAGNOSTIC_KINDS = [
 export type LinuxGatewayDiagnosticKind = (typeof LINUX_GATEWAY_DIAGNOSTIC_KINDS)[number];
 
 // What raised the diagnostic: a caught render-boundary error, an unhandled promise rejection, an
-// SSE transport failure, or anything else a call site does not further classify.
+// uncaught `window` error event, an SSE transport failure, or anything else a call site does not
+// further classify.
 export const CLIENT_DIAGNOSTIC_KINDS = [
   "boundary",
   "unhandled-rejection",
+  "window-error",
   "sse-error",
   "other",
 ] as const;
 export type ClientDiagnosticKind = (typeof CLIENT_DIAGNOSTIC_KINDS)[number];
+
+// Browser-side delivery loss the page counted since its previous accepted report (#3532). Each
+// value is a bounded non-negative count, never content: the pre-transport buffer evicting its
+// oldest record, the client-side POST throttle dropping a report, a POST that failed, and
+// unhandled rejections or `window` errors beyond the per-session reporting cap. The server adds
+// them to its bounded loss ledger and records them on the `client.diagnostic` line, so a report
+// that arrives after a storm also says how much of that storm never reached the Activity Log.
+export const CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS = [
+  "bufferEvicted",
+  "postsThrottled",
+  "postsFailed",
+  "rejectionsSuppressed",
+  "errorsSuppressed",
+] as const;
+export type ClientDiagnosticLossCountKey = (typeof CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS)[number];
+
+// A count above this ceiling is clamped by the sender and refused by the guard, so a hostile page
+// cannot inflate the server's loss ledger with an arbitrary number.
+export const CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX = 1_000_000;
+
+export type ClientDiagnosticLossCounts = Readonly<
+  Partial<Record<ClientDiagnosticLossCountKey, number | undefined>>
+>;
 
 export const CLIENT_DIAGNOSTIC_GIT_CHANGE_DESCRIPTION_ACTIONS = [
   "review",
@@ -191,6 +216,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly loss?: ClientDiagnosticLossCounts | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -310,25 +336,129 @@ function isOptional(value: unknown, guard: (candidate: unknown) => boolean): boo
   return value === undefined || guard(value);
 }
 
+const CLIENT_DIAGNOSTIC_LOSS_COUNT_KEY_SET: ReadonlySet<string> = new Set(
+  CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
+);
+
+export function isClientDiagnosticLossCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX
+  );
+}
+
+// Closed on both axes: an unknown key or an out-of-range count refuses the whole report, so the
+// server never has to decide which part of a malformed loss block to believe.
+function isClientDiagnosticLossCounts(value: unknown): value is ClientDiagnosticLossCounts {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(
+    ([key, count]) =>
+      CLIENT_DIAGNOSTIC_LOSS_COUNT_KEY_SET.has(key) &&
+      isOptional(count, isClientDiagnosticLossCount),
+  );
+}
+
+function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
+  const { gitChangeDescription, workspaceTrustBinding, loss } = value;
+  if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
+  if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
+  return isOptional(loss, isClientDiagnosticLossCounts);
+}
+
 export function isClientDiagnosticIngestRequest(
   value: unknown,
 ): value is ClientDiagnosticIngestRequest {
   if (!isRecord(value)) return false;
-  const {
-    message,
-    clientTs,
-    readyState,
-    correlationId,
-    kind,
-    gitChangeDescription,
-    workspaceTrustBinding,
-  } = value;
+  const { message, clientTs, readyState, correlationId, kind } = value;
   if (!isBoundedString(message, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)) return false;
   if (!isIsoInstant(clientTs)) return false;
   if (!isOptional(readyState, isClientDiagnosticReadyState)) return false;
   if (!isOptional(correlationId, isCorrelationIdShape)) return false;
   if (!isOptional(kind, isClientDiagnosticKind)) return false;
-  if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
-  if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
-  return true;
+  return hasValidClientDiagnosticContext(value);
+}
+
+// ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────
+//
+// Whether this process can currently produce machine-reconstruction evidence. `ready` holds only
+// when the registry/catalog identity is coherent, the production sink accepted a real write, the
+// storage is inside its budget and free-space floor, every required port is wired, and the
+// configured level does not silence the log. Any failed check names a closed reason; nothing here
+// ever carries a path, an error message, or a count of anything but lost events.
+export const ACTIVITY_LOG_READINESS_STATES = ["ready", "degraded", "unavailable"] as const;
+export type ActivityLogReadinessState = (typeof ACTIVITY_LOG_READINESS_STATES)[number];
+
+export const ACTIVITY_LOG_READINESS_REASONS = [
+  "catalog-mismatch",
+  "sink-unwritable",
+  "storage-pressure",
+  "budget-exceeded",
+  "port-unwired",
+  "level-silent",
+  // The storage could not be inspected at all (an unlistable log directory, a descriptor limit).
+  "storage-check-failed",
+] as const;
+export type ActivityLogReadinessReason = (typeof ACTIVITY_LOG_READINESS_REASONS)[number];
+
+// Which writer serves the process: the real file-backed Activity Log, an explicitly injected test
+// writer (never reachable in a production process), or none at all.
+export const ACTIVITY_LOG_WRITER_KINDS = [
+  "production-file",
+  "test-injected",
+  "unavailable",
+] as const;
+export type ActivityLogWriterKind = (typeof ACTIVITY_LOG_WRITER_KINDS)[number];
+
+export interface ActivityLogReadinessSnapshot {
+  readonly readiness: ActivityLogReadinessState;
+  readonly reasons: readonly ActivityLogReadinessReason[];
+  readonly writer: ActivityLogWriterKind;
+  // Events this process counted as lost since it started (bounded, see the loss ledger).
+  readonly lostEvents: number;
+}
+
+/** The `GET /api/health` body. `diagnostics` is additive; `status`/`version` keep their meaning. */
+export interface HealthResponse {
+  readonly status: "ok";
+  readonly version: string;
+  readonly diagnostics: ActivityLogReadinessSnapshot;
+}
+
+const READINESS_STATE_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_READINESS_STATES);
+const READINESS_REASON_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_READINESS_REASONS);
+const WRITER_KIND_SET: ReadonlySet<string> = new Set(ACTIVITY_LOG_WRITER_KINDS);
+
+function isReadinessReasonList(value: unknown): value is readonly ActivityLogReadinessReason[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= ACTIVITY_LOG_READINESS_REASONS.length &&
+    value.every((reason) => isSetMember(reason, READINESS_REASON_SET)) &&
+    new Set(value).size === value.length
+  );
+}
+
+// A failed check always names its reason and a ready process names none, so a snapshot whose state
+// and reasons disagree is refused instead of shown to an operator.
+function hasCoherentReasons(
+  readiness: unknown,
+  reasons: readonly ActivityLogReadinessReason[],
+): boolean {
+  return (readiness === "ready") === (reasons.length === 0);
+}
+
+export function isActivityLogReadinessSnapshot(
+  value: unknown,
+): value is ActivityLogReadinessSnapshot {
+  if (!isRecord(value)) return false;
+  return (
+    isSetMember(value.readiness, READINESS_STATE_SET) &&
+    isReadinessReasonList(value.reasons) &&
+    hasCoherentReasons(value.readiness, value.reasons) &&
+    isSetMember(value.writer, WRITER_KIND_SET) &&
+    typeof value.lostEvents === "number" &&
+    Number.isSafeInteger(value.lostEvents) &&
+    value.lostEvents >= 0
+  );
 }

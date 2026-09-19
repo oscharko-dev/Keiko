@@ -48,6 +48,10 @@ import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // Installs a buffered process logger at `level` and returns its sink, mirroring
 // `bounded-request-body.test.ts`'s helper of the same name. `resetServerLogger` in each suite's
@@ -1019,6 +1023,15 @@ describe("coding-sidecar gateway", () => {
       expect(availabilityEvents[0]?.extra?.handlerSetDigest).not.toBe(
         availabilityEvents[1]?.extra?.handlerSetDigest,
       );
+      const persistedAvailability = expectActivityLogProof(
+        "coding-sidecar.gateway.tool-availability.line",
+        formatActivityLogProofLine(availabilityEvents[0] ?? {}),
+      );
+      expect(persistedAvailability).toMatchObject({
+        runId: "run-real",
+        unavailableOptionalTools: ["keiko_research_fetch"],
+        offeredOptionalToolCount: 3,
+      });
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();
@@ -1137,6 +1150,11 @@ describe("coding-sidecar gateway", () => {
         },
       }),
     ]);
+    const persistedRejection = expectActivityLogProof(
+      "coding-sidecar.gateway.rejected.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persistedRejection).toMatchObject({ reason: "capability-authenticator-unavailable" });
   });
 
   it("logs a body-free rejection line for a request missing a bearer capability", async () => {
@@ -3474,6 +3492,11 @@ describe("coding-sidecar gateway", () => {
       activityLogEventRegistration(validated as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
     expect(JSON.stringify(sink.events)).not.toContain("bounded source context");
+    const persistedValidated = expectActivityLogProof(
+      "coding-sidecar.gateway.request-validated.line",
+      formatActivityLogProofLine(validated ?? {}),
+    );
+    expect(persistedValidated).toMatchObject({ maxRequestBytes: 1_048_576, inputMessageCount: 1 });
   });
 
   it("rejects an over-limit assistant tool-call continuation before provider dispatch or spend", async () => {
@@ -4423,6 +4446,15 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
         sink.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
       ),
     ).toBeDefined();
+    const persistedReadiness = expectActivityLogProof(
+      "coding-sidecar.gateway.readiness-insufficient.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persistedReadiness).toMatchObject({
+      reason: "model-context-window-insufficient",
+      maxPromptTokens: 4_096,
+      minimumRequiredPromptTokens: 32_000,
+    });
   });
 
   it("keeps reporting available when the derived prompt budget clears the minimum", () => {

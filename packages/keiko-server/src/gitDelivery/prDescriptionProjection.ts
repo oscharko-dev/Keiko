@@ -122,7 +122,7 @@ const PR_DESCRIPTION_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["git-pr-description"],
-  proofIds: ["git.pr-description"],
+  proofIds: ["git.pr-description.emitted-line"],
   releaseImpact: "patch",
 });
 

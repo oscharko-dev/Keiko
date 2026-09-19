@@ -9,6 +9,7 @@ import {
   deliveryProviderState,
 } from "./coding-issue-delivery.js";
 import { COMMIT_MESSAGE } from "./coding-issue-commit.js";
+import { readActivityLogText } from "../../../scripts/lib/activity-log-files.mjs";
 
 function expectProviderEvidence(provider: Readonly<Record<string, unknown>>): void {
   expect(provider).toMatchObject({ pushes: 7, creates: 5, rejections: 5 });
@@ -68,7 +69,7 @@ export function writeDeliveryJourneyReceipt(stateDir: string, cases: readonly st
 }
 
 function readDeliveryLog(stateDir: string): readonly Record<string, unknown>[] {
-  const log = readFileSync(join(stateDir, "bff-state", "state", "logs", "server.log"), "utf8");
+  const log = readActivityLogText(join(stateDir, "bff-state", "state", "logs"));
   for (const value of [DELIVERY_TITLE, DELIVERY_TEMPLATE, COMMIT_MESSAGE])
     expect(log).not.toContain(value);
   const lines = log

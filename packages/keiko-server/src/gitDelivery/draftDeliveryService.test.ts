@@ -22,6 +22,10 @@ import {
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { PR_DESCRIPTION_REGION_START } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const GIT_FIXTURE_TIMEOUT_MS = 15_000;
 
@@ -214,6 +218,11 @@ describe("draft delivery hard boundaries", () => {
     });
     expect(redactLogFields(event?.extra ?? {})).toEqual(event?.extra);
     expect(fixture.pushCount).toBe(0);
+    const persisted = expectActivityLogProof(
+      "git.draft-remote.observed.emitted-line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ phase: "base-read", state: "observed" });
   });
 
   it("records the observed and expected remote commit when the published head drifts", async () => {
@@ -285,6 +294,12 @@ describe("draft delivery hard boundaries", () => {
         },
       }),
     );
+    const draftDeliveryLine = fixture.events.find((event) => event.op === "git.draft-delivery");
+    const persisted = expectActivityLogProof(
+      "git.draft-delivery.emitted-line",
+      formatActivityLogProofLine(draftDeliveryLine ?? {}),
+    );
+    expect(persisted).toMatchObject({ phase: "refused", reason: "operation-in-flight" });
     release.resolve();
     await expect(first).resolves.toMatchObject({ record: { phase: "push-proposed" } });
   });

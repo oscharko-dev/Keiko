@@ -1,5 +1,5 @@
 // Persistent record of generated launcher shortcut paths, written under the existing
-// `.keiko/` state dir alongside `ui.pid` / `ui.log` (see `lifecycle.ts`). The state file
+// `.keiko/` state dir alongside `ui.pid` (see `lifecycle.ts`). The state file
 // is plaintext JSON and contains ONLY:
 //   - the absolute path of each generated shortcut,
 //   - the SHA-256 hash of the content Keiko generated for that path at install time,

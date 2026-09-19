@@ -2,13 +2,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  activityLogLossCounters,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   causeChain as productionCauseChain,
@@ -19,6 +20,7 @@ import {
 } from "@oscharko-dev/keiko-server";
 import { redactLogFields } from "@oscharko-dev/keiko-server/runtime/tool-catalog-lifecycle";
 import { formatServerLogLine } from "../../keiko-server/src/observability/server-log.js";
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
 
 import {
   analyzeLogText,
@@ -105,6 +107,26 @@ function productionLogCategory(op: string): ServerLogCategory {
 // the production formatter without the physical sink's registration gate: this analyzer suite
 // deliberately needs legacy and adversarial record shapes, while server-log.test.ts separately
 // proves that those shapes cannot reach a current production file.
+//
+// The physical sink refuses every fixture shape written here (they are deliberately unregistered),
+// and that refusal is what lets the first fixture's correlation reach the sink's own safe-open line
+// without persisting a second copy of the fixture. The refusal is counted as `schema-rejected` and
+// announced on stderr; the count is asserted and the notice captured, so priming can neither leak
+// output into this suite nor start persisting a fixture unnoticed.
+function primeFileSink(
+  fileSink: ServerLogSink,
+  event: Parameters<ServerLogSink["write"]>[0],
+): void {
+  const rejectedBefore = activityLogLossCounters()["schema-rejected"];
+  const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  try {
+    fileSink.write(event);
+  } finally {
+    stderrWrite.mockRestore();
+  }
+  expect(activityLogLossCounters()["schema-rejected"]).toBe(rejectedBefore + 1);
+}
+
 function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => void): string {
   const stateDir = mkdtempSync(join(tmpdir(), prefix));
   const fileSink = createFileServerLogSink(stateDir, { level: "debug" });
@@ -113,7 +135,7 @@ function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => v
   const fixtureSink: ServerLogSink = {
     write(event): void {
       if (!primed) {
-        fileSink.write(event);
+        primeFileSink(fileSink, event);
         primed = true;
       }
       fixtureLines.push(formatServerLogLine(event));
@@ -122,7 +144,7 @@ function serializedActivityLog(prefix: string, write: (sink: ServerLogSink) => v
   try {
     write(fixtureSink);
     fileSink.close?.();
-    return `${readFileSync(join(stateDir, "logs", "server.log"), "utf8")}${fixtureLines.join("")}`;
+    return `${readPersistedActivityLog(stateDir)}${fixtureLines.join("")}`;
   } finally {
     fileSink.close?.();
     rmSync(stateDir, { recursive: true, force: true });
@@ -940,15 +962,21 @@ describe("support timeline contract — the #3347 workspace-authority security o
 
     const result = analyzeLogText(serialized);
 
+    // The writer's own storage lifecycle lines use the same sanctioned fallback: the segment opened
+    // (safe-open) and sealed on close with no request correlation in scope (#3530).
     expect(result.timelines).toEqual([
       expect.objectContaining({
         correlationId: "unknown-correlation-id",
-        lines: [expect.objectContaining({ op: "server-log.safe-open" })],
+        lines: [
+          expect.objectContaining({ op: "server-log.safe-open" }),
+          expect.objectContaining({ op: "activity-log.segment.sealed" }),
+        ],
       }),
     ]);
     expect(result.malformedLineCount).toBe(0);
     expect(result.clusters.map((cluster) => cluster.op)).toEqual([
       "server-log.safe-open",
+      "activity-log.segment.sealed",
       WATCH_AUTHORITY_REVOKED,
     ]);
   });
@@ -1864,6 +1892,7 @@ describe("human-readable rendering", () => {
         warnings: [],
         clusters: [],
         updateAttempts: [],
+        sufficiency: analyzeLogText("").sufficiency,
       }),
     ).toBe("No correlated events found.\n");
   });
@@ -2120,6 +2149,7 @@ describe("renderHumanReproductionSeed — Wave 6 sub-field rendering", () => {
       sourceArtifact: { kind: "raw-log", lineCount: 1, sha256: "a".repeat(64) },
       correlationId: "req-seed",
       timeline: [],
+      sufficiency: analyzeLogText("").sufficiency,
       warnings: ["no prompt/response body was ever logged by design"],
       ...overrides,
     };

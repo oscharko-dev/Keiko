@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 export default defineConfig({
@@ -24,6 +25,11 @@ export default defineConfig({
     // bug-investigation fixture's intentionally fail-before regression test) must not be collected
     // into this suite.
     exclude: ["**/node_modules/**", "tests/fixtures/**", "packages/keiko-ui/**"],
+    // #3532: explicit Activity Log test-writer injection. Without it, product code under test
+    // resolves the default runtime state directory and writes a real log into the checkout.
+    setupFiles: [
+      fileURLToPath(new URL("./tests/support/activity-log-test-writer.ts", import.meta.url)),
+    ],
     // ADR-0013 D2 site 2 — `node:sqlite` requires --experimental-sqlite on Node 22.0–22.11 builds
     // and emits an ExperimentalWarning on every import on the Node.js 24 baseline (where the flag is no longer
     // strictly required). The flag covers both, and the warning suppressor keeps test output clean.

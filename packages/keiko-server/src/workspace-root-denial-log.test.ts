@@ -8,6 +8,10 @@ import {
   recordWorkspaceRootDenial,
   recordWorkspaceRootDenied,
 } from "./workspace-root-denial-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 describe("workspace root denial activity", () => {
   it("emits the authoritative typed denial without path or message content", () => {
@@ -43,6 +47,11 @@ describe("workspace root denial activity", () => {
     ).toMatchObject({ emitter: "workspace-root-denial-log.recordWorkspaceRootDenied" });
     expect(JSON.stringify(event)).not.toContain(deniedPath);
     expect(JSON.stringify(event)).not.toContain(message);
+    const proven = expectActivityLogProof(
+      "workspace.root.denied.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(proven).toMatchObject({ decision: "denied", reason: "denied-locus" });
   });
 
   it("uses closed authority and internal failure kinds across every producer", () => {

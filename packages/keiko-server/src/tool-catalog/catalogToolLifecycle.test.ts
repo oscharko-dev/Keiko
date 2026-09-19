@@ -1,8 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import {
+  activityLogLossCounters,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
-import { createBufferedServerLogSink } from "../observability/server-log.js";
+import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
 import { emitToolLifecycleEvent, validateToolLifecycleEvent } from "./catalogToolLifecycle.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 interface Fixture {
   readonly phase: string;
@@ -31,6 +39,35 @@ function sinks(): {
     auxiliary: createBufferedServerLogSink(),
     diagnostics: { record: vi.fn<ServerDiagnosticSink["record"]>() },
   };
+}
+
+// Kept as its own top-level helper (rather than inlined at the one it.each call site) so that test
+// stays under the file's complexity ceiling: each generated fixture drives its op's real production
+// write site (writeProjection/writeBindingReady/.../writeCompletionDiscarded) through the actual
+// emitToolLifecycleEvent dispatcher, and the captured primary event is what the production sink
+// built -- formatting it exactly as the file sink would makes it a valid persisted-line proof. Every
+// `expectActivityLogProof` call below keeps its proof id as a literal, which the op-catalog
+// generator's static resolution requires.
+function proveToolCatalogLifecycleLine(op: unknown, event: ServerLogEvent | undefined): void {
+  const persistedLine = formatActivityLogProofLine(event ?? {});
+  if (op === "tool-catalog.projection") {
+    expectActivityLogProof("tool-catalog.projection.emitted-line", persistedLine);
+  }
+  if (op === "tool-catalog.bind-ready") {
+    expectActivityLogProof("tool-catalog.bind-ready.emitted-line", persistedLine);
+  }
+  if (op === "tool-catalog.bind-unavailable") {
+    expectActivityLogProof("tool-catalog.bind-unavailable.emitted-line", persistedLine);
+  }
+  if (op === "tool-catalog.invocation-started") {
+    expectActivityLogProof("tool-catalog.invocation-started.emitted-line", persistedLine);
+  }
+  if (op === "tool-catalog.invocation-settled") {
+    expectActivityLogProof("tool-catalog.invocation-settled.emitted-line", persistedLine);
+  }
+  if (op === "tool-catalog.completion-discarded") {
+    expectActivityLogProof("tool-catalog.completion-discarded.emitted-line", persistedLine);
+  }
 }
 
 describe("closed runtime lifecycle emission", () => {
@@ -65,6 +102,7 @@ describe("closed runtime lifecycle emission", () => {
           reason: fixture.evidence.reason,
         });
       expect(port.diagnostics.record).not.toHaveBeenCalled();
+      proveToolCatalogLifecycleLine(fixture.evidence.op, port.primary.events[0]);
     },
   );
   it("rejects every forbidden body field before either sink sees it", () => {
@@ -217,5 +255,21 @@ describe("closed runtime lifecycle emission", () => {
     expect(port.diagnostics.record).toHaveBeenCalledWith(
       expect.objectContaining({ source: "tool-catalog-lifecycle-primary" }),
     );
+  });
+  // #3532: a lifecycle line a sink refused is lost, and the process loss ledger counts it.
+  it("counts every lifecycle line a failing sink loses", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      const port = sinks();
+      const failing = {
+        write: vi.fn(() => {
+          throw new Error("private failure body");
+        }),
+      };
+      emitToolLifecycleEvent({ ...port, primary: failing, auxiliary: failing }, phase("terminal"));
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(2);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
   });
 });

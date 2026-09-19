@@ -1,8 +1,8 @@
 import {
-  appendFileSync,
   chmodSync,
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,9 +12,10 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync, spawn, type ChildProcessByStdio } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { dirname, join, resolve } from "node:path";
@@ -24,17 +25,27 @@ import {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
   ActivityLogEventValidationError,
   activityLogEvent,
+  activityLogLossCounters,
+  activityLogSegmentFileName,
   defineActivityLogOperation,
+  formatActivityLogSegmentId,
+  parseActivityLogFileName,
+  resetActivityLogLossCountersForTests,
+  type ActivityLogSegmentIdentity,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
+import { writeActivityLogPolicyRecord } from "./activity-log-store.js";
 import { MAX_LOG_FIELD_COUNT, REDACTED_KEY, REDACTED_SHAPE } from "./log-redaction.js";
 import {
+  ACTIVITY_LOG_STORAGE_OPERATIONS,
   MAX_LOG_LINE_BYTES,
   SERVER_LOG_LEVEL_ENV,
   SERVER_LOG_SCHEMA_VERSION,
+  activityLogStorageHealth,
   closeFileServerLogSinks,
   createBufferedServerLogSink,
   createFileServerLogSink as createStrictFileServerLogSink,
@@ -42,6 +53,9 @@ import {
   errorKindOf,
   formatServerLogLine,
   formatRegisteredServerLogLine,
+  listActivityLogFiles,
+  pinActivityLogWindow,
+  releaseActivityLogPin,
   reportServerLogFailure,
   resetServerLogFailureNotices,
   serverLogInstanceId,
@@ -50,6 +64,8 @@ import {
   serverLogProcessIdentity,
 } from "./server-log.js";
 import type {
+  ActivityLogFileInfo,
+  ActivityLogPinResult,
   DurableServerLogBatchOptions,
   DurableServerLogBatchResult,
   FileServerLogSinkOptions,
@@ -101,18 +117,6 @@ const TEST_FILE_OPERATION = defineActivityLogOperation({
         "invalid-field-vocabulary",
       ],
     },
-    writerCapability: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["unavailable"],
-    },
-    compatibilityState: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: ["incomplete"],
-    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
     reason: {
@@ -151,8 +155,6 @@ function registeredTestEvent(event: ServerLogEvent): ServerLogEvent {
     },
     {
       failedOp: testEventMarker(event),
-      writerCapability: "unavailable",
-      compatibilityState: "incomplete",
       completeness: "unknown",
       loss: "event-dropped",
     },
@@ -183,8 +185,8 @@ function appendDurableServerLogBatch(
 ): DurableServerLogBatchResult {
   return appendStrictDurableServerLogBatch(stateDir, {
     ...options,
-    inspect(directory): ReturnType<DurableServerLogBatchOptions["inspect"]> {
-      const inspection = options.inspect(directory);
+    inspect(directory, files): ReturnType<DurableServerLogBatchOptions["inspect"]> {
+      const inspection = options.inspect(directory, files);
       return inspection.status === "append"
         ? { ...inspection, events: inspection.events.map(registeredTestEvent) }
         : inspection;
@@ -206,43 +208,79 @@ function logicalTestRecord(record: Record<string, unknown>): Record<string, unkn
   };
 }
 
-// A line the file holds, or `null` when those bytes are not a parseable record. Used by the
-// short-write test, which is about exactly that distinction.
-function readRawRecords(stateDir: string): (Record<string, unknown> | null)[] {
-  const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-  return raw
-    .split("\n")
-    .filter((line) => line !== "")
-    .map((line) => {
-      try {
-        return logicalTestRecord(JSON.parse(line) as Record<string, unknown>);
-      } catch {
-        return null;
-      }
-    });
+function parseLine(line: string): Record<string, unknown> | null {
+  try {
+    return logicalTestRecord(JSON.parse(line) as Record<string, unknown>);
+  } catch {
+    return null;
+  }
 }
 
-// Counters for the syscalls the sink's cost claim is actually about. The mock passes every call
-// through to the real filesystem — it only counts — so every other test in this file keeps
-// exercising real appends and real permissions.
+// Every physical line of the logical log, read through the writer's own ordered listing (the
+// function under test) so no test restates the name grammar or the order.
+function readActivityLogLines(stateDir: string): readonly string[] {
+  return listActivityLogFiles(stateDir).flatMap((file) =>
+    readFileSync(file.path, "utf8")
+      .split("\n")
+      .filter((line) => line !== ""),
+  );
+}
+
+// Every physical line of the logical log, or `null` where the bytes are not a parseable record.
+// Used by the short-write test, which is about exactly that distinction.
+function readRawRecords(stateDir: string): (Record<string, unknown> | null)[] {
+  return readActivityLogLines(stateDir).map(parseLine);
+}
+
+function readLines(stateDir: string): Record<string, unknown>[] {
+  return readRawRecords(stateDir).filter(
+    (record): record is Record<string, unknown> => record !== null,
+  );
+}
+
+function fileRecords(path: string): Record<string, unknown>[] {
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+// Counters for the syscalls the sink's cost claim is actually about, plus the fault knobs the
+// failure tests drive. The mock passes every call through to the real filesystem unless a knob is
+// set, so every other test in this file keeps exercising real appends and real permissions.
 const fsCalls = vi.hoisted(() => ({
-  replaceAfterWrite: null as {
-    readonly current: string;
-    readonly op: string;
-    readonly stale: string;
-  } | null,
+  replaceAfterWrite: null as { readonly logsDir: string; readonly op: string } | null,
   open: 0,
   write: 0,
   close: 0,
   fsync: 0,
   failFsync: false,
-  failOpenPath: null as string | null,
+  failOpenMatching: null as RegExp | null,
   failWriteOpOnce: null as string | null,
+  failWriteCode: null as string | null,
+  freeBytes: null as number | null,
+  // `null` lists every Activity Log directory normally. A number fails exactly that ordinal listing of a
+  // `logs` directory (1 = the next one) with EACCES, the error class `readdirSync` rethrows.
+  failLogsListingCall: null as number | null,
+  logsListings: 0,
   // `null` passes every write through untouched. A number is a byte budget: the descriptor accepts
   // that many more bytes and then reports 0, which is what a stalled descriptor reports and the
   // only way to produce a short write on a regular file.
   writeBudgetBytes: null as number | null,
 }));
+
+function resetFsKnobs(): void {
+  fsCalls.writeBudgetBytes = null;
+  fsCalls.replaceAfterWrite = null;
+  fsCalls.fsync = 0;
+  fsCalls.failFsync = false;
+  fsCalls.failOpenMatching = null;
+  fsCalls.failWriteOpOnce = null;
+  fsCalls.failWriteCode = null;
+  fsCalls.freeBytes = null;
+  fsCalls.failLogsListingCall = null;
+  fsCalls.logsListings = 0;
+}
 
 // The four-argument Buffer overload is the only one the module under test uses, and the only one
 // the budget path has to understand. `Parameters<>` resolves to the string overload, so the
@@ -251,42 +289,59 @@ type BufferWriteArgs = readonly [fd: number, buffer: Buffer, offset: number, len
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
+  // A peer swaps the active segment right after a matching write: the written inode moves to a
+  // non-grammar name and an empty file takes the segment's name.
+  const swapActiveSegment = (logsDir: string): void => {
+    const name = actual.readdirSync(logsDir).find((entry) => entry.endsWith(".active.jsonl"));
+    if (name === undefined) return;
+    actual.renameSync(join(logsDir, name), join(logsDir, "peer-moved.jsonl"));
+    actual.writeFileSync(join(logsDir, name), "", { mode: 0o600 });
+  };
+  const textOf = (buffer: Buffer, offset: number, length: number): string =>
+    buffer.subarray(offset, offset + length).toString("utf8");
+  const mentionsOp = (text: string, op: string): boolean =>
+    text.includes(`"op":"${op}"`) || text.includes(`:${op}"`);
+  const readdirSync = actual.readdirSync as (...args: readonly unknown[]) => unknown;
   return {
     ...actual,
+    readdirSync: ((...args: readonly unknown[]): unknown => {
+      if (fsCalls.failLogsListingCall !== null && /(?:^|[\\/])logs$/u.test(String(args[0]))) {
+        fsCalls.logsListings += 1;
+        if (fsCalls.logsListings === fsCalls.failLogsListingCall) {
+          throw Object.assign(new Error("forced listing failure"), { code: "EACCES" });
+        }
+      }
+      return readdirSync(...args);
+    }) as typeof actual.readdirSync,
     openSync: (...args: Parameters<typeof actual.openSync>): number => {
       fsCalls.open += 1;
-      if (String(args[0]) === fsCalls.failOpenPath) {
+      if (fsCalls.failOpenMatching?.test(String(args[0])) === true) {
         throw Object.assign(new Error("forced open failure"), { code: "EIO" });
       }
       return actual.openSync(...args);
     },
     writeSync: (...args: Parameters<typeof actual.writeSync>): number => {
       fsCalls.write += 1;
-      const budget = fsCalls.writeBudgetBytes;
       const [fd, buffer, offset, length] = args as unknown as BufferWriteArgs;
-      const writtenText = buffer.subarray(offset, offset + length).toString("utf8");
+      if (fsCalls.failWriteCode !== null) {
+        throw Object.assign(new Error("forced write failure"), { code: fsCalls.failWriteCode });
+      }
       if (
         fsCalls.failWriteOpOnce !== null &&
-        (writtenText.includes(`"op":"${fsCalls.failWriteOpOnce}"`) ||
-          writtenText.includes(`:${fsCalls.failWriteOpOnce}"`))
+        mentionsOp(textOf(buffer, offset, length), fsCalls.failWriteOpOnce)
       ) {
         fsCalls.failWriteOpOnce = null;
         return 0;
       }
+      const budget = fsCalls.writeBudgetBytes;
       const allowed = budget === null ? length : Math.min(length, budget);
       if (budget !== null) fsCalls.writeBudgetBytes = budget - allowed;
       if (allowed === 0) return 0;
       const written = actual.writeSync(fd, buffer, offset, allowed);
       const replacement = fsCalls.replaceAfterWrite;
-      const acceptedText = buffer.subarray(offset, offset + written).toString("utf8");
-      if (
-        replacement !== null &&
-        (acceptedText.includes(`"op":"${replacement.op}"`) ||
-          acceptedText.includes(`:${replacement.op}"`))
-      ) {
+      if (replacement !== null && mentionsOp(textOf(buffer, offset, written), replacement.op)) {
         fsCalls.replaceAfterWrite = null;
-        actual.renameSync(replacement.current, replacement.stale);
-        actual.writeFileSync(replacement.current, "", { mode: 0o600 });
+        swapActiveSegment(replacement.logsDir);
       }
       return written;
     },
@@ -296,147 +351,351 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
       fsCalls.fsync += 1;
-      if (fsCalls.failFsync)
+      if (fsCalls.failFsync) {
         throw Object.assign(new Error("forced fsync failure"), { code: "EIO" });
+      }
       actual.fsyncSync(...args);
+    },
+    statfsSync: (
+      ...args: Parameters<typeof actual.statfsSync>
+    ): ReturnType<typeof actual.statfsSync> => {
+      const real = actual.statfsSync(...args);
+      const free = fsCalls.freeBytes;
+      if (free === null || typeof real.bavail === "bigint") return real;
+      const numeric = real as import("node:fs").StatsFs;
+      return {
+        type: numeric.type,
+        bsize: 1,
+        blocks: numeric.blocks,
+        bfree: free,
+        bavail: free,
+        files: numeric.files,
+        ffree: numeric.ffree,
+        frsize: numeric.frsize,
+      };
     },
   };
 });
 
 const BURST_EVENT_COUNT = 2_000;
 
-function readLines(stateDir: string): Record<string, unknown>[] {
-  const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-  if (raw.trim() === "") return [];
-  return raw
-    .trim()
-    .split("\n")
-    .map((line) => logicalTestRecord(JSON.parse(line) as Record<string, unknown>));
-}
-
-const FILESYSTEM_EVIDENCE_OPS: ReadonlySet<unknown> = new Set([
-  "server-log.capacity-warning",
-  "server-log.rotation",
-  "server-log.safe-open",
-]);
+// Storage evidence the writer adds on its own, taken from the producer. Caller-facing assertions
+// filter these out; the storage tests assert them explicitly.
+const STORAGE_EVIDENCE_OPS: ReadonlySet<unknown> = ACTIVITY_LOG_STORAGE_OPERATIONS;
 
 function readCallerLines(stateDir: string): Record<string, unknown>[] {
-  return readLines(stateDir).filter((line) => !FILESYSTEM_EVIDENCE_OPS.has(line.op));
+  return readLines(stateDir).filter((line) => !STORAGE_EVIDENCE_OPS.has(line.op));
 }
 
 function readCallerRecords(stateDir: string): (Record<string, unknown> | null)[] {
   return readRawRecords(stateDir).filter(
-    (record) => record === null || !FILESYSTEM_EVIDENCE_OPS.has(record.op),
+    (record) => record === null || !STORAGE_EVIDENCE_OPS.has(record.op),
   );
 }
 
-const rotationWorkerModule = pathToFileURL(
+function linesWithOp(stateDir: string, op: string): Record<string, unknown>[] {
+  return readLines(stateDir).filter((line) => line.op === op);
+}
+
+function segmentFiles(
+  stateDir: string,
+  kind?: ActivityLogFileInfo["kind"],
+): readonly ActivityLogFileInfo[] {
+  return listActivityLogFiles(stateDir).filter((file) => kind === undefined || file.kind === kind);
+}
+
+function logsDirectory(stateDir: string): string {
+  return join(stateDir, "logs");
+}
+
+function modeOf(path: string): number {
+  return statSync(path).mode & 0o777;
+}
+
+// A process id that certainly belonged to a process that has exited.
+function exitedProcessId(): number {
+  return spawnSync(process.execPath, ["-e", ""]).pid;
+}
+
+// What recovery must report for a writer killed at an arbitrary instant: every complete line it
+// left is still a whole record, and the tail and seal state follow from its last bytes.
+function expectedKilledWriterRecovery(name: string, bytes: Buffer): Record<string, unknown> {
+  const completeLines = bytes.toString("utf8").split("\n").slice(0, -1);
+  for (const line of completeLines) expect(() => JSON.parse(line) as unknown).not.toThrow();
+  const truncated = bytes.at(-1) !== 0x0a;
+  const sealWritten = (completeLines.at(-1) ?? "").includes('"op":"activity-log.segment.sealed"');
+  const parsed = parseActivityLogFileName(name);
+  return {
+    recoveryStatus: "sealed",
+    recoveryKind: sealWritten && !truncated ? "interrupted-seal" : "unsealed",
+    ownerState: "exited",
+    tailState: truncated ? "truncated" : "terminated",
+    segmentBytes: bytes.length,
+    recoveredInstanceId: parsed !== undefined && "instanceId" in parsed ? parsed.instanceId : "",
+    loss: truncated ? "event-dropped" : "none",
+  };
+}
+
+interface SeededSegment {
+  readonly identity: ActivityLogSegmentIdentity;
+  readonly state: "active" | "sealed";
+  readonly content: string;
+  readonly mtimeMs?: number;
+}
+
+function seedSegment(stateDir: string, segment: SeededSegment): string {
+  const directory = logsDirectory(stateDir);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, activityLogSegmentFileName(segment.identity, segment.state));
+  writeFileSync(path, segment.content, { mode: 0o600 });
+  chmodSync(path, segment.state === "sealed" ? 0o400 : 0o600);
+  if (segment.mtimeMs !== undefined) {
+    utimesSync(path, segment.mtimeMs / 1000, segment.mtimeMs / 1000);
+  }
+  return path;
+}
+
+function seedLegacyFile(stateDir: string, name: string, bytes: number, mtimeMs?: number): string {
+  const directory = logsDirectory(stateDir);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, name);
+  const line = `${JSON.stringify({ ts: "2026-01-01T00:00:00.000Z", op: "legacy" })}\n`;
+  writeFileSync(path, line.repeat(Math.max(1, Math.ceil(bytes / line.length))).slice(0, bytes), {
+    mode: 0o600,
+  });
+  if (mtimeMs !== undefined) utimesSync(path, mtimeMs / 1000, mtimeMs / 1000);
+  return path;
+}
+
+function syntheticLines(bytes: number, seqStart = 1): string {
+  let seq = seqStart;
+  let text = "";
+  while (Buffer.byteLength(text) < bytes) {
+    text += `${JSON.stringify({ ts: "2026-09-18T00:00:00.000Z", seq, op: "seeded" })}\n`;
+    seq += 1;
+  }
+  return text;
+}
+
+function storageEnv(overrides: Readonly<Record<string, string>>): Readonly<Record<string, string>> {
+  return { [SERVER_LOG_LEVEL_ENV]: "debug", ...overrides };
+}
+
+// Bytes the directory really occupies: each inode once (a seal briefly holds one inode under both
+// its active and its sealed name), and a name that vanishes mid-scan simply no longer counts.
+function directoryBytes(directory: string): number {
+  const inodes = new Map<string, number>();
+  for (const name of readdirSync(directory)) {
+    try {
+      const stat = lstatSync(join(directory, name));
+      if (stat.isFile()) inodes.set(`${String(stat.dev)}:${String(stat.ino)}`, stat.size);
+    } catch {
+      // Sealed or pruned between the listing and the stat.
+    }
+  }
+  return [...inodes.values()].reduce((total, size) => total + size, 0);
+}
+
+const serverLogDistModule = pathToFileURL(
   resolve(dirname(fileURLToPath(import.meta.url)), "../../dist/observability/server-log.js"),
 ).href;
-const rotationWorkerContractsModule = pathToFileURL(
+const contractsDistModule = pathToFileURL(
   resolve(
     dirname(fileURLToPath(import.meta.url)),
     "../../../keiko-contracts/dist/observability.js",
   ),
 ).href;
 
-const ROTATION_WORKER_SOURCE = `
-const [moduleUrl, contractsUrl, stateDir, barrier, workerId] = process.argv.slice(1);
-let clock = "2026-09-17T23:59:00.000Z";
-const RealDate = Date;
-globalThis.Date = class extends RealDate {
-  constructor(...args) { super(...(args.length === 0 ? [clock] : args)); }
-  static now() { return new RealDate(clock).valueOf(); }
-};
-const { createFileServerLogSink } = await import(moduleUrl);
+// A forever writer that stops by itself exits with this code, so a test can tell it from a kill.
+const WRITER_WORKER_STOPPED_ITSELF = 75;
+// Longer than any test waits before it kills a forever writer on purpose (their timeouts are 60 s).
+const WRITER_WORKER_LIFETIME_MS = 90_000;
+
+// A real Keiko writer process built from dist: `count` events and a clean close, or `forever` until
+// it is killed. Every event names its worker and index, so no line can be attributed to the wrong
+// process. A forever writer whose test failed before killing it must not spin on: it stops by itself
+// at the end of its lifetime, or as soon as the process that spawned it (`parentPid`) is gone. On
+// #3554 ten writers from failed runs outlived their tests and held ten cores for two hours.
+const WRITER_WORKER_SOURCE = `
+const [moduleUrl, contractsUrl, stateDir, workerId, count, mode, pinMode, lifetimeMs, parentPid] =
+  process.argv.slice(1);
+const { createFileServerLogSink, pinActivityLogWindow } = await import(moduleUrl);
 const { activityLogEvent, defineActivityLogOperation } = await import(contractsUrl);
-const { existsSync } = await import("node:fs");
-const operation = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "server-log.capacity-warning",
-  category: "diagnostic",
-  owner: "keiko-server",
-  emitter: "observability/server-log.capacityWarningEvidence",
-  fields: {
-    artifactClass: { type: "string", dataClass: "closed-enum", required: true, values: ["activity-log"] },
-    capacityStatus: { type: "string", dataClass: "closed-enum", required: true, values: ["warning-threshold-reached"] },
-    observedSizeBytes: { type: "integer", dataClass: "count", required: true },
-    warningThresholdBytes: { type: "integer", dataClass: "count", required: true },
-    operatorAction: { type: "string", dataClass: "closed-enum", required: true, values: ["stop-export-replace"] },
-    mutationStatus: { type: "string", dataClass: "closed-enum", required: true, values: ["not-attempted"] },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "capability",
-  failureClasses: ["activity-log-capacity"],
-  proofIds: ["server-log.capacity-warning.threshold"],
-  releaseImpact: "patch",
-});
-const event = (day) => activityLogEvent(operation, {
-  level: "warn",
-  correlationId: "rotation-worker-" + workerId,
-  errorKind: "publish-unsupported",
+const operation = defineActivityLogOperation(${JSON.stringify(TEST_FILE_OPERATION)});
+const event = (index) => activityLogEvent(operation, {
+  level: "error",
+  correlationId: "worker-" + workerId + "-events",
+  errorKind: "write-failed",
 }, {
-  artifactClass: "activity-log",
-  capacityStatus: "warning-threshold-reached",
-  observedSizeBytes: day * 100 + Number(workerId),
-  warningThresholdBytes: 999999,
-  operatorAction: "stop-export-replace",
-  mutationStatus: "not-attempted",
-  completeness: "complete",
-  loss: "none",
+  failedOp: "worker." + workerId + "." + index + "." + "x".repeat(index % 7 * 11),
+  completeness: "unknown",
+  loss: "event-dropped",
 });
 const sink = createFileServerLogSink(stateDir, { level: "debug" });
-sink.write(event(1));
-process.stdout.write("ready\\n");
-while (!existsSync(barrier)) await new Promise((resolve) => setTimeout(resolve, 5));
-clock = "2026-09-18T00:00:30.000Z";
-sink.write(event(2));
-sink.close?.();
+if (mode === "forever") {
+  const stopAtMs = Date.now() + Number(lifetimeMs);
+  for (let index = 0; ; index += 1) {
+    sink.write(event(index));
+    if (index % 64 === 0 && (Date.now() > stopAtMs || process.ppid !== Number(parentPid))) {
+      process.exit(${String(WRITER_WORKER_STOPPED_ITSELF)});
+    }
+  }
+}
+for (let index = 0; index < Number(count); index += 1) {
+  sink.write(event(index));
+  if (pinMode === "pin" && index === Math.floor(Number(count) / 2)) {
+    const now = Date.now();
+    pinActivityLogWindow(stateDir, {
+      scope: { kind: "window", fromMs: now - 60_000, toMs: now + 60_000 },
+      expiresAtMs: now + 3_600_000,
+    });
+  }
+}
+sink.close();
 `;
 
-function startRotationWorker(
+interface WriterWorker {
+  readonly child: ChildProcessByStdio<null, Readable, Readable>;
+  // Captured at spawn: a worker that finishes before the test awaits it must not be missed.
+  readonly exit: Promise<number | null>;
+}
+
+interface WriterWorkerOptions {
+  readonly count: number;
+  readonly mode: "count" | "forever";
+  readonly env: Readonly<Record<string, string>>;
+  readonly pin?: boolean;
+  readonly lifetimeMs?: number;
+}
+
+// Every writer a test spawned that has not exited yet. A test that fails or times out before its
+// own kill leaves its writer here until killLiveWriterWorkers ends it.
+const liveWriterWorkers = new Set<WriterWorker>();
+
+async function killLiveWriterWorkers(): Promise<void> {
+  const workers = [...liveWriterWorkers];
+  for (const worker of workers) worker.child.kill("SIGKILL");
+  await Promise.all(workers.map((worker) => worker.exit.catch(() => null)));
+}
+
+// A suite that spawns writers kills them first thing in its own afterEach, before it removes the
+// directory they write to: Vitest skips the enclosing hooks once an inner one throws, and a removal
+// racing a live writer does throw. This file-level hook is the backstop for any other suite.
+afterEach(killLiveWriterWorkers);
+
+// The worker's arguments without its trailing parent pid, which whoever spawns it appends.
+function writerWorkerArgs(
   stateDir: string,
-  barrier: string,
   workerId: number,
-): ChildProcessByStdio<null, Readable, Readable> {
-  return spawn(
+  options: WriterWorkerOptions,
+): string[] {
+  return [
+    "--input-type=module",
+    "-e",
+    WRITER_WORKER_SOURCE,
+    serverLogDistModule,
+    contractsDistModule,
+    stateDir,
+    String(workerId),
+    String(options.count),
+    options.mode,
+    options.pin === true ? "pin" : "none",
+    String(options.lifetimeMs ?? WRITER_WORKER_LIFETIME_MS),
+  ];
+}
+
+function startWriterWorker(
+  stateDir: string,
+  workerId: number,
+  options: WriterWorkerOptions,
+): WriterWorker {
+  const child = spawn(
     process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      ROTATION_WORKER_SOURCE,
-      rotationWorkerModule,
-      rotationWorkerContractsModule,
-      stateDir,
-      barrier,
-      String(workerId),
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    [...writerWorkerArgs(stateDir, workerId, options), String(process.pid)],
+    { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...options.env } },
   );
-}
-
-function waitForWorkerReady(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
-  return new Promise((resolveReady, reject) => {
-    child.once("error", reject);
-    child.stdout.once("data", (chunk) => {
-      if (String(chunk).includes("ready")) resolveReady();
-      else reject(new Error("rotation worker did not become ready"));
-    });
-  });
-}
-
-function waitForWorkerExit(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
-  return new Promise((resolveExit, reject) => {
+  const exit = new Promise<number | null>((resolveExit, reject) => {
     child.once("error", reject);
     child.once("exit", (code) => {
-      if (code === 0) resolveExit();
-      else reject(new Error(`rotation worker exited ${String(code)}`));
+      resolveExit(code);
     });
   });
+  const worker = { child, exit };
+  liveWriterWorkers.add(worker);
+  const forget = (): void => {
+    liveWriterWorkers.delete(worker);
+  };
+  exit.then(forget, forget);
+  return worker;
+}
+
+// An exited process nobody has reaped yet (a zombie) no longer runs. Inside a container without an
+// init process nothing reaps an orphan, so `kill(pid, 0)` alone would report a writer that stopped
+// by itself as still alive.
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+  return !processIsZombie(pid);
+}
+
+// /proc/<pid>/stat is "pid (comm) state ..."; comm may itself contain spaces and parentheses, so the
+// state is the first field after the last ")". Without procfs (macOS, Windows) the system init
+// reaps an orphan, and `kill(pid, 0)` is already exact there.
+function processIsZombie(pid: number): boolean {
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${String(pid)}/stat`, "utf8");
+  } catch {
+    return false;
+  }
+  const afterComm = stat.lastIndexOf(")");
+  return stat.slice(afterComm + 2, afterComm + 3) === "Z";
+}
+
+// Spawns a forever writer through a short-lived relay process that exits at once, which leaves the
+// writer exactly as a killed test runner leaves it: alive, with its parent gone. Resolves the pid.
+const ORPHANING_RELAY_SOURCE = `
+import { spawn } from "node:child_process";
+const [command, ...args] = process.argv.slice(1);
+const writer = spawn(command, [...args, String(process.pid)], { stdio: "ignore" });
+writer.once("spawn", () => {
+  process.stdout.write(String(writer.pid) + "\\n", () => process.exit(0));
+});
+`;
+
+async function startOrphanedForeverWriter(stateDir: string): Promise<number> {
+  const args = writerWorkerArgs(stateDir, 7, { count: 0, mode: "forever", env: {} });
+  const relay = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", ORPHANING_RELAY_SOURCE, process.execPath, ...args],
+    { stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...storageEnv({}) } },
+  );
+  let output = "";
+  relay.stdout.on("data", (chunk: Buffer) => {
+    output += chunk.toString("utf8");
+  });
+  const code = await new Promise<number | null>((resolveExit, reject) => {
+    relay.once("error", reject);
+    relay.once("exit", resolveExit);
+  });
+  const pid = Number(output.trim());
+  if (code !== 0 || !Number.isInteger(pid) || pid <= 0) {
+    throw new Error("the relay did not report its writer");
+  }
+  return pid;
+}
+
+async function waitFor<T>(probe: () => T | undefined, timeoutMs = 20_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = probe();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) throw new Error("condition not reached");
+    await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+  }
 }
 
 describe("server activity log", () => {
@@ -446,356 +705,27 @@ describe("server activity log", () => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-server-log-"));
     // Hermetic: the suite must not observe the developer's or the runner's own threshold.
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
-    fsCalls.writeBudgetBytes = null;
-    fsCalls.replaceAfterWrite = null;
-    fsCalls.fsync = 0;
-    fsCalls.failFsync = false;
-    fsCalls.failOpenPath = null;
-    fsCalls.failWriteOpOnce = null;
+    resetFsKnobs();
+    // Spy first: the reset below flushes whatever an earlier test's throttle suppressed, and that
+    // last-resort notice belongs in the spy, not in the runner's output.
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
     // The failure notice is throttled process-wide, so a test that asserts on it must start from a
     // slate no earlier test can have used up.
     resetServerLogFailureNotices();
-    vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
 
   afterEach(() => {
     // The file sink is a process-wide singleton per log directory, so a suite that leaves one
-    // registered leaves its descriptor open too.
+    // registered leaves its segment open too.
     closeFileServerLogSinks();
-    fsCalls.writeBudgetBytes = null;
-    fsCalls.replaceAfterWrite = null;
-    fsCalls.fsync = 0;
-    fsCalls.failFsync = false;
-    fsCalls.failOpenPath = null;
-    fsCalls.failWriteOpOnce = null;
+    resetFsKnobs();
     rmSync(stateDir, { recursive: true, force: true });
     vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("appends and fsyncs a durable batch through the existing active log", () => {
-    const sink = createFileServerLogSink(stateDir);
-    sink.write({ category: "process", op: "before-batch" });
-    const openCount = fsCalls.open;
-
-    const result = appendDurableServerLogBatch(stateDir, {
-      level: "info",
-      inspect: () => ({
-        status: "append",
-        events: [
-          { category: "diagnostic", op: "batch-one" },
-          { category: "diagnostic", op: "batch-complete" },
-        ],
-      }),
-    });
-
-    expect(result).toStrictEqual({ status: "appended", appendedCount: 2 });
-    // Two additional opens pin the fixed state/log directory ancestors; one read-only descriptor
-    // validates the current tail before inspection. The existing append descriptor is still reused.
-    expect(fsCalls.open).toBe(openCount + 3);
-    expect(fsCalls.fsync).toBe(1);
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
-      "before-batch",
-      "batch-one",
-      "batch-complete",
-    ]);
-  });
-
-  it("keeps adversarial registered-field values out of the physical activity log", () => {
-    const sink = createStrictFileServerLogSink(stateDir);
-    const syntheticCredential = ["sk", "proj", "abcdefghijklmno"].join("-");
-    const adversarialValues: readonly unknown[] = [
-      "the complete operator prompt",
-      syntheticCredential,
-      "operator@example.test",
-      "/etc/passwd",
-      String.raw`C:\Users\operator\secret.txt`,
-      { nested: syntheticCredential },
-    ];
-
-    for (const value of adversarialValues) {
-      const event = registeredTestEvent({ category: "diagnostic", op: "adversarial.fixture" });
-      Reflect.set(event.extra ?? {}, "failedOp", value);
-      expect(() => {
-        sink.write(event);
-      }).not.toThrow();
-    }
-
-    const persisted = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-    expect(readCallerLines(stateDir)).toHaveLength(0);
-    for (const fragment of [
-      "operator prompt",
-      "sk-proj-",
-      "operator@example",
-      "/etc/passwd",
-      "C:\\Users",
-    ]) {
-      expect(persisted).not.toContain(fragment);
-    }
-  });
-
-  it("emits separate safe-open and completed-rotation evidence for a durable batch", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const sink = createFileServerLogSink(stateDir);
-    sink.write({ category: "process", op: "before-durable-boundary" });
-    sink.close?.();
-
-    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    const result = appendDurableServerLogBatch(stateDir, {
-      level: "info",
-      inspect: () => ({
-        status: "append",
-        events: [
-          {
-            category: "diagnostic",
-            op: "durable-after-boundary",
-            extra: { domainStatus: "complete" },
-          },
-        ],
-      }),
-    });
-
-    expect(result).toStrictEqual({ status: "appended", appendedCount: 1 });
-    expect(readLines(stateDir).slice(-3)).toEqual([
-      expect.objectContaining({
-        op: "server-log.safe-open",
-        correlationId: "unknown-correlation-id",
-        persistenceStatus: "opened",
-      }),
-      expect.objectContaining({
-        op: "server-log.rotation",
-        correlationId: "unknown-correlation-id",
-        persistenceStatus: "rotated",
-        rotationReason: "hard-link-winner",
-        archivedCount: 1,
-        retentionStatus: "unchanged",
-        prunedCount: 0,
-        retainedCount: 1,
-      }),
-      expect.objectContaining({
-        op: "durable-after-boundary",
-      }),
-    ]);
-    expect(readLines(stateDir).at(-1)).not.toHaveProperty("persistenceStatus");
-  });
-
-  it("persists first-open evidence when a durable batch is already complete", () => {
-    const result = appendDurableServerLogBatch(stateDir, {
-      level: "info",
-      inspect: () => ({ status: "already-complete" }),
-    });
-
-    expect(result).toStrictEqual({ status: "already-complete" });
-    expect(readLines(stateDir)).toEqual([
-      expect.objectContaining({
-        op: "server-log.safe-open",
-        correlationId: "unknown-correlation-id",
-        persistenceStatus: "opened",
-        completeness: "complete",
-        loss: "none",
-      }),
-    ]);
-    expect(fsCalls.fsync).toBe(1);
-  });
-
-  it("persists boundary evidence before a durable inspection defers", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const sink = createFileServerLogSink(stateDir);
-    sink.write({ category: "process", op: "before-deferred-inspection" });
-    sink.close?.();
-
-    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    const result = appendDurableServerLogBatch(stateDir, {
-      level: "info",
-      inspect: () => ({ status: "deferred" }),
-    });
-
-    expect(result).toStrictEqual({ status: "inspection-deferred" });
-    expect(readLines(stateDir).slice(-2)).toEqual([
-      expect.objectContaining({
-        op: "server-log.safe-open",
-        correlationId: "unknown-correlation-id",
-      }),
-      expect.objectContaining({
-        op: "server-log.rotation",
-        correlationId: "unknown-correlation-id",
-        persistenceStatus: "rotated",
-        rotationReason: "hard-link-winner",
-        retentionStatus: "unchanged",
-      }),
-    ]);
-    expect(fsCalls.fsync).toBe(1);
-  });
-
-  it("does not inspect or touch the log directory when a durable info batch is filtered", () => {
-    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
-
-    expect(appendDurableServerLogBatch(stateDir, { level: "warn", inspect })).toStrictEqual({
-      status: "deferred",
-      reason: "level-filtered",
-    });
-    expect(inspect).not.toHaveBeenCalled();
-    expect(existsSync(join(stateDir, "logs"))).toBe(false);
-  });
-
-  it("defers when the current log changes during durable batch inspection", () => {
-    const sink = createFileServerLogSink(stateDir);
-    sink.write({ category: "process", op: "before-race" });
-
-    const result = appendDurableServerLogBatch(stateDir, {
-      level: "info",
-      inspect: (directory) => {
-        appendFileSync(join(directory, "server.log"), "peer\n", "utf8");
-        return {
-          status: "append",
-          events: [{ category: "diagnostic", op: "must-not-append" }],
-        };
-      },
-    });
-
-    expect(result).toStrictEqual({ status: "deferred", reason: "destination-mutated" });
-    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).not.toContain(
-      "must-not-append",
-    );
-  });
-
-  it("reports uncertain durability and closes the active handle when batch fsync fails", () => {
-    createFileServerLogSink(stateDir).write({ category: "process", op: "before-fsync-failure" });
-    fsCalls.failFsync = true;
-
-    expect(
-      appendDurableServerLogBatch(stateDir, {
-        level: "info",
-        inspect: () => ({
-          status: "append",
-          events: [{ category: "diagnostic", op: "uncertain-batch" }],
-        }),
-      }),
-    ).toStrictEqual({ status: "deferred", reason: "durability-uncertain" });
-    expect(fsCalls.close).toBeGreaterThanOrEqual(3);
-  });
-
-  it("classifies a fresh safe-open evidence write failure before inspection", () => {
-    fsCalls.writeBudgetBytes = 0;
-    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
-
-    expect(appendDurableServerLogBatch(stateDir, { level: "info", inspect })).toStrictEqual({
-      status: "deferred",
-      reason: "append-failed",
-    });
-    expect(inspect).not.toHaveBeenCalled();
-  });
-
-  it("classifies fresh safe-open evidence with uncertain durability before inspection", () => {
-    fsCalls.failFsync = true;
-    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
-
-    expect(appendDurableServerLogBatch(stateDir, { level: "info", inspect })).toStrictEqual({
-      status: "deferred",
-      reason: "durability-uncertain",
-    });
-    expect(inspect).not.toHaveBeenCalled();
-  });
-
-  it("classifies a fresh safe-open pathname replacement before inspection", () => {
-    const current = join(stateDir, "logs", "server.log");
-    fsCalls.replaceAfterWrite = {
-      current,
-      stale: join(stateDir, "logs", "server-stale.log"),
-      op: "server-log.safe-open",
-    };
-    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
-
-    expect(appendDurableServerLogBatch(stateDir, { level: "info", inspect })).toStrictEqual({
-      status: "deferred",
-      reason: "destination-mutated",
-    });
-    expect(inspect).not.toHaveBeenCalled();
-  });
-
-  it("terminates a partial record before a durable batch retry", () => {
-    createFileServerLogSink(stateDir).write({ category: "process", op: "before-partial-batch" });
-    fsCalls.writeBudgetBytes = 5;
-    expect(
-      appendDurableServerLogBatch(stateDir, {
-        level: "info",
-        inspect: () => ({
-          status: "append",
-          events: [{ category: "diagnostic", op: "interrupted-batch" }],
-        }),
-      }),
-    ).toStrictEqual({ status: "deferred", reason: "append-failed" });
-
-    fsCalls.writeBudgetBytes = null;
-    expect(
-      appendDurableServerLogBatch(stateDir, {
-        level: "info",
-        inspect: () => ({
-          status: "append",
-          events: [{ category: "diagnostic", op: "retry-batch" }],
-        }),
-      }),
-    ).toStrictEqual({ status: "appended", appendedCount: 1 });
-    const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-    expect(raw.endsWith("\n")).toBe(true);
-    expect(raw).toContain("retry-batch");
-  });
-
-  it("terminates and syncs a partial current-file tail before fresh-process inspection", async () => {
-    const logs = join(stateDir, "logs");
-    mkdirSync(logs, { mode: 0o700 });
-    writeFileSync(join(logs, "server.log"), '{"interrupted":', "utf8");
-    let inspected = false;
-    vi.resetModules();
-    const freshServerLog = await import("./server-log.js");
-
-    try {
-      const result = freshServerLog.appendDurableServerLogBatch(stateDir, {
-        level: "info",
-        inspect: (directory) => {
-          inspected = true;
-          const raw = readFileSync(join(directory, "server.log"), "utf8");
-          expect(raw.startsWith('{"interrupted":\n')).toBe(true);
-          expect(raw).toContain('"op":"server-log.safe-open"');
-          return {
-            status: "append",
-            events: [registeredTestEvent({ category: "diagnostic", op: "fresh-process-retry" })],
-          };
-        },
-      });
-
-      expect(inspected).toBe(true);
-      expect(result).toStrictEqual({ status: "appended", appendedCount: 1 });
-      expect(readCallerRecords(stateDir)).toEqual([
-        null,
-        expect.objectContaining({ op: "fresh-process-retry" }),
-      ]);
-      expect(fsCalls.fsync).toBe(3);
-    } finally {
-      freshServerLog.closeFileServerLogSinks();
-    }
-  });
-
-  it("does not inspect or truncate a partial tail when delimiter durability is uncertain", () => {
-    const logs = join(stateDir, "logs");
-    mkdirSync(logs, { mode: 0o700 });
-    const interrupted = '{"interrupted":';
-    writeFileSync(join(logs, "server.log"), interrupted, "utf8");
-    fsCalls.failFsync = true;
-    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
-
-    expect(appendDurableServerLogBatch(stateDir, { level: "info", inspect })).toStrictEqual({
-      status: "deferred",
-      reason: "destination-unsafe",
-    });
-    expect(inspect).not.toHaveBeenCalled();
-    expect(readFileSync(join(logs, "server.log"), "utf8")).toBe(`${interrupted}\n`);
-  });
-
-  it("writes one JSON line per event into <stateDir>/logs/server.log", () => {
+  it("writes one JSON line per event into this process's own active segment", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "request", status: 200, durationMs: 42 });
     sink.write({
@@ -806,6 +736,14 @@ describe("server activity log", () => {
       extra: { items: 36 },
     });
 
+    const files = segmentFiles(stateDir);
+    expect(files.map((file) => file.kind)).toStrictEqual(["active"]);
+    expect(parseActivityLogFileName(files[0]?.name ?? "")).toMatchObject({
+      kind: "active",
+      pid: process.pid,
+      instanceId: serverLogInstanceId(),
+      index: 1,
+    });
     const lines = readCallerLines(stateDir);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatchObject({
@@ -854,9 +792,9 @@ describe("server activity log", () => {
   });
 
   // Envelope v2 (#2902): every line the file sink writes carries a process/sequence identity an
-  // agent joins across the long-lived current file and any legacy archive. This is the functional
-  // counterpart to the spoofing test below — it proves the real values actually land on disk, not
-  // merely that a forged one is stripped.
+  // agent joins across segments and any legacy file. This is the functional counterpart to the
+  // spoofing test below — it proves the real values actually land on disk, not merely that a forged
+  // one is stripped.
   it("stamps registry, build, platform and writer identity on every file-sink line", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "one" });
@@ -884,12 +822,9 @@ describe("server activity log", () => {
     expect(first.instanceId).toBe(serverLogInstanceId());
     expect(String(first.instanceId)).toMatch(/^[0-9a-f]{8}$/);
     // Monotonic PER PROCESS, not per file and not starting at a fixed value: the allocator is
-    // shared by every ActiveLog this process ever resolves, so an earlier test's sink may already
-    // have claimed numbers below this one — an absolute starting value is exactly what a
-    // process-wide counter makes unstable to assert. What the contract actually promises is that
-    // two lines written back to back by the SAME sink are exactly one apart, and carry the SAME
-    // instanceId/pid — two different process lifetimes are told apart by instanceId, never pid
-    // alone, since the OS reuses pids across restarts.
+    // shared by every store this process ever resolves, so an earlier test's sink may already have
+    // claimed numbers below this one. Two lines written back to back by the SAME sink are exactly
+    // one apart and carry the SAME instanceId/pid.
     if (typeof first.seq !== "number" || typeof second.seq !== "number") {
       throw new TypeError("expected numeric sequence values");
     }
@@ -900,8 +835,7 @@ describe("server activity log", () => {
 
   // The reserved-field defense-in-depth this envelope depends on: `RESERVED_FIELD_NAMES` in
   // `log-redaction.ts` strips a same-named `extra` key before the real identity is ever applied, so
-  // a caller (or a hostile upstream value merged into `extra`) cannot make its own line look like a
-  // different process or a different position in the sequence.
+  // a caller cannot make its own line look like a different process or sequence position.
   it("never lets extra spoof registry, runtime, writer or process identity", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({
@@ -940,19 +874,14 @@ describe("server activity log", () => {
     expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
     expect(lines[0]?.pid).not.toBe(-1);
     expect(lines[0]?.instanceId).not.toBe("deadbeef");
-    // The real, process-allocated value, never the forged one. `seq` is not pinned to 1 here: the
-    // allocator is process-wide, so an earlier test's sink may already have advanced it — asserting
-    // "not the forged value, and a genuine positive integer" is what still holds regardless.
     expect(lines[0]?.seq).not.toBe(999_999);
     expect(typeof lines[0]?.seq).toBe("number");
     expect(lines[0]?.seq as number).toBeGreaterThan(0);
   });
 
   // ADR-0173 D2's join key is `(pid, instanceId, seq)`, promised unique PROCESS-WIDE — not merely
-  // within one log file. Before this fix `seq` lived on `ActiveLog`, one per resolved directory, so
-  // two state directories in the very same process each started counting at 1 and could stamp an
-  // identical tuple on two unrelated lines. A shared, module-scoped allocator is the only way two
-  // independent `ActiveLog`s can still hand out non-overlapping numbers.
+  // within one log directory. A per-directory counter would let two state directories in the same
+  // process stamp an identical tuple on two unrelated lines.
   it("shares one seq allocator across independent state directories, so seq never repeats", () => {
     const otherStateDir = mkdtempSync(join(tmpdir(), "keiko-server-log-other-"));
     try {
@@ -966,13 +895,8 @@ describe("server activity log", () => {
 
       const seqA = readLines(stateDir).map((line) => line.seq as number);
       const seqB = readLines(otherStateDir).map((line) => line.seq as number);
-
-      // No duplicate anywhere across the two directories: a per-directory counter would let
-      // seqA[0] and seqB[0] both be 1.
       const combined = [...seqA, ...seqB];
       expect(new Set(combined).size).toBe(combined.length);
-      // Strictly increasing within each directory's own lines, even though the two sinks'
-      // writes were interleaved and share one process-wide counter.
       expect(seqA[1]).toBeGreaterThan(seqA[0] ?? Number.POSITIVE_INFINITY);
       expect(seqB[1]).toBeGreaterThan(seqB[0] ?? Number.POSITIVE_INFINITY);
     } finally {
@@ -980,56 +904,49 @@ describe("server activity log", () => {
     }
   });
 
-  // The counter is claimed BEFORE the write is attempted (see `allocateServerLogSeq`), so a write
-  // that throws still consumes a number. That number is never seen again — reusing it for the next
-  // line would be silently worse than the gap it would hide. The gap is therefore the expected,
-  // diagnosable outcome, not a bug: an agent reconstructing the run sees seq jump by two and knows
-  // exactly one line failed to persist at that point, which is what the stderr failure notice
-  // (asserted elsewhere) also reports.
-  it("leaves a gap in seq for a write that throws, and keeps allocating correctly after", () => {
+  // The counter is claimed BEFORE the write is attempted, so a write that throws still consumes a
+  // number that is never reused. The gap is the diagnosable outcome, and once writing resumes the
+  // blocked backpressure is persisted with the exact number of events it cost.
+  it("leaves a gap in seq for a write that throws and persists the backpressure once writing resumes", () => {
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
     sink.write({ category: "http", op: "before-failure" });
     const before = readCallerRecords(stateDir)[0]?.seq as number;
 
-    // A zero-byte budget means the descriptor accepts NOTHING for this record: `writeAll` throws
-    // on its first call before a single byte lands, so — unlike the short-write test below, which
-    // corrupts a partial record — this record leaves no bytes behind at all. `readRawRecords`
-    // filters the resulting blank line, which is why it (not `readLines`) is used here.
-    //
-    // The restore runs in `finally` so this shared fixture cannot leak a nonzero budget into a
-    // later test if anything above throws before the plain reset would have run — belt-and-braces
-    // alongside the file's own unconditional `afterEach` reset.
     fsCalls.writeBudgetBytes = 0;
     try {
       sink.write({ category: "http", op: "dropped" });
     } finally {
       fsCalls.writeBudgetBytes = null;
     }
-
     sink.write({ category: "http", op: "after-failure" });
-    const records = readCallerRecords(stateDir);
 
-    // Only the two writes that actually landed are on disk; the failed one never appears.
+    const records = readCallerRecords(stateDir);
     expect(records.map((record) => record?.op)).toStrictEqual(["before-failure", "after-failure"]);
-    // The failed event claimed `before + 1`; the separate safe-reopen event claims `before + 2`,
-    // and the caller's next event follows it. Exactly the failed number stays absent.
-    expect(records[1]?.seq).toBe(before + 3);
     expect(readRawRecords(stateDir).some((record) => record?.seq === before + 1)).toBe(false);
-    expect(readRawRecords(stateDir)).toContainEqual(
-      expect.objectContaining({ op: "server-log.safe-open", seq: before + 2 }),
-    );
+    expect(linesWithOp(stateDir, "activity-log.pressure")).toStrictEqual([
+      expect.objectContaining({
+        seq: before + 2,
+        pressureState: "backpressure",
+        droppedEventCount: 1,
+        writerCapability: "degraded",
+        errorKind: "write-failed",
+        completeness: "partial",
+        loss: "event-dropped",
+      }),
+    ]);
+    expect(records[1]?.seq).toBe(before + 3);
   });
 
-  it("reserves the caller seq before an open failure and exposes the exact gap", () => {
+  it("reserves the caller seq before a segment open failure and exposes the exact gap", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
     sink.write({ category: "http", op: "before-open-failure" });
     const before = readCallerLines(stateDir)[0]?.seq as number;
     sink.close?.();
 
-    fsCalls.failOpenPath = join(stateDir, "logs", "server.log");
+    fsCalls.failOpenMatching = /\.active\.jsonl$/u;
     sink.write({ category: "http", op: "open-failed-caller" });
-    fsCalls.failOpenPath = null;
+    fsCalls.failOpenMatching = null;
     sink.write({ category: "http", op: "after-open-recovery" });
 
     const records = readLines(stateDir);
@@ -1037,15 +954,18 @@ describe("server activity log", () => {
       "before-open-failure",
       "after-open-recovery",
     ]);
-    expect(records.some((record) => record.seq === before + 1)).toBe(false);
+    // before + 1 is the close's seal line; before + 2 is the caller that could not persist.
     expect(records).toContainEqual(
-      expect.objectContaining({ op: "server-log.safe-open", seq: before + 2 }),
+      expect.objectContaining({ op: "activity-log.segment.sealed", seq: before + 1 }),
     );
-    expect(readCallerLines(stateDir)[1]?.seq).toBe(before + 3);
+    expect(records.some((record) => record.seq === before + 2)).toBe(false);
+    expect(records).toContainEqual(
+      expect.objectContaining({ op: "server-log.safe-open", seq: before + 3 }),
+    );
+    expect(readCallerLines(stateDir)[1]?.seq).toBe(before + 4);
     const notice = stderr.mock.calls
       .map((call) => String(call[0]))
       .find((value) => value.includes('"failedOp":"server-log.write-failed"'));
-    expect(notice).toBeDefined();
     expect(JSON.parse(notice ?? "{}")).toMatchObject({
       op: "server-log.write-failed",
       failedOp: "server-log.write-failed",
@@ -1057,8 +977,6 @@ describe("server activity log", () => {
     });
   });
 
-  // Envelope v2 widens the category union to include process-lifecycle lines; this proves the sink
-  // actually accepts and persists the new member rather than only the type system allowing it.
   it("accepts the process category alongside every existing one", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "process", op: "process.started" });
@@ -1092,82 +1010,46 @@ describe("server activity log", () => {
     sink.write({ category: "http", op: "before" });
     // The log directory disappearing under a running server (an operator clearing state, a
     // container volume detaching) must degrade to dropped lines, never to a thrown request.
-    rmSync(join(stateDir, "logs"), { recursive: true, force: true });
+    rmSync(logsDirectory(stateDir), { recursive: true, force: true });
     expect(() => {
       sink.write({ category: "http", op: "after" });
       sink.write({ category: "http", op: "after-again" });
     }).not.toThrow();
   });
 
-  it("refuses symlinked, hard-linked, and non-regular current logs", (ctx) => {
-    if (process.platform === "win32") ctx.skip();
-    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const logsDir = join(stateDir, "logs");
-    mkdirSync(logsDir, { mode: 0o700 });
-    const victim = join(stateDir, "victim");
-    writeFileSync(victim, "unchanged", { mode: 0o640 });
-    chmodSync(victim, 0o640);
-
-    for (const kind of ["symlink", "hard-link", "fifo"] as const) {
-      const current = join(logsDir, "server.log");
-      rmSync(current, { force: true });
-      if (kind === "symlink") symlinkSync(victim, current);
-      else if (kind === "hard-link") linkSync(victim, current);
-      else execFileSync("mkfifo", [current]);
-      const sink = createFileServerLogSink(stateDir);
-      sink.write({
-        category: "diagnostic",
-        op: `unsafe-${kind}`,
-        correlationId: "unsafe-log-test",
-      });
-      sink.close?.();
-      expect(readFileSync(victim, "utf8")).toBe("unchanged");
-      expect(statSync(victim).mode & 0o777).toBe(0o640);
-    }
-
-    expect(stderr).toHaveBeenCalled();
-    const noticeText = stderr.mock.calls
-      .map((call) => String(call[0]))
-      .find((text) => text.includes('"failedOp":"server-log.write-failed"'));
-    expect(noticeText).toBeDefined();
-    expect(JSON.parse(noticeText ?? "{}")).toMatchObject({
-      category: "diagnostic",
-      op: "server-log.write-failed",
-      failedOp: "server-log.write-failed",
-      correlationId: "unsafe-log-test",
-      errorKind: "unsafe-target",
-      completeness: "unknown",
-      loss: "event-dropped",
-    });
-    expect(noticeText).not.toContain(victim);
-  });
-
-  it("reopens the current path when a peer replaces it instead of appending to a stale inode", () => {
+  it("abandons a replaced active segment instead of appending to a stale inode", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "diagnostic", op: "before-peer-replace" });
-    const logsDir = join(stateDir, "logs");
-    const stale = join(logsDir, "server-stale.log");
-    renameSync(join(logsDir, "server.log"), stale);
-    writeFileSync(join(logsDir, "server.log"), `${JSON.stringify({ op: "peer" })}\n`, {
-      mode: 0o600,
-    });
+    const [active] = segmentFiles(stateDir, "active");
+    if (active === undefined) throw new Error("expected an active segment");
+    const stale = join(logsDirectory(stateDir), "peer-moved.jsonl");
+    renameSync(active.path, stale);
+    writeFileSync(active.path, `${JSON.stringify({ op: "peer" })}\n`, { mode: 0o600 });
 
     sink.write({ category: "diagnostic", op: "after-peer-replace" });
 
+    expect(readFileSync(stale, "utf8")).not.toContain("after-peer-replace");
+    // The file now at this process's old segment name is sealed as-is, never appended to.
     expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
       "peer",
       "after-peer-replace",
     ]);
-    expect(readFileSync(stale, "utf8")).not.toContain("after-peer-replace");
+    expect(linesWithOp(stateDir, "activity-log.segment.recovered")).toStrictEqual([
+      expect.objectContaining({
+        recoveryStatus: "sealed",
+        recoveryKind: "unsealed",
+        ownerState: "same-process",
+        tailState: "terminated",
+      }),
+    ]);
+    expect(segmentFiles(stateDir).map((file) => file.kind)).toStrictEqual(["sealed", "active"]);
   });
 
-  it("reports an event location as unknown when a peer swaps the path after its write", () => {
+  it("reports an event location as unknown when a peer swaps the segment after its write", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const logsDir = join(stateDir, "logs");
-    const current = join(logsDir, "server.log");
-    const stale = join(logsDir, "server-stale.log");
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
-    fsCalls.replaceAfterWrite = { current, op: "post-write-swap", stale };
+    sink.write({ category: "diagnostic", op: "warm-up" });
+    fsCalls.replaceAfterWrite = { logsDir: logsDirectory(stateDir), op: "post-write-swap" };
 
     sink.write({
       category: "diagnostic",
@@ -1175,8 +1057,8 @@ describe("server activity log", () => {
       correlationId: "post-write-race-3528",
     });
 
-    expect(readFileSync(stale, "utf8")).toContain(":post-write-swap");
-    expect(readFileSync(current, "utf8")).not.toContain(":post-write-swap");
+    const moved = readFileSync(join(logsDirectory(stateDir), "peer-moved.jsonl"), "utf8");
+    expect(moved).toContain(":post-write-swap");
     expect(readLines(stateDir)).toContainEqual(
       expect.objectContaining({
         op: "server-log.target-mutated",
@@ -1198,353 +1080,11 @@ describe("server activity log", () => {
     });
   });
 
-  it("tightens an existing current log to owner-only permissions before appending", (ctx) => {
-    if (process.platform === "win32") ctx.skip();
-    const logsDir = join(stateDir, "logs");
-    mkdirSync(logsDir, { mode: 0o700 });
-    const current = join(logsDir, "server.log");
-    writeFileSync(current, "", { mode: 0o644 });
-    chmodSync(current, 0o644);
-
-    createFileServerLogSink(stateDir).write({ category: "diagnostic", op: "permission-hardened" });
-
-    expect(statSync(current).mode & 0o777).toBe(0o600);
-  });
-
-  it("rotates exactly one archive at the day boundary and prunes only closed-grammar archives", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-15T00:00:00Z"));
-    const logsDir = join(stateDir, "logs");
-    const sink = createFileServerLogSink(stateDir);
-    sink.write({ category: "http", op: "day1" });
-    for (const day of [
-      "2026-08-01",
-      "2026-08-02",
-      "2026-08-03",
-      "2026-08-04",
-      "2026-08-05",
-      "2026-08-06",
-      "2026-08-07",
-      "2026-08-08",
-    ]) {
-      writeFileSync(join(logsDir, `server-${day}.log`), "seed\n", { mode: 0o600 });
-    }
-    writeFileSync(join(logsDir, "server-2026-08-00.log"), "non-grammar\n");
-    writeFileSync(join(logsDir, "server-2026-08-01.log.bak"), "non-grammar\n");
-    vi.setSystemTime(new Date("2026-08-16T00:00:00Z"));
-    sink.write({
-      category: "http",
-      op: "day2",
-      correlationId: "rotation-deferred-3528",
-    });
-
-    const rolled = readdirSync(logsDir)
-      .filter((name) => name.startsWith("server-"))
-      .sort();
-    expect(rolled).toStrictEqual([
-      "server-2026-08-00.log",
-      "server-2026-08-01.log.bak",
-      "server-2026-08-03.log",
-      "server-2026-08-04.log",
-      "server-2026-08-05.log",
-      "server-2026-08-06.log",
-      "server-2026-08-07.log",
-      "server-2026-08-08.log",
-      "server-2026-08-15.log",
-    ]);
-    expect(readFileSync(join(logsDir, "server-2026-08-00.log"), "utf8")).toBe("non-grammar\n");
-    expect(readFileSync(join(logsDir, "server-2026-08-01.log.bak"), "utf8")).toBe("non-grammar\n");
-    expect(readFileSync(join(logsDir, "server-2026-08-15.log"), "utf8")).toContain(":day1");
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["day2"]);
-    expect(readLines(stateDir)).toContainEqual(
-      expect.objectContaining({
-        op: "server-log.rotation",
-        correlationId: "rotation-deferred-3528",
-        persistenceStatus: "rotated",
-        rotationReason: "hard-link-winner",
-        archivedCount: 1,
-        retentionStatus: "pruned",
-        prunedCount: 2,
-        retainedCount: 7,
-        completeness: "complete",
-        loss: "none",
-      }),
-    );
-    sink.close?.();
-  });
-
-  it("honors a configured bounded retention window instead of the default", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const logsDir = join(stateDir, "logs");
-    const sink = createFileServerLogSink(stateDir, { retentionDays: 2 });
-    sink.write({ category: "http", op: "bounded-day-20" });
-    for (const day of [21, 22, 23, 24]) {
-      vi.setSystemTime(new Date(`2026-08-${String(day)}T00:00:30Z`));
-      sink.write({ category: "http", op: `bounded-day-${String(day)}` });
-    }
-
-    expect(
-      readdirSync(logsDir).filter((name) => /^server-\d{4}-\d{2}-\d{2}\.log$/u.test(name)),
-    ).toStrictEqual(["server-2026-08-22.log", "server-2026-08-23.log"]);
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["bounded-day-24"]);
-  });
-
-  it("keeps both process histories across one shared UTC day boundary", async () => {
-    const barrier = join(stateDir, "rotate-now");
-    const workers = [
-      startRotationWorker(stateDir, barrier, 1),
-      startRotationWorker(stateDir, barrier, 2),
-    ];
-    await Promise.all(workers.map(waitForWorkerReady));
-    writeFileSync(barrier, "rotate", { mode: 0o600 });
-    await Promise.all(workers.map(waitForWorkerExit));
-
-    const logsDir = join(stateDir, "logs");
-    expect(readdirSync(logsDir).filter((name) => name.startsWith("server-"))).toStrictEqual([
-      "server-2026-09-17.log",
-    ]);
-    const archived = readFileSync(join(logsDir, "server-2026-09-17.log"), "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    const current = readLines(stateDir);
-    expect(
-      archived
-        .filter((line) => line.op === "server-log.capacity-warning")
-        .map((line) => line.observedSizeBytes)
-        .sort(),
-    ).toStrictEqual([101, 102]);
-    expect(
-      current
-        .filter((line) => line.op === "server-log.capacity-warning")
-        .map((line) => line.observedSizeBytes)
-        .sort(),
-    ).toStrictEqual([201, 202]);
-    expect(current.filter((line) => line.op === "server-log.rotation")).toHaveLength(2);
-  });
-
-  it("warns once at the size threshold without rotating, truncating, or deleting", () => {
-    const sink = createFileServerLogSink(stateDir, {
-      level: "debug",
-      capacityWarningBytes: 1,
-    });
-
-    sink.write({
-      category: "diagnostic",
-      op: "capacity-trigger",
-      correlationId: "capacity-request-3529",
-    });
-    sink.write({
-      category: "diagnostic",
-      op: "capacity-after-warning",
-      correlationId: "capacity-request-after-3529",
-    });
-
-    const warnings = readLines(stateDir).filter(
-      (line) => line.op === "server-log.capacity-warning",
-    );
-    expect(warnings).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        category: "diagnostic",
-        op: "server-log.capacity-warning",
-        correlationId: "capacity-request-3529",
-        errorKind: "publish-unsupported",
-        artifactClass: "activity-log",
-        capacityStatus: "warning-threshold-reached",
-        warningThresholdBytes: 1,
-        operatorAction: "stop-export-replace",
-        mutationStatus: "not-attempted",
-        writerCapability: "degraded",
-        completeness: "complete",
-        loss: "none",
-      }),
-    ]);
-    const observedSizeBytes = warnings[0]?.observedSizeBytes;
-    expect(typeof observedSizeBytes).toBe("number");
-    if (typeof observedSizeBytes !== "number") {
-      throw new TypeError("Expected the capacity warning to report a numeric observed size");
-    }
-    expect(observedSizeBytes).toBeGreaterThanOrEqual(1);
-    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual(["server.log"]);
-    expect(readFileSync(join(stateDir, "logs", "server.log"), "utf8")).toContain(
-      "capacity-after-warning",
-    );
-    sink.close?.();
-  });
-
-  it("does not repeat deferred-rotation evidence when the caller write fails", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
-    sink.write({ category: "indexing", op: "before-boundary-caller-failure" });
-
-    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    fsCalls.failWriteOpOnce = "boundary-caller-fails";
-    sink.write({ category: "indexing", op: "boundary-caller-fails" });
-    sink.write({ category: "indexing", op: "boundary-caller-retry" });
-
-    const records = readRawRecords(stateDir).filter(
-      (record): record is Record<string, unknown> => record !== null,
-    );
-    expect(
-      records.filter((line) => !FILESYSTEM_EVIDENCE_OPS.has(line.op)).map((line) => line.op),
-    ).toStrictEqual(["boundary-caller-retry"]);
-    expect(records.filter((line) => line.op === "server-log.rotation")).toHaveLength(1);
-    expect(readFileSync(join(stateDir, "logs", "server-2026-08-20.log"), "utf8")).toContain(
-      ":before-boundary-caller-failure",
-    );
-  });
-
-  it("keeps Windows logging active with explicit platform and completed-rotation evidence", () => {
-    stateDir = realpathSync(stateDir);
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
-    sink.write({ category: "indexing", op: "windows-day-20" });
-
-    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    sink.write({
-      category: "indexing",
-      op: "windows-day-21",
-      correlationId: "windows-rotation-3528",
-    });
-
-    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual([
-      "server-2026-08-20.log",
-      "server.log",
-    ]);
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["windows-day-21"]);
-    expect(readFileSync(join(stateDir, "logs", "server-2026-08-20.log"), "utf8")).toContain(
-      ":windows-day-20",
-    );
-    expect(readLines(stateDir)).toContainEqual(
-      expect.objectContaining({
-        op: "server-log.rotation",
-        correlationId: "windows-rotation-3528",
-        persistenceStatus: "rotated",
-        rotationReason: "hard-link-winner",
-        retentionStatus: "unchanged",
-        completeness: "complete",
-        loss: "none",
-      }),
-    );
-    expect(readLines(stateDir)[0]).toMatchObject({
-      op: "server-log.safe-open",
-      persistenceStatus: "opened",
-      permissionAssurance: "platform-inherited",
-      containmentAssurance: "platform-inherited",
-    });
-  });
-
-  // Regression for the retired path-based rotation: a peer may still move the current inode into a
-  // legacy archive and install a new current file. The sink must reopen the pathname and must never
-  // mutate the moved inode through its stale descriptor.
-  it("reopens after peer replacement without mutating the legacy archive", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const logsDir = join(stateDir, "logs");
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
-    sink.write({ category: "indexing", op: "our-day-20" });
-
-    // A peer process or operator moves the current inode and installs a fresh file. Our sink still
-    // holds the descriptor for the moved inode until its pre-write identity check rejects it.
-    renameSync(join(logsDir, "server.log"), join(logsDir, "server-2026-08-20.log"));
-    writeFileSync(join(logsDir, "server.log"), `${JSON.stringify({ op: "peer-day-21" })}\n`, {
-      mode: 0o600,
-    });
-
-    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    sink.write({
-      category: "indexing",
-      op: "our-day-21",
-      correlationId: "request-reopen-3528",
-    });
-
-    // The legacy archive is untouched and contains only the bytes it held when it was moved.
-    const archived = readFileSync(join(logsDir, "server-2026-08-20.log"), "utf8");
-    expect(archived).toContain("our-day-20");
-    expect(archived).not.toContain("peer-day-21");
-    // And both processes' lines for the new day are in the new day's file.
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
-      "peer-day-21",
-      "our-day-21",
-    ]);
-    expect(readLines(stateDir)).toContainEqual(
-      expect.objectContaining({
-        op: "server-log.safe-open",
-        correlationId: "request-reopen-3528",
-      }),
-    );
-    sink.close?.();
-  });
-
-  it("does not mutate an outside victim or advertised stage after a parent redirect", (ctx) => {
-    if (process.platform === "win32") ctx.skip();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
-    sink.write({ category: "indexing", op: "before-parent-redirect" });
-    const logsDir = join(stateDir, "logs");
-    const parkedLogs = join(stateDir, "logs-parked");
-    const outside = mkdtempSync(join(tmpdir(), "keiko-server-log-outside-"));
-    const outsideVictim = join(outside, "server.log");
-    const outsideArchive = join(outside, "server-2026-08-19.log");
-    const outsideStage = join(outside, `.keiko-server-rotation-${"a".repeat(32)}.stage`);
-    writeFileSync(outsideVictim, "outside-victim", { mode: 0o640 });
-    writeFileSync(outsideArchive, "outside-archive", { mode: 0o600 });
-    writeFileSync(outsideStage, "outside-stage", { mode: 0o640 });
-    chmodSync(outsideVictim, 0o640);
-    renameSync(logsDir, parkedLogs);
-    symlinkSync(outside, logsDir);
-
-    try {
-      vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-      sink.write({ category: "indexing", op: "during-parent-redirect" });
-
-      expect(readFileSync(outsideVictim, "utf8")).toBe("outside-victim");
-      expect(readFileSync(outsideArchive, "utf8")).toBe("outside-archive");
-      expect(readFileSync(outsideStage, "utf8")).toBe("outside-stage");
-      expect(statSync(outsideVictim).mode & 0o777).toBe(0o640);
-      expect(statSync(outsideStage).mode & 0o777).toBe(0o640);
-    } finally {
-      rmSync(logsDir);
-      renameSync(parkedLogs, logsDir);
-      rmSync(outside, { recursive: true, force: true });
-    }
-
-    sink.write({
-      category: "indexing",
-      op: "after-parent-restore",
-      correlationId: "directory-restore-evidence",
-    });
-    expect(readCallerLines(stateDir).map((line) => line.op)).toContain("after-parent-restore");
-    expect(readLines(stateDir)).toContainEqual(
-      expect.objectContaining({
-        op: "server-log.rotation",
-        correlationId: "directory-restore-evidence",
-        errorKind: "durability-failed",
-        persistenceStatus: "failed",
-        rotationReason: "mutation-failed",
-        archivedCount: 0,
-        retentionStatus: "unchanged",
-        prunedCount: 0,
-        retainedCount: 1,
-        completeness: "partial",
-        loss: "none",
-      }),
-    );
-    expect(readdirSync(logsDir)).toStrictEqual(["server.log"]);
-  });
-
   it("bounds a stalled write to the line that stalled instead of corrupting the next one", () => {
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
     sink.write({ category: "http", op: "first" });
     // The descriptor takes 10 bytes of the next line and then reports 0 — a short write that never
-    // completes. The bytes it accepted cannot be recalled. Restored in `finally` so a failed
-    // assertion above cannot leave the shared fixture's budget mutated for a later test.
+    // completes. The bytes it accepted cannot be recalled.
     fsCalls.writeBudgetBytes = 10;
     try {
       expect(() => {
@@ -1560,16 +1100,13 @@ describe("server activity log", () => {
     expect(records[0]).toMatchObject({ op: "first" });
     // The truncated bytes are their own line: one lost record, and only one.
     expect(records[1]).toBeNull();
-    // The record written AFTER the stall is intact. Returning from the short write instead of
-    // dropping the line glued this one onto the partial bytes and cost two records, not one.
+    // The record written AFTER the stall is intact.
     expect(records[2]).toMatchObject({ op: "second" });
   });
 
   it("announces a write failure on stderr instead of dropping the line in silence", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
-    // Restored in `finally` so a failed assertion below cannot leave the shared fixture's budget
-    // mutated for a later test.
     fsCalls.writeBudgetBytes = 0;
     try {
       sink.write({
@@ -1599,11 +1136,8 @@ describe("server activity log", () => {
     expect(String(stderr.mock.calls[0]?.[0])).not.toContain("accepted no bytes");
   });
 
-  // Regression: when stderr itself cannot be written (a closed descriptor, a broken pipe, ...),
-  // the notice must not vanish into an empty catch. It surfaces on the independent
-  // `process.emitWarning` channel instead — Node dispatches the 'warning' event synchronously to
-  // any listener even when stderr is gone. Fails before the fix: the write failure was swallowed
-  // and no warning was ever emitted.
+  // Regression: when stderr itself cannot be written, the notice surfaces on the independent
+  // `process.emitWarning` channel instead of vanishing into an empty catch.
   it("warns via process.emitWarning when the stderr notice itself cannot be written", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
       throw new Error("EPIPE: broken pipe");
@@ -1628,9 +1162,7 @@ describe("server activity log", () => {
   });
 
   // Regression for ADR-0173 D2's accounting promise: a suppressed count otherwise surfaces only on
-  // the NEXT unthrottled failure. Without a shutdown flush, a count with no further failure to
-  // report it is silently lost the instant the notice state is cleared — exactly what a clean
-  // process shutdown does.
+  // the NEXT unthrottled failure; a shutdown must flush it rather than clear it.
   it("flushes an unreported suppressed count to stderr instead of losing it on shutdown", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T00:00:00Z"));
@@ -1647,7 +1179,6 @@ describe("server activity log", () => {
       loss: "event-dropped",
     });
 
-    // Inside the one-minute throttle window: counted, not emitted.
     vi.setSystemTime(new Date("2026-08-21T00:00:10Z"));
     reportServerLogFailure(new Error("second"), { op: "indexing.persist" });
     expect(stderr).toHaveBeenCalledTimes(1);
@@ -1693,64 +1224,44 @@ describe("server activity log", () => {
     expect(raw).not.toContain("hostile.operation.value");
   });
 
-  it("closes the descriptor it holds and reopens on the next write", () => {
+  it("seals the segment on close and opens the next segment on the next write", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "one" });
     sink.close?.();
     sink.write({ category: "http", op: "two" });
-    expect(readCallerLines(stateDir)).toHaveLength(2);
+
+    const files = segmentFiles(stateDir);
+    expect(files.map((file) => file.kind)).toStrictEqual(["sealed", "active"]);
+    expect(files.map((file) => parseActivityLogFileName(file.name))).toMatchObject([
+      { index: 1 },
+      { index: 2 },
+    ]);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["one", "two"]);
+    const sealed = files[0];
+    if (sealed === undefined) throw new Error("expected a sealed segment");
+    expect(modeOf(sealed.path) & 0o222).toBe(0);
+    expect(fileRecords(sealed.path).at(-1)).toMatchObject({
+      op: "activity-log.segment.sealed",
+      sealReason: "close",
+      segmentIndex: 1,
+    });
   });
 
-  it("shares one boundary state and emits one rotation record across every sink", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
+  it("shares one active segment and emits one seal across every sink on the directory", () => {
     // Two independent consumers, exactly as the CLI and the process logger ask for them.
     const cliSink = createFileServerLogSink(stateDir, { level: "debug" });
     const processSink = createFileServerLogSink(stateDir, { level: "debug" });
-    cliSink.write({ category: "indexing", op: "before-midnight" });
-
-    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    cliSink.write({ category: "indexing", op: "after-midnight-cli" });
-    processSink.write({ category: "indexing", op: "after-midnight-process" });
+    cliSink.write({ category: "indexing", op: "from-cli" });
+    processSink.write({ category: "indexing", op: "from-process" });
     cliSink.close?.();
 
+    const files = segmentFiles(stateDir);
+    expect(files.map((file) => file.kind)).toStrictEqual(["sealed"]);
     expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
-      "after-midnight-cli",
-      "after-midnight-process",
+      "from-cli",
+      "from-process",
     ]);
-    expect(readLines(stateDir).filter((line) => line.op === "server-log.rotation")).toHaveLength(1);
-    expect(readFileSync(join(stateDir, "logs", "server-2026-08-20.log"), "utf8")).toContain(
-      ":before-midnight",
-    );
-    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual([
-      "server-2026-08-20.log",
-      "server.log",
-    ]);
-  });
-
-  it("coalesces multi-day open failures into one warning on the recovery day", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
-    sink.write({ category: "indexing", op: "before-multi-day-failure" });
-    sink.close?.();
-
-    fsCalls.failOpenPath = join(stateDir, "logs", "server.log");
-    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
-    sink.write({ category: "indexing", op: "lost-day-21" });
-    vi.setSystemTime(new Date("2026-08-22T00:00:30Z"));
-    sink.write({ category: "indexing", op: "lost-day-22" });
-    fsCalls.failOpenPath = null;
-
-    sink.write({ category: "indexing", op: "recovered-day-22" });
-    sink.write({ category: "indexing", op: "same-recovery-day" });
-
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
-      "before-multi-day-failure",
-      "recovered-day-22",
-      "same-recovery-day",
-    ]);
-    expect(readLines(stateDir).filter((line) => line.op === "server-log.rotation")).toHaveLength(1);
+    expect(linesWithOp(stateDir, "activity-log.segment.sealed")).toHaveLength(1);
   });
 
   it("measures the line cap in bytes, because the write encodes UTF-8", () => {
@@ -1803,10 +1314,10 @@ describe("server activity log level threshold", () => {
     expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["skipped", "breaker"]);
   });
 
-  it("writes nothing at all — not even the file — under a silent threshold", () => {
+  it("writes nothing at all — not even a segment — under a silent threshold", () => {
     const sink = createFileServerLogSink(stateDir, { level: "silent" });
     sink.write({ level: "error", category: "indexing", op: "breaker" });
-    expect(existsSync(join(stateDir, "logs", "server.log"))).toBe(false);
+    expect(listActivityLogFiles(stateDir)).toHaveLength(0);
   });
 
   it("defaults to info and reads KEIKO_LOG_LEVEL from the environment", () => {
@@ -1957,9 +1468,6 @@ describe("server activity log line format", () => {
       extra[`field${String(index)}_${"n".repeat(48)}`] = "ab.".repeat(53);
     }
     const line = formatServerLogLine({ category: "indexing", op: "wide", extra });
-    // Bytes, not UTF-16 code units. The replacement line is ASCII today so both counts agree, and
-    // that is exactly why measuring the wrong one here would go unnoticed until a producer put
-    // multi-byte text on the line the cap exists to bound.
     expect(serverLogLineBytes(line)).toBeLessThanOrEqual(MAX_LOG_LINE_BYTES);
     expect(JSON.parse(line)).toMatchObject({
       category: "diagnostic",
@@ -1977,10 +1485,8 @@ describe("server activity log line format", () => {
     expect(line.trimEnd()).not.toContain("\n");
   });
 
-  // ADR-0173 D5 / g12: `parentCorrelationId` reuses `isValidCorrelationId`'s `SAFE_CORRELATION_ID`
-  // shape guard rather than the generic string redaction `correlationId` gets, because it is
-  // producer-suppliable like `correlationId` (not spoof-resistant) but is expected to always be a
-  // correlation-id-shaped value — a malformed one is dropped outright, never written under a marker.
+  // ADR-0173 D5 / g12: `parentCorrelationId` reuses `isValidCorrelationId`'s shape guard; a
+  // malformed one is dropped outright, never written under a marker.
   it("writes a validly shaped parentCorrelationId straight through, like correlationId", () => {
     const record = JSON.parse(
       formatServerLogLine({
@@ -2007,8 +1513,7 @@ describe("server activity log line format", () => {
 });
 
 // Requirement 9. Nothing closed the descriptor the process-wide logger opened: `resetServerLogger`
-// dropped the reference and the handle stayed open for the life of the process — and, in a test
-// run, once more for every suite that touched the logger.
+// dropped the reference and the handle stayed open for the life of the process.
 describe("server activity log descriptor lifecycle", () => {
   let stateDir: string;
 
@@ -2018,7 +1523,6 @@ describe("server activity log descriptor lifecycle", () => {
     // The process logger resolves its threshold from the environment, so without this the suite
     // asserts on lines a runner that exports KEIKO_LOG_LEVEL=warn would legitimately suppress.
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
-    // Start from a clean process-wide slot, then count only what this test does.
     resetServerLogger();
     fsCalls.open = 0;
     fsCalls.close = 0;
@@ -2030,37 +1534,29 @@ describe("server activity log descriptor lifecycle", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("closes the descriptor the process logger opened, and stays usable after", () => {
+  it("seals the segment the process logger opened on reset, and stays usable after", () => {
     getServerLogger().info(registeredTestEvent({ category: "diagnostic", op: "lifecycle.probe" }));
-    const guardedOpenCount = fsCalls.open;
-    expect(guardedOpenCount).toBeGreaterThan(1);
-    expect(fsCalls.close).toBe(guardedOpenCount - 1);
+    expect(segmentFiles(stateDir, "active")).toHaveLength(1);
+    const closesBefore = fsCalls.close;
 
     resetServerLogger();
-    expect(fsCalls.close).toBe(guardedOpenCount);
+    // The segment descriptor is released and the segment sealed: nothing is left open.
+    expect(fsCalls.close).toBeGreaterThan(closesBefore);
+    expect(segmentFiles(stateDir, "active")).toHaveLength(0);
 
     // Closing releases an OS resource; it does not disable the log.
     getServerLogger().info(registeredTestEvent({ category: "diagnostic", op: "lifecycle.after" }));
-    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
-      "lifecycle.probe",
-      "lifecycle.after",
-    ]);
+    expect(
+      readCallerLines(stateDir)
+        .map((line) => line.op)
+        .filter((op) => String(op).startsWith("lifecycle.")),
+    ).toStrictEqual(["lifecycle.probe", "lifecycle.after"]);
   });
 });
 
-// Requirement 4. The sink is deliberately synchronous — see the module header for why a
-// write-behind queue is the wrong shape for diagnosing a wedged process — so the cost has to be
-// pinned rather than argued.
-//
-// It is pinned by COUNTING, not by timing. The property the module claims is structural: one
-// descriptor for the life of the file, one `write(2)` per line, and not one byte of work for a
-// line below the threshold. A wall-clock budget over 10,000 real filesystem writes measures the
-// runner's disk and scheduler instead — it is exactly the "no wall-clock races in the suite" rule
-// AGENTS.md states, and on a loaded CI lane it turns the required `ci` context red on a diff that
-// never touched this file. Counters answer the same question deterministically, and answer it
-// more precisely: a return to open/write/close per line moves `open` from the fixed boundary-safe
-// setup cost to N, and a quadratic format path shows up as a byte total that is not N x the line
-// size.
+// Requirement 4. The sink is deliberately synchronous, so the cost has to be pinned rather than
+// argued — by COUNTING, not by timing: one descriptor for the life of a segment, one `write(2)` per
+// line, and not one byte of work for a line below the threshold.
 describe("server activity log burst cost", () => {
   let stateDir: string;
 
@@ -2093,35 +1589,24 @@ describe("server activity log burst cost", () => {
       sink.write(event);
     }
 
-    // One retained file descriptor plus one-time ancestry guards. The exact guard count depends on
-    // the absolute state-directory depth; an `appendFileSync`-style path would keep growing it.
+    // One retained segment descriptor plus one-time ancestry guards when the segment opened; an
+    // `appendFileSync`-style path would keep growing both counts.
     expect(guardedOpenCount).toBeGreaterThan(1);
     expect(fsCalls.open).toBe(guardedOpenCount);
     expect(fsCalls.close).toBe(closedGuardCount);
-    // One `write(2)` per line: one separate safe-open record, then one per caller event.
-    // `writeAll` loops only on a short write, which a regular file does not produce.
-    expect(fsCalls.write).toBe(BURST_EVENT_COUNT + 1);
+    // One `write(2)` per line: one exclusive-create for this process's first-ever store-policy
+    // record (#3554, resolved lazily on this first passing-threshold write), one separate
+    // safe-open record, then one per caller event.
+    expect(fsCalls.write).toBe(BURST_EVENT_COUNT + 2);
 
-    sink.close?.();
-    expect(fsCalls.close).toBe(closedGuardCount + 1);
-
-    // Linear output, not quadratic — but lines are no longer byte-identical now that the envelope
-    // carries `seq`: its digit width grows at each power-of-ten boundary the burst crosses
-    // (9 -> 10, 99 -> 100, 999 -> 1000), so the total is the SUM of each line's own width rather
-    // than one width times the count. Summing through the production formatter itself — not
-    // re-deriving its byte math here — is what keeps this pin honest: a future change to what the
-    // identity envelope carries shows up here automatically, the same way the single-width version
-    // did before `seq` existed.
-    //
-    // `seq` is process-wide (ADR-0173 D2), not scoped to this burst's own sink, so the first line
-    // this burst wrote is NOT necessarily `1` — an earlier test in this file may already have
-    // advanced the shared allocator. The starting point is read back off the actual first
-    // persisted line instead of assumed, and the rest of the burst's numbers are derived from it:
-    // the allocator is claimed once per write with nothing else writing to this sink concurrently,
-    // so they are exactly consecutive.
+    // Linear output, not quadratic, measured on the still-active segment: the SUM of each line's own
+    // width, derived through the production formatter itself so a change to the identity envelope
+    // shows up here automatically. `seq` is process-wide, so the burst's starting number is read
+    // back off the first persisted caller line rather than assumed.
+    const [active] = segmentFiles(stateDir, "active");
+    if (active === undefined) throw new Error("expected one active segment");
     const lines = readLines(stateDir);
-    const callerLines = readCallerLines(stateDir);
-    const firstSeq = callerLines[0]?.seq as number;
+    const firstSeq = readCallerLines(stateDir)[0]?.seq as number;
     let expectedBytes = serverLogLineBytes(`${JSON.stringify(lines[0])}\n`);
     for (let index = 0; index < BURST_EVENT_COUNT; index += 1) {
       expectedBytes += serverLogLineBytes(
@@ -2132,7 +1617,7 @@ describe("server activity log burst cost", () => {
         ),
       );
     }
-    expect(statSync(join(stateDir, "logs", "server.log")).size).toBe(expectedBytes);
+    expect(statSync(active.path).size).toBe(expectedBytes);
     expect(lines).toHaveLength(BURST_EVENT_COUNT + 1);
   });
 
@@ -2152,21 +1637,16 @@ describe("server activity log burst cost", () => {
       sink.write(event);
     }
 
-    // The gate short-circuits before the event source is touched and before any syscall: the
-    // getter that would have thrown was never reached, and not a byte was produced.
+    // The gate short-circuits before the event source is touched and before any syscall.
     expect(fieldReads).toBe(0);
     expect(fsCalls.open).toBe(0);
     expect(fsCalls.write).toBe(0);
-    expect(existsSync(join(stateDir, "logs", "server.log"))).toBe(false);
+    expect(listActivityLogFiles(stateDir)).toHaveLength(0);
   });
 });
 
 // ADR-0173 D11: `errorKindOf` delegates to `error-classification.ts`'s hardened reflection helpers
-// (`safeProperty`/`machineToken`/`contentFreeErrorClass`) instead of a plain-cast regex reader with
-// no try/catch of its own. `server-logger.test.ts` already pins the full code-first/name-fallback/
-// unknown-floor contract this rewrite must reproduce exactly; this suite covers the ONE thing that
-// contract could not exercise before the rewrite — a `code` accessor that THROWS on read, which the
-// old plain-cast reader had no way to survive.
+// instead of a plain-cast reader with no try/catch of its own.
 describe("errorKindOf (ADR-0173 D11 hardened reflection)", () => {
   it("degrades to the class instead of crashing when the `code` accessor throws", () => {
     const hostile = new Error("placeholder");
@@ -2190,11 +1670,6 @@ describe("errorKindOf (ADR-0173 D11 hardened reflection)", () => {
     expect(errorKindOf(hostile)).toBe("Error");
   });
 
-  // The rewrite's `instanceof Error` gate (added only to keep the `errorKindOf({})` floor below)
-  // over-corrected: it also discarded a `code`/`name` carried by a THROWN VALUE THAT IS NOT AN
-  // `Error` INSTANCE AT ALL — a plain object, which the pre-rewrite reader (any object, not only
-  // `Error`) classified correctly. `code` still wins over `name` for a non-`Error` object, exactly
-  // as it does for an `Error`.
   it("still reads `code`/`name` off a thrown value that is not an `Error` instance", () => {
     expect(errorKindOf({ code: "SQLITE_BUSY" })).toBe("SQLITE_BUSY");
     expect(errorKindOf({ code: "not an identifier", name: "TransportFailure" })).toBe(
@@ -2205,5 +1680,1684 @@ describe("errorKindOf (ADR-0173 D11 hardened reflection)", () => {
   it("still floors a code-less, name-less non-`Error` object to `unknown`", () => {
     expect(errorKindOf({})).toBe("unknown");
     expect(errorKindOf({ irrelevant: true })).toBe("unknown");
+  });
+});
+
+// #3530: the logical log is a sequence of bounded, immutable segments. These suites pin the seal
+// triggers, crash recovery, the cross-process ownership rule, retention by bytes and age, the pin
+// primitive and its quota, pressure evidence, and the read-only storage health report.
+const SMALL_SEGMENT = 32 * 1024;
+const SMALL_BUDGET = 128 * 1024;
+
+// #3554: a forever writer must never outlive the test that started it, whether that test fails
+// before its kill or the whole runner dies.
+describe("activity log writer workers never outlive their test", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-server-log-worker-"));
+  });
+
+  afterEach(async () => {
+    // First: a writer still running would recreate files while the directory is removed.
+    await killLiveWriterWorkers();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("stops a forever writer by itself at the end of its lifetime", async () => {
+    const worker = startWriterWorker(stateDir, 5, {
+      count: 0,
+      mode: "forever",
+      env: storageEnv({}),
+      lifetimeMs: 200,
+    });
+    expect(await worker.exit).toBe(WRITER_WORKER_STOPPED_ITSELF);
+  }, 30_000);
+
+  it("stops a forever writer as soon as the process that spawned it is gone", async (ctx) => {
+    // Windows keeps a dead parent's pid, so there only the lifetime bounds a writer.
+    if (process.platform === "win32") ctx.skip();
+    const pid = await startOrphanedForeverWriter(stateDir);
+    const stopped = await waitFor(() => (processIsRunning(pid) ? undefined : true), 10_000).catch(
+      () => false,
+    );
+    // Whatever the outcome, this test itself must not leave the writer running.
+    if (processIsRunning(pid)) process.kill(pid, "SIGKILL");
+    expect(stopped).toBe(true);
+  }, 30_000);
+});
+
+describe("activity log segment lifecycle", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-segments-"));
+    vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
+    resetFsKnobs();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
+  });
+
+  afterEach(async () => {
+    // First: a writer still running would recreate files while the directory is removed.
+    await killLiveWriterWorkers();
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("rolls over by size: every sealed segment stays within the byte bound and ends with its seal line", () => {
+    const env = storageEnv({ KEIKO_LOG_SEGMENT_BYTES: String(SMALL_SEGMENT) });
+    const sink = createFileServerLogSink(stateDir, { env });
+    for (let index = 0; index < 180; index += 1) {
+      sink.write({ category: "indexing", op: `size.rollover.${String(index)}` });
+    }
+
+    const sealed = segmentFiles(stateDir, "sealed");
+    expect(sealed.length).toBeGreaterThanOrEqual(2);
+    for (const file of sealed) {
+      expect(file.sizeBytes).toBeLessThanOrEqual(SMALL_SEGMENT);
+      expect(modeOf(file.path) & 0o222).toBe(0);
+      const records = fileRecords(file.path);
+      const seal = records.at(-1);
+      expect(records[0]).toMatchObject({ op: "server-log.safe-open" });
+      expect(seal).toMatchObject({
+        op: "activity-log.segment.sealed",
+        sealReason: "size-limit",
+        segmentFirstSeq: records[0]?.seq,
+        segmentLastSeq: seal?.seq,
+        segmentLineCount: records.length - 1,
+        segmentBytes: file.sizeBytes - serverLogLineBytes(`${JSON.stringify(seal)}\n`),
+        segmentByteLimit: SMALL_SEGMENT,
+        droppedEventCount: 0,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(new Set(records.map((record) => record.instanceId))).toStrictEqual(
+        new Set([serverLogInstanceId()]),
+      );
+    }
+    // One strictly increasing sequence across every segment, and every caller line exactly once.
+    const seqs = readLines(stateDir).map((line) => line.seq as number);
+    expect(seqs.every((seq, index) => index === 0 || seq > (seqs[index - 1] ?? 0))).toBe(true);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(
+      Array.from({ length: 180 }, (_, index) => `size.rollover.${String(index)}`),
+    );
+  });
+
+  it("rolls over by age on the next write, and a clock step backwards seals too", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-18T10:00:00Z"));
+    const env = storageEnv({ KEIKO_LOG_SEGMENT_SECONDS: "60" });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "indexing", op: "age.first" });
+    vi.setSystemTime(new Date("2026-09-18T10:01:01Z"));
+    sink.write({ category: "indexing", op: "age.second" });
+    vi.setSystemTime(new Date("2026-09-18T09:00:00Z"));
+    sink.write({ category: "indexing", op: "clock.third" });
+
+    const seals = linesWithOp(stateDir, "activity-log.segment.sealed");
+    expect(seals.map((seal) => seal.sealReason)).toStrictEqual(["age-limit", "clock-change"]);
+    expect(seals[0]).toMatchObject({ segmentSecondsLimit: 60, segmentIndex: 1 });
+    // The third segment's name never sorts before its predecessors although the clock stepped back.
+    const names = segmentFiles(stateDir).map((file) => parseActivityLogFileName(file.name));
+    expect(
+      names.map((name) => (name !== undefined && "index" in name ? name.index : 0)),
+    ).toStrictEqual([1, 2, 3]);
+  });
+
+  it("seals an idle segment from its own timer so no active segment outlives its window", () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(new Date("2026-09-18T10:00:00Z"));
+    const env = storageEnv({ KEIKO_LOG_SEGMENT_SECONDS: "4" });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "indexing", op: "idle.only" });
+    expect(segmentFiles(stateDir, "active")).toHaveLength(1);
+
+    vi.advanceTimersByTime(5_000);
+
+    expect(segmentFiles(stateDir, "active")).toHaveLength(0);
+    expect(linesWithOp(stateDir, "activity-log.segment.sealed")).toStrictEqual([
+      expect.objectContaining({ sealReason: "age-limit", correlationId: "unknown-correlation-id" }),
+    ]);
+  });
+
+  it("keeps every process's lines in its own segments across concurrent writers", async () => {
+    const env = storageEnv({
+      KEIKO_LOG_SEGMENT_BYTES: String(SMALL_SEGMENT),
+      KEIKO_LOG_RETENTION_BYTES: String(64 * 1024 * 1024),
+    });
+    const workers = [1, 2, 3].map((id) =>
+      startWriterWorker(stateDir, id, { count: 120, mode: "count", env }),
+    );
+    const codes = await Promise.all(workers.map((worker) => worker.exit));
+    expect(codes).toStrictEqual([0, 0, 0]);
+
+    const files = segmentFiles(stateDir);
+    expect(files.every((file) => file.kind === "sealed")).toBe(true);
+    const seen = new Map<string, number[]>();
+    for (const file of files) {
+      const name = parseActivityLogFileName(file.name);
+      const records = fileRecords(file.path);
+      // No process ever appended to another process's segment.
+      expect(
+        new Set(records.map((record) => `${String(record.pid)}:${String(record.instanceId)}`)),
+      ).toStrictEqual(
+        new Set([
+          name !== undefined && "pid" in name ? `${String(name.pid)}:${name.instanceId}` : "",
+        ]),
+      );
+      for (const record of records) {
+        const marker = /^worker\.(\d+)\.(\d+)\./u.exec(String(record.failedOp));
+        if (marker === null) continue;
+        const list = seen.get(marker[1] ?? "") ?? [];
+        list.push(Number(marker[2]));
+        seen.set(marker[1] ?? "", list);
+      }
+    }
+    for (const id of ["1", "2", "3"]) {
+      expect(seen.get(id)).toStrictEqual(Array.from({ length: 120 }, (_, index) => index));
+    }
+  }, 60_000);
+
+  it("recovers a SIGKILLed writer's segment byte-for-byte and reports how it ended", async () => {
+    const env = storageEnv({ KEIKO_LOG_SEGMENT_BYTES: String(1024 * 1024) });
+    const worker = startWriterWorker(stateDir, 9, { count: 0, mode: "forever", env });
+    const workerPid = worker.child.pid ?? 0;
+    await waitFor(() =>
+      segmentFiles(stateDir, "active").find(
+        (file) => file.name.includes(`-${String(workerPid)}-`) && file.sizeBytes > 4_096,
+      ),
+    );
+    worker.child.kill("SIGKILL");
+    await worker.exit;
+    const orphan = segmentFiles(stateDir, "active").find((file) =>
+      file.name.includes(`-${String(workerPid)}-`),
+    );
+    if (orphan === undefined) throw new Error("the killed writer left no active segment");
+    const bytes = readFileSync(orphan.path);
+
+    createFileServerLogSink(stateDir, { env }).write({ category: "process", op: "after-crash" });
+
+    const sealedPath = orphan.path.replace(/\.active\.jsonl$/u, ".jsonl");
+    expect(existsSync(orphan.path)).toBe(false);
+    expect(readFileSync(sealedPath).equals(bytes)).toBe(true);
+    expect(modeOf(sealedPath) & 0o222).toBe(0);
+    expect(linesWithOp(stateDir, "activity-log.segment.recovered")).toStrictEqual([
+      expect.objectContaining(expectedKilledWriterRecovery(orphan.name, bytes)),
+    ]);
+  }, 60_000);
+
+  it("seals a dead writer's orphan as-is and reports exactly its truncated tail", () => {
+    const deadPid = exitedProcessId();
+    const identity = {
+      startMs: Date.now() - 1_000,
+      pid: deadPid,
+      instanceId: "0badc0de",
+      index: 3,
+    };
+    const complete = syntheticLines(600);
+    const fragment = '{"ts":"2026-09-18T00:00:00.000Z","seq":99,"op":"torn';
+    const orphanPath = seedSegment(stateDir, {
+      identity,
+      state: "active",
+      content: `${complete}${fragment}`,
+    });
+
+    createFileServerLogSink(stateDir).write({ category: "process", op: "recovery.trigger" });
+
+    const sealedPath = join(
+      logsDirectory(stateDir),
+      activityLogSegmentFileName(identity, "sealed"),
+    );
+    expect(existsSync(orphanPath)).toBe(false);
+    expect(readFileSync(sealedPath, "utf8")).toBe(`${complete}${fragment}`);
+    expect(linesWithOp(stateDir, "activity-log.segment.recovered")).toStrictEqual([
+      expect.objectContaining({
+        level: "warn",
+        recoveryStatus: "sealed",
+        recoveryKind: "unsealed",
+        ownerState: "exited",
+        tailState: "truncated",
+        truncatedBytes: Buffer.byteLength(fragment),
+        segmentBytes: Buffer.byteLength(`${complete}${fragment}`),
+        segmentIndex: 3,
+        recoveredInstanceId: "0badc0de",
+        completeness: "unknown",
+        loss: "event-dropped",
+      }),
+    ]);
+    expect(activityLogStorageHealth(stateDir).recoveredSegments).toBe(1);
+  });
+
+  it("finishes a seal interrupted between its link and its unlink without touching the content", () => {
+    const identity = {
+      startMs: Date.now() - 1_000,
+      pid: exitedProcessId(),
+      instanceId: "5ea1ed00",
+      index: 1,
+    };
+    const sealLine = `${JSON.stringify({ ts: "2026-09-18T00:00:00.000Z", seq: 7, op: "activity-log.segment.sealed" })}\n`;
+    const activePath = seedSegment(stateDir, {
+      identity,
+      state: "active",
+      content: `${syntheticLines(300)}${sealLine}`,
+    });
+    const sealedPath = join(
+      logsDirectory(stateDir),
+      activityLogSegmentFileName(identity, "sealed"),
+    );
+    linkSync(activePath, sealedPath);
+
+    createFileServerLogSink(stateDir).write({ category: "process", op: "recovery.trigger" });
+
+    expect(existsSync(activePath)).toBe(false);
+    expect(lstatSync(sealedPath).nlink).toBe(1);
+    expect(linesWithOp(stateDir, "activity-log.segment.recovered")).toStrictEqual([
+      expect.objectContaining({
+        recoveryStatus: "sealed",
+        recoveryKind: "interrupted-seal",
+        tailState: "terminated",
+        completeness: "complete",
+        loss: "none",
+      }),
+    ]);
+  });
+
+  it("never takes over a live writer's fresh segment, but recovers one stale past two windows", () => {
+    const livePid = process.ppid;
+    const fresh = { startMs: Date.now(), pid: livePid, instanceId: "11111111", index: 1 };
+    const stale = {
+      startMs: Date.now() - 3 * 3_600_000,
+      pid: livePid,
+      instanceId: "22222222",
+      index: 1,
+    };
+    const freshPath = seedSegment(stateDir, {
+      identity: fresh,
+      state: "active",
+      content: syntheticLines(200),
+    });
+    seedSegment(stateDir, {
+      identity: stale,
+      state: "active",
+      content: syntheticLines(200),
+      mtimeMs: Date.now() - 2 * 3_600_000,
+    });
+
+    createFileServerLogSink(stateDir).write({ category: "process", op: "recovery.trigger" });
+
+    expect(existsSync(freshPath)).toBe(true);
+    expect(linesWithOp(stateDir, "activity-log.segment.recovered")).toStrictEqual([
+      expect.objectContaining({ ownerState: "stale", recoveredInstanceId: "22222222" }),
+    ]);
+  });
+});
+
+describe("activity log retention", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-retention-"));
+    vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
+    resetFsKnobs();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const retentionEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(SMALL_BUDGET) });
+
+  it("prunes the oldest files first until the byte budget holds the new segment's reservation", () => {
+    const archive = seedLegacyFile(stateDir, "server-2026-09-01.log", 40 * 1024);
+    const legacyCurrent = seedLegacyFile(stateDir, "server.log", 20 * 1024);
+    const older = seedSegment(stateDir, {
+      identity: {
+        startMs: Date.now() - 60_000,
+        pid: exitedProcessId(),
+        instanceId: "aaaaaaaa",
+        index: 1,
+      },
+      state: "sealed",
+      content: syntheticLines(30 * 1024),
+    });
+    const newer = seedSegment(stateDir, {
+      identity: {
+        startMs: Date.now() - 30_000,
+        pid: exitedProcessId(),
+        instanceId: "bbbbbbbb",
+        index: 1,
+      },
+      state: "sealed",
+      content: syntheticLines(20 * 1024),
+    });
+
+    createFileServerLogSink(stateDir, { env: retentionEnv }).write({
+      category: "http",
+      op: "after",
+    });
+
+    // 110 KiB seeded + one 32 KiB reservation exceeds 128 KiB: only the oldest file has to go.
+    expect(existsSync(archive)).toBe(false);
+    expect([legacyCurrent, older, newer].every((path) => existsSync(path))).toBe(true);
+    expect(linesWithOp(stateDir, "activity-log.retention.pruned")).toStrictEqual([
+      expect.objectContaining({
+        retentionStatus: "pruned",
+        prunedLegacyFileCount: 1,
+        prunedSegmentCount: 0,
+        prunedBytes: 40 * 1024,
+        prunedByBudgetCount: 1,
+        prunedByAgeCount: 0,
+        failedDeletionCount: 0,
+        retentionBudgetBytes: SMALL_BUDGET,
+        retentionDays: 14,
+        completeness: "complete",
+        loss: "none",
+      }),
+    ]);
+    expect(directoryBytes(logsDirectory(stateDir))).toBeLessThanOrEqual(SMALL_BUDGET);
+  });
+
+  it("prunes by age even when the byte budget has room", () => {
+    const now = Date.now();
+    const aged = seedSegment(stateDir, {
+      identity: {
+        startMs: now - 21 * 86_400_000,
+        pid: exitedProcessId(),
+        instanceId: "cccccccc",
+        index: 1,
+      },
+      state: "sealed",
+      content: syntheticLines(1_024),
+      mtimeMs: now - 20 * 86_400_000,
+    });
+    const agedLegacy = seedLegacyFile(
+      stateDir,
+      "server-2026-08-01.log",
+      1_024,
+      now - 30 * 86_400_000,
+    );
+    const recent = seedSegment(stateDir, {
+      identity: { startMs: now - 60_000, pid: exitedProcessId(), instanceId: "dddddddd", index: 1 },
+      state: "sealed",
+      content: syntheticLines(1_024),
+    });
+
+    createFileServerLogSink(stateDir).write({ category: "http", op: "after" });
+
+    expect(existsSync(aged)).toBe(false);
+    expect(existsSync(agedLegacy)).toBe(false);
+    expect(existsSync(recent)).toBe(true);
+    expect(linesWithOp(stateDir, "activity-log.retention.pruned")).toStrictEqual([
+      expect.objectContaining({ prunedByAgeCount: 2, prunedByBudgetCount: 0, retentionDays: 14 }),
+    ]);
+  });
+
+  it("reads legacy files as part of the logical log and never rewrites them", () => {
+    const archive = seedLegacyFile(stateDir, "server-2026-09-10.log", 512);
+    const current = seedLegacyFile(stateDir, "server.log", 512);
+    const archiveBefore = readFileSync(archive);
+    const currentBefore = readFileSync(current);
+    const currentMtime = statSync(current).mtimeMs;
+
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "after-upgrade" });
+    sink.close?.();
+
+    expect(readFileSync(archive).equals(archiveBefore)).toBe(true);
+    expect(readFileSync(current).equals(currentBefore)).toBe(true);
+    expect(statSync(current).mtimeMs).toBe(currentMtime);
+    expect(listActivityLogFiles(stateDir).map((file) => file.kind)).toStrictEqual([
+      "legacy-archive",
+      "legacy-current",
+      "sealed",
+    ]);
+    expect(
+      readLines(stateDir)
+        .map((line) => line.op)
+        .slice(0, 2),
+    ).toStrictEqual(["legacy", "legacy"]);
+  });
+
+  it("tightens a non-private legacy archive before retention deletes it", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const archive = seedLegacyFile(
+      stateDir,
+      "server-2026-08-02.log",
+      512,
+      Date.now() - 30 * 86_400_000,
+    );
+    chmodSync(archive, 0o644);
+
+    createFileServerLogSink(stateDir).write({ category: "http", op: "after" });
+
+    expect(existsSync(archive)).toBe(false);
+    expect(linesWithOp(stateDir, "activity-log.retention.pruned")[0]).toMatchObject({
+      prunedLegacyFileCount: 1,
+      failedDeletionCount: 0,
+    });
+  });
+
+  it("never deletes through a symlink or hard link planted at a grammar name", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const outside = mkdtempSync(join(tmpdir(), "keiko-activity-victim-"));
+    try {
+      const victim = join(outside, "victim.jsonl");
+      writeFileSync(victim, "outside", { mode: 0o600 });
+      mkdirSync(logsDirectory(stateDir), { recursive: true, mode: 0o700 });
+      const old = Date.now() - 40 * 86_400_000;
+      const symlinkName = activityLogSegmentFileName(
+        { startMs: old, pid: 4_242, instanceId: "eeeeeeee", index: 1 },
+        "sealed",
+      );
+      symlinkSync(victim, join(logsDirectory(stateDir), symlinkName));
+      const hardlink = join(logsDirectory(stateDir), "server-2026-07-01.log");
+      linkSync(victim, hardlink);
+      utimesSync(hardlink, old / 1000, old / 1000);
+
+      createFileServerLogSink(stateDir).write({ category: "http", op: "after" });
+
+      expect(readFileSync(victim, "utf8")).toBe("outside");
+      expect(existsSync(hardlink)).toBe(true);
+      expect(linesWithOp(stateDir, "activity-log.retention.pruned")).toStrictEqual([
+        expect.objectContaining({ retentionStatus: "failed", failedDeletionCount: 1 }),
+      ]);
+      expect(linesWithOp(stateDir, "activity-log.pressure")).toContainEqual(
+        expect.objectContaining({
+          pressureState: "retention-blocked",
+          errorKind: "durability-failed",
+        }),
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("drops events rather than exceed the budget, and reports the exact loss when room returns", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-18T10:00:00Z"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-activity-budget-"));
+    try {
+      const blocker = join(outside, "blocker.log");
+      writeFileSync(blocker, "x".repeat(SMALL_BUDGET), { mode: 0o600 });
+      mkdirSync(logsDirectory(stateDir), { recursive: true, mode: 0o700 });
+      // A hard link counts as Activity Log bytes but can never be deleted by the store.
+      const planted = join(logsDirectory(stateDir), "server-2026-09-01.log");
+      linkSync(blocker, planted);
+      const sink = createFileServerLogSink(stateDir, { env: retentionEnv });
+      sink.write({ category: "http", op: "blocked-one" });
+      sink.write({ category: "http", op: "blocked-two" });
+      expect(segmentFiles(stateDir).filter((file) => file.kind === "active")).toHaveLength(0);
+
+      rmSync(planted);
+      vi.setSystemTime(new Date("2026-09-18T10:00:05Z"));
+      sink.write({ category: "http", op: "resumed" });
+
+      expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["resumed"]);
+      expect(linesWithOp(stateDir, "activity-log.pressure")).toContainEqual(
+        expect.objectContaining({
+          pressureState: "budget-exceeded",
+          droppedEventCount: 2,
+          writerCapability: "degraded",
+          errorKind: "unavailable",
+          loss: "event-dropped",
+        }),
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  // PR #3554 review: a deletion that failed once was skipped for the life of the process while its
+  // bytes kept counting, so one transient failure could deny every later segment.
+  it("retries a deletion that failed transiently instead of wedging the writer", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-18T10:00:00Z"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-activity-transient-"));
+    try {
+      const external = join(outside, "external-link.log");
+      writeFileSync(external, "x".repeat(SMALL_BUDGET), { mode: 0o600 });
+      mkdirSync(logsDirectory(stateDir), { recursive: true, mode: 0o700 });
+      const archive = join(logsDirectory(stateDir), "server-2026-09-01.log");
+      // Undeletable while a second link exists; an ordinary private file once it is gone.
+      linkSync(external, archive);
+      const sink = createFileServerLogSink(stateDir, { env: retentionEnv });
+      sink.write({ category: "http", op: "while-blocked" });
+      expect(readCallerLines(stateDir)).toHaveLength(0);
+
+      rmSync(external);
+      vi.setSystemTime(new Date("2026-09-18T10:01:01Z"));
+      sink.write({ category: "http", op: "after-retry" });
+
+      expect(existsSync(archive)).toBe(false);
+      expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["after-retry"]);
+      expect(linesWithOp(stateDir, "activity-log.retention.pruned")).toContainEqual(
+        expect.objectContaining({ retentionStatus: "pruned", prunedLegacyFileCount: 1 }),
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  // PR #3554 review, same class at the recovery layer: a failed recovery was never retried, so the
+  // orphan stayed active and reserved against the budget for the life of the process.
+  it("retries a recovery that failed transiently and evidences the first failure only once", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-18T10:00:00Z"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-activity-orphan-"));
+    try {
+      const identity = {
+        startMs: Date.now() - 1_000,
+        pid: exitedProcessId(),
+        instanceId: "7e7e7e7e",
+        index: 1,
+      };
+      const orphan = seedSegment(stateDir, {
+        identity,
+        state: "active",
+        content: syntheticLines(400),
+      });
+      const external = join(outside, "external-link.jsonl");
+      linkSync(orphan, external);
+      const sink = createFileServerLogSink(stateDir);
+      sink.write({ category: "http", op: "first-pass" });
+      sink.close?.();
+      sink.write({ category: "http", op: "inside-backoff" });
+      sink.close?.();
+      expect(existsSync(orphan)).toBe(true);
+
+      rmSync(external);
+      vi.setSystemTime(new Date("2026-09-18T10:01:01Z"));
+      sink.write({ category: "http", op: "after-backoff" });
+
+      expect(existsSync(orphan)).toBe(false);
+      expect(
+        linesWithOp(stateDir, "activity-log.segment.recovered").map((line) => line.recoveryStatus),
+      ).toStrictEqual(["failed", "sealed"]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a full disk once writing resumes, with the exact number of dropped events", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "before-full" });
+    fsCalls.failWriteCode = "ENOSPC";
+    for (let index = 0; index < 3; index += 1) sink.write({ category: "http", op: "while-full" });
+    fsCalls.failWriteCode = null;
+    sink.write({ category: "http", op: "after-full" });
+
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
+      "before-full",
+      "after-full",
+    ]);
+    expect(linesWithOp(stateDir, "activity-log.pressure")).toStrictEqual([
+      expect.objectContaining({
+        pressureState: "disk-full",
+        droppedEventCount: 3,
+        writerCapability: "degraded",
+        errorKind: "write-failed",
+        completeness: "partial",
+        loss: "event-dropped",
+      }),
+    ]);
+    sink.close?.();
+    expect(linesWithOp(stateDir, "activity-log.segment.sealed").at(-1)).toMatchObject({
+      droppedEventCount: 3,
+      completeness: "partial",
+      loss: "event-dropped",
+    });
+  });
+
+  it("reports low disk space on entry and once more when it clears", () => {
+    fsCalls.freeBytes = 1_024;
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "low" });
+    sink.close?.();
+    fsCalls.freeBytes = null;
+    sink.write({ category: "http", op: "cleared" });
+
+    expect(linesWithOp(stateDir, "activity-log.pressure")).toStrictEqual([
+      expect.objectContaining({
+        pressureState: "low-disk-space",
+        freeBytes: 1_024,
+        droppedEventCount: 0,
+      }),
+      expect.objectContaining({ pressureState: "cleared", previousState: "low-disk-space" }),
+    ]);
+  });
+
+  it("refuses to list, recover, or prune through a redirected log directory", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "indexing", op: "before-redirect" });
+    const logs = logsDirectory(stateDir);
+    const parked = join(stateDir, "logs-parked");
+    const outside = mkdtempSync(join(tmpdir(), "keiko-activity-outside-"));
+    const decoy = join(
+      outside,
+      activityLogSegmentFileName(
+        {
+          startMs: Date.now() - 40 * 86_400_000,
+          pid: exitedProcessId(),
+          instanceId: "dec0dec0",
+          index: 1,
+        },
+        "active",
+      ),
+    );
+    writeFileSync(decoy, "outside-decoy", { mode: 0o600 });
+    utimesSync(decoy, (Date.now() - 40 * 86_400_000) / 1000, (Date.now() - 40 * 86_400_000) / 1000);
+    renameSync(logs, parked);
+    symlinkSync(outside, logs);
+
+    try {
+      sink.write({ category: "indexing", op: "during-redirect" });
+      sink.close?.();
+      expect(readdirSync(outside)).toStrictEqual([basenameOf(decoy)]);
+      expect(readFileSync(decoy, "utf8")).toBe("outside-decoy");
+    } finally {
+      rmSync(logs);
+      renameSync(parked, logs);
+      rmSync(outside, { recursive: true, force: true });
+    }
+
+    sink.write({ category: "indexing", op: "after-restore" });
+    expect(readCallerLines(stateDir).map((line) => line.op)).toContain("after-restore");
+  });
+
+  it("keeps Windows logging active with platform-inherited assurance and a completed seal", () => {
+    stateDir = realpathSync(stateDir);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({ category: "indexing", op: "windows-line" });
+    sink.close?.();
+
+    expect(segmentFiles(stateDir).map((file) => file.kind)).toStrictEqual(["sealed"]);
+    expect(readLines(stateDir)[0]).toMatchObject({
+      op: "server-log.safe-open",
+      permissionAssurance: "platform-inherited",
+      containmentAssurance: "platform-inherited",
+    });
+    expect(readLines(stateDir).at(-1)).toMatchObject({
+      op: "activity-log.segment.sealed",
+      sealReason: "close",
+    });
+  });
+});
+
+function basenameOf(path: string): string {
+  return path.slice(dirname(path).length + 1);
+}
+
+function writeSegments(
+  stateDir: string,
+  env: Readonly<Record<string, string>>,
+  count: number,
+): void {
+  const sink = createFileServerLogSink(stateDir, { env });
+  for (let segment = 0; segment < count; segment += 1) {
+    for (let line = 0; line < 12; line += 1) {
+      sink.write({ category: "indexing", op: `pinned.${String(segment)}.${String(line)}` });
+    }
+    sink.close?.();
+  }
+}
+
+function ageFiles(files: readonly ActivityLogFileInfo[], days: number): void {
+  const when = (Date.now() - days * 86_400_000) / 1000;
+  for (const file of files) utimesSync(file.path, when, when);
+}
+
+describe("activity log retention pins", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-pins-"));
+    vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
+    resetFsKnobs();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
+  });
+
+  afterEach(async () => {
+    // First: a writer still running would recreate files while the directory is removed.
+    await killLiveWriterWorkers();
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("protects a pinned window from age retention, including segments sealed later inside it", () => {
+    const start = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(start);
+    const env = storageEnv({});
+    // A control segment that ended well before the window: it ages out like any other.
+    const outside = seedSegment(stateDir, {
+      identity: {
+        startMs: start - 5 * 3_600_000,
+        pid: exitedProcessId(),
+        instanceId: "0c0c0c0c",
+        index: 1,
+      },
+      state: "sealed",
+      content: syntheticLines(512),
+      mtimeMs: start - 4 * 3_600_000,
+    });
+    writeSegments(stateDir, env, 2);
+    const result = pinActivityLogWindow(
+      stateDir,
+      {
+        scope: { kind: "window", fromMs: start - 3_600_000, toMs: start + 3_600_000 },
+        expiresAtMs: start + 60 * 86_400_000,
+        correlationId: "incident-pin-3530",
+      },
+      env,
+    );
+    expect(result).toMatchObject({
+      status: "pinned",
+      pinnedSegmentCount: 2,
+      quotaStatus: "within-quota",
+    });
+    writeSegments(stateDir, env, 1);
+    const pinned = segmentFiles(stateDir, "sealed").filter((file) => file.path !== outside);
+    expect(pinned.length).toBeGreaterThanOrEqual(3);
+
+    // Thirty days later every one of them is far past the 14-day age bound.
+    vi.setSystemTime(start + 30 * 86_400_000);
+    createFileServerLogSink(stateDir, { env }).write({ category: "http", op: "retention.pass" });
+
+    expect(existsSync(outside)).toBe(false);
+    for (const file of pinned) expect(existsSync(file.path)).toBe(true);
+    expect(linesWithOp(stateDir, "activity-log.pin.created")).toContainEqual(
+      expect.objectContaining({
+        correlationId: "incident-pin-3530",
+        pinStatus: "created",
+        pinKind: "window",
+        pinReason: "incident",
+        pinnedSegmentCount: 2,
+        windowSeconds: 7_200,
+        quotaStatus: "within-quota",
+        completeness: "complete",
+      }),
+    );
+    expect(activityLogStorageHealth(stateDir, env).pinnedBytes).toBe(
+      pinned.reduce((total, file) => total + file.sizeBytes, 0),
+    );
+  });
+
+  it("reports quota exhaustion exactly once with exact segment counts and sequence span", () => {
+    const env = storageEnv({ KEIKO_LOG_PIN_QUOTA_BYTES: String(12 * 1024) });
+    writeSegments(stateDir, env, 3);
+    const sealed = segmentFiles(stateDir, "sealed");
+    const spans = sealed.map((file) => {
+      const records = fileRecords(file.path);
+      return (records.at(-1)?.seq as number) - (records[0]?.seq as number) + 1;
+    });
+    const now = Date.now();
+    pinActivityLogWindow(
+      stateDir,
+      {
+        scope: { kind: "window", fromMs: now - 3_600_000, toMs: now + 60_000 },
+        expiresAtMs: now + 86_400_000,
+      },
+      env,
+    );
+    // Several more maintenance passes while the quota stays exhausted.
+    const sink = createFileServerLogSink(stateDir, { env });
+    for (let pass = 0; pass < 3; pass += 1) {
+      sink.write({ category: "http", op: `pass.${String(pass)}` });
+      sink.close?.();
+    }
+
+    const markers = linesWithOp(stateDir, "activity-log.pin.quota-exhausted");
+    expect(markers).toHaveLength(1);
+    const marker = markers[0];
+    const unprotectedCount = marker?.unprotectedSegmentCount as number;
+    expect(marker).toMatchObject({
+      level: "error",
+      errorKind: "unavailable",
+      pinQuotaBytes: 12 * 1024,
+      activePinCount: 1,
+      unknownSpanSegmentCount: 0,
+      completeness: "partial",
+      loss: "event-dropped",
+    });
+    expect((marker?.protectedSegmentCount as number) + unprotectedCount).toBe(sealed.length);
+    expect(marker?.protectedPinnedBytes as number).toBeLessThanOrEqual(12 * 1024);
+    expect(marker?.unprotectedSeqSpan as number).toBeGreaterThanOrEqual(
+      Math.min(...spans) * Math.max(0, unprotectedCount - 1),
+    );
+  });
+
+  it("expires a pin, releases its segments, and removes an unreadable pin record", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 1);
+    const [segment] = segmentFiles(stateDir, "sealed");
+    if (segment === undefined) throw new Error("expected one sealed segment");
+    const segmentName = parseActivityLogFileName(segment.name);
+    const segmentId =
+      segmentName !== undefined && "segmentId" in segmentName ? segmentName.segmentId : "";
+    const logs = logsDirectory(stateDir);
+    const expired = "0123456789abcdef01234567";
+    writeFileSync(
+      join(logs, `pin-${expired}.json`),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        pinId: expired,
+        reason: "incident",
+        createdAtMs: Date.now() - 7_200_000,
+        expiresAtMs: Date.now() - 3_600_000,
+        scope: { kind: "segments", segmentIds: [segmentId] },
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const garbage = "fedcba9876543210fedcba98";
+    writeFileSync(join(logs, `pin-${garbage}.json`), "not json", { mode: 0o600 });
+
+    createFileServerLogSink(stateDir, { env }).write({ category: "http", op: "expiry.pass" });
+
+    expect(existsSync(join(logs, `pin-${expired}.json`))).toBe(false);
+    expect(existsSync(join(logs, `pin-${garbage}.json`))).toBe(false);
+    expect(linesWithOp(stateDir, "activity-log.pin.expired")).toStrictEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pinId: expired,
+          expiryReason: "expired",
+          removalStatus: "removed",
+          releasedSegmentCount: 1,
+          releasedBytes: segment.sizeBytes,
+        }),
+        expect.objectContaining({
+          pinId: garbage,
+          expiryReason: "invalid-record",
+          removalStatus: "removed",
+          releasedSegmentCount: 0,
+        }),
+      ]),
+    );
+  });
+
+  it("rejects an unbounded or malformed pin request with closed evidence", () => {
+    const now = Date.now();
+    const cases = [
+      {
+        scope: { kind: "window", fromMs: now, toMs: now + 8 * 86_400_000 },
+        expiresAtMs: now + 60_000,
+      },
+      { scope: { kind: "window", fromMs: now, toMs: now + 1 }, expiresAtMs: now - 1 },
+      { scope: { kind: "segments", segmentIds: ["../escape"] }, expiresAtMs: now + 60_000 },
+    ] as const;
+    for (const request of cases) {
+      expect(
+        pinActivityLogWindow(
+          stateDir,
+          request as unknown as Parameters<typeof pinActivityLogWindow>[1],
+        ),
+      ).toStrictEqual({
+        status: "rejected",
+        reason: "invalid-request",
+      });
+    }
+    expect(linesWithOp(stateDir, "activity-log.pin.created")).toHaveLength(3);
+    expect(linesWithOp(stateDir, "activity-log.pin.created")[0]).toMatchObject({
+      pinStatus: "rejected",
+      rejectionReason: "invalid-request",
+      errorKind: "invalid-request",
+      completeness: "partial",
+    });
+    expect(readdirSync(logsDirectory(stateDir)).some((name) => name.startsWith("pin-"))).toBe(
+      false,
+    );
+  });
+
+  it("refuses a pin beyond the bounded number of pin records", () => {
+    const logs = logsDirectory(stateDir);
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    const now = Date.now();
+    for (let index = 0; index < 64; index += 1) {
+      const pinId = index.toString(16).padStart(24, "0");
+      writeFileSync(
+        join(logs, `pin-${pinId}.json`),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          pinId,
+          reason: "incident",
+          createdAtMs: now - 1_000,
+          expiresAtMs: now + 3_600_000,
+          scope: { kind: "window", fromMs: now - 1_000, toMs: now },
+        })}\n`,
+        { mode: 0o600 },
+      );
+    }
+    expect(
+      pinActivityLogWindow(stateDir, {
+        scope: { kind: "window", fromMs: now - 1_000, toMs: now },
+        expiresAtMs: now + 60_000,
+      }),
+    ).toStrictEqual({ status: "rejected", reason: "pin-limit-reached" });
+    expect(linesWithOp(stateDir, "activity-log.pin.created")[0]).toMatchObject({
+      pinStatus: "rejected",
+      rejectionReason: "pin-limit-reached",
+      errorKind: "rate-limited",
+    });
+  });
+
+  it("keeps total disk use within budget plus pin quota across concurrent writers and a crash", async () => {
+    const budget = 256 * 1024;
+    const quota = 64 * 1024;
+    const env = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(budget),
+      KEIKO_LOG_PIN_QUOTA_BYTES: String(quota),
+    });
+    const logs = logsDirectory(stateDir);
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    let peak = 0;
+    const sampler = setInterval(() => {
+      peak = Math.max(peak, directoryBytes(logs));
+    }, 5);
+    try {
+      const writers = [1, 2, 3].map((id) =>
+        startWriterWorker(stateDir, id, { count: 700, mode: "count", env, pin: id === 2 }),
+      );
+      const crasher = startWriterWorker(stateDir, 4, { count: 0, mode: "forever", env });
+      const crasherPid = crasher.child.pid ?? 0;
+      await waitFor(() =>
+        segmentFiles(stateDir, "active").find(
+          (file) => file.name.includes(`-${String(crasherPid)}-`) && file.sizeBytes > 4_096,
+        ),
+      );
+      crasher.child.kill("SIGKILL");
+      const codes = await Promise.all(writers.map((writer) => writer.exit));
+      await crasher.exit;
+      expect(codes).toStrictEqual([0, 0, 0]);
+      createFileServerLogSink(stateDir, { env }).write({ category: "http", op: "final.pass" });
+    } finally {
+      clearInterval(sampler);
+    }
+    peak = Math.max(peak, directoryBytes(logs));
+    expect(peak).toBeLessThanOrEqual(budget + quota);
+    // The crashed writer's segment was recovered by someone: no exited writer's segment is left active.
+    const remaining = segmentFiles(stateDir, "active").map((file) =>
+      parseActivityLogFileName(file.name),
+    );
+    expect(
+      remaining.every((name) => name !== undefined && "pid" in name && name.pid === process.pid),
+    ).toBe(true);
+  }, 120_000);
+});
+
+// #3554 (PR #3554 review comment 4050604711): several cooperating processes writing the same
+// directory must share ONE governing retention/pin-quota policy — not each enforce its own env —
+// and a disagreement must be detected and reported, never silently mask a budget overrun.
+describe("activity log store policy", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-store-policy-"));
+    resetFsKnobs();
+  });
+
+  afterEach(async () => {
+    // First: a writer still running would recreate files while the directory is removed.
+    await killLiveWriterWorkers();
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function policyRecord(): Record<string, unknown> | undefined {
+    const path = join(logsDirectory(stateDir), ACTIVITY_LOG_STORE_POLICY_FILE_NAME);
+    return existsSync(path)
+      ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)
+      : undefined;
+  }
+
+  it("keeps total disk use within the FIRST writer's stored budget when cooperating processes disagree on retention", async () => {
+    const smallBudget = 256 * 1024;
+    const bigBudget = 8 * 1024 * 1024;
+    const quota = 64 * 1024;
+    const establishingEnv = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(smallBudget),
+      KEIKO_LOG_PIN_QUOTA_BYTES: String(quota),
+    });
+    const disagreeingEnv = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(bigBudget),
+      KEIKO_LOG_PIN_QUOTA_BYTES: String(quota),
+    });
+    const logs = logsDirectory(stateDir);
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    // A forever writer establishes the SMALL budget and holds a continuously active segment for
+    // the whole test — a stand-in for the review's own example (a long-running server plus one-off
+    // CLI invocations) — so every writer below unambiguously sees a live peer, never a startup race
+    // against other equally-fresh processes, and must adopt rather than replace.
+    const establisher = startWriterWorker(stateDir, 1, {
+      count: 0,
+      mode: "forever",
+      env: establishingEnv,
+    });
+    const establisherPid = establisher.child.pid ?? 0;
+    await waitFor(() =>
+      segmentFiles(stateDir, "active").find((file) =>
+        file.name.includes(`-${String(establisherPid)}-`),
+      ),
+    );
+    expect(policyRecord()).toMatchObject({ retentionBytes: smallBudget });
+
+    let peak = directoryBytes(logs);
+    const sampler = setInterval(() => {
+      peak = Math.max(peak, directoryBytes(logs));
+    }, 5);
+    try {
+      // Three writers all believe the budget is the LARGER one: without one shared governing
+      // policy each would only cap itself at its own bigger view, and the total could grow toward
+      // bigBudget + quota instead of staying at the smaller stored budget.
+      const writers = [2, 3, 4].map((id) =>
+        startWriterWorker(stateDir, id, { count: 700, mode: "count", env: disagreeingEnv }),
+      );
+      const codes = await Promise.all(writers.map((writer) => writer.exit));
+      expect(codes).toStrictEqual([0, 0, 0]);
+      establisher.child.kill("SIGKILL");
+      await establisher.exit;
+    } finally {
+      clearInterval(sampler);
+    }
+    peak = Math.max(peak, directoryBytes(logs));
+    // The bound is the STORED (small) budget plus quota — never the disagreeing processes' own
+    // (larger) view — proving the governing policy, not each process's own env, is what is enforced.
+    expect(peak).toBeLessThanOrEqual(smallBudget + quota);
+    expect(policyRecord()).toMatchObject({ retentionBytes: smallBudget });
+    // The conflict-evidence SHAPE (one "adopted" line per disagreeing process) is proven by the
+    // lighter-weight "refuses to replace" case below; a first segment holding that evidence is
+    // itself subject to the same governed retention bound under this test's volume and is
+    // correctly pruned like any other aged content, so it is not re-asserted here.
+  }, 120_000);
+
+  it("replaces the stored policy once this process is the sole live writer (a clean restart with a changed budget)", async () => {
+    const firstBudget = 4 * 1024 * 1024;
+    const secondBudget = 512 * 1024;
+    const firstEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(firstBudget) });
+    const secondEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(secondBudget) });
+    const first = startWriterWorker(stateDir, 1, { count: 5, mode: "count", env: firstEnv });
+    expect(await first.exit).toBe(0);
+    expect(policyRecord()).toMatchObject({ retentionBytes: firstBudget });
+
+    // The first writer has fully exited: the second is the sole live writer and may replace it.
+    const second = startWriterWorker(stateDir, 2, { count: 5, mode: "count", env: secondEnv });
+    expect(await second.exit).toBe(0);
+    expect(policyRecord()).toMatchObject({ retentionBytes: secondBudget });
+    expect(linesWithOp(stateDir, "activity-log.policy.conflict")).toContainEqual(
+      expect.objectContaining({
+        policyResolution: "replaced",
+        storedRetentionBytes: firstBudget,
+        requestedRetentionBytes: secondBudget,
+      }),
+    );
+  });
+
+  // Every maintenance pass re-reads the stored policy, so a record another process replaced after
+  // this one resolved it (a sole-writer restart while this process held no active segment) governs
+  // this process's next pass instead of its stale first read.
+  it("applies a policy another process replaced after this process resolved its own", () => {
+    const firstBudget = 4 * 1024 * 1024;
+    const secondBudget = 512 * 1024;
+    const env = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(firstBudget),
+      KEIKO_LOG_SEGMENT_BYTES: String(SMALL_SEGMENT),
+    });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "http", op: "before.replacement" });
+    expect(policyRecord()).toMatchObject({ retentionBytes: firstBudget });
+
+    // What a sole-writer restart elsewhere leaves behind: the same record, a smaller budget.
+    const logs = logsDirectory(stateDir);
+    rmSync(join(logs, ACTIVITY_LOG_STORE_POLICY_FILE_NAME));
+    writeActivityLogPolicyRecord(logs, logs, {
+      schemaVersion: 1,
+      retentionBytes: secondBudget,
+      retentionDays: 14,
+      pinQuotaBytes: 64 * 1024 * 1024,
+    });
+
+    // One segment rollover: its maintenance pass re-reads the record before anything is pruned.
+    for (let index = 0; index < 150; index += 1) {
+      sink.write({ category: "http", op: "after.replacement", extra: { index } });
+    }
+    expect(linesWithOp(stateDir, "activity-log.policy.conflict")).toContainEqual(
+      expect.objectContaining({
+        policyResolution: "adopted",
+        storedRetentionBytes: secondBudget,
+        requestedRetentionBytes: firstBudget,
+      }),
+    );
+
+    // Well past the new, smaller budget but far below the first: only the replaced policy prunes.
+    for (let index = 150; index < 2_500; index += 1) {
+      sink.write({ category: "http", op: "after.replacement", extra: { index } });
+    }
+    expect(linesWithOp(stateDir, "activity-log.retention.pruned").at(-1)).toMatchObject({
+      retentionBudgetBytes: secondBudget,
+    });
+  });
+
+  it("refuses to replace the stored policy while a live peer still holds an active segment", async () => {
+    const firstBudget = 4 * 1024 * 1024;
+    const secondBudget = 512 * 1024;
+    const firstEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(firstBudget) });
+    const secondEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(secondBudget) });
+    const forever = startWriterWorker(stateDir, 1, { count: 0, mode: "forever", env: firstEnv });
+    try {
+      await waitFor(() => segmentFiles(stateDir, "active")[0]);
+      expect(policyRecord()).toMatchObject({ retentionBytes: firstBudget });
+
+      // A second, different process — this test process itself — disagrees but must adopt, not
+      // replace, since the forever writer is still alive.
+      createFileServerLogSink(stateDir, { env: secondEnv }).write({
+        category: "http",
+        op: "disagreeing.write",
+      });
+      expect(policyRecord()).toMatchObject({ retentionBytes: firstBudget });
+      expect(linesWithOp(stateDir, "activity-log.policy.conflict")).toContainEqual(
+        expect.objectContaining({
+          policyResolution: "adopted",
+          storedRetentionBytes: firstBudget,
+          requestedRetentionBytes: secondBudget,
+        }),
+      );
+    } finally {
+      forever.child.kill("SIGKILL");
+      await forever.exit;
+    }
+  });
+});
+
+describe("activity log pins never throw and can be released", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-pin-release-"));
+    resetFsKnobs();
+  });
+
+  afterEach(() => {
+    resetFsKnobs();
+    closeFileServerLogSinks();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function pinWindow(
+    env: Readonly<Record<string, string>>,
+    correlationId: string,
+  ): ActivityLogPinResult {
+    const now = Date.now();
+    return pinActivityLogWindow(
+      stateDir,
+      {
+        scope: { kind: "window", fromMs: now - 3_600_000, toMs: now + 60_000 },
+        expiresAtMs: now + 86_400_000,
+        correlationId,
+      },
+      env,
+    );
+  }
+
+  function pinRecordNames(): readonly string[] {
+    return readdirSync(logsDirectory(stateDir)).filter((name) => name.startsWith("pin-"));
+  }
+
+  it("rejects a pin as storage-unavailable when the directory cannot be listed", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 1);
+    fsCalls.failLogsListingCall = 1;
+    const result = pinWindow(env, "pin-unlistable-3530");
+    fsCalls.failLogsListingCall = null;
+
+    expect(result).toStrictEqual({ status: "rejected", reason: "storage-unavailable" });
+    expect(pinRecordNames()).toStrictEqual([]);
+    expect(linesWithOp(stateDir, "activity-log.pin.created")).toContainEqual(
+      expect.objectContaining({
+        correlationId: "pin-unlistable-3530",
+        pinStatus: "rejected",
+        rejectionReason: "storage-unavailable",
+      }),
+    );
+  });
+
+  it("still reports a published pin when the listing after the seal fails", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 2);
+    fsCalls.failLogsListingCall = 2;
+    const result = pinWindow(env, "pin-late-listing-3530");
+    fsCalls.failLogsListingCall = null;
+
+    expect(result).toMatchObject({ status: "pinned", pinnedSegmentCount: 2 });
+    expect(pinRecordNames()).toHaveLength(1);
+  });
+
+  it("releases a pin before its expiry and records it as a released pin.expired", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 2);
+    const pinned = pinWindow(env, "pin-to-release-3533");
+    if (pinned.status !== "pinned") throw new Error("expected a pin");
+
+    const released = releaseActivityLogPin(
+      stateDir,
+      { pinId: pinned.pinId, correlationId: "pin-release-3533" },
+      env,
+    );
+
+    expect(released).toStrictEqual({
+      status: "released",
+      releasedSegmentCount: pinned.pinnedSegmentCount,
+      releasedBytes: pinned.pinnedBytes,
+    });
+    expect(pinRecordNames()).toStrictEqual([]);
+    expect(activityLogStorageHealth(stateDir, env).pinnedBytes).toBe(0);
+    expect(linesWithOp(stateDir, "activity-log.pin.expired")).toContainEqual(
+      expect.objectContaining({
+        correlationId: "pin-release-3533",
+        pinId: pinned.pinId,
+        expiryReason: "released",
+        removalStatus: "removed",
+        releasedSegmentCount: pinned.pinnedSegmentCount,
+      }),
+    );
+  });
+
+  it("refuses an invalid or unknown pin id without touching the store", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 1);
+
+    expect(releaseActivityLogPin(stateDir, { pinId: "not-a-pin-id" }, env)).toStrictEqual({
+      status: "rejected",
+      reason: "invalid-request",
+    });
+    expect(releaseActivityLogPin(stateDir, { pinId: "a".repeat(24) }, env)).toStrictEqual({
+      status: "rejected",
+      reason: "not-found",
+    });
+    expect(linesWithOp(stateDir, "activity-log.pin.expired")).toStrictEqual([]);
+  });
+
+  it("evidences a release that cannot list the directory and never throws", () => {
+    const env = storageEnv({});
+    writeSegments(stateDir, env, 1);
+    const pinned = pinWindow(env, "pin-release-unlistable-3533");
+    if (pinned.status !== "pinned") throw new Error("expected a pin");
+    fsCalls.logsListings = 0;
+    fsCalls.failLogsListingCall = 1;
+    const released = releaseActivityLogPin(
+      stateDir,
+      { pinId: pinned.pinId, correlationId: "pin-release-unlistable-3533" },
+      env,
+    );
+    fsCalls.failLogsListingCall = null;
+
+    expect(released).toStrictEqual({ status: "rejected", reason: "storage-unavailable" });
+    expect(pinRecordNames()).toHaveLength(1);
+    expect(linesWithOp(stateDir, "activity-log.pin.expired")).toContainEqual(
+      expect.objectContaining({
+        correlationId: "pin-release-unlistable-3533",
+        expiryReason: "released",
+        removalStatus: "failed",
+      }),
+    );
+  });
+});
+
+describe("activity log storage health", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-health-"));
+    vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
+    resetFsKnobs();
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  it("reports a fresh state directory without creating anything", () => {
+    expect(activityLogStorageHealth(stateDir)).toMatchObject({
+      writable: true,
+      usedBytes: 0,
+      budgetBytes: 256 * 1024 * 1024,
+      pinQuotaBytes: 64 * 1024 * 1024,
+      pinnedBytes: 0,
+      activeSegments: 0,
+      sealedSegments: 0,
+      legacyFiles: 0,
+      orphanedSegments: 0,
+      pressure: "none",
+      pressureState: "none",
+      recoveredSegments: 0,
+    });
+    expect(existsSync(logsDirectory(stateDir))).toBe(false);
+  });
+
+  it("counts every kind of file, orphans awaiting recovery, and closed pressure states", () => {
+    seedLegacyFile(stateDir, "server.log", 100);
+    seedSegment(stateDir, {
+      identity: {
+        startMs: Date.now() - 1_000,
+        pid: exitedProcessId(),
+        instanceId: "abababab",
+        index: 1,
+      },
+      state: "active",
+      content: syntheticLines(100),
+    });
+    const before = listActivityLogFiles(stateDir).map((file) => file.name);
+    fsCalls.freeBytes = 1_024;
+
+    const health = activityLogStorageHealth(
+      stateDir,
+      storageEnv({ KEIKO_LOG_RETENTION_BYTES: "70000" }),
+    );
+
+    expect(health).toMatchObject({
+      writable: true,
+      budgetBytes: 70_000,
+      activeSegments: 1,
+      sealedSegments: 0,
+      legacyFiles: 1,
+      orphanedSegments: 1,
+      freeBytes: 1_024,
+      pressure: "elevated",
+      pressureState: "low-disk-space",
+    });
+    expect(health.usedBytes).toBe(
+      listActivityLogFiles(stateDir).reduce((total, file) => total + file.sizeBytes, 0),
+    );
+    // Read-only: the orphan is still unrecovered after the probe.
+    expect(listActivityLogFiles(stateDir).map((file) => file.name)).toStrictEqual(before);
+  });
+
+  it("reports a redirected or non-private log directory as unwritable", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    mkdirSync(logsDirectory(stateDir), { mode: 0o700 });
+    chmodSync(logsDirectory(stateDir), 0o755);
+    expect(activityLogStorageHealth(stateDir).writable).toBe(false);
+  });
+});
+
+describe("activity log durable batches", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-durable-"));
+    vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
+    resetFsKnobs();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("appends and fsyncs a standard durable batch through the segment writer", () => {
+    seedLegacyFile(stateDir, "server.log", 64);
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "process", op: "before-batch" });
+    const seenFiles: string[] = [];
+
+    const result = appendDurableServerLogBatch(stateDir, {
+      level: "info",
+      inspect: (directory, files) => {
+        expect(directory).toBe(logsDirectory(stateDir));
+        seenFiles.push(...files);
+        return {
+          status: "append",
+          events: [
+            { category: "diagnostic", op: "batch-one" },
+            { category: "diagnostic", op: "batch-complete" },
+          ],
+        };
+      },
+    });
+
+    expect(result).toStrictEqual({ status: "appended", appendedCount: 2 });
+    // Only legacy files and durable-batch pinned segments can hold an earlier batch.
+    expect(seenFiles).toStrictEqual(["server.log"]);
+    expect(fsCalls.fsync).toBeGreaterThanOrEqual(1);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
+      "legacy",
+      "before-batch",
+      "batch-one",
+      "batch-complete",
+    ]);
+    expect(readdirSync(logsDirectory(stateDir)).some((name) => name.startsWith("pin-"))).toBe(
+      false,
+    );
+  });
+
+  it("pins a durable batch so its segments are found again and never aged out", () => {
+    const first = appendDurableServerLogBatch(stateDir, {
+      level: "info",
+      retention: "pinned",
+      inspect: () => ({
+        status: "append",
+        events: [{ category: "diagnostic", op: "import-complete" }],
+      }),
+    });
+    expect(first).toStrictEqual({ status: "appended", appendedCount: 1 });
+    const pinned = segmentFiles(stateDir, "sealed");
+    expect(pinned).toHaveLength(1);
+    expect(linesWithOp(stateDir, "activity-log.pin.created")[0]).toMatchObject({
+      pinReason: "durable-batch",
+      pinKind: "segments",
+      pinStatus: "created",
+      pinnedSegmentCount: 1,
+    });
+    ageFiles(pinned, 400);
+
+    let seen: readonly string[] = [];
+    const second = appendDurableServerLogBatch(stateDir, {
+      level: "info",
+      inspect: (_directory, files) => {
+        seen = files;
+        return { status: "already-complete" };
+      },
+    });
+
+    expect(second).toStrictEqual({ status: "already-complete" });
+    expect(seen).toStrictEqual(pinned.map((file) => file.name));
+    createFileServerLogSink(stateDir).write({ category: "http", op: "age.pass" });
+    expect(existsSync(pinned[0]?.path ?? "")).toBe(true);
+  });
+
+  it("writes nothing when the batch is already complete or the inspection defers", () => {
+    expect(
+      appendDurableServerLogBatch(stateDir, {
+        level: "info",
+        inspect: () => ({ status: "already-complete" }),
+      }),
+    ).toStrictEqual({ status: "already-complete" });
+    expect(
+      appendDurableServerLogBatch(stateDir, {
+        level: "info",
+        inspect: () => ({ status: "deferred" }),
+      }),
+    ).toStrictEqual({ status: "inspection-deferred" });
+    expect(listActivityLogFiles(stateDir)).toHaveLength(0);
+  });
+
+  it("does not inspect or touch the log directory when a durable info batch is filtered", () => {
+    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
+    expect(appendDurableServerLogBatch(stateDir, { level: "warn", inspect })).toStrictEqual({
+      status: "deferred",
+      reason: "level-filtered",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+    expect(existsSync(logsDirectory(stateDir))).toBe(false);
+  });
+
+  it("reports uncertain durability when the batch fsync fails", () => {
+    createFileServerLogSink(stateDir).write({ category: "process", op: "before-fsync-failure" });
+    fsCalls.failFsync = true;
+    expect(
+      appendDurableServerLogBatch(stateDir, {
+        level: "info",
+        inspect: () => ({
+          status: "append",
+          events: [{ category: "diagnostic", op: "uncertain-batch" }],
+        }),
+      }),
+    ).toStrictEqual({ status: "deferred", reason: "durability-uncertain" });
+  });
+
+  it("defers an invalid batch before writing any of it", () => {
+    const valid = registeredTestEvent({ category: "diagnostic", op: "valid-first" });
+    const result = appendStrictDurableServerLogBatch(stateDir, {
+      level: "info",
+      inspect: () => ({
+        status: "append",
+        events: [valid, { category: "diagnostic", op: "unregistered.second" }],
+      }),
+    });
+    expect(result).toStrictEqual({ status: "deferred", reason: "append-failed" });
+    expect(readCallerLines(stateDir)).toHaveLength(0);
+  });
+
+  it("defers without writing when the log directory is redirected during inspection", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const outside = mkdtempSync(join(tmpdir(), "keiko-activity-durable-outside-"));
+    try {
+      const result = appendDurableServerLogBatch(stateDir, {
+        level: "info",
+        inspect: (directory) => {
+          renameSync(directory, join(stateDir, "parked"));
+          symlinkSync(outside, directory);
+          return { status: "append", events: [{ category: "diagnostic", op: "must-not-append" }] };
+        },
+      });
+      expect(result).toStrictEqual({ status: "deferred", reason: "destination-mutated" });
+      expect(readdirSync(outside)).toStrictEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+// A shared segment id is what a segment-set pin names; the id survives sealing unchanged.
+describe("activity log segment identity", () => {
+  it("keeps one segment id from creation to seal", () => {
+    const identity = {
+      startMs: Date.UTC(2026, 8, 18),
+      pid: 4_242,
+      instanceId: "0a0b0c0d",
+      index: 2,
+    };
+    const id = formatActivityLogSegmentId(identity);
+    expect(activityLogSegmentFileName(identity, "active")).toBe(`activity-${id}.active.jsonl`);
+    expect(activityLogSegmentFileName(identity, "sealed")).toBe(`activity-${id}.jsonl`);
+  });
+});
+
+// #3532 reads the process-wide loss ledger for its loss summary and readiness, so every line this
+// writer loses is counted there too, under the closed reason that lost it, and only once it is
+// really lost: evidence still queued for the next write, or a seal line already on disk, is not.
+describe("activity log loss ledger", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-activity-loss-"));
+    vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
+    resetFsKnobs();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    resetServerLogFailureNotices();
+    resetActivityLogLossCountersForTests();
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    resetFsKnobs();
+    resetActivityLogLossCountersForTests();
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("counts a dropped write as persistence-failed and a registry rejection as schema-rejected", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "before-full" });
+    fsCalls.failWriteCode = "ENOSPC";
+    for (let index = 0; index < 3; index += 1) sink.write({ category: "http", op: "while-full" });
+    fsCalls.failWriteCode = null;
+    createStrictFileServerLogSink(stateDir).write({
+      category: "diagnostic",
+      op: "unregistered.loss-ledger",
+    });
+
+    expect(activityLogLossCounters()).toMatchObject({
+      "persistence-failed": 3,
+      "schema-rejected": 1,
+    });
+  });
+
+  it("counts the lines a close cannot persist: the blocked-loss line and the seal line", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "before-full" });
+    fsCalls.failWriteCode = "ENOSPC";
+    for (let index = 0; index < 3; index += 1) sink.write({ category: "http", op: "while-full" });
+    sink.close?.();
+    fsCalls.failWriteCode = null;
+
+    // Three dropped writes, the disk-full pressure line that never landed, and the seal line.
+    expect(activityLogLossCounters()["persistence-failed"]).toBe(5);
+  });
+
+  it("does not count a seal line that reached the disk before publication failed", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "sealed-late" });
+    fsCalls.failFsync = true;
+    sink.close?.();
+    fsCalls.failFsync = false;
+
+    expect(activityLogLossCounters()["persistence-failed"]).toBe(0);
+    expect(linesWithOp(stateDir, "activity-log.segment.sealed")).toHaveLength(1);
+  });
+
+  it("keeps pin evidence queued through a failed write instead of counting it lost", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "before-pin" });
+    const now = Date.now();
+    fsCalls.failWriteOpOnce = "activity-log.pin.created";
+
+    const result = pinActivityLogWindow(stateDir, {
+      scope: { kind: "window", fromMs: now - 60_000, toMs: now },
+      expiresAtMs: now + 60_000,
+    });
+
+    expect(result.status).toBe("pinned");
+    expect(fsCalls.failWriteOpOnce).toBeNull();
+    expect(linesWithOp(stateDir, "activity-log.pin.created")).toHaveLength(0);
+    sink.write({ category: "http", op: "after-pin" });
+    expect(linesWithOp(stateDir, "activity-log.pin.created")).toHaveLength(1);
+    expect(activityLogLossCounters()["persistence-failed"]).toBe(0);
   });
 });

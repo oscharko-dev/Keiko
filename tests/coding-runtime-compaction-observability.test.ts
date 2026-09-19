@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { analyzeLogText, findTimeline } from "../packages/keiko-cli/src/support-analyze.js";
 import { recordCompactionActivity } from "../packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.js";
 import { createFileServerLogSink } from "../packages/keiko-server/src/observability/server-log.js";
+import { readPersistedActivityLog } from "./support/activity-log-proof.js";
 
 describe("native coding-runtime compaction support reconstruction", () => {
   it("retains the correlated body-free lifecycle in the support timeline", () => {
@@ -59,7 +60,7 @@ describe("native coding-runtime compaction support reconstruction", () => {
       ]);
       activityLog.close?.();
 
-      const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+      const serialized = readPersistedActivityLog(stateDir);
       const analysis = analyzeLogText(serialized);
       const timeline = findTimeline(analysis, runId);
       expect(timeline?.lines.map(({ op, extra, errorKind }) => ({ op, extra, errorKind }))).toEqual(

@@ -62,6 +62,10 @@ import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
 import { runGatewayReadiness } from "./gateway-readiness.js";
 import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
 import type { RouteContext } from "./routes.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const tmpDirs: string[] = [];
 
@@ -571,6 +575,14 @@ describe("handleGatewaySetup", () => {
           verificationEvent as unknown as Readonly<Record<PropertyKey, unknown>>,
         ),
       ).toBeDefined();
+      const persisted = expectActivityLogProof(
+        "gateway.tool-calling.verification.line",
+        formatActivityLogProofLine(verificationEvent ?? {}),
+      );
+      expect(persisted).toMatchObject({
+        correlationId: "corr-tool-proof",
+        verificationStatus: "verified",
+      });
     } finally {
       resetServerLogger();
       deps.store.close();

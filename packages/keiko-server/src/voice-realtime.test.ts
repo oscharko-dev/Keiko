@@ -18,6 +18,10 @@ import {
   setServerLogger,
   type BufferedServerLogSink,
 } from "./observability/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const OFFER_SDP =
   "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendonly\r\n";
@@ -692,6 +696,14 @@ describe("VoiceControlConnection diagnostics (w4b-voice-realtime)", () => {
     });
     expect(JSON.stringify(sink.events[0])).not.toContain("speech-to-text");
     expect(JSON.stringify(sink.events[0])).not.toContain("full-realtime");
+
+    // Activity Log proof (#3532): the same denial event, formatted exactly as the production file
+    // sink persists it, resolves voice.realtime.policy-decision.reason for the op-catalog.
+    const persisted = expectActivityLogProof(
+      "voice.realtime.policy-decision.reason",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ decision: "deny", reason: "profile-mismatch" });
   });
 
   it("brackets a normal session lifecycle with a session-start and a session-end line", () => {
@@ -714,6 +726,24 @@ describe("VoiceControlConnection diagnostics (w4b-voice-realtime)", () => {
       op: "voice.realtime.session-ended",
       correlationId: "diag-lifecycle-1",
       extra: {},
+    });
+
+    // Activity Log proofs (#3532): the same start/end events, formatted exactly as the production
+    // file sink persists them, resolve voice.realtime.session-started.profile and
+    // voice.realtime.session-ended.closed for the op-catalog.
+    const startedProof = expectActivityLogProof(
+      "voice.realtime.session-started.profile",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(startedProof).toMatchObject({ profile: "full-realtime", resumed: false });
+
+    const endedProof = expectActivityLogProof(
+      "voice.realtime.session-ended.closed",
+      formatActivityLogProofLine(sink.events[1] ?? {}),
+    );
+    expect(endedProof).toMatchObject({
+      op: "voice.realtime.session-ended",
+      correlationId: "diag-lifecycle-1",
     });
   });
 });

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import {
   resetServerLogFailureNotices,
   type ServerLogSink,
 } from "./server-log.js";
+import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
 
 function runBusinessOperation(sink: ServerLogSink, rejectedValue: string): string {
   const registration = activityLogOperationSchema("chat.request.dispatch");
@@ -59,7 +60,7 @@ describe("Activity Log validation resilience", () => {
       "business-operation-completed",
     );
 
-    const persisted = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
+    const persisted = readPersistedActivityLog(stateDir);
     expect(persisted).not.toContain("chat.request.dispatch");
     expect(persisted).not.toContain(rejectedValue);
     expect(stderrWrite).toHaveBeenCalledTimes(1);

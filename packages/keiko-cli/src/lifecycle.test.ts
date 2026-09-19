@@ -1,6 +1,5 @@
 import {
   existsSync,
-  fstatSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -104,23 +103,10 @@ function makeRoot(): string {
   return root;
 }
 
-function childLogFds(opts: SpawnOptions): { readonly stdoutFd: number; readonly stderrFd: number } {
-  expect(Array.isArray(opts.stdio)).toBe(true);
-  const stdio = opts.stdio as readonly unknown[];
-  expect(stdio[0]).toBe("ignore");
-  expect(typeof stdio[1]).toBe("number");
-  expect(typeof stdio[2]).toBe("number");
-  return { stdoutFd: stdio[1] as number, stderrFd: stdio[2] as number };
-}
-
-function requireCapturedLogFds(
-  logFds: { readonly stdoutFd: number; readonly stderrFd: number } | undefined,
-): { readonly stdoutFd: number; readonly stderrFd: number } {
-  expect(logFds).toBeDefined();
-  if (logFds === undefined) {
-    throw new Error("Expected child log file descriptors to be captured");
-  }
-  return logFds;
+// #3532: the detached UI child inherits no descriptor at all. Its raw stdout/stderr is never
+// persisted (`ui.log` is retired); every diagnostic it produces is an Activity Log line.
+function expectNoPersistedChildOutput(opts: SpawnOptions): void {
+  expect(opts.stdio).toBe("ignore");
 }
 
 async function withHealthServer<T>(
@@ -386,12 +372,25 @@ describe("runLifecycleCli", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
-  it("reports a live pid through status without probing health", async () => {
+  it("reports a live pid and the server's diagnostic readiness through status", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
     writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
     const c = makeIo();
-    const fetchImpl = vi.fn();
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        Response.json({
+          status: "ok",
+          version: SDK_VERSION,
+          diagnostics: {
+            readiness: "degraded",
+            reasons: ["level-silent"],
+            writer: "production-file",
+            lostEvents: 2,
+          },
+        }),
+      ),
+    );
 
     const code = await runLifecycle(
       "status",
@@ -408,7 +407,31 @@ describe("runLifecycleCli", () => {
     expect(code).toBe(0);
     expect(c.out()).toContain("Keiko UI is running on http://127.0.0.1:1983");
     expect(c.out()).toContain("pid 12345");
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(c.out()).toContain("Diagnostic evidence: degraded (level-silent); lost events: 2.");
+  });
+
+  it("reports readiness as unknown when the health body carries no valid diagnostics block", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), `12345\n${TEST_LAUNCH_ID}\n`, "utf8");
+    const c = makeIo();
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        Response.json({ status: "ok", version: SDK_VERSION, diagnostics: { readiness: "fine" } }),
+      ),
+    );
+
+    const code = await runLifecycle(
+      "status",
+      [],
+      c.io,
+      {},
+      { cwd: root, fetchImpl, isProcessAlive: () => true },
+    );
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Diagnostic evidence: unknown (health check unavailable).");
   });
 
   it("starts the packaged UI through the compiled CLI entry and records runtime state", async () => {
@@ -457,12 +480,10 @@ describe("runLifecycleCli", () => {
       KEIKO_STATE_DIR: join(root, ".keiko-test"),
       KEIKO_UI_LAUNCH_ID: pidFileText.split("\n")[1],
     });
-    const logFds = childLogFds(spawn.opts);
-    expect(logFds.stdoutFd).not.toBe(logFds.stderrFd);
-    expect(() => fstatSync(logFds.stdoutFd)).toThrow();
-    expect(() => fstatSync(logFds.stderrFd)).toThrow();
-    expect(existsSync(join(root, ".keiko-test", "ui.log"))).toBe(true);
+    expectNoPersistedChildOutput(spawn.opts);
+    expect(existsSync(join(root, ".keiko-test", "ui.log"))).toBe(false);
     expect(c.out()).toContain("Keiko UI running");
+    expect(c.out()).toContain(`Activity Log: ${join(root, ".keiko-test", "logs")}`);
   });
 
   it("uses the plan-bound launch id for a recovered portable start", async () => {
@@ -1204,7 +1225,10 @@ describe("runLifecycleCli", () => {
         // The async failure surfaces only after spawn returned (real EMFILE shape).
         spawnFn: () => {
           queueMicrotask(() => {
-            child.emit("error", new Error("spawn EMFILE"));
+            child.emit(
+              "error",
+              Object.assign(new Error("spawn /private/path EMFILE"), { code: "EMFILE" }),
+            );
           });
           return child;
         },
@@ -1218,7 +1242,11 @@ describe("runLifecycleCli", () => {
     );
 
     expect(code).toBe(1);
-    expect(c.err()).toContain("failed to launch (spawn EMFILE)");
+    // The content-free class only: the spawn error's text (which can carry a path) never reaches
+    // stderr, and the start result is the closed `process-exited`.
+    expect(c.err()).toContain("failed to launch (EMFILE)");
+    expect(c.err()).not.toContain("/private/path");
+    expect(c.err()).toContain("UI did not become healthy (process-exited)");
   });
 
   it("fails cleanly when the UI child process has no pid", async () => {
@@ -1247,10 +1275,10 @@ describe("runLifecycleCli", () => {
     expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
   });
 
-  it("closes UI log descriptors when spawning the UI process throws", async () => {
+  it("never opens ui.log when spawning the UI process throws", async () => {
     const root = makeRoot();
     const c = makeIo();
-    let logFds: { readonly stdoutFd: number; readonly stderrFd: number } | undefined;
+    let spawnOptions: SpawnOptions | undefined;
 
     const code = await runLifecycle(
       "start",
@@ -1260,7 +1288,7 @@ describe("runLifecycleCli", () => {
       {
         cwd: root,
         spawnFn: (_command, _args, opts) => {
-          logFds = childLogFds(opts);
+          spawnOptions = opts;
           throw new Error("spawn failed");
         },
         fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
@@ -1273,10 +1301,9 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(1);
     expect(c.err()).toContain("failed to spawn");
-    const capturedLogFds = requireCapturedLogFds(logFds);
-    expect(capturedLogFds.stdoutFd).not.toBe(capturedLogFds.stderrFd);
-    expect(() => fstatSync(capturedLogFds.stdoutFd)).toThrow();
-    expect(() => fstatSync(capturedLogFds.stderrFd)).toThrow();
+    expect(spawnOptions).toBeDefined();
+    if (spawnOptions !== undefined) expectNoPersistedChildOutput(spawnOptions);
+    expect(existsSync(join(root, ".keiko", "ui.log"))).toBe(false);
     expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
   });
 
@@ -1640,7 +1667,9 @@ describe("safeKillProcess (ESRCH-safe default killer)", () => {
 // path. Skipped on Windows: NTFS symlink semantics differ and the fallback lstat
 // refusal is exercised via cross-platform code review, not test.
 describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () => {
-  it("refuses to open a pre-planted symlinked ui.log without corrupting the target file", async (ctx) => {
+  // #3532 strengthens this pin: `keiko start` no longer opens `ui.log` at all, so a planted
+  // symlink can never be followed or written through, and it no longer blocks a start either.
+  it("never opens or follows a pre-planted symlinked ui.log and never corrupts its target", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = join(root, ".keiko");
@@ -1674,12 +1703,12 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
       },
     );
 
-    // The symlinked-log branch fails the start with a spawn-fail message (openUiLogStdio
-    // throws before spawn runs) and never writes through the symlink.
-    expect(code).toBe(1);
-    // The decoy file is byte-identical before and after the attempt.
+    // The start never touches ui.log: the child inherits no descriptor, the decoy is
+    // byte-identical, and the planted symlink is left exactly as it was.
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
+    expectNoPersistedChildOutput((spawned[0] as { readonly opts: SpawnOptions }).opts);
     expect(readFileSync(decoy, "utf8")).toBe(original);
-    // The symlink itself is still a symlink (not replaced with a real file).
     expect(lstatSync(join(stateDir, "ui.log")).isSymbolicLink()).toBe(true);
   });
 
@@ -1786,8 +1815,10 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
 // could ever run; a directory (or other non-regular entry) is accepted outright. The fix opens
 // O_NONBLOCK (so a FIFO's open() fails fast instead of hanging) and fstat-verifies the OPENED
 // descriptor is a regular, single-link file before it is ever handed to the child.
-describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment 3865329050)", () => {
-  it("detects a hard-linked ui.log and never writes through the hardlink's target file", async (ctx) => {
+// #3532 strengthens these pins: `keiko start` no longer opens `ui.log` at all, so no planted entry
+// there can receive child output, hang the start, or be modified — whatever its kind.
+describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.log (comment 3865329050)", () => {
+  it("never writes through a hard-linked ui.log's target file", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = join(root, ".keiko");
@@ -1823,17 +1854,16 @@ describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment
       },
     );
 
-    // The refusal happens before spawn: no child process is ever launched, and the victim
-    // file's content is byte-identical before and after.
-    expect(spawned).toEqual([]);
-    expect(code).toBe(1);
+    // The child inherits no descriptor, the victim file's content is byte-identical before and
+    // after, and the hard link itself is left exactly as planted.
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
+    expectNoPersistedChildOutput((spawned[0] as { readonly opts: SpawnOptions }).opts);
     expect(readFileSync(victim, "utf8")).toBe(original);
-    // The hard link itself is left in place — never unlinked, unlike the pid file's
-    // unlink-and-recreate self-heal (ui.log has no such self-heal path).
     expect(lstatSync(join(stateDir, "ui.log")).nlink).toBeGreaterThan(1);
   });
 
-  it("refuses a FIFO planted at ui.log without hanging (O_NONBLOCK)", async (ctx) => {
+  it("never opens a FIFO planted at ui.log, so the start cannot hang on it", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = join(root, ".keiko");
@@ -1864,12 +1894,14 @@ describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment
     );
 
     // A blocking open() with no reader present would hang this test forever; reaching this
-    // assertion at all proves the open failed fast instead. No child is ever launched.
-    expect(spawned).toEqual([]);
-    expect(code).toBe(1);
+    // assertion at all proves the FIFO was never opened.
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
+    expectNoPersistedChildOutput((spawned[0] as { readonly opts: SpawnOptions }).opts);
+    expect(lstatSync(join(stateDir, "ui.log")).isFIFO()).toBe(true);
   }, 10_000);
 
-  it("refuses a directory planted at ui.log", async (ctx) => {
+  it("leaves a directory planted at ui.log untouched", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
     const stateDir = join(root, ".keiko");
@@ -1899,8 +1931,8 @@ describe("keiko start — refuses a hard-linked/FIFO/non-regular ui.log (comment
       },
     );
 
-    expect(spawned).toEqual([]);
-    expect(code).toBe(1);
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
     // The directory is left exactly as planted — never removed or written into.
     expect(lstatSync(join(stateDir, "ui.log")).isDirectory()).toBe(true);
   });

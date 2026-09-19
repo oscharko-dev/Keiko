@@ -33,6 +33,10 @@ import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 type EgressConfig = NonNullable<GatewayConfig["egress"]>;
 
@@ -892,5 +896,42 @@ describe("rerankSelection activity log", () => {
     expect(serialized).not.toContain("beta");
     expect(serialized).not.toContain("gamma");
     expect(serialized).not.toContain("reranker-test-key");
+  });
+
+  // Activity Log proof (#3532): the facade's real applied-outcome event, formatted exactly as the
+  // production file sink persists it, resolves search.rerank.completed.line for the op-catalog.
+  it("resolves the search.rerank.completed Activity Log proof", async () => {
+    const deps = depsWith(gatewayConfig(), () =>
+      Promise.resolve(successfulOutcome([{ index: 0 }, { index: 1 }])),
+    );
+    const sink = capture("debug");
+
+    await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: CANDIDATES,
+      documentFor: (candidate) => candidate,
+      topN: 2,
+      fallbackMode: "slice-topN",
+      correlationId: "search-rerank-proof-0001",
+    });
+
+    const [event] = sink.events;
+    const persisted = expectActivityLogProof(
+      "search.rerank.completed.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      correlationId: "search-rerank-proof-0001",
+      outcome: "applied",
+      mode: "provider-backed",
+      candidateCount: 3,
+      documentCount: 3,
+      keptCount: 2,
+      fallbackMode: "slice-topN",
+      topN: 2,
+      completeness: "complete",
+      loss: "none",
+    });
   });
 });

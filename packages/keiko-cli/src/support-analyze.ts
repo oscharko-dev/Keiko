@@ -61,10 +61,19 @@ import {
   isActivityLogProductVersion,
   isActivityLogSequence,
   validateActivityLogOperationRecord,
+  type ActivityLogCompletenessState,
   type ActivityLogEventEnvelope,
+  type ActivityLogLossState,
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
+import {
+  activityLogFailureClassesOf,
+  projectActivityLogSufficiency,
+  restrictActivityLogSufficiency,
+  type ActivityLogSufficiency,
+  type ActivityLogSufficiencyLine,
+} from "./support-analyze-sufficiency.js";
 
 export interface SupportAnalyzeOptions {
   readonly toolLifecycleValidator?: ToolLifecycleValidator;
@@ -159,6 +168,28 @@ export interface ProcessSummary {
 export type ActivityLogEvidenceClassification =
   "supported" | "legacy" | "unsupported" | "corrupt" | "truncated" | "incomplete";
 
+export interface ActivityLogEvidenceIntegrity {
+  readonly completeness: ActivityLogCompletenessState;
+  readonly loss: ActivityLogLossState;
+}
+
+// ADR-0173 D10's closed vocabularies, derived from the analyzer's own verdict instead of the
+// constructor defaults. Only supported or legacy evidence (which implies no malformed line) is
+// complete; a truncated or corrupt artifact is a known, counted subset whose unreadable bytes stand
+// where a record should be; unsupported lines are preserved but excluded; incomplete identity or
+// writer evidence means completeness cannot be established at all. Shared by the analysis evidence
+// line and the SupportIncident descriptor (#3533) so both state one verdict the same way.
+export const ACTIVITY_LOG_EVIDENCE_INTEGRITY: Readonly<
+  Record<ActivityLogEvidenceClassification, ActivityLogEvidenceIntegrity>
+> = {
+  supported: { completeness: "complete", loss: "none" },
+  legacy: { completeness: "complete", loss: "none" },
+  unsupported: { completeness: "partial", loss: "none" },
+  corrupt: { completeness: "partial", loss: "event-dropped" },
+  truncated: { completeness: "partial", loss: "event-dropped" },
+  incomplete: { completeness: "unknown", loss: "none" },
+};
+
 export type ProcessSequenceAnomalyKind = "gap" | "duplicate" | "decreasing" | "reset";
 
 export interface ProcessSequenceAnomaly {
@@ -209,6 +240,9 @@ export interface AnalyzeAllResult {
   // originating HTTP request correlation. This projection joins only explicit candidate/session
   // identity fields emitted by production; it never guesses from target version or timestamps.
   readonly updateAttempts: readonly UpdateAttemptTimeline[];
+  // #3532: every observed failure class projected to complete/degraded/insufficient with closed
+  // reasons, derived from the registry's failure-class contracts (support-analyze-sufficiency.ts).
+  readonly sufficiency: ActivityLogSufficiency;
 }
 
 export type SourceKind = "bundle" | "raw-log";
@@ -387,14 +421,14 @@ function toolCatalogFields(
   return {};
 }
 
-interface ParsedLine {
+export interface ParsedLine {
   readonly view: ServerLogLineView;
   readonly correlationId: string | undefined;
   readonly hasFullIdentity: boolean;
   readonly fileIndex: number;
 }
 
-type LineClassification =
+export type LineClassification =
   | {
       readonly kind: "line";
       readonly evidence: "supported" | "legacy";
@@ -693,7 +727,7 @@ function recordEvidence(
 // A `$section`-tagged line is bundle metadata, not evidence. Unsupported versions are classified
 // before their unknown envelope is interpreted; every supported or legacy record still requires
 // the common ts/category/op shape.
-function classifyLine(
+export function classifyLine(
   raw: string,
   fileIndex: number,
   terminalFragment: boolean,
@@ -1154,7 +1188,7 @@ function buildOpClusters(lines: readonly ParsedLine[]): readonly OpCluster[] {
   }));
 }
 
-interface MutableEvidenceCounts {
+export interface MutableEvidenceCounts {
   supported: number;
   legacy: number;
   unsupported: number;
@@ -1163,11 +1197,11 @@ interface MutableEvidenceCounts {
   incomplete: number;
 }
 
-function emptyEvidenceCounts(): MutableEvidenceCounts {
+export function emptyEvidenceCounts(): MutableEvidenceCounts {
   return { supported: 0, legacy: 0, unsupported: 0, corrupt: 0, truncated: 0, incomplete: 0 };
 }
 
-function incrementEvidence(
+export function incrementEvidence(
   counts: MutableEvidenceCounts,
   classification: ActivityLogEvidenceClassification,
 ): void {
@@ -1192,7 +1226,7 @@ function overallEvidenceClassification(
   return "supported";
 }
 
-function evidenceSummary(
+export function evidenceSummary(
   counts: MutableEvidenceCounts,
   sequenceAnomalies: readonly ProcessSequenceAnomaly[],
 ): ActivityLogEvidenceSummary {
@@ -1227,7 +1261,7 @@ function evidenceWarnings(evidence: ActivityLogEvidenceSummary): readonly string
   return warnings;
 }
 
-interface SequenceState {
+export interface SequenceState {
   readonly seen: Set<number>;
   previous: number;
 }
@@ -1249,7 +1283,10 @@ function sequenceAnomaly(
   };
 }
 
-function lineSequenceAnomalies(line: ParsedLine, state: SequenceState): ProcessSequenceAnomaly[] {
+export function lineSequenceAnomalies(
+  line: ParsedLine,
+  state: SequenceState,
+): ProcessSequenceAnomaly[] {
   const anomalies: ProcessSequenceAnomaly[] = [];
   const seq = orZero(line.view.seq);
   if (seq > state.previous + 1) {
@@ -1320,29 +1357,133 @@ function latestObservation(lines: readonly ParsedLine[]): LatestObservation {
   return { latestTimestamp, latestInstanceId };
 }
 
-// Parses `text` (the full content of a raw server.log OR a support bundle), groups every line
+// Parses `text` (the full content of a raw Activity Log file OR a support bundle), groups every line
 // that carries a correlationId into one LogTimeline per id (first-occurrence order), and counts
 // every line that could not be read as a log record. A line with no correlationId at all
 // (`process.*` lines, a first-ever request before any id was assigned) belongs to no timeline and
 // is neither malformed nor counted — this module only reconstructs correlated request/run stories.
+// A bundle joins the lines of many Activity Log files (#3530 segments), so a crashed writer's torn
+// tail can sit in the MIDDLE of the bundle. The manifest's `sourceLogFileLines` names each file's
+// line count and whether it ended in a fragment; those positions classify as `truncated` exactly as
+// the bundle's own final fragment does. A malformed or oversized declaration reinterprets nothing,
+// and the declaration can only move an invalid line between two rejected classes.
+const MAX_SOURCE_LOG_FILE_ENTRIES = 100_000;
+
+interface SourceFileBoundary {
+  readonly lineCount: number;
+  readonly terminalFragment: boolean;
+}
+
+function sourceFileBoundary(value: unknown): SourceFileBoundary | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const lineCount: unknown = Reflect.get(value, "lineCount");
+  const terminalFragment: unknown = Reflect.get(value, "terminalFragment");
+  return typeof lineCount === "number" &&
+    Number.isSafeInteger(lineCount) &&
+    lineCount >= 0 &&
+    typeof terminalFragment === "boolean"
+    ? { lineCount, terminalFragment }
+    : undefined;
+}
+
+// The declared fragment positions, relative to the first content line after the bundle's leading
+// `$section` records (their count is only known once the first evidence line streams past).
+function bundleRelativeFragments(manifestLine: string | undefined): ReadonlySet<number> {
+  const entries: unknown = tryParseJsonObject(manifestLine ?? "")?.sourceLogFileLines;
+  if (!Array.isArray(entries) || entries.length > MAX_SOURCE_LOG_FILE_ENTRIES) return new Set();
+  const fragments = new Set<number>();
+  let offset = 0;
+  for (const entry of entries) {
+    const boundary = sourceFileBoundary(entry);
+    if (boundary === undefined) return new Set();
+    offset += boundary.lineCount;
+    if (boundary.terminalFragment && boundary.lineCount > 0) fragments.add(offset - 1);
+  }
+  return fragments;
+}
+
+/** One line of an Activity Log artifact; only a final torn fragment is not `terminated`. */
+export interface ActivityLogTextLine {
+  readonly text: string;
+  readonly terminated: boolean;
+}
+
+function* textLines(text: string): Generator<ActivityLogTextLine> {
+  const lines = splitLines(text);
+  const lastIndex = lines.length - 1;
+  for (const [index, line] of lines.entries()) {
+    yield { text: line, terminated: index < lastIndex || text.endsWith("\n") };
+  }
+}
+
+interface LineAccumulation {
+  readonly parsedLines: ParsedLine[];
+  readonly evidenceCounts: MutableEvidenceCounts;
+  malformedLineCount: number;
+  // Content lines seen, and how many leading `$section` records preceded the first evidence line.
+  contentIndex: number;
+  leadingSections: number | undefined;
+}
+
+function accumulateContentLine(
+  accumulation: LineAccumulation,
+  line: ActivityLogTextLine,
+  fragments: ReadonlySet<number>,
+  options: SupportAnalyzeOptions,
+): void {
+  const index = accumulation.contentIndex;
+  accumulation.contentIndex += 1;
+  // A line that turns out to be a section ignores the flag, so the tentative offset is safe.
+  const leading = accumulation.leadingSections ?? index;
+  const terminalFragment = fragments.has(index - leading) || !line.terminated;
+  const classification = classifyLine(line.text, index, terminalFragment, options);
+  if (classification.kind === "section") return;
+  accumulation.leadingSections ??= index;
+  incrementEvidence(accumulation.evidenceCounts, classification.evidence);
+  if (classification.kind === "line") accumulation.parsedLines.push(classification.parsed);
+  else if (classification.evidence !== "unsupported") accumulation.malformedLineCount += 1;
+}
+
 export function analyzeLogText(
   text: string,
   options: SupportAnalyzeOptions = {},
 ): AnalyzeAllResult {
-  const lines = splitLines(text);
-  const kind = detectSourceKind(lines[0]);
-  const contentLines = kind === "bundle" ? lines.slice(1) : lines;
-  const parsedLines: ParsedLine[] = [];
-  const evidenceCounts = emptyEvidenceCounts();
-  let malformedLineCount = 0;
-  for (const [index, raw] of contentLines.entries()) {
-    const terminalFragment = index === contentLines.length - 1 && !text.endsWith("\n");
-    const classification = classifyLine(raw, index, terminalFragment, options);
-    if (classification.kind === "section") continue;
-    incrementEvidence(evidenceCounts, classification.evidence);
-    if (classification.kind === "line") parsedLines.push(classification.parsed);
-    else if (classification.evidence !== "unsupported") malformedLineCount += 1;
+  return analyzeLogLines(textLines(text), options);
+}
+
+/**
+ * Streams an Activity Log artifact line by line (#3531): the text is never held whole, so memory
+ * follows the retained evidence rather than the artifact size. Ordering and every verdict are
+ * identical to `analyzeLogText`, which delegates here.
+ */
+export function analyzeLogLines(
+  lines: Iterable<ActivityLogTextLine>,
+  options: SupportAnalyzeOptions = {},
+): AnalyzeAllResult {
+  const iterator = lines[Symbol.iterator]();
+  const first = iterator.next();
+  const firstLine: ActivityLogTextLine | undefined = first.done === true ? undefined : first.value;
+  const kind = detectSourceKind(firstLine?.text);
+  const fragments =
+    kind === "bundle" ? bundleRelativeFragments(firstLine?.text) : new Set<number>();
+  const accumulation: LineAccumulation = {
+    parsedLines: [],
+    evidenceCounts: emptyEvidenceCounts(),
+    malformedLineCount: 0,
+    contentIndex: 0,
+    leadingSections: undefined,
+  };
+  if (firstLine !== undefined && kind === "raw-log") {
+    accumulateContentLine(accumulation, firstLine, fragments, options);
   }
+  for (let next = iterator.next(); next.done !== true; next = iterator.next()) {
+    accumulateContentLine(accumulation, next.value, fragments, options);
+  }
+  return analyzeParsedLines(kind, accumulation);
+}
+
+function analyzeParsedLines(kind: SourceKind, accumulation: LineAccumulation): AnalyzeAllResult {
+  const { parsedLines, evidenceCounts, malformedLineCount } = accumulation;
   const groups = groupByCorrelationId(parsedLines);
   const timelines = [...groups.entries()].map(([correlationId, group]) =>
     buildTimeline(correlationId, group),
@@ -1355,6 +1496,7 @@ export function analyzeLogText(
   const clusters = buildOpClusters(parsedLines);
   const updateAttempts = buildUpdateAttempts(parsedLines);
   const observation = latestObservation(parsedLines);
+  const sufficiency = projectActivityLogSufficiency(parsedLines.map(sufficiencyLine), evidence);
   return {
     sourceKind: kind,
     ...observation,
@@ -1366,6 +1508,29 @@ export function analyzeLogText(
     warnings,
     clusters,
     updateAttempts,
+    sufficiency,
+  };
+}
+
+/** The artifact's sufficiency narrowed to the failure classes one timeline observed (#3532). */
+export function timelineSufficiency(
+  result: AnalyzeAllResult,
+  timeline: LogTimeline,
+): ActivityLogSufficiency {
+  return restrictActivityLogSufficiency(
+    result.sufficiency,
+    activityLogFailureClassesOf(timeline.lines.map((line) => line.op)),
+  );
+}
+
+export function sufficiencyLine(line: ParsedLine): ActivityLogSufficiencyLine {
+  return {
+    op: line.view.op,
+    correlationId: line.correlationId,
+    parentCorrelationId: line.view.parentCorrelationId,
+    pid: line.view.pid,
+    instanceId: line.view.instanceId,
+    fields: line.view.extra,
   };
 }
 
@@ -1487,7 +1652,7 @@ export function renderHumanAllTimelines(result: AnalyzeAllResult): string {
 // (scanning `gateway.chat.*`/`gateway.stream.*`/`gateway.retry.*` lines for the httpStatus/
 // retryAfterMs/finishReason/usage/firstTokenMs fields ADR-0173 Wave 3 added), an `httpRequest`
 // (the timeline's `http`/`request` and `http`/`sse.stream.closed` lines), a `storeFingerprint`
-// (the bundle manifest's `storeFingerprints`, Wave 4a — undefined for a raw server.log, which
+// (the bundle manifest's `storeFingerprints`, Wave 4a — undefined for a raw Activity Log file, which
 // carries no manifest), an `indexingJob` (the timeline's `indexing.job.started` line, Wave 4a),
 // `stackFrames`/`causeChain` (straight off the timeline), and a `warnings` field naming exactly
 // what could not be reconstructed and why — never silently omitted.
@@ -1938,9 +2103,10 @@ function issueToPrJourneyWarning(journey: IssueToPrJourneyView | undefined): str
 // exporter is Wave-4a-or-later. `classifyLine` treats it as bundle metadata and never parses its
 // content, so this reads it directly, independent of `analyzeLogText`. Every candidate is
 // re-validated with the contract's own `isStoreFingerprint` guard (never trusted merely because it
-// parsed as JSON) — a raw server.log, which has no manifest line at all, always returns undefined.
-function extractManifestStoreFingerprints(text: string): readonly StoreFingerprint[] | undefined {
-  const [firstLine] = splitLines(text);
+// parsed as JSON) — a raw Activity Log file, which has no manifest line at all, always returns undefined.
+function extractManifestStoreFingerprints(
+  firstLine: string | undefined,
+): readonly StoreFingerprint[] | undefined {
   if (firstLine === undefined) return undefined;
   const record = tryParseJsonObject(firstLine);
   if (record?.$section !== "manifest" || !Array.isArray(record.storeFingerprints)) {
@@ -1985,6 +2151,8 @@ export interface ReproductionSeed {
   readonly issueToPrJourney?: IssueToPrJourneyView | undefined;
   readonly stackFrames?: readonly string[] | undefined;
   readonly causeChain?: readonly string[] | undefined;
+  // #3532: complete/degraded/insufficient for the failure classes this timeline observed.
+  readonly sufficiency: ActivityLogSufficiency;
   // What could NOT be reconstructed from this artifact, and why — GRAFTED FROM DESIGN C
   // (ADR-0173 §10). Never empty in practice: every seed at minimum names the standing
   // by-design gap that no prompt/response body is ever logged.
@@ -2024,7 +2192,7 @@ function storeFingerprintWarning(
 ): string | undefined {
   if (fingerprints !== undefined) return undefined;
   return kind === "raw-log"
-    ? "a raw server.log carries no store fingerprints — export a support bundle " +
+    ? "a raw Activity Log file carries no store fingerprints — export a support bundle " +
         "(`keiko support export`) to include them"
     : "no store fingerprints found in this bundle's manifest — either the exporter predates " +
         "Wave 4a, or every store was unavailable at export time";
@@ -2100,7 +2268,7 @@ interface SeedComputation extends SeedComputedFields {
 // of `buildReproductionSeed` purely to stay under the repository's per-function line/complexity
 // ceilings (AGENTS.md §6), no behavioural seam of its own.
 function computeSeedFields(
-  text: string,
+  source: ReproductionSeedSource,
   timeline: LogTimeline,
   options: SupportAnalyzeOptions,
 ): SeedComputation {
@@ -2108,11 +2276,11 @@ function computeSeedFields(
     line.toolCatalog === undefined ? [] : [line.toolCatalog],
   );
   return {
-    kind: detectSourceKind(splitLines(text)[0]),
+    kind: detectSourceKind(source.firstLine),
     gatewayScript: buildGatewayReplayScript(timeline.lines),
     httpRequest: buildHttpRequestSeed(timeline.lines),
     indexingJob: buildIndexingJobSeed(timeline.lines),
-    storeFingerprint: extractManifestStoreFingerprints(text),
+    storeFingerprint: extractManifestStoreFingerprints(source.firstLine),
     stackFrames: timeline.frames ?? [],
     causeChain: aggregateCauseChain(timeline.lines),
     toolCatalog,
@@ -2120,7 +2288,16 @@ function computeSeedFields(
   };
 }
 
-// Assembles a full `ReproductionSeed` for one correlationId out of `text` (a raw server.log or a
+// What a seed records about its source artifact. The CLI computes it while streaming the file
+// (#3531), so a seed never needs the artifact held whole: the line count, the SHA-256 of the
+// artifact's bytes, and its first line (a bundle's manifest line, for its store fingerprints).
+export interface ReproductionSeedSource {
+  readonly lineCount: number;
+  readonly sha256: string;
+  readonly firstLine: string | undefined;
+}
+
+// Assembles a full `ReproductionSeed` for one correlationId out of `text` (a raw Activity Log file or a
 // support bundle — auto-detected, same as `analyzeLogText`). Undefined when no timeline exists for
 // `correlationId`, mirroring `findTimeline`. `generatedAt` is caller-supplied (never `new Date()`
 // read here) so this stays pure and deterministic, like every other export in this file.
@@ -2130,22 +2307,42 @@ export function buildReproductionSeed(
   generatedAt: Date,
   options: SupportAnalyzeOptions = {},
 ): ReproductionSeed | undefined {
-  const timeline = findTimeline(analyzeLogText(text, options), correlationId);
+  const lines = splitLines(text);
+  return buildReproductionSeedFromAnalysis(
+    analyzeLogText(text, options),
+    { lineCount: lines.length, sha256: sha256Hex(text), firstLine: lines[0] },
+    correlationId,
+    generatedAt,
+    options,
+  );
+}
+
+// The same seed from an analysis the caller already streamed plus the facts of its source, so
+// `keiko support analyze --seed` and `--emit-fixture` never load the artifact whole (#3531).
+export function buildReproductionSeedFromAnalysis(
+  analysis: AnalyzeAllResult,
+  source: ReproductionSeedSource,
+  correlationId: string,
+  generatedAt: Date,
+  options: SupportAnalyzeOptions = {},
+): ReproductionSeed | undefined {
+  const timeline = findTimeline(analysis, correlationId);
   if (timeline === undefined) return undefined;
-  const fields = computeSeedFields(text, timeline, options);
+  const fields = computeSeedFields(source, timeline, options);
 
   return {
     schemaVersion: REPRODUCTION_SEED_SCHEMA_VERSION,
     generatedAt: generatedAt.toISOString(),
     sourceArtifact: {
       kind: fields.kind,
-      lineCount: splitLines(text).length,
-      sha256: sha256Hex(text),
+      lineCount: source.lineCount,
+      sha256: source.sha256,
     },
     correlationId,
     timeline: timeline.lines,
     ...optionalSeedFields(fields),
     ...toolCatalogSeed(fields.toolCatalog),
+    sufficiency: timelineSufficiency(analysis, timeline),
     warnings: [
       ...toolCatalogWarnings(fields.toolCatalog),
       ...buildSeedWarnings({
@@ -2268,6 +2465,8 @@ export function renderHumanReproductionSeed(seed: ReproductionSeed): string {
     `correlationId=${seed.correlationId} schemaVersion=${String(seed.schemaVersion)}`,
     `source: kind=${seed.sourceArtifact.kind} lines=${String(seed.sourceArtifact.lineCount)} ` +
       `sha256=${seed.sourceArtifact.sha256}`,
+    `sufficiency: ${seed.sufficiency.status}` +
+      (seed.sufficiency.reasons.length === 0 ? "" : ` (${seed.sufficiency.reasons.join(", ")})`),
     ...renderOptionalSeedSections(seed),
   ];
   if (seed.stackFrames !== undefined && seed.stackFrames.length > 0) {

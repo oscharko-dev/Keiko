@@ -91,7 +91,7 @@ const LSP_SPAWN_COMPLETED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["lsp-process-spawn"],
-  proofIds: ["lsp.spawn-completed.emitted-line"],
+  proofIds: ["lsp.spawn.completed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -137,11 +137,12 @@ const LSP_SPAWN_FAILED_OPERATION = defineActivityLogOperation({
       maxItems: 5,
     },
   },
-  causal: "correlation",
+  // Process-scoped like process.started: no request correlation exists at the spawn boundary.
+  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["lsp-process-spawn"],
-  proofIds: ["lsp.spawn-failed.emitted-line"],
+  proofIds: ["lsp.spawn.failed.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -169,11 +170,12 @@ const LSP_PROCESS_RUNTIME_ERROR_OPERATION = defineActivityLogOperation({
       maxItems: 5,
     },
   },
-  causal: "correlation",
+  // Process-scoped like process.started: no request correlation exists for a running server.
+  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["lsp-process-runtime"],
-  proofIds: ["lsp.process-runtime-error.emitted-line"],
+  proofIds: ["lsp.process.runtime-error.emitted-line"],
   releaseImpact: "patch",
 });
 
@@ -213,7 +215,7 @@ const LSP_PROCESS_TERMINATED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["lsp-process-termination"],
-  proofIds: ["lsp.process-terminated.emitted-line"],
+  proofIds: ["lsp.process.terminated.emitted-line"],
   releaseImpact: "patch",
 });
 

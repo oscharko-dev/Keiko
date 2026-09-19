@@ -30,6 +30,10 @@ import {
 } from "./http.js";
 import { requestOpenAIEmbedding } from "./openai-embedding-adapter.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDAT3UYX+IFphaO
@@ -632,16 +636,40 @@ describe("gatewayFetch", () => {
       socket.once("close", () => originSockets.delete(socket));
     });
     const originPort = await listen(origin);
+    const events: ModelGatewayLogEvent[] = [];
     try {
       await expect(
         gatewayFetch(`https://127.0.0.1:${String(originPort)}/secure`, {
           useCaFallback: true,
           timeoutMs: 1_000,
+          log: {
+            write: (event): void => {
+              events.push(event);
+            },
+          },
         }),
       ).rejects.toMatchObject({
         name: "OutboundHttpEgressError",
         code: "TLS_CA_FAILURE",
         message: "TLS certificate verification failed for outbound egress.",
+      });
+      // The self-signed origin has no configured CA bundle to verify it, so the direct attempt and
+      // the CA-bundle fallback both fail on the same untrusted certificate -- proving both the
+      // fallback-attempted line and the (post-fallback) trust-failed line off one real handshake.
+      const caFallback = events.find((event) => event.op === "http.gateway.tls.ca-bundle-fallback");
+      const caFallbackPersisted = expectActivityLogProof(
+        "http.gateway.tls.ca-bundle-fallback.emitted-line",
+        formatActivityLogProofLine(caFallback ?? {}),
+      );
+      expect(caFallbackPersisted).toMatchObject({ endpointClass: "loopback" });
+      const trustFailed = events.find((event) => event.op === "http.gateway.tls.trust-failed");
+      const trustFailedPersisted = expectActivityLogProof(
+        "http.gateway.tls.trust-failed.emitted-line",
+        formatActivityLogProofLine(trustFailed ?? {}),
+      );
+      expect(trustFailedPersisted).toMatchObject({
+        endpointClass: "loopback",
+        afterCaBundleFallback: true,
       });
     } finally {
       for (const socket of originSockets) socket.destroy();

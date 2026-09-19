@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  activityLogLossCounters,
+  resetActivityLogLossCountersForTests,
+  validateRegisteredActivityLogEvent,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { runDetachedWindowsAlert } from "./portable-launch-notifier.js";
@@ -35,9 +39,9 @@ type SecurityAwareLifecycleCommand = (
   env: EnvSource,
   deps?: SecurityAwareCommandDeps,
 ) => Promise<number>;
-type ServerModule = Pick<typeof import("@oscharko-dev/keiko-server"), "createFileServerLogSink">;
+type ServerModule = Pick<typeof import("@oscharko-dev/keiko-server"), "createActivityLogSink">;
 type PersistedServerLogEvent = Parameters<
-  ReturnType<ServerModule["createFileServerLogSink"]>["write"]
+  ReturnType<ServerModule["createActivityLogSink"]>["write"]
 >[0];
 
 const commandMocks = vi.hoisted(() => ({
@@ -131,12 +135,12 @@ describe("Windows CLI security-log production wiring", () => {
   it("persists layout evidence for every install-layout consumer outside read-only targets", async () => {
     Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
     const written: PersistedServerLogEvent[] = [];
-    const createFileServerLogSink = vi.fn<ServerModule["createFileServerLogSink"]>(() => ({
+    const createActivityLogSink = vi.fn<ServerModule["createActivityLogSink"]>(() => ({
       write: (event): void => {
         written.push(event);
       },
     }));
-    commandMocks.loadServer.mockResolvedValue({ createFileServerLogSink });
+    commandMocks.loadServer.mockResolvedValue({ createActivityLogSink });
     commandMocks.repair.mockImplementation((_args, _io, env, deps) => {
       writeInstallLayoutOverrideEvidence(deps?.securityLogSinkFactory?.("/state"), env);
       return 41;
@@ -191,7 +195,7 @@ describe("Windows CLI security-log production wiring", () => {
       },
     );
     expect(commandMocks.loadServer).toHaveBeenCalledTimes(7);
-    expect(createFileServerLogSink).toHaveBeenCalledTimes(7);
+    expect(createActivityLogSink).toHaveBeenCalledTimes(7);
     expect(written).toHaveLength(7);
     expect(written.every(({ op }) => op === "cli.install-layout.normalized")).toBe(true);
     expect(written.map((event) => validateRegisteredActivityLogEvent(event).op)).toEqual(
@@ -259,7 +263,7 @@ describe("Windows CLI security-log production wiring", () => {
     Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
     const written: PersistedServerLogEvent[] = [];
     commandMocks.loadServer.mockResolvedValue({
-      createFileServerLogSink: () => ({
+      createActivityLogSink: () => ({
         write: (event): void => {
           written.push(event);
         },
@@ -294,12 +298,12 @@ describe("Windows CLI security-log production wiring", () => {
 
   it("loads and flushes the file sink only after a security event is emitted", async () => {
     const written: unknown[] = [];
-    const createFileServerLogSink = vi.fn<ServerModule["createFileServerLogSink"]>(() => ({
+    const createActivityLogSink = vi.fn<ServerModule["createActivityLogSink"]>(() => ({
       write: (event): void => {
         written.push(event);
       },
     }));
-    commandMocks.loadServer.mockResolvedValue({ createFileServerLogSink });
+    commandMocks.loadServer.mockResolvedValue({ createActivityLogSink });
     commandMocks.repair.mockImplementation((_args, _io, _env, deps) => {
       deps?.securityLogSinkFactory?.(String.raw`C:\Keiko\state`).write({
         category: "security",
@@ -312,7 +316,7 @@ describe("Windows CLI security-log production wiring", () => {
     await expect(Promise.resolve(runCli(["repair", "--dry-run"], io(), {}))).resolves.toBe(41);
 
     expect(commandMocks.loadServer).toHaveBeenCalledTimes(1);
-    expect(createFileServerLogSink).toHaveBeenCalledWith(String.raw`C:\Keiko\state`);
+    expect(createActivityLogSink).toHaveBeenCalledWith(String.raw`C:\Keiko\state`);
     expect(written).toEqual([
       expect.objectContaining({
         op: "security.windows-system-root.refused",
@@ -326,7 +330,7 @@ describe("Windows CLI security-log production wiring", () => {
     const stateDir = String.raw`C:\Keiko\state`;
     const written: PersistedServerLogEvent[] = [];
     commandMocks.loadServer.mockResolvedValue({
-      createFileServerLogSink: () => ({
+      createActivityLogSink: () => ({
         write: (event): void => {
           written.push(event);
         },
@@ -362,13 +366,13 @@ describe("Windows CLI security-log production wiring", () => {
     const eventWritten = new Promise<void>((resolve) => {
       resolveWritten = resolve;
     });
-    const createFileServerLogSink = vi.fn<ServerModule["createFileServerLogSink"]>(() => ({
+    const createActivityLogSink = vi.fn<ServerModule["createActivityLogSink"]>(() => ({
       write: (event): void => {
         written.push(event);
         resolveWritten?.();
       },
     }));
-    commandMocks.loadServer.mockResolvedValue({ createFileServerLogSink });
+    commandMocks.loadServer.mockResolvedValue({ createActivityLogSink });
     commandMocks.portable.mockImplementation((_args, _io, _env, deps) => {
       const securityLogSink = createCliSecurityLogSink(stateDir, deps?.securityLogSinkFactory);
       runDetachedWindowsAlert(
@@ -398,7 +402,7 @@ describe("Windows CLI security-log production wiring", () => {
     expect(commandMocks.loadServer).toHaveBeenCalledTimes(1);
     await eventWritten;
 
-    expect(createFileServerLogSink).toHaveBeenCalledWith(stateDir);
+    expect(createActivityLogSink).toHaveBeenCalledWith(stateDir);
     expect(written).toEqual([
       expect.objectContaining({
         category: "diagnostic",
@@ -443,6 +447,27 @@ describe("Windows CLI security-log production wiring", () => {
     expect(JSON.stringify(emitWarning.mock.calls)).not.toContain("Sensitive");
   });
 
+  // #3532: the collector used to drop everything it held without saying how much. Every dropped
+  // event is now counted in the process loss ledger and named on the warning.
+  it("counts every event the deferred collector drops when its sink cannot load", async () => {
+    resetActivityLogLossCountersForTests();
+    commandMocks.loadServer.mockRejectedValue(new Error("module load failed"));
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation((): void => undefined);
+    commandMocks.repair.mockImplementation((_args, _io, _env, deps) => {
+      const sink = deps?.securityLogSinkFactory?.(String.raw`C:\Keiko\state`);
+      for (let index = 0; index < 3; index += 1) {
+        sink?.write({ category: "security", op: "security.windows-system-root.refused" });
+      }
+      return 41;
+    });
+
+    await expect(Promise.resolve(runCli(["repair", "--dry-run"], io(), {}))).resolves.toBe(41);
+
+    expect(activityLogLossCounters()["collector-dropped"]).toBe(3);
+    expect(JSON.stringify(emitWarning.mock.calls)).toContain("droppedEvents=3");
+    resetActivityLogLossCountersForTests();
+  });
+
   it("fails a read-only audit closed when deferred activity evidence cannot persist", async () => {
     commandMocks.loadServer.mockRejectedValue(new Error("module load failed"));
     const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation((): void => undefined);
@@ -464,5 +489,25 @@ describe("Windows CLI security-log production wiring", () => {
     expect(err).toHaveBeenCalledWith(
       "keiko audit: durable activity logging is unavailable; audit refused.\n",
     );
+  });
+});
+
+describe("POSIX lifecycle security-log wiring (#3532)", () => {
+  it("supplies the deferred sink to start, stop and restart, and keeps status on its fast path", async () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+    const commandIo = io();
+
+    await expect(Promise.resolve(runCli(["stop"], commandIo, {}))).resolves.toBe(45);
+    await expect(Promise.resolve(runCli(["start"], commandIo, {}))).resolves.toBe(45);
+    await expect(Promise.resolve(runCli(["restart"], commandIo, {}))).resolves.toBe(45);
+    await expect(Promise.resolve(runCli(["status"], commandIo, {}))).resolves.toBe(45);
+
+    for (const index of [0, 1, 2]) {
+      const factory = lifecycleSecurityFactory(commandMocks.lifecycle.mock.calls[index]);
+      expect(typeof factory).toBe("function");
+    }
+    expect(commandMocks.lifecycle.mock.calls[3]).toEqual(["status", [], commandIo, {}]);
+    // The deferred sink loads the server graph only when an event is actually written.
+    expect(commandMocks.loadServer).not.toHaveBeenCalled();
   });
 });

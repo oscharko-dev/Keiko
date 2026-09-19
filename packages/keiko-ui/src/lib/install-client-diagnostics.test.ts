@@ -7,13 +7,16 @@ import {
   clientDiagnosticPostFailureCount,
   clientDiagnosticPostThrottledCount,
   fanOutClientDiagnostic,
+  flushClientDiagnosticLoss,
   resetClientDiagnosticPostStateForTests,
   writeToBrowserConsole,
 } from "./install-client-diagnostics";
 import {
+  recordClientDiagnosticLoss,
   reportClientDiagnostic,
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
+  takeClientDiagnosticLoss,
 } from "./client-diagnostics";
 
 function jsonResponse(status = 204): Response {
@@ -197,6 +200,88 @@ describe("fanOutClientDiagnostic", () => {
     }
     expect(clientDiagnosticPostThrottledCount()).toBe(3);
     expect(throttleNotices()).toBe(2);
+  });
+});
+
+// #3532: every report the page could not deliver is counted, and the counts ride the next report
+// that does reach the server, so the Activity Log records how much of a storm never arrived.
+describe("fanOutClientDiagnostic delivery-loss accounting", () => {
+  it("carries the counted loss on the next delivered report and clears it", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    recordClientDiagnosticLoss("rejectionsSuppressed", 3);
+
+    fanOutClientDiagnostic("[keiko] app shell crashed: TypeError");
+    fanOutClientDiagnostic("[keiko] app shell crashed: RangeError");
+
+    const bodies = fetchMock.mock.calls.map(
+      ([, init]) => JSON.parse((init as RequestInit).body as string) as Record<string, unknown>,
+    );
+    expect(bodies[0]?.["loss"]).toEqual({ rejectionsSuppressed: 3 });
+    expect(bodies[1]).not.toHaveProperty("loss");
+  });
+
+  it("counts a throttled POST and reports it on the first admitted one", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+
+    for (let index = 0; index < 22; index += 1) fanOutClientDiagnostic(`tick ${String(index)}`);
+    now.mockReturnValue(1_700_000_000_000 + 60_000);
+    fanOutClientDiagnostic("after the window");
+
+    expect(fetchMock).toHaveBeenCalledTimes(21);
+    expect(lastPostedBody(fetchMock)["loss"]).toEqual({ postsThrottled: 2 });
+  });
+
+  it("gives a failed POST's loss back and counts the failed POST itself", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network error")));
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    recordClientDiagnosticLoss("bufferEvicted", 2);
+
+    fanOutClientDiagnostic("boot: gateway probe failed");
+
+    await vi.waitFor(() => {
+      expect(clientDiagnosticPostFailureCount()).toBe(1);
+    });
+    expect(takeClientDiagnosticLoss()).toEqual({ bufferEvicted: 2, postsFailed: 1 });
+  });
+
+  it("puts the caller's closed kind on the wire", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic("[keiko] uncaught window error: TypeError", { kind: "window-error" });
+
+    expect(lastPostedBody(fetchMock)["kind"]).toBe("window-error");
+  });
+
+  it("flushes the remaining loss in one final report when the page is hidden", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    recordClientDiagnosticLoss("errorsSuppressed", 7);
+
+    // The module installs this listener on import; the page hiding is what triggers it.
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const body = lastPostedBody(fetchMock);
+    expect(body["loss"]).toEqual({ errorsSuppressed: 7 });
+    expect(body["kind"]).toBe("other");
+    expect(body["message"]).toBe("[keiko] client diagnostic delivery loss summary");
+    expect(takeClientDiagnosticLoss()).toBeUndefined();
+  });
+
+  it("sends nothing on page hide when nothing was lost", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    flushClientDiagnosticLoss();
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

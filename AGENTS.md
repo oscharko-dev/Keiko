@@ -218,7 +218,7 @@ evidence.
 | Retrieval / RAG / grounding                                     | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                                                                                                                                                                                                 |
 | Context lanes / compaction                                      | `check:context-quality`                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Server error handling / diagnostics                             | `check:error-observability`                                                                                                                                                                                                                                                                                                                                                                                                  |
-| A new or changed activity-log line or `op`                      | `npm run generate:op-catalog` then `npm run check:op-catalog` (the catalog is generated, never hand-edited — §8)                                                                                                                                                                                                                                                                                                             |
+| A new or changed activity-log line or `op`                      | `npm run generate:op-catalog`, then `npm run check:activity-log`, the Activity Log implementation gate over the complete registered inventory (it runs `check:op-catalog` itself; the catalog is generated, never hand-edited — §8)                                                                                                                                                                                          |
 | An ADR (added/renumbered)                                       | `npm run check:adr-index`                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Anything under `tests/e2e/` — added, renamed, deleted OR edited | `npm run check:e2e-suite-wiring` — a suite no lane runs is not coverage (#2629), a spec no script can reach is not a suite, and a retained spec calling an unmounted route is a journey that cannot pass (#2955). An EDIT counts: changing a title, a `@tag` or an `/api/...` literal moves reachability just as a rename does. Reads the built `API_ROUTES`, so run `npm run build:packages` (or `npm run typecheck`) first |
 | The ESLint toolchain or `eslint.config.*`                       | `npm run check:eslint-lane` and `npm run check:dependency-hygiene` — #2777: covers `eslint`, `@eslint/js`, and a workspace's own `eslint` range, none of which `npm ls` can police                                                                                                                                                                                                                                           |
@@ -368,7 +368,7 @@ sent back.
 
 ## 8. Logging is part of every change — and the first thing you read when something breaks
 
-Keiko's activity log (`<stateDir>/logs/server.log`, governed by
+Keiko's activity log (the segments in `<stateDir>/logs/`, governed by
 [ADR-0173](docs/adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) and
 described in [`docs/observability/`](docs/observability/README.md)) is a **machine-reconstruction
 contract**: a customer's log file must let an agent rebuild a defect 1:1 without access to the
@@ -398,7 +398,8 @@ system that exists, never beside it:
   classes and vocabularies, causal/lifecycle semantics, analyzer projection, failure classes,
   proof ids, and release impact. The generator resolves those canonical APIs through TypeScript
   symbols; same-shaped local helpers, unresolved dynamic calls, duplicate registrations,
-  registrations without an emitter, and unregistered emitters fail closed. Run
+  registrations without an emitter, unregistered emitters, and an emission outside the operation's
+  owner package (a bypass of its owning port) fail closed. Run
   `npm run generate:op-catalog` and commit the regenerated
   [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
   `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
@@ -408,8 +409,10 @@ system that exists, never beside it:
   transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
   replay references. Its release expectation is 100% complete. A genuinely unavoidable platform
   or durability boundary may use only the registry's reviewed exemption shape: one exact operation
-  and failure class, owner, technical reason, linked issue, and expiry. Wildcards, expired records,
-  unknown operations, extra authorization fields, silent loss, and incomplete evidence fail closed.
+  and failure class, the operation's owning package as owner, a technical reason, a linked issue,
+  and an expiry at most 180 days ahead. Wildcards, expired or effectively permanent records, unknown
+  operations, another owner, extra authorization fields, silent loss, and incomplete evidence fail
+  closed.
 - **Sufficiency is complete by default.** A supported failure class owns its start/state/end/failure
   and loss transitions, causal edges, safe context, frames/causes, analyzer projection, and replay
   proof. Exercise unavailable sinks, rejected writes, backpressure, disk and durability failures,
@@ -426,7 +429,11 @@ system that exists, never beside it:
   closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
   `extra.causeChain`) and a correlation id on every failure line. A `catch` that logs nothing, or
   logs free text, loses the defect for good; `check:error-observability` pins the named sites and
-  every new failure path is held to the same shape.
+  checks every `catch` in the whole tree on every run. Failure paths that predate that full-tree
+  check are listed in a register that may only shrink
+  (`docs/observability/legacy-failure-path-register.json`): never add to it, and after fixing a
+  listed path run `node scripts/check-error-observability.mjs --prune-register` and commit the
+  smaller file.
 - **The persisted identity is complete or the write fails closed.** Every persisted v2 record is
   stamped at the central sink with schema/registry versions and digests, product/build/release and
   safe platform classes, compatibility and writer-capability states, plus
@@ -438,8 +445,11 @@ system that exists, never beside it:
   failed durability, and an unavailable primary sink may never masquerade as an active complete
   writer. Persist the applicable closed completeness/loss/capability state when the primary path is
   available; otherwise use the existing independent body-free diagnostic fallbacks and state their
-  loss ceiling honestly. An explicit `silent` log level produces no reconstruction evidence and
-  must never be interpreted as an active writer.
+  loss ceiling honestly. Every lost event is counted in the closed loss ledger and persisted as
+  `activity-log.loss`, and diagnostic readiness (`ready`, `degraded`, `unavailable`) is reported in
+  `/api/health`, `keiko status` and the UI. An explicit `silent` log level suppresses ordinary events
+  only: lifecycle, loss and readiness evidence is still written, and readiness reports `degraded`
+  (`level-silent`) so a silent interval never passes for an active complete writer.
 - **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
   hashes, ids, route templates, byte sizes, durations — never prompts, responses, file contents,
   secrets, paths, endpoints or PII (ADR-0173 D4). New fields go into `extra` and through the
@@ -450,16 +460,19 @@ system that exists, never beside it:
   emitted line(s) — `op`, `correlationId`, `errorKind`, the fields that carry the evidence — and a
   change to a user-visible or failure-prone surface is checked against `keiko support analyze`
   showing the operation in its timeline. The pull-request template carries this as a checklist item.
-- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log;
-  it must not create a second logical stream or a path-based replacement shortcut. Until immutable
-  segments replace daily files, the current file rotates at UTC day boundaries and dated archives
-  are retained for the configured bounded window. Never remove an existing disk bound while a
-  successor is unfinished. Rotation and pruning operate only inside an owner-private,
-  non-redirected directory, on closed-grammar names whose opened handles prove regular,
-  owner-matched files; hard-link publication selects one cross-process archive winner, and rename is
-  only the fallback on filesystems that report hard links unsupported. Segment and retention
-  changes preserve ordering, compatibility classification, explicit truncation/loss, and
-  support-export reconstruction.
+- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log
+  in `<stateDir>/logs/`; it must not create a second logical stream or a path-based replacement
+  shortcut. It is stored as immutable segments (ADR-0173 D14). Each process appends only to its own
+  active segment, and a sealed segment is read-only and never rewritten. Retention bounds the whole
+  directory by bytes and age, so total use stays within the byte budget plus the pin quota. Never
+  remove or loosen a disk bound. Sealing, recovery and pruning operate only inside an
+  owner-private, non-redirected directory, on the closed name grammar in `keiko-contracts`
+  (`activity-log-files.ts`), and only on opened handles that prove regular, owner-matched files.
+  Publication never replaces an existing name; rename is only the fallback on filesystems that
+  report hard links unsupported. Readers enumerate and order the files only through that grammar
+  (`orderActivityLogFileNames`), never through a hand-written pattern or a fixed file path. Segment
+  and retention changes preserve ordering, compatibility classification, explicit truncation/loss,
+  and support-export reconstruction.
 - **Saved reports remain under human control.** A support export or replay fixture is written only
   to the local destination the user selected. Keiko does not upload it, attach it to GitHub, open an
   issue, or otherwise disclose it automatically. Content-bearing optional sections require their
@@ -468,8 +481,16 @@ system that exists, never beside it:
 - **Keep the contract converged in the same change.** When runtime behavior changes this contract,
   update the owning code, failure-first regression, emitted-line/analyzer or replay proof,
   ADR-0173, this section, `CONTRIBUTING.md`, and directly affected operator documentation together.
-  Run the existing locally executable op-catalog and error-observability checks; do not document a
-  future gate name before its command exists.
+- **One command is the gate.** `npm run check:activity-log` is the Activity Log implementation
+  gate, and required CI runs that exact command. Every run builds the packages and evaluates the
+  complete registered inventory: `check:op-catalog` (typed registrations and emitters, closed fields
+  and vocabularies, exemptions, failure-class coverage, the failure-surface inventory, and proof and
+  scenario resolution), `test:activity-log-scenarios` (executes every curated end-to-end scenario
+  the inventory resolves, each of which must reach a complete support-analyze report),
+  `check:error-observability`, `arch:check` with `arch:check:negative`, and `check:release-impact`.
+  It takes no changed-file input, so an unchanged emitter is proven again on every run. Each failure
+  names its check, rule, site, and remediation. Run it before every pull request that changes
+  product runtime behaviour.
 
 ### Rule 2 — when you debug, the log is your primary source
 
@@ -477,8 +498,13 @@ Before you read code, form a hypothesis, or ask a human for a screenshot, read w
 already recorded:
 
 1. **Get the artifact.** `keiko support export --out bundle.jsonl` (adds store fingerprints, a
-   manifest and — with `--include-evidence` — evidence manifests), or the raw
-   `<stateDir>/logs/server.log`; the analyzer auto-detects which it was handed.
+   manifest and — with `--include-evidence` — evidence manifests), or one raw Activity Log file
+   from `<stateDir>/logs/` (a segment or a legacy file); the analyzer auto-detects which it was
+   handed. If Keiko recorded a local incident candidate, `keiko support incident show <id> --json`
+   names its defect fingerprint, correlations and pinned evidence window. For one operation,
+   `keiko support export --correlation-id <id>` (or `--incident <id>`) writes only its registered
+   causal closure, and `keiko support query --correlation-id <id> --json` returns it directly; both
+   report `insufficient` with a closed reason rather than cut required evidence to fit.
 2. **Reconstruct.** `keiko support analyze bundle.jsonl` prints every timeline;
    `--correlation-id <id> --json` narrows to one as a machine-readable `LogTimeline`; `--clusters`
    groups every parsed line of the file by category, `op` and `errorKind` (errors and successes

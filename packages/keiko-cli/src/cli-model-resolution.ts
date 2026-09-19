@@ -11,6 +11,7 @@
 
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { cliActivityLogSink } from "./cli-activity-log.js";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 
@@ -75,7 +76,8 @@ export async function buildWorkflowCapableModel(
       io.err("Error: no configured workflow-capable chat model is available.\n");
       return 1;
     }
-    return { port: new harness.GatewayModelPort(new gateway.Gateway(config)), modelId };
+    const log = await cliActivityLogSink();
+    return { port: new harness.GatewayModelPort(new gateway.Gateway(config, { log })), modelId };
   } catch (error) {
     if (error instanceof gateway.GatewayError) {
       // KEIKO-0910: GatewayError extends RedactingError and self-redacts at construction

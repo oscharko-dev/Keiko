@@ -30,6 +30,10 @@ import {
   type WorkspaceWatchRawEvent,
   type WorkspaceWatchService,
 } from "./workspaceWatchService.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../tests/support/activity-log-proof.js";
 
 interface FakeHandle extends WorkspaceNativeWatchHandle {
   readonly close: Mock<() => void>;
@@ -265,6 +269,11 @@ describe("workspace watch authority revocation logging (#3347)", () => {
       expect(revokedEvent?.correlationId).toBe(correlationId);
       expect(revokedEvent?.errorKind).toBe("authority-denied");
       expect(JSON.stringify(revokedEvent)).not.toContain(revocableRoot);
+      const proven = expectActivityLogProof(
+        "editor.workspace-watch.authority-revoked.emitted-line",
+        formatActivityLogProofLine(revokedEvent ?? {}),
+      );
+      expect(proven).toMatchObject({ decision: "revoked", phase: "stream" });
     } finally {
       await closeServer(built.server);
       await rm(revocableRoot, { recursive: true, force: true });

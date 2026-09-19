@@ -9,7 +9,15 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  activityLogLossCounters,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import {
   emitKnowledgeLogEvent,
   knowledgeErrorKind,
@@ -203,6 +211,13 @@ describe("emitKnowledgeLogEvent", () => {
       extra: { failureKind: "ENOSPC" },
     });
     expect(events[0]?.extra?.droppedOpDigest).toMatch(/^[0-9a-f]{16}$/u);
+
+    const persisted = expectActivityLogProof(
+      "knowledge.log.sink-failed.body-free",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "ENOSPC" });
+    expect(persisted.droppedOpDigest).toMatch(/^[0-9a-f]{16}$/u);
   });
 
   it("keeps writing subsequent lines a recovered sink can take", () => {
@@ -316,5 +331,37 @@ describe("KnowledgeLogEvent", () => {
       "op",
       "status",
     ]);
+  });
+});
+
+// #3532: the process warning is once per sink, but the process loss ledger counts every line a
+// failing sink loses, so a quiet log can be told apart from a log that stopped working.
+describe("emitKnowledgeLogEvent loss accounting", () => {
+  it("counts every line a dead sink loses in the process loss ledger", () => {
+    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    resetActivityLogLossCountersForTests();
+    const dead: KnowledgeLogSink = {
+      write: (): never => {
+        throw new Error("sink is down");
+      },
+    };
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        emitKnowledgeLogEvent(dead, { category: "indexing", op: "indexing.job.received" });
+      }
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(3);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
+
+  it("counts an event handed to an unwired port as lost", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      emitKnowledgeLogEvent(undefined, { category: "indexing", op: "indexing.job.received" });
+      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
   });
 });

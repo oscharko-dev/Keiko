@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { readActivityLogText } from "../../scripts/lib/activity-log-files.mjs";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 
 // Issue #3405 (Epic #3403) - current browser qualification for the governed update UI. The test
@@ -269,7 +270,7 @@ async function cleanupOutageHarness(harness: OutageHarness): Promise<void> {
 }
 
 function serverLogRecords(stateDir: string): readonly JsonObject[] {
-  return readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+  return readActivityLogText(join(stateDir, "logs"))
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as JsonObject);
@@ -1873,12 +1874,16 @@ test("@real-bff-outage preserves accepted update progress and reconnects to dura
   const page = await context.newPage();
   try {
     expect(runOutageLifecycle(harness, "start")).toContain("Starting Keiko UI");
-    expect(readFileSync(join(harness.stateDir, "ui.log"), "utf8")).toContain(
-      "KEIKO_E2E_UPDATE_OUTAGE_BFF",
-    );
+    // #3532: `keiko start` no longer copies the UI process's raw output into `ui.log`. The started
+    // server proves it is the outage fixture through the fixture-only release-impact entry it
+    // injects, which no real catalog carries.
+    expect(existsSync(join(harness.stateDir, "ui.log"))).toBe(false);
     const offered = await fetchUpdatePreflight(harness.origin);
     expect(offered, `real-BFF preflight:\n${JSON.stringify(offered, undefined, 2)}`).toHaveProperty(
       "candidate",
+    );
+    expect(JSON.stringify(offered)).toContain(
+      "Exercises update recovery across a real local BFF outage.",
     );
 
     await seedSettingsWindow(page, {
@@ -1949,7 +1954,7 @@ test("@real-bff-outage preserves accepted update progress and reconnects to dura
       cancellationCutoff: "mutation-started",
     });
     expect(lifecycle?.correlationId).toEqual(expect.any(String));
-    const rawLog = readFileSync(join(harness.stateDir, "logs", "server.log"), "utf8");
+    const rawLog = readActivityLogText(join(harness.stateDir, "logs"));
     expect(rawLog).not.toContain("executionToken");
     expect(rawLog).not.toContain("confirmationDigest");
   } finally {
