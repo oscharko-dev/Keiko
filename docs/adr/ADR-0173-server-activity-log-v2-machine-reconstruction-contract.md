@@ -915,7 +915,11 @@ request":
   - a message: `client.diagnostic`, a failure at `warn`, as above;
   - a window stage: `client.stage.started` / `client.stage.settled` at `info`. One
     client-minted correlation id per mount joins both phases, and the duration is monotonic and
-    bounded to the contract's ceiling;
+    bounded to the contract's ceiling. A window chunk that has not arrived 10 seconds after its
+    stage started is reported as stalled, a `client.diagnostic` with `errorKind: timeout` under
+    that stage's id, and the window offers the reload that requests it fresh: a chunk request the
+    browser loses never settles, and the bundler keeps it pending, so nothing inside the page can
+    request it again (dev CI run 35438847738, a WebKit network process crash);
   - a restored window's binding: `client.binding.resolved` at `info`,
     `client.binding.candidates-offered`, `client.binding.choice-kept` and
     `client.binding.choice-withdrawn` at `info`, or `client.binding.target-missing` at `warn`
