@@ -87,6 +87,7 @@ import {
   ACTIVITY_LOG_FRAME_FIELD_NAME,
   ACTIVITY_LOG_RESERVED_FIELD_NAMES,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import { redactRoutePath } from "./route-template.js";
 import { FRAME_SHAPE_PATTERN, PACKAGE_DIR_NAMES } from "./stack-frames.js";
@@ -579,12 +580,27 @@ function isConformingFrame(value: unknown): value is string {
   return packageName === undefined || PACKAGE_DIR_NAMES.has(packageName);
 }
 
+// Browser coordinates are untrusted even after wire validation. Digest the asset identity here,
+// at the persistence boundary, so a forged but shape-conforming basename cannot disclose content.
+// Operators can map the domain-separated digest back to an asset in the exact shipped build.
+function redactBrowserFrame(frame: string): string {
+  if (!isClientDiagnosticFrame(frame)) return frame;
+  const coordinateOffset = frame.indexOf(":");
+  const identity = sha256Hex(
+    `keiko-client-diagnostic-chunk-v1\0${frame.slice(0, coordinateOffset)}`,
+  );
+  return `dist/ui/static/_next/static/chunks/sha256-${identity}.js${frame.slice(coordinateOffset)}`;
+}
+
 // Drops every non-conforming element outright — never a marker in its place, the same fail-closed
 // direction `redactRoutePath` and `stack-frames.ts` itself already take for a frame that cannot be
 // safely reduced. See the "NAMED ESCAPE HATCHES" header comment for why this guard exists on
 // top of the generic array/string path at all.
 function redactKeikoFrames(value: readonly unknown[]): string[] {
-  return value.filter(isConformingFrame).slice(0, MAX_GUARDED_FRAME_ELEMENTS);
+  return value
+    .filter(isConformingFrame)
+    .slice(0, MAX_GUARDED_FRAME_ELEMENTS)
+    .map(redactBrowserFrame);
 }
 
 function isConformingCauseClass(value: unknown): value is string {

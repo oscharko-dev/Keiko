@@ -17,6 +17,7 @@ import {
   type ServerLogEvent,
 } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
+import { redactLogFields } from "./observability/log-redaction.js";
 
 const CORRELATION_ID = "diagnostics-route-test";
 const CLIENT_TS = "2026-08-21T10:00:00.000Z";
@@ -363,7 +364,7 @@ describe("POST /api/diagnostics/client", () => {
       expect(clientDiagnosticLine(sink)).toMatchObject({
         correlationId: "chunk-failure-id",
         errorClass,
-        frames,
+        frames: redactLogFields({ frames })?.frames,
         causeChain: ["TypeError"],
         errorKind: errorClass === "ChunkLoadError" ? "unavailable" : "internal",
       });
@@ -395,10 +396,30 @@ describe("POST /api/diagnostics/client", () => {
     expect(clientDiagnosticLine(sink)).toMatchObject({
       correlationId: "recorder-session",
       voiceCaptureReason: "replacement-create-failed",
-      frames,
+      frames: redactLogFields({ frames })?.frames,
       causeChain: ["TypeError"],
     });
     expect(sink.lines().join("")).not.toContain("private device");
+  });
+
+  it("does not persist a secret disguised as a production chunk basename", async () => {
+    const sink = captureServerLog();
+    const basename = ["customer", "apikey", "1234"].join("");
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "browser failure",
+          clientTs: CLIENT_TS,
+          errorEvidence: {
+            errorClass: "TypeError",
+            frames: [`dist/ui/static/_next/static/chunks/${basename}.js:1:2`],
+            causeChain: [],
+          },
+        }),
+      ),
+    );
+    expect(clientDiagnosticLine(sink)).toHaveProperty("frames");
+    expect(sink.lines().join("")).not.toContain(basename);
   });
 
   it("projects the hostile message only as a digest", async () => {

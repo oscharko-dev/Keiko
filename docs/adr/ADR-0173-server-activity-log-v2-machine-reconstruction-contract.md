@@ -878,6 +878,11 @@ request":
   up to five closed cause classes and up to eight production chunk coordinates. The browser reduces
   same-origin stack locations to `dist/ui/static/_next/static/chunks/<chunk>.js:LINE:COL`; the shared
   wire guard and existing frame redaction boundary independently revalidate the bounded shape.
+  Shape validation does not prove a client-supplied basename belongs to the build. At the central
+  persistence boundary, the asset path before `:LINE:COL` is therefore reduced with SHA-256 over
+  `keiko-client-diagnostic-chunk-v1\0<asset path>`. Only the resulting `sha256-<digest>.js`
+  identity and bounded coordinates reach the log. An operator can compute that identity for the
+  exact shipped assets; a forged basename never survives verbatim.
   Function names, origins, query strings, source paths and raw messages/stacks remain excluded.
   Development frames without a production chunk anchor are omitted, never invented.
   A valid original request correlation takes precedence. Reports without one, including reports
