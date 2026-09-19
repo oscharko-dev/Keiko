@@ -408,10 +408,16 @@ describe("client diagnostics loss evidence", () => {
   // under the list loads that decided the offer, so the recovery state is reconstructable.
   it("persists an offer as client.binding.candidates-offered with its count, zero included", async () => {
     for (const offer of [
-      { windowRef: "chat-mfr3k2x1-6", candidateCount: 0, correlationId: "ui_list-offer-0001" },
+      {
+        windowRef: "chat-mfr3k2x1-6",
+        candidateCount: 0,
+        disambiguatedCount: 0,
+        correlationId: "ui_list-offer-0001",
+      },
       {
         windowRef: "chat-mfr3k2x1-7",
         candidateCount: 2,
+        disambiguatedCount: 2,
         correlationId: "ui_list-offer-0002",
         relatedCorrelationIds: ["ui_list-offer-0003"],
         decidingLoadCount: 2,
@@ -435,6 +441,7 @@ describe("client diagnostics loss evidence", () => {
       correlationId: "ui_list-offer-0001",
       referenceShape: "redacted",
       candidateCount: 0,
+      disambiguatedCount: 0,
       bindingDigest: clientBindingDigest("chat-mfr3k2x1-6"),
       completeness: "complete",
       loss: "none",
@@ -443,12 +450,67 @@ describe("client diagnostics loss evidence", () => {
       correlationId: "ui_list-offer-0002",
       relatedCorrelationIds: ["ui_list-offer-0003"],
       candidateCount: 2,
+      disambiguatedCount: 2,
       bindingDigest: clientBindingDigest("chat-mfr3k2x1-7"),
       completeness: "complete",
       loss: "none",
     });
     expect(empty?.errorKind).toBeUndefined();
     expect(lines("client.binding.target-missing")).toEqual([]);
+  });
+
+  // #3557 review: a chat the person chose stays a choice until they keep it or withdraw it. Each
+  // decision persists on the binding's timeline and names the chat by its fingerprint.
+  async function postChoiceDecision(
+    outcome: "choice-kept" | "choice-withdrawn",
+    referenceShape: "fingerprint" | "user-selected",
+    targetFingerprint: string,
+  ): Promise<void> {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-8",
+      outcome,
+      referenceShape,
+      heuristicFlagged: true,
+      correlationId: "ui_list-choice-0004",
+      targetFingerprint,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+  }
+
+  const DECISION_LINE = {
+    correlationId: "ui_list-choice-0004",
+    heuristicFlagged: true,
+    bindingDigest: clientBindingDigest("chat-mfr3k2x1-8"),
+    completeness: "complete",
+    loss: "none",
+  } as const;
+
+  it("persists a kept choice as client.binding.choice-kept", async () => {
+    await postChoiceDecision("choice-kept", "user-selected", FINGERPRINT_A);
+
+    const [line] = lines("client.binding.choice-kept");
+    const record = expectActivityLogProof("client.binding.choice-kept.line", line ?? "");
+    expect(record).toMatchObject({
+      ...DECISION_LINE,
+      referenceShape: "user-selected",
+      targetFingerprint: FINGERPRINT_A,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  it("persists a withdrawn choice as client.binding.choice-withdrawn", async () => {
+    await postChoiceDecision("choice-withdrawn", "fingerprint", FINGERPRINT_B);
+
+    const [line] = lines("client.binding.choice-withdrawn");
+    const record = expectActivityLogProof("client.binding.choice-withdrawn.line", line ?? "");
+    expect(record).toMatchObject({
+      ...DECISION_LINE,
+      referenceShape: "fingerprint",
+      targetFingerprint: FINGERPRINT_B,
+    });
+    expect(record.errorKind).toBeUndefined();
   });
 
   // #3557 review: a window whose redacted id carries no fingerprint, bound to the chat the person

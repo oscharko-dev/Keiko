@@ -636,11 +636,15 @@ export const CLIENT_BINDING_SURFACES = ["chat-window"] as const;
 export type ClientBindingSurface = (typeof CLIENT_BINDING_SURFACES)[number];
 
 // `candidates-offered`: a window whose chat id persistence redacted without a fingerprint listed the
-// chats it may have shown, for the person to choose from (#3557 review).
+// chats it may have shown, for the person to choose from (#3557 review). `choice-kept` and
+// `choice-withdrawn`: the person kept the chat they chose for such a window, or withdrew it and
+// returned the window to the chats it may have shown.
 export const CLIENT_BINDING_OUTCOMES = [
   "resolved",
   "target-missing",
   "candidates-offered",
+  "choice-kept",
+  "choice-withdrawn",
 ] as const;
 export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 
@@ -691,8 +695,11 @@ export interface ClientBindingIngestRequest {
   readonly decidingLoadCount?: number | undefined;
   // `candidates-offered` only, and always there: how many chats the window offered, zero included.
   readonly candidateCount?: number | undefined;
-  // A resolved binding found again after redaction (`fingerprint`, `user-selected`) only: the
-  // fingerprint of the chat it bound to, so two choices from one list answer stay apart.
+  // `candidates-offered` only, and always there: how many of those offers read alike and show a
+  // reference from their chat's fingerprint, zero included.
+  readonly disambiguatedCount?: number | undefined;
+  // A resolved binding found again after redaction (`fingerprint`, `user-selected`), and always a
+  // person's decision about a chosen chat: the fingerprint of that chat, never its id.
   readonly targetFingerprint?: string | undefined;
 }
 
@@ -707,6 +714,7 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "relatedCorrelationIds",
   "decidingLoadCount",
   "candidateCount",
+  "disambiguatedCount",
   "targetFingerprint",
 ]);
 
@@ -736,7 +744,12 @@ const RESTORED_REFERENCE_SHAPES: ReadonlySet<ClientBindingReferenceShape> = new 
   "user-selected",
 ]);
 
-function isCandidateCount(value: unknown): boolean {
+const CLIENT_BINDING_CHOICE_DECISIONS: ReadonlySet<unknown> = new Set([
+  "choice-kept",
+  "choice-withdrawn",
+]);
+
+function isCandidateCount(value: unknown): value is number {
   return (
     typeof value === "number" &&
     Number.isSafeInteger(value) &&
@@ -745,18 +758,27 @@ function isCandidateCount(value: unknown): boolean {
   );
 }
 
-// An offer always states its count and nothing else does; only a redaction marker offers.
-function hasConsistentCandidateCount(value: Record<string, unknown>): boolean {
-  const offered = value.outcome === "candidates-offered";
-  if (!offered) return value.candidateCount === undefined;
-  return value.referenceShape === "redacted" && isCandidateCount(value.candidateCount);
+// An offer always states its count and how many of its offers read alike, and nothing else does;
+// only a redaction marker offers.
+function hasConsistentOffer(value: Record<string, unknown>): boolean {
+  const { candidateCount, disambiguatedCount } = value;
+  if (value.outcome !== "candidates-offered") {
+    return candidateCount === undefined && disambiguatedCount === undefined;
+  }
+  return (
+    value.referenceShape === "redacted" &&
+    isCandidateCount(candidateCount) &&
+    isCandidateCount(disambiguatedCount) &&
+    disambiguatedCount <= candidateCount
+  );
 }
 
-// Only a resolved binding found again after redaction names the chat it bound to, and only by its
-// fingerprint.
+// A resolved binding found again after redaction may name the chat it bound to, and a person's
+// decision about a chosen chat always does; each only by the chat's fingerprint.
 function hasConsistentTargetFingerprint(value: Record<string, unknown>): boolean {
   const { targetFingerprint } = value;
-  if (targetFingerprint === undefined) return true;
+  const decision = CLIENT_BINDING_CHOICE_DECISIONS.has(value.outcome);
+  if (targetFingerprint === undefined) return !decision;
   if (
     typeof targetFingerprint !== "string" ||
     !CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN.test(targetFingerprint)
@@ -764,7 +786,7 @@ function hasConsistentTargetFingerprint(value: Record<string, unknown>): boolean
     return false;
   }
   return (
-    value.outcome === "resolved" &&
+    (decision || value.outcome === "resolved") &&
     isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES) &&
     RESTORED_REFERENCE_SHAPES.has(value.referenceShape)
   );
@@ -804,7 +826,7 @@ export function isClientBindingIngestRequest(value: unknown): value is ClientBin
   }
   return (
     hasConsistentBindingReference(value) &&
-    hasConsistentCandidateCount(value) &&
+    hasConsistentOffer(value) &&
     hasConsistentTargetFingerprint(value) &&
     hasBindingCorrelations(value)
   );

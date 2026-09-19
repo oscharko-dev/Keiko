@@ -681,6 +681,8 @@ describe("POST /api/diagnostics/client", () => {
       sink: BufferedServerLogSink,
       op:
         | "client.binding.candidates-offered"
+        | "client.binding.choice-kept"
+        | "client.binding.choice-withdrawn"
         | "client.binding.resolved"
         | "client.binding.target-missing",
     ): readonly ServerLogEvent[] {
@@ -762,6 +764,7 @@ describe("POST /api/diagnostics/client", () => {
         referenceShape: "redacted",
         heuristicFlagged: false,
         candidateCount: 0,
+        disambiguatedCount: 0,
         correlationId: "ui_chat-list-load-0006",
       });
 
@@ -772,10 +775,49 @@ describe("POST /api/diagnostics/client", () => {
       expect(events[0]).toMatchObject({
         level: "info",
         correlationId: "ui_chat-list-load-0006",
-        extra: { referenceShape: "redacted", candidateCount: 0, completeness: "complete" },
+        extra: {
+          referenceShape: "redacted",
+          candidateCount: 0,
+          disambiguatedCount: 0,
+          completeness: "complete",
+        },
       });
       expect(events[0]?.errorKind).toBeUndefined();
       expect(bindingEvents(sink, "client.binding.target-missing")).toEqual([]);
+    });
+
+    // #3557 review: a person's decision about a chosen chat is a state at info on the binding's
+    // timeline, and never logs without the chat it concerns.
+    it.each([
+      ["choice-kept", "client.binding.choice-kept"],
+      ["choice-withdrawn", "client.binding.choice-withdrawn"],
+    ] as const)("logs a %s decision as %s at info", async (outcome, op) => {
+      const sink = captureServerLog();
+      const decision = {
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "chat-mfr3k2x1-8",
+        outcome,
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+        correlationId: "ui_chat-list-load-0008",
+      };
+
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(decision)))).status).toBe(
+        400,
+      );
+      expect(bindingEvents(sink, op)).toEqual([]);
+      const body = JSON.stringify({ ...decision, targetFingerprint: "a1".repeat(32) });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+      const events = bindingEvents(sink, op);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        level: "info",
+        correlationId: "ui_chat-list-load-0008",
+        extra: { referenceShape: "user-selected", targetFingerprint: "a1".repeat(32) },
+      });
+      expect(events[0]?.errorKind).toBeUndefined();
     });
 
     // #3557 review: only a binding found again after redaction names its chat, by fingerprint.
@@ -1062,6 +1104,7 @@ describe("POST /api/diagnostics/client", () => {
         referenceShape: "redacted",
         heuristicFlagged: false,
         candidateCount: 1,
+        disambiguatedCount: 0,
       };
       await handleClientDiagnosticIngest(context(JSON.stringify(offer)));
     }

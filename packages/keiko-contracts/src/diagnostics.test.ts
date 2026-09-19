@@ -454,19 +454,33 @@ describe("isClientBindingIngestRequest", () => {
     };
   }
 
-  // A redaction marker never resolved to a live chat, and only a redaction marker offers chats.
+  // A redaction marker never resolved to a live chat, only a redaction marker offers chats, and a
+  // person decides only about a chat the window found again after redaction.
   function possibleBinding(outcome: string, referenceShape: string): boolean {
     if (outcome === "resolved") return referenceShape !== "redacted";
-    return outcome !== "candidates-offered" || referenceShape === "redacted";
+    if (outcome === "candidates-offered") return referenceShape === "redacted";
+    if (outcome === "target-missing") return true;
+    return referenceShape === "fingerprint" || referenceShape === "user-selected";
+  }
+
+  // The fields an outcome always carries.
+  function outcomeFields(outcome: string): Record<string, unknown> {
+    if (outcome === "candidates-offered") return { candidateCount: 1, disambiguatedCount: 0 };
+    if (outcome.startsWith("choice-")) return { targetFingerprint: "c".repeat(64) };
+    return {};
   }
 
   it("accepts every possible outcome and reference shape, with and without correlation ids", () => {
     for (const outcome of CLIENT_BINDING_OUTCOMES) {
       for (const referenceShape of CLIENT_BINDING_REFERENCE_SHAPES) {
         if (!possibleBinding(outcome, referenceShape)) continue;
-        const offer = outcome === "candidates-offered" ? { candidateCount: 1 } : {};
         expect(
-          isClientBindingIngestRequest({ ...bindingRequest(), outcome, referenceShape, ...offer }),
+          isClientBindingIngestRequest({
+            ...bindingRequest(),
+            outcome,
+            referenceShape,
+            ...outcomeFields(outcome),
+          }),
         ).toBe(true);
       }
     }
@@ -518,7 +532,7 @@ describe("isClientBindingIngestRequest", () => {
   // #3557 review: a window whose redacted id carries no fingerprint says how many chats it offered,
   // zero included. Nothing else carries a count, and only a redaction marker offers.
   it("accepts an offer only with its candidate count, zero included, from a redaction marker", () => {
-    const offer = { ...bindingRequest(), outcome: "candidates-offered" };
+    const offer = { ...bindingRequest(), outcome: "candidates-offered", disambiguatedCount: 0 };
     for (const candidateCount of [0, 2, CLIENT_BINDING_CANDIDATES_MAX]) {
       expect(isClientBindingIngestRequest({ ...offer, candidateCount })).toBe(true);
     }
@@ -532,14 +546,54 @@ describe("isClientBindingIngestRequest", () => {
       );
     }
     for (const outcome of ["resolved", "target-missing"]) {
-      expect(
-        isClientBindingIngestRequest({
-          ...bindingRequest(),
-          outcome,
-          referenceShape: "uuid",
-          candidateCount: 1,
-        }),
-      ).toBe(false);
+      for (const counts of [{ candidateCount: 1 }, { disambiguatedCount: 0 }]) {
+        expect(
+          isClientBindingIngestRequest({
+            ...bindingRequest(),
+            outcome,
+            referenceShape: "uuid",
+            ...counts,
+          }),
+        ).toBe(false);
+      }
+    }
+  });
+
+  // #3557 review: an offer also says how many of its offers read alike and show a fingerprint
+  // reference, zero included, and never more than it offered.
+  it("accepts an offer's disambiguation count only up to its candidate count", () => {
+    const offer = { ...bindingRequest(), outcome: "candidates-offered", candidateCount: 3 };
+    for (const disambiguatedCount of [0, 2, 3]) {
+      expect(isClientBindingIngestRequest({ ...offer, disambiguatedCount })).toBe(true);
+    }
+    for (const disambiguatedCount of [undefined, -1, 1.5, "2", 4]) {
+      expect(isClientBindingIngestRequest({ ...offer, disambiguatedCount })).toBe(false);
+    }
+  });
+
+  // #3557 review: a chat the person chose stays a choice until they keep it or withdraw it; each
+  // decision names that chat by its fingerprint, and only a binding found again after redaction
+  // can be decided about.
+  it("accepts a choice decision only with the chosen chat's fingerprint, for a restored binding", () => {
+    const targetFingerprint = "c".repeat(64);
+    for (const outcome of ["choice-kept", "choice-withdrawn"]) {
+      const decision = { ...bindingRequest(), outcome, heuristicFlagged: true };
+      for (const referenceShape of ["fingerprint", "user-selected"]) {
+        expect(
+          isClientBindingIngestRequest({ ...decision, referenceShape, targetFingerprint }),
+        ).toBe(true);
+        expect(isClientBindingIngestRequest({ ...decision, referenceShape })).toBe(false);
+      }
+      for (const referenceShape of ["uuid", "opaque", "redacted"]) {
+        expect(
+          isClientBindingIngestRequest({
+            ...decision,
+            referenceShape,
+            heuristicFlagged: false,
+            targetFingerprint,
+          }),
+        ).toBe(false);
+      }
     }
   });
 
@@ -557,7 +611,12 @@ describe("isClientBindingIngestRequest", () => {
       { outcome: "resolved", referenceShape: "uuid" },
       { outcome: "resolved", referenceShape: "opaque", heuristicFlagged: false },
       { outcome: "target-missing", referenceShape: "fingerprint" },
-      { outcome: "candidates-offered", referenceShape: "redacted", candidateCount: 1 },
+      {
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        candidateCount: 1,
+        disambiguatedCount: 0,
+      },
     ]) {
       expect(isClientBindingIngestRequest({ ...restored, ...patch, targetFingerprint })).toBe(
         false,

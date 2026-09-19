@@ -564,8 +564,9 @@ const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
 });
 
 // #3557 review: a window whose chat id persistence redacted without a fingerprint listed the chats
-// it may have shown, for the person to choose from. The line names the list loads that answered and
-// how many chats were offered, zero included, so the recovery state is reconstructable.
+// it may have shown, for the person to choose from. The line names the list loads that answered, how
+// many chats were offered and how many of those read alike and show a fingerprint reference, zero
+// included, so the recovery state the person saw is reconstructable.
 const CLIENT_BINDING_CANDIDATES_OFFERED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -576,12 +577,54 @@ const CLIENT_BINDING_CANDIDATES_OFFERED_OPERATION = defineActivityLogOperation({
   fields: {
     ...CLIENT_BINDING_FIELDS,
     candidateCount: { type: "integer", dataClass: "count", required: true },
+    disambiguatedCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["client-binding"],
   proofIds: ["client.binding.candidates-offered.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_BINDING_CHOICE_FIELDS = {
+  ...CLIENT_BINDING_FIELDS,
+  // The chat the person decided about, by the fingerprint the window persists, never its id.
+  targetFingerprint: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+} as const;
+
+// #3557 review: the chat a person chose for such a window stays a choice until they keep it; they
+// can withdraw it and choose again. Each decision is a state on the binding's timeline and names the
+// chat it concerns, so which conversation the window ended with is reconstructable.
+const CLIENT_BINDING_CHOICE_KEPT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.choice-kept",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingChoiceKept",
+  fields: CLIENT_BINDING_CHOICE_FIELDS,
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.choice-kept.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_BINDING_CHOICE_WITHDRAWN_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.choice-withdrawn",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingChoiceWithdrawn",
+  fields: CLIENT_BINDING_CHOICE_FIELDS,
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.choice-withdrawn.line"],
   releaseImpact: "patch",
 });
 
@@ -1215,17 +1258,87 @@ function logClientBindingResolved(
   );
 }
 
-function logClientBindingCandidatesOffered(
+// The ingest contract holds these fields to their outcome; the guards below only let the compiler
+// see what it already proved.
+type ClientBindingOffer = ClientBindingIngestRequest & {
+  readonly candidateCount: number;
+  readonly disambiguatedCount: number;
+};
+
+type ClientBindingChoiceDecision = ClientBindingIngestRequest & {
+  readonly outcome: "choice-kept" | "choice-withdrawn";
+  readonly targetFingerprint: string;
+};
+
+function isClientBindingOffer(request: ClientBindingIngestRequest): request is ClientBindingOffer {
+  return (
+    request.outcome === "candidates-offered" &&
+    request.candidateCount !== undefined &&
+    request.disambiguatedCount !== undefined
+  );
+}
+
+function isClientBindingChoiceDecision(
   request: ClientBindingIngestRequest,
+): request is ClientBindingChoiceDecision {
+  return (
+    (request.outcome === "choice-kept" || request.outcome === "choice-withdrawn") &&
+    request.targetFingerprint !== undefined
+  );
+}
+
+function logClientBindingCandidatesOffered(
+  request: ClientBindingOffer,
   correlationId: string,
 ): void {
   getServerLogger().info(
     activityLogEvent(
       CLIENT_BINDING_CANDIDATES_OFFERED_OPERATION,
       { correlationId },
-      { ...clientBindingFields(request), candidateCount: request.candidateCount ?? 0 },
+      {
+        ...clientBindingFields(request),
+        candidateCount: request.candidateCount,
+        disambiguatedCount: request.disambiguatedCount,
+      },
     ),
   );
+}
+
+function logClientBindingChoiceKept(
+  request: ClientBindingChoiceDecision,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_BINDING_CHOICE_KEPT_OPERATION,
+      { correlationId },
+      { ...clientBindingFields(request), targetFingerprint: request.targetFingerprint },
+    ),
+  );
+}
+
+function logClientBindingChoiceWithdrawn(
+  request: ClientBindingChoiceDecision,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_BINDING_CHOICE_WITHDRAWN_OPERATION,
+      { correlationId },
+      { ...clientBindingFields(request), targetFingerprint: request.targetFingerprint },
+    ),
+  );
+}
+
+function logClientBindingChoiceDecision(
+  request: ClientBindingChoiceDecision,
+  correlationId: string,
+): void {
+  if (request.outcome === "choice-kept") {
+    logClientBindingChoiceKept(request, correlationId);
+    return;
+  }
+  logClientBindingChoiceWithdrawn(request, correlationId);
 }
 
 function logClientBindingTargetMissing(
@@ -1253,8 +1366,12 @@ function logClientBinding(
     logClientBindingResolved(request, correlationId);
     return;
   }
-  if (request.outcome === "candidates-offered") {
+  if (isClientBindingOffer(request)) {
     logClientBindingCandidatesOffered(request, correlationId);
+    return;
+  }
+  if (isClientBindingChoiceDecision(request)) {
+    logClientBindingChoiceDecision(request, correlationId);
     return;
   }
   logClientBindingTargetMissing(request, correlationId);
