@@ -72,6 +72,11 @@ describe("turn-based Digital Twin", () => {
 
   it.each([
     {
+      label: "a cancelled canonical delivery",
+      firstDelivery: (): Promise<SendMessageOutcome> =>
+        Promise.resolve({ status: "cancelled", userPersisted: true }),
+    },
+    {
       label: "a failed canonical delivery",
       firstDelivery: (): Promise<SendMessageOutcome> => Promise.resolve({ status: "failed" }),
     },
@@ -183,6 +188,7 @@ describe("turn-based Digital Twin", () => {
       status: "completed" as const,
       assistantMessageId: "answer-a",
     }));
+    const parentCorrelations: Array<string | undefined> = [];
     const diagnostics: Array<{
       readonly correlationId: string | undefined;
       readonly stage: string | undefined;
@@ -190,6 +196,8 @@ describe("turn-based Digital Twin", () => {
     resetClientDiagnosticWriter();
     setClientDiagnosticWriter((_message, meta) => {
       diagnostics.push({ correlationId: meta?.correlationId, stage: meta?.voiceDialogueStage });
+      if (meta?.voiceDialogueStage === "turn-submitted")
+        parentCorrelations.push(meta.parentCorrelationId);
     });
     const { result, unmount } = renderHook(() =>
       useBatchVoiceDialogue({
@@ -211,6 +219,9 @@ describe("turn-based Digital Twin", () => {
     const correlationId = submit.mock.calls[0]?.[1];
     expect(correlationId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(diagnostics).toContainEqual({ correlationId, stage: "turn-submitted" });
+    expect(parentCorrelations).toEqual([
+      diagnostics.find((event) => event.stage === "started")?.correlationId,
+    ]);
     await waitFor(() => expect(result.current.waitingForAnswer).toBe(true));
     expect(starts).toHaveBeenCalledTimes(1);
 

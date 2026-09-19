@@ -152,6 +152,7 @@ describe("client diagnostics loss evidence", () => {
       kind: "voice-dialogue",
       voiceDialogueStage: "interrupted",
       correlationId: "voice-turn-correlation",
+      parentCorrelationId: "voice-session-correlation",
       loss: { postsFailed: 1 },
     });
     expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
@@ -160,6 +161,7 @@ describe("client diagnostics loss evidence", () => {
     expect(proof).toMatchObject({
       level: "info",
       correlationId: "voice-turn-correlation",
+      parentCorrelationId: "voice-session-correlation",
       voiceDialogueStage: "interrupted",
       clientPostsFailed: 1,
     });

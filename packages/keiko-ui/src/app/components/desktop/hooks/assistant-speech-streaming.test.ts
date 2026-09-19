@@ -4,6 +4,7 @@
 // buffered path. The streaming wiring itself is exercised through useAssistantSpeech with a fake sink.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { streamAssistantSpeech } from "@/lib/api";
 import {
   createBrowserAssistantSpeechStreamingSink,
@@ -153,6 +154,7 @@ describe("pcmBytesToInt16", () => {
 
 describe("createBrowserAssistantSpeechStreamingSink", () => {
   afterEach(() => {
+    resetClientDiagnosticWriter();
     vi.unstubAllGlobals();
     vi.mocked(streamAssistantSpeech).mockReset();
   });
@@ -455,6 +457,34 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
       sink?.stop();
       resume.resolve();
       await playback;
+    }
+  });
+
+  it("reports a failed stream against its request before using buffered playback", async () => {
+    stubDeferredAudioResume(Promise.resolve());
+    const writer = vi.fn();
+    resetClientDiagnosticWriter();
+    setClientDiagnosticWriter(writer);
+    const error = Object.assign(new Error("private upstream message"), {
+      correlationId: "speech-stream-0001",
+    });
+    vi.mocked(streamAssistantSpeech).mockRejectedValue(error);
+    const sink = createBrowserAssistantSpeechStreamingSink();
+    try {
+      await expect(
+        sink?.play({ text: "Synthetic response" }, new AbortController().signal, {
+          onStart: vi.fn(),
+          onEnded: vi.fn(),
+          onError: vi.fn(),
+        }),
+      ).resolves.toBe(false);
+      expect(writer).toHaveBeenCalledWith(
+        "[keiko] assistant speech stream failed; using buffered playback",
+        { kind: "voice-playback", correlationId: "speech-stream-0001" },
+      );
+      expect(JSON.stringify(writer.mock.calls)).not.toContain("private upstream");
+    } finally {
+      sink?.dispose();
     }
   });
 

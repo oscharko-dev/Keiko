@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  streamAssistantSpeech,
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
   cloneRepository,
@@ -4649,6 +4650,24 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     await expect(applyGitChangeChatDescription(INPUT)).rejects.toMatchObject({
       code: "CONTRACT_VALIDATION_FAILED",
       correlationId: "corr-malformed-apply",
+    });
+  });
+});
+
+describe("streamAssistantSpeech correlation", () => {
+  it("preserves the server correlation on a failed streaming synthesis request", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ error: { code: "UPSTREAM_UNAVAILABLE", message: "Unavailable" } }),
+          { status: 502, headers: { "X-Keiko-Correlation-Id": "speech-request-0001" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(streamAssistantSpeech({ text: "Synthetic test" })).rejects.toMatchObject({
+      status: 502,
+      correlationId: "speech-request-0001",
     });
   });
 });

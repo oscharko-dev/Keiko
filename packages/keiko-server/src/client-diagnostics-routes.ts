@@ -145,6 +145,7 @@ const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
         "turn-submitted",
         "answer-ready",
         "playback-settled",
+        "playback-fallback",
         "interrupted",
         "stopped",
       ],
@@ -215,6 +216,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "window-error",
         "sse-error",
         "voice-dialogue",
+        "voice-playback",
         "markdown-layout",
         "other",
       ],
@@ -231,6 +233,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "answer-ready",
         "delivery-failed",
         "playback-settled",
+        "playback-fallback",
         "interrupted",
         "stopped",
       ],
@@ -441,6 +444,7 @@ const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
   "window-error": "internal",
   "sse-error": "unavailable",
   "voice-dialogue": "internal",
+  "voice-playback": "unavailable",
   "markdown-layout": "unknown",
   other: "unknown",
 } as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
@@ -484,6 +488,22 @@ const VOICE_FAILURE_STAGES = new Set([
   "delivery-failed",
 ]);
 
+function clientDiagnosticCorrelation(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): {
+  readonly correlationId: string;
+  readonly parentCorrelationId?: string;
+} {
+  const parent = request.parentCorrelationId;
+  return {
+    correlationId,
+    ...(parent !== undefined && isValidCorrelationId(parent) && parent !== correlationId
+      ? { parentCorrelationId: parent }
+      : {}),
+  };
+}
+
 function logVoiceDialogueStage(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -499,7 +519,7 @@ function logVoiceDialogueStage(
   getServerLogger().info(
     activityLogEvent(
       CLIENT_VOICE_DIALOGUE_OPERATION,
-      { correlationId },
+      clientDiagnosticCorrelation(request, correlationId),
       extra as ActivityLogFields<typeof CLIENT_VOICE_DIALOGUE_OPERATION>,
     ),
   );
@@ -562,7 +582,10 @@ function logClientDiagnostic(
   getServerLogger().warn(
     activityLogEvent(
       CLIENT_DIAGNOSTIC_OPERATION,
-      { correlationId, errorKind: clientDiagnosticErrorKind(request.kind) },
+      {
+        ...clientDiagnosticCorrelation(request, correlationId),
+        errorKind: clientDiagnosticErrorKind(request.kind),
+      },
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );

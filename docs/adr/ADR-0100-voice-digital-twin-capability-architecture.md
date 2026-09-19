@@ -213,7 +213,7 @@ provider is required for Keiko to reason about voice availability.
 option for a regulated product because a transcription/realtime endpoint is then never conversation-eligible,
 never workflow-eligible, and never elected for chat completion. The voice modality is refined by additive
 optional flags `supportsSpeechInput?`, `supportsSpeechOutput?`, `supportsRealtimeVoice?`, plus
-`voiceProviderLocality?` (`azure-foundry` | `customer-hosted` | `local-only`, D7), all on the closed
+`voiceProviderLocality?` (`azure-foundry` | `customer-hosted` | `local-only` | `gateway-managed`, D7), all on the closed
 `MODEL_CAPABILITY_KNOWN_KEYS` allowlist and enforced by two voice invariants (voice fields require
 `kind: "voice"`; a voice capability must advertise ≥1 sub-capability and a locality). A content-free
 `resolveVoiceCapability` resolver and a UI-readable `GET /api/voice/capability` BFF endpoint expose the

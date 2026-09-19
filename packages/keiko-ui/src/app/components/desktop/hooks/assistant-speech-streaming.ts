@@ -11,6 +11,8 @@
 
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import { streamAssistantSpeech } from "@/lib/api";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { CORRELATION_HEADER } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export interface AssistantSpeechStreamHandlers {
@@ -75,7 +77,11 @@ async function pcmBodyOrFallback(
   // Passing it to the raw PCM worklet would produce silence or noise.
   if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "audio/pcm") {
     await cancelResponseBody(response);
-    reportClientDiagnostic("[keiko] assistant speech switched to buffered playback");
+    reportClientDiagnostic("[keiko] assistant speech switched to buffered playback", {
+      kind: "voice-dialogue",
+      voiceDialogueStage: "playback-fallback",
+      correlationId: response.headers.get(CORRELATION_HEADER) ?? undefined,
+    });
     return undefined;
   }
   return response.body ?? undefined;
@@ -142,7 +148,10 @@ export function createBrowserAssistantSpeechStreamingSink():
       return await streamAssistantSpeech(input, signal);
     } catch (error) {
       if (isAbortError(error)) return "cancelled";
-      reportClientDiagnostic("[keiko] assistant speech stream failed; using buffered playback");
+      reportClientDiagnostic("[keiko] assistant speech stream failed; using buffered playback", {
+        kind: "voice-playback",
+        correlationId: correlationIdOf(error),
+      });
       return "fallback";
     }
   }

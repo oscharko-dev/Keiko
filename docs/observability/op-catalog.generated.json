@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "eaacd07e4766e24f0a4feab0f511baf888d80bf38fb550999f9d26ff88ff3e5a",
+    "catalogDigest": "e56a1a66eb08a3dcb36805f6759cf03215d06ba0ca7d0ef0f03dfeaf338ee28a",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1817,6 +1817,7 @@
               "window-error",
               "sse-error",
               "voice-dialogue",
+              "voice-playback",
               "markdown-layout",
               "other"
             ]
@@ -1833,6 +1834,7 @@
               "answer-ready",
               "delivery-failed",
               "playback-settled",
+              "playback-fallback",
               "interrupted",
               "stopped"
             ]
@@ -1917,8 +1919,8 @@
         "failureClasses": ["client-diagnostic"],
         "proofIds": ["client.diagnostic.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:198",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:563"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:199",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:583"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1957,7 +1959,7 @@
         "proofIds": ["client.diagnostic.rate-limited.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:73",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:363"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:366"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2005,7 +2007,7 @@
         ],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:99",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:391"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:394"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2063,8 +2065,8 @@
         "failureClasses": ["client-diagnostic"],
         "proofIds": ["client.markdown.layout.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:168",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:518"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:169",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:538"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26377,6 +26379,7 @@
               "turn-submitted",
               "answer-ready",
               "playback-settled",
+              "playback-fallback",
               "interrupted",
               "stopped"
             ]
@@ -26414,7 +26417,7 @@
         "proofIds": ["voice.dialogue.stage.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:131",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:500"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:520"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -68816,7 +68819,7 @@
     {
       "op": "client.diagnostic",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:201",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:202",
       "package": "keiko-server"
     },
     {
@@ -68834,7 +68837,7 @@
     {
       "op": "client.markdown.layout",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:171",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:172",
       "package": "keiko-server"
     },
     {

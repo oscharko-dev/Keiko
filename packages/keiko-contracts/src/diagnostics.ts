@@ -66,6 +66,7 @@ export const CLIENT_DIAGNOSTIC_KINDS = [
   "window-error",
   "sse-error",
   "voice-dialogue",
+  "voice-playback",
   "markdown-layout",
   "other",
 ] as const;
@@ -79,6 +80,7 @@ export const CLIENT_VOICE_DIALOGUE_STAGES = [
   "answer-ready",
   "delivery-failed",
   "playback-settled",
+  "playback-fallback",
   "interrupted",
   "stopped",
 ] as const;
@@ -228,6 +230,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly clientTs: string;
   readonly readyState?: ClientDiagnosticReadyState | undefined;
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
@@ -382,7 +385,8 @@ function isClientDiagnosticLossCounts(value: unknown): value is ClientDiagnostic
 }
 
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { gitChangeDescription, workspaceTrustBinding, loss } = value;
+  const { gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } = value;
+  if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
   return isOptional(loss, isClientDiagnosticLossCounts);

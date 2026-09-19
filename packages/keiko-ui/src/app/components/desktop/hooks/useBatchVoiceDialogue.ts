@@ -54,10 +54,15 @@ interface BatchDeliverySetters {
   readonly setFailedTranscript: (value: string | undefined) => void;
 }
 
-function reportBatchStage(stage: ClientVoiceDialogueStage, correlationId?: string): void {
+function reportBatchStage(
+  stage: ClientVoiceDialogueStage,
+  correlationId?: string,
+  parentCorrelationId?: string,
+): void {
   reportClientDiagnostic(`[keiko] batch voice dialogue (stage=${stage})`, {
     kind: "voice-dialogue",
     voiceDialogueStage: stage,
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
     ...(correlationId === undefined ? {} : { correlationId }),
   });
 }
@@ -90,10 +95,10 @@ function settleDelivery(
   if (outcome.status === "completed") {
     flags.expectedAnswerId = outcome.assistantMessageId;
     flags.expectedAnswerCorrelationId = correlationId;
-    reportBatchStage("answer-ready", correlationId);
+    reportBatchStage("answer-ready", correlationId, flags.sessionCorrelationId);
     return;
   }
-  reportBatchStage("delivery-failed", correlationId);
+  reportBatchStage("delivery-failed", correlationId, flags.sessionCorrelationId);
   setters.setWaiting(false);
   setters.setFailedTranscript(transcript);
   setters.setError(
@@ -132,7 +137,7 @@ function observeBatchDelivery(
     (outcome) => settleDelivery(outcome, flags, generation, text, correlationId, setters),
     () => {
       if (!deliveryIsCurrent(flags, generation)) return;
-      reportBatchStage("delivery-failed", correlationId);
+      reportBatchStage("delivery-failed", correlationId, flags.sessionCorrelationId);
       setters.setWaiting(false);
       setters.setFailedTranscript(text);
       setters.setError("The spoken turn failed. You can retry or continue in text.");
@@ -154,12 +159,12 @@ function useBatchTurnAdmission(
       const correlationId = crypto.randomUUID();
       const delivery = submitRef.current(text, correlationId);
       if (delivery === undefined) {
-        reportBatchStage("queue-unavailable", correlationId);
+        reportBatchStage("queue-unavailable", correlationId, flags.sessionCorrelationId);
         setFailedTranscript(text);
         setError("The spoken turn could not be queued. You can retry or continue in text.");
         return;
       }
-      reportBatchStage("turn-submitted", correlationId);
+      reportBatchStage("turn-submitted", correlationId, flags.sessionCorrelationId);
       setWaiting(true);
       const generation = flags.generation;
       observeBatchDelivery(delivery, flags, generation, text, correlationId, {
@@ -197,6 +202,7 @@ function useBatchDeliveryLifecycle(
       reportBatchStage(
         interrupted ? "interrupted" : "playback-settled",
         flags.expectedAnswerCorrelationId,
+        flags.sessionCorrelationId,
       );
       flags.expectedAnswerCorrelationId = undefined;
       return true;

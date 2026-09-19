@@ -44,6 +44,7 @@ import {
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;

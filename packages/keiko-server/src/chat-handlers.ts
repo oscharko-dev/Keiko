@@ -2552,8 +2552,8 @@ export async function handleCreateDesktopChat(
   // probe latency to an already-decided answer.
   const explicitModelId = explicitChatModelId(body);
   await (explicitModelId === undefined
-    ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps))
-    : ensureOnDemandConversationReadiness(deps, explicitModelId));
+    ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps), ctx.correlationId)
+    : ensureOnDemandConversationReadiness(deps, explicitModelId, ctx.correlationId));
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) {
     logChatCreationRejection(
@@ -3308,7 +3308,7 @@ export async function handleSendDesktopChat(
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
     if (activeGitChangeScope(prepared.chat) === undefined) {
-      await ensureOnDemandConversationReadiness(deps, prepared.modelId);
+      await ensureOnDemandConversationReadiness(deps, prepared.modelId, ctx.correlationId);
     }
     const gitChangeDenial = admitGitChangeScopedTurn(
       deps,

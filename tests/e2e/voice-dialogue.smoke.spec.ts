@@ -7,8 +7,8 @@
 //      injected (no hardware, no provider; privacy contract preserved). The dialogue switch starts the
 //      Realtime session directly; the committed user transcript enters the canonical desktop-chat
 //      route, so persistence, retrieval, memory, and the visible assistant answer match typed chat.
-//   3. Full-realtime WITHOUT browser WebRTC media: no fluid dialogue switch is offered. Dictation and
-//      read-aloud remain separate helper surfaces.
+//   3. Without WebRTC media, deployments with both STT and TTS offer the batch dialogue path.
+//      Dictation remains a separate, editable-text surface.
 //
 // Scope note: the provider itself is faked at the WebRTC/control boundary. The executable unit and
 // integration suites cover parser, turn-manager, and BFF persistence behavior; this smoke proves the
@@ -45,6 +45,8 @@ declare global {
     readonly __micStats?: Readonly<Record<string, number>>;
     readonly __providerNativeOutputEvents?: number;
     readonly __canonicalTtsPlays?: number;
+    readonly __canonicalTtsStops?: number;
+    readonly __holdBatchSpeech?: boolean;
     readonly __releaseCanonicalTts?: () => void;
     readonly __pcmSamples?: number;
   }
@@ -106,15 +108,16 @@ const BATCH_VOICE_CAPABILITY = {
 
 const BATCH_AUDIO_INIT = `${fakeDictationMediaInit("grant")}
   window.__canonicalTtsPlays = 0;
+  window.__canonicalTtsStops = 0;
   window.Audio = class {
     constructor() { this.onplaying = null; this.onended = null; this.onerror = null; }
     play() {
       window.__canonicalTtsPlays += 1;
       this.onplaying?.();
-      setTimeout(() => this.onended?.(), 0);
+      if (!window.__holdBatchSpeech) setTimeout(() => this.onended?.(), 0);
       return Promise.resolve();
     }
-    pause() {}
+    pause() { window.__canonicalTtsStops += 1; }
   };
 `;
 
@@ -1146,7 +1149,7 @@ test("voice dialogue @smoke — Whisper-style STT and TTS complete a browser dia
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
   await expect(
-    page.getByText("Listening to you.", {
+    page.locator('[data-composer-layer="voice"]').getByText("Listening to you.", {
       exact: true,
     }),
   ).toBeVisible();
@@ -1169,6 +1172,49 @@ test("voice dialogue @smoke — Whisper-style STT and TTS complete a browser dia
   expect(sends.canonicalCorrelations()[0]).not.toBe(sends.canonicalPayloads()[0]?.clientTurnId);
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
+});
+
+test("voice dialogue @smoke — batch interrupt stops playback and retains the next turn", async ({
+  page,
+}) => {
+  await page.addInitScript(`${BATCH_AUDIO_INIT} window.__holdBatchSpeech = true;`);
+  await stubCapability(page, BATCH_VOICE_CAPABILITY);
+  let transcriptions = 0;
+  await page.route("**/api/voice/transcribe", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        transcript: ++transcriptions === 1 ? "First test question" : "Thank you, that is enough.",
+      }),
+    }),
+  );
+  const sends = captureVoiceChatSends(page);
+  const speeches = await captureSynthesizedTexts(page);
+  await openComposer(page);
+  const mode = page.getByRole("switch", { name: "Voice dialogue mode" });
+  const finish = page.getByRole("button", { name: "Finish speaking" });
+  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
+  await mode.click();
+  await expect(finish).toBeVisible();
+  await expect(interrupt).toHaveCount(0);
+  await finish.click();
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
+  await expect(interrupt).toBeVisible();
+  await expect(finish).toHaveCount(0);
+  const stops = await page.evaluate(() => window.__canonicalTtsStops ?? 0);
+  await interrupt.click();
+  await expect
+    .poll(() => page.evaluate(() => window.__canonicalTtsStops ?? 0))
+    .toBeGreaterThan(stops);
+  await expect(interrupt).toHaveCount(0);
+  await expect(finish).toBeVisible();
+  await finish.click();
+  await expect
+    .poll(() => sends.canonicalContents())
+    .toEqual(["First test question", "Thank you, that is enough."]);
+  await expect.poll(() => speeches.length).toBe(2);
+  await mode.click();
+  await expect(mode).toHaveAttribute("aria-checked", "false");
 });
 
 async function startFailedBatchTurn(page: Page): Promise<void> {
@@ -1401,7 +1447,7 @@ test("voice dialogue @smoke — full-realtime without WebRTC uses turn-based cap
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
   await expect(
-    page.getByText("Listening to you.", {
+    page.locator('[data-composer-layer="voice"]').getByText("Listening to you.", {
       exact: true,
     }),
   ).toBeVisible();

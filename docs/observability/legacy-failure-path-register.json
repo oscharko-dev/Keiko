@@ -8312,12 +8312,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/lib/api.ts",
-      "owner": "streamAssistantSpeech",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
       "owner": "actionIdentity",
       "kind": "unregistered-catch",

@@ -819,6 +819,7 @@ async function runDesktopChatStream(
   await ensureOnDemandConversationReadiness(
     deps,
     start.parsed.request.modelId ?? start.parsed.chat.selectedModel,
+    ctx.correlationId,
   );
   const streamState: DesktopChatStreamState = { started: false };
   const result = await runSerializedChatTurn(

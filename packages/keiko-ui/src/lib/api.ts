@@ -693,27 +693,22 @@ export async function streamAssistantSpeech(
   input: VoiceSpeechRequest,
   signal?: AbortSignal,
 ): Promise<Response> {
+  const correlationId = newClientCorrelationId();
   const res = await fetch("/api/voice/speak/stream", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Keiko-CSRF": "1",
+      [CORRELATION_HEADER]: correlationId,
       Accept: "audio/pcm",
     },
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),
   });
   if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as BffError;
-      code = envelope.error.code;
-      message = envelope.error.message;
-    } catch {
-      // parse failure — keep generic message, never log body
-    }
-    throw new ApiError(code, message, res.status);
+    const error = await bffFailure(res);
+    error.correlationId ??= correlationId;
+    throw error;
   }
   return res;
 }

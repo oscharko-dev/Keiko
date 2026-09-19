@@ -249,6 +249,24 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
     expect(takeClientDiagnosticLoss()).toEqual({ bufferEvicted: 2, postsFailed: 1 });
   });
 
+  it("preserves a voice turn parent and rejects an unsafe parent identity", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("voice lifecycle", {
+      kind: "voice-dialogue",
+      voiceDialogueStage: "turn-submitted",
+      correlationId: "turn-0001",
+      parentCorrelationId: "session-0001",
+    });
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "turn-0001",
+      parentCorrelationId: "session-0001",
+    });
+    fanOutClientDiagnostic("voice lifecycle", { parentCorrelationId: "private unsafe parent" });
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("parentCorrelationId");
+  });
+
   it("puts the caller's closed kind on the wire", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);

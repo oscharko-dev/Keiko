@@ -182,10 +182,10 @@ describe("POST /api/diagnostics/client", () => {
           level: "info",
           op: "voice.dialogue.stage",
           correlationId: "voice-turn-correlation",
-          extra: expect.objectContaining({ voiceDialogueStage }),
         }),
       );
       const event = sink.events.find((entry) => entry.op === "voice.dialogue.stage");
+      expect(event?.extra).toMatchObject({ voiceDialogueStage });
       expect(event?.errorKind).toBeUndefined();
       expect(sink.lines().join("\n")).not.toContain("private content");
     },

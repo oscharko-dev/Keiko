@@ -1488,8 +1488,46 @@ interface VoiceGuidanceNoteProps {
   readonly storedModels: readonly ModelCapability[];
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
+}
+
+function hasCompleteRealtimeSelection(
+  modelId: string,
+  transcriptionId: string,
+  preserveExisting: boolean,
+  storedModels: readonly ModelCapability[],
+): boolean {
+  const selected = modelId.trim();
+  if (selected !== "" && transcriptionId.trim() !== "") return true;
+  if (!preserveExisting) return false;
+  return storedModels.some(
+    (model) =>
+      (selected === "" || model.id === selected) &&
+      isCompleteRealtimeVoiceCapability({
+        ...model,
+        realtimeTranscriptionModel: transcriptionId.trim() || model.realtimeTranscriptionModel,
+      }),
+  );
+}
+
+function hasStoredOutputVoice(
+  preserveExisting: boolean,
+  modelId: string,
+  storedModels: readonly ModelCapability[],
+): boolean {
+  const selected = modelId.trim();
+  return (
+    preserveExisting &&
+    storedModels.some(
+      (model) =>
+        model.kind === "voice" &&
+        model.supportsSpeechOutput === true &&
+        (model.supportedVoicePersonas?.length ?? 0) > 0 &&
+        (selected === "" || model.id === selected),
+    )
+  );
 }
 
 function VoiceGuidanceNote({
@@ -1498,6 +1536,7 @@ function VoiceGuidanceNote({
   storedModels,
   voiceModelId,
   voiceRealtimeModelId,
+  voiceRealtimeTranscriptionModelId,
   voiceSpeechOutputModelId,
   voiceOutputVoiceId,
 }: VoiceGuidanceNoteProps): ReactNode {
@@ -1513,22 +1552,17 @@ function VoiceGuidanceNote({
     storedModels,
     "supportsSpeechOutput",
   );
-  const nativeRealtime = voiceCapabilitySelected(
+  const nativeRealtime = hasCompleteRealtimeSelection(
     voiceRealtimeModelId,
+    voiceRealtimeTranscriptionModelId,
     preserveExisting,
     storedModels,
-    "supportsRealtimeVoice",
   );
-  const selectedOutput = voiceSpeechOutputModelId.trim();
-  const storedOutputVoice =
-    preserveExisting &&
-    storedModels.some(
-      (model) =>
-        model.kind === "voice" &&
-        model.supportsSpeechOutput === true &&
-        (model.supportedVoicePersonas?.length ?? 0) > 0 &&
-        (selectedOutput === "" || model.id === selectedOutput),
-    );
+  const storedOutputVoice = hasStoredOutputVoice(
+    preserveExisting,
+    voiceSpeechOutputModelId,
+    storedModels,
+  );
   const readAloud = speechOutput && (voiceOutputVoiceId.trim() !== "" || storedOutputVoice);
   return (
     <div className="gw-note gw-span-2">
@@ -1976,6 +2010,7 @@ interface VoiceDeploymentFieldsProps {
   readonly voiceModelId: string;
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
   readonly commitVoiceSpeechOutputModelId: () => void;
@@ -2025,6 +2060,7 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         storedModels={props.storedModels}
         voiceModelId={props.voiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
+        voiceRealtimeTranscriptionModelId={props.voiceRealtimeTranscriptionModelId}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
         voiceOutputVoiceId={props.voiceOutputVoiceId}
       />
@@ -2214,6 +2250,7 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
         voiceModelId={props.voiceModelId}
         setVoiceModelId={props.setVoiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
+        voiceRealtimeTranscriptionModelId={props.voiceRealtimeTranscriptionModelId}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
         setVoiceSpeechOutputModelId={props.setVoiceSpeechOutputModelId}
         commitVoiceSpeechOutputModelId={props.commitVoiceSpeechOutputModelId}

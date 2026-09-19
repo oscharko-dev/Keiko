@@ -804,14 +804,15 @@ describe("GatewaySetupDialog", () => {
     render(<GatewaySetupDialog />);
     await user.click(screen.getByText(/Advanced: native Realtime or separate audio connection/i));
     await user.type(screen.getByLabelText(/^native realtime · deployment/i), "realtime");
-    await user.type(
-      screen.getByLabelText(/native realtime.*live transcription deployment/i),
-      "transcription",
-    );
     expect(screen.getByText(/Digital Twin off · Read aloud off/iu)).toBeInTheDocument();
     await user.type(screen.getByLabelText(/read aloud.*speech-output deployment/i), "tts");
     expect(screen.getByText(/Digital Twin off · Read aloud off/iu)).toBeInTheDocument();
     await user.type(screen.getByLabelText(/output voice/i), "neutral-voice");
+    expect(screen.getByText(/Digital Twin off · Read aloud on/iu)).toBeInTheDocument();
+    await user.type(
+      screen.getByLabelText(/native realtime.*live transcription deployment/i),
+      "transcription",
+    );
     expect(screen.getByText(/Digital Twin on · Read aloud on/iu)).toBeInTheDocument();
   });
 
