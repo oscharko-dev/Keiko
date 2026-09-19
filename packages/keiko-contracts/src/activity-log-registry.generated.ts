@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7f6bf33ad3d5ff9f30258bb1d7b6476e4bf633cc0da8793cae157efd8e75e348" as const;
+  "944cb80041aa2b6efb951282a5f7d88904896adf7a62b8bc7a1d048dd5e2bff8" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2070,6 +2070,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 128,
         maxItems: 63,
+      },
+      targetFingerprint: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
       },
     },
     causal: "correlation",
@@ -29183,6 +29189,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "targetFingerprint",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
           ],
           evidenceClasses: [
