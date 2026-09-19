@@ -23,6 +23,7 @@
 // package below the workspace's own manifests names. After npm exits, the tree it installed is
 // still held to the same rule.
 
+import { closeSync, lstatSync, mkdirSync, openSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
@@ -87,6 +88,7 @@ const LOCKFILE_MAX_BYTES = 64 * 1_048_576;
 const MANIFEST = "package.json";
 const LOCKFILES: readonly string[] = ["package-lock.json", "npm-shrinkwrap.json"];
 const INSTALLED_TREE_MARKER = join("node_modules", ".package-lock.json");
+const COMPLETED_INSTALL_MARKER = ".keiko-install-complete";
 // Every lockfile npm reads a source from: the root lockfiles and the tree it already installed.
 const SOURCE_LOCKFILES: readonly string[] = [...LOCKFILES, INSTALLED_TREE_MARKER];
 const LOCKFILE_VERSIONS: ReadonlySet<unknown> = new Set<unknown>([2, 3]);
@@ -361,16 +363,52 @@ function lockfileState(root: string, fs: WorkspaceFs): VerificationLockfileState
     : "absent";
 }
 
-// npm's own currency heuristic, read rather than re-derived: the hidden lockfile it writes into
-// node_modules describes the installed tree, and it is current while nothing it was derived from
-// (the manifest, a lockfile) has been written since.
+function completedInstallCurrent(root: string, fs: WorkspaceFs, installed: number): boolean {
+  const modules = statOrUndefined(fs, join(root, "node_modules"));
+  if (modules?.isDirectory !== true || modules.isSymbolicLink) return false;
+  const completed = statOrUndefined(fs, join(root, "node_modules", COMPLETED_INSTALL_MARKER));
+  return !(
+    completed?.isFile !== true ||
+    completed.isSymbolicLink ||
+    completed.mtimeMs === undefined ||
+    completed.mtimeMs < installed
+  );
+}
+
+// npm may write its hidden lockfile before an install fails, leaving packages only partly unpacked.
+// Trust its currency heuristic only after this bootstrap has observed a successful, confined install.
 function installedTreeCurrent(root: string, fs: WorkspaceFs): boolean {
   const installed = statOrUndefined(fs, join(root, INSTALLED_TREE_MARKER))?.mtimeMs;
-  if (installed === undefined) return false;
+  if (installed === undefined || !completedInstallCurrent(root, fs, installed)) return false;
   const inputs = [MANIFEST, ...LOCKFILES]
     .map((name) => statOrUndefined(fs, join(root, name))?.mtimeMs)
     .filter((mtime): mtime is number => mtime !== undefined);
   return inputs.every((mtime) => mtime <= installed);
+}
+
+function installedDirectory(root: string): string | undefined {
+  const path = join(root, "node_modules");
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (stat === undefined) return undefined;
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error("dependency install directory unavailable");
+  }
+  return path;
+}
+
+function clearCompletedInstall(root: string): void {
+  const directory = installedDirectory(root);
+  if (directory === undefined) return;
+  const marker = join(directory, COMPLETED_INSTALL_MARKER);
+  if (lstatSync(marker, { throwIfNoEntry: false }) !== undefined) unlinkSync(marker);
+}
+
+function recordCompletedInstall(root: string): void {
+  const existing = installedDirectory(root);
+  const directory = existing ?? join(root, "node_modules");
+  if (existing === undefined) mkdirSync(directory);
+  const descriptor = openSync(join(directory, COMPLETED_INSTALL_MARKER), "wx", 0o600);
+  closeSync(descriptor);
 }
 
 export function planDependencyBootstrap(
@@ -541,8 +579,22 @@ export async function runDependencyBootstrap(
     };
   }
   try {
+    clearCompletedInstall(deps.workspace.root);
     const outcome = await installBehindProxy(plan.lockfile, deps, proxy.url, startedAt);
-    return withEgress(outcome, proxy.counts(), proxy.fault());
+    const checked = withEgress(outcome, proxy.counts(), proxy.fault());
+    if (checked.summary.state === "installed") recordCompletedInstall(deps.workspace.root);
+    return checked;
+  } catch {
+    return {
+      summary: {
+        state: "failed",
+        lockfile: plan.lockfile,
+        exitCode: null,
+        durationMs: deps.now() - startedAt,
+        detail: "dependency install completion could not be recorded",
+        egress: proxy.counts(),
+      },
+    };
   } finally {
     await proxy.close();
   }

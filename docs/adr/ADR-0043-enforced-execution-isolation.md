@@ -462,7 +462,8 @@ nothing was impossible by construction.
 The dependency bootstrap (`packages/keiko-verification/src/dependencies.ts`) closes that gap at the
 layer that owns the plan. Before the first script step of a plan that has one, the orchestrator
 reads the workspace's `package.json`; when it declares dependencies and npm's own hidden lockfile
-(`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, it runs
+(`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, or Keiko
+has not recorded a completed install for that tree, it runs
 exactly `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error` through
 the same keiko-tools command boundary as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm
 install` and nothing else, no leading flags, `-c`/`--call` denied), under
@@ -526,6 +527,13 @@ the bootstrap, because its egress was cut rather than confined. The install reac
 an upstream proxy is not supported. After npm exits, the tree it installed is still held to the
 same rule through its hidden lockfile: an install that left none, or one naming another source, is
 `refused` and its steps are skipped.
+
+The hidden lockfile alone is not completion evidence: npm can write it before returning a failure
+and leave a partly unpacked package behind. Keiko removes its own completion marker before each
+bootstrap and writes `node_modules/.keiko-install-complete` only after npm exits successfully, the
+installed tree passes the source check, and registry egress has no refusal or fault. A missing or
+older completion marker makes the next verification install again. This also recovers after an
+interrupted install without treating its partial tree as current.
 
 The outcome is part of the report (`VerificationReport.dependencies`: state, lockfile
 `present`/`created`/`absent`, npm's exit code, duration, a short redacted detail, the tunnels

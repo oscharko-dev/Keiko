@@ -86,6 +86,7 @@ function writeInstalledTree(
     JSON.stringify({ lockfileVersion: 3, packages }),
     "utf8",
   );
+  writeFileSync(join(root, "node_modules", ".keiko-install-complete"), "", "utf8");
 }
 
 function planFor(root: string): ReturnType<typeof planDependencyBootstrap> {
@@ -219,6 +220,7 @@ describe("planDependencyBootstrap", () => {
     utimesSync(join(root, "package.json"), base, base);
     utimesSync(join(root, "package-lock.json"), base, base);
     utimesSync(join(root, "node_modules", ".package-lock.json"), installedAt, installedAt);
+    utimesSync(join(root, "node_modules", ".keiko-install-complete"), installedAt, installedAt);
 
     expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({
       kind: "current",
@@ -683,6 +685,20 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     expect(outcome.summary.lockfile).toBe("absent");
     expect(outcome.summary.detail).toBe("npm install failed (exit 1)");
     expect(outcome.excerpt).toBe("npm ERR! network failure");
+  });
+
+  it("retries after npm leaves a current-looking hidden lockfile but exits unsuccessfully", async () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    const plan = planFor(root);
+    writeInstalledTree(root);
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stderr: "npm ERR! incomplete install\n", exitCode: 1 });
+
+    const outcome = await runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
+
+    expect(outcome.summary.state).toBe("failed");
+    expect(planFor(root)).toEqual({ kind: "install", lockfile: "absent" });
   });
 
   it("never lets a failed summary carry the raw child output beyond the redacted excerpt", async () => {
