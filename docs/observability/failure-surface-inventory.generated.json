@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "994e11270458cf025974e6445e87132eb8b63947bda2af76bf646a84db943252"
+    "catalogDigest": "57bf0f0fd290a2a6485d27e149e2e3d724f8beba7366308d0870b1b220633104"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 424,
-    "proofCount": 432,
-    "resolvedProofCount": 432,
-    "failureClassCount": 310,
+    "operationCount": 426,
+    "proofCount": 434,
+    "resolvedProofCount": 434,
+    "failureClassCount": 311,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -111,7 +111,9 @@
       "operations": [
         "client.diagnostic",
         "client.diagnostic.rate-limited",
-        "client.diagnostic.rejected"
+        "client.diagnostic.rejected",
+        "client.stage.settled",
+        "client.stage.started"
       ],
       "scenarios": ["client-diagnostics.dependency-failure", "client-diagnostics.loss"]
     },
@@ -611,6 +613,7 @@
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
+    "client-stage": ["client-diagnostics.dependency-failure"],
     "coding-app-session-channel": ["tools-workflows.dependency-failure"],
     "coding-app-session-pairing": ["tools-workflows.dependency-failure"],
     "coding-app-session-rotation": ["tools-workflows.dependency-failure"],
@@ -995,6 +998,8 @@
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
+    "client.stage.settled.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.stage.started.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "coding-app-session.channel.closed.duration": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
     ],

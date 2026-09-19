@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "994e11270458cf025974e6445e87132eb8b63947bda2af76bf646a84db943252" as const;
+  "57bf0f0fd290a2a6485d27e149e2e3d724f8beba7366308d0870b1b220633104" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1879,6 +1879,92 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["client-diagnostic-rejection"],
     proofIds: ["client.diagnostic.rejected.line", "client.diagnostic.rejected.shutdown-flush"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.stage.settled",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientStageSettled",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      stage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "window-chunk",
+          "chat-window-chunk",
+          "editor-widget-chunk",
+          "files-widget-chunk",
+          "chat-bind",
+        ],
+      },
+      ordinal: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-stage"],
+    proofIds: ["client.stage.settled.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.stage.started",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientStageStarted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      stage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "window-chunk",
+          "chat-window-chunk",
+          "editor-widget-chunk",
+          "files-widget-chunk",
+          "chat-bind",
+        ],
+      },
+      ordinal: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "start",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-stage"],
+    proofIds: ["client.stage.started.line"],
+    releaseImpact: "patch",
   },
   {
     contractKind: "activity-log-operation",
@@ -25459,8 +25545,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 310,
-  completeClassCount: 310,
+  supportedClassCount: 311,
+  completeClassCount: 311,
   completeness: "complete",
   classes: [
     {
@@ -27896,6 +27982,96 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "client.diagnostic.rejected.line",
             "client.diagnostic.rejected.shutdown-flush",
           ],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-stage",
+      requirementContract: "client-stage",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end", "start"],
+      lifecycleOperations: {
+        start: ["client.stage.started"],
+        state: [],
+        end: ["client.stage.settled"],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.stage.settled",
+          mode: "correlation",
+        },
+        {
+          op: "client.stage.started",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.stage.settled", "client.stage.started"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.stage.settled",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "ordinal",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "stage",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.stage.settled.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.stage.started",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "start",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "ordinal",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "stage",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.stage.started.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -56728,6 +56904,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
     "client.diagnostic.rejected": "client-diagnostics",
+    "client.stage.settled": "client-diagnostics",
+    "client.stage.started": "client-diagnostics",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
     "coding-app-session.local-session.issued": "tools-workflows",
