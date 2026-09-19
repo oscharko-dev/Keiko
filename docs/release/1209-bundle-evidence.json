@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1024587,
-    "loadedTotalBytes": 1024587,
+    "shipsTotalBytes": 1026774,
+    "loadedTotalBytes": 1026774,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 111932,
+    "largestWorkerBytes": 112765,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 111932,
+    "largestLoadedWorkerBytes": 112765,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,12 +30,12 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 111932,
+      "gzipBytes": 112765,
       "path": "dist/ui/static/_next/static/chunks/41umh1jrct7g7.js"
     },
     {
       "label": "editor",
-      "gzipBytes": 152,
+      "gzipBytes": 151,
       "path": "dist/ui/static/_next/static/media/editor.worker.1duyl2hr9iop5.js"
     },
     {
@@ -49,25 +49,25 @@
   "editorRuntimeChunks": [
     {
       "path": "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js",
-      "gzipBytes": 617301,
+      "gzipBytes": 618550,
       "rawBytes": 2525072,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/1yiiigw5l63v1.js",
-      "gzipBytes": 295079,
+      "gzipBytes": 295185,
       "rawBytes": 1265646,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/41umh1jrct7g7.js",
-      "gzipBytes": 111932,
+      "gzipBytes": 112765,
       "rawBytes": 369177,
       "workerLabel": "editor"
     },
     {
       "path": "dist/ui/static/_next/static/media/editor.worker.1duyl2hr9iop5.js",
-      "gzipBytes": 152,
+      "gzipBytes": 151,
       "rawBytes": 240,
       "workerLabel": "editor"
     },
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "c8735c66023176cc98c18d23df82df69965260f643beeb7d797ac7322f12329c"
+  "measurementSha256": "8159435eadbae7ac103fcefbfc60b175143803c7b21cd7573c8639df3afea986"
 }
