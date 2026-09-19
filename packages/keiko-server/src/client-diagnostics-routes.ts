@@ -29,14 +29,31 @@
 // body) gets its own throttled `client.diagnostic.rejected` line, and every drop, rejection and
 // browser-reported delivery loss is also counted in the process-wide loss ledger that the
 // `activity-log.loss` summary persists. None of those paths ever carries the refused content.
+//
+// KEIKO-3557: this route accepts TWO closed report shapes on the same rate limit, size bound, and
+// rejection/loss accounting above. A message report (the shape this header describes) reaches
+// `client.diagnostic` — a FAILURE, always at warn. A stage report (`useWindowStageEvidence`,
+// keiko-ui: a desktop window placeholder mounting and later unmounting) reaches
+// `client.stage.started`/`client.stage.settled` instead — the ORDINARY case, at info, with no
+// `errorKind`. Routing routine evidence through the failure-shaped operation is exactly the defect
+// this pair fixes: a live log showed 416 of 449 `client.diagnostic` lines were stage evidence, all
+// misclassified warn/unknown and burying the rare real failures a `keiko support analyze --clusters`
+// pass needs to find.
 
 import type { IncomingMessage } from "node:http";
 
 import type {
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
+  ClientStageId,
+  ClientStageIngestRequest,
+  ClientStageSettledIngestRequest,
+  ClientStageStartedIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  isClientDiagnosticIngestRequest,
+  isClientStageIngestRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -180,6 +197,75 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["client-diagnostic"],
   proofIds: ["client.diagnostic.line"],
+  releaseImpact: "patch",
+});
+
+// Kebab-case persisted vocabulary for the `stage` field below. The registration generator's closed
+// value pattern refuses the space-separated wire ids (`ClientStageId`, e.g. "chat window chunk")
+// outright, and every other closed-enum field this module persists is already kebab-case
+// (`clientKind`, `action`, `disposition`, `outcome`). The `satisfies` clause keeps this map
+// exhaustive: a new `ClientStageId` the contracts leaf adds without a matching entry here fails
+// typecheck, not a gate.
+const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
+  "window-chunk",
+  "chat-window-chunk",
+  "editor-widget-chunk",
+  "files-widget-chunk",
+  "chat-bind",
+] as const;
+
+const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
+  "window chunk": "window-chunk",
+  "chat window chunk": "chat-window-chunk",
+  "editor widget chunk": "editor-widget-chunk",
+  "files widget chunk": "files-widget-chunk",
+  "chat bind": "chat-bind",
+} as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
+
+// KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
+// own lifecycle operations instead of the failure-shaped `CLIENT_DIAGNOSTIC_OPERATION` above — a
+// stage that starts and settles is the ordinary case, not a warning. Modelled on the non-failure
+// `coding-app-session.channel.opened`/`.closed` pair (codingAppSessionRoutes.ts): `start`/`end`
+// lifecycle, `timeline` projection, no `errorKind`, at level info.
+const CLIENT_STAGE_FIELDS = {
+  stage: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: CLIENT_STAGE_ACTIVITY_LOG_IDS,
+  },
+  ordinal: { type: "integer", dataClass: "count", required: true },
+} as const;
+
+const CLIENT_STAGE_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.stage.started",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientStageStarted",
+  fields: CLIENT_STAGE_FIELDS,
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-stage"],
+  proofIds: ["client.stage.started.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.stage.settled",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientStageSettled",
+  fields: CLIENT_STAGE_FIELDS,
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-stage"],
+  proofIds: ["client.stage.settled.line"],
   releaseImpact: "patch",
 });
 
@@ -424,6 +510,59 @@ function logClientDiagnostic(
   );
 }
 
+function logClientStageStarted(
+  request: ClientStageStartedIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_STAGE_STARTED_OPERATION,
+      { correlationId },
+      {
+        stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
+        ordinal: request.ordinal,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function logClientStageSettled(
+  request: ClientStageSettledIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_STAGE_SETTLED_OPERATION,
+      { correlationId, durationMs: request.durationMs },
+      {
+        stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
+        ordinal: request.ordinal,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+// Projects a validated stage report onto its own lifecycle operation — never the failure-shaped
+// `client.diagnostic` above. Root cause of KEIKO-3557: 416 of 449 `client.diagnostic` lines in a
+// live log were exactly this routine evidence, all persisted as warn/unknown and burying the rare
+// real failures. Unlike `client.diagnostic`, no client-supplied correlation id: a stage mount is not
+// itself a server request, so only the ingest POST's own correlation id ever applies.
+function logClientStage(
+  request: ClientStageIngestRequest,
+  ingestCorrelationId: string | undefined,
+): void {
+  const correlationId = correlationIdOrUnknown(ingestCorrelationId);
+  if (request.phase === "started") {
+    logClientStageStarted(request, correlationId);
+    return;
+  }
+  logClientStageSettled(request, correlationId);
+}
+
 // Discriminates a rejected read (already a fully-formed `RouteResult`) from a successfully parsed
 // body, instead of duck-typing the parsed value's shape. Attacker-controlled JSON can legally
 // contain a numeric `status` field and a `body` key (e.g. `{"status":200,"body":{...}}`), which
@@ -497,7 +636,14 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     return outcome.result;
   }
   const parsed = outcome.value;
-  if (!isClientDiagnosticIngestRequest(parsed)) {
+  // A stage report and a message report are mutually exclusive by construction (a stage report has
+  // no `message`, so it can never satisfy `isClientDiagnosticIngestRequest`), so trying the stage
+  // shape first is a cheap discriminant, never a possible ambiguity. Both share the same rate limit,
+  // size bound, and rejection/loss accounting below — only the logger they reach differs.
+  const stageReport = isClientStageIngestRequest(parsed) ? parsed : undefined;
+  const diagnosticReport =
+    stageReport === undefined && isClientDiagnosticIngestRequest(parsed) ? parsed : undefined;
+  if (stageReport === undefined && diagnosticReport === undefined) {
     noticeRejectedReport("invalid-shape", ctx.correlationId);
     return badRequest("Request body is not a valid diagnostic report.", ctx.correlationId);
   }
@@ -506,6 +652,10 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     noticeRateLimitedDrop(now, ctx.correlationId);
     return { status: 204, body: null };
   }
-  logClientDiagnostic(parsed, ctx.correlationId);
+  if (stageReport !== undefined) {
+    logClientStage(stageReport, ctx.correlationId);
+  } else if (diagnosticReport !== undefined) {
+    logClientDiagnostic(diagnosticReport, ctx.correlationId);
+  }
   return { status: 204, body: null };
 }

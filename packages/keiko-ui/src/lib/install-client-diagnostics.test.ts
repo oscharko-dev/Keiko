@@ -395,3 +395,58 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
     expect(body["kind"]).toBe("sse-error");
   });
 });
+
+// KEIKO-3557: `useWindowStageEvidence` reports routine stage evidence through `meta.stageReport`
+// rather than the failure-shaped message/kind wire body above. The console still gets the exact
+// same human-readable text (nothing here decorates or replaces it) — only the POST body changes.
+describe("fanOutClientDiagnostic stage evidence", () => {
+  it("posts the closed stage wire shape for a started report, never the message body", () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("desktop chat bind #1: started", {
+      stageReport: { stage: "chat bind", phase: "started", ordinal: 1 },
+    });
+
+    // The console still gets the plain, human-readable text — the transport is the only thing that
+    // changes what reaches the server.
+    expect(consoleWarn).toHaveBeenCalledWith("desktop chat bind #1: started");
+    const body = lastPostedBody(fetchMock);
+    expect(body).toEqual({ kind: "stage", stage: "chat bind", phase: "started", ordinal: 1 });
+  });
+
+  it("posts the closed stage wire shape for a settled report, with durationMs and no other field", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("desktop chat bind #1: settled after 5ms", {
+      stageReport: { stage: "chat bind", phase: "settled", ordinal: 1, durationMs: 5 },
+    });
+
+    const body = lastPostedBody(fetchMock);
+    expect(body).toEqual({
+      kind: "stage",
+      stage: "chat bind",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 5,
+    });
+  });
+
+  it("never drains the page's pending delivery loss for a stage report, leaving it for the next report", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    recordClientDiagnosticLoss("rejectionsSuppressed", 3);
+
+    fanOutClientDiagnostic("desktop chat bind #1: started", {
+      stageReport: { stage: "chat bind", phase: "started", ordinal: 1 },
+    });
+
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("loss");
+    // Still pending: a stage report never took it, so the next delivered report still carries it.
+    expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 3 });
+  });
+});

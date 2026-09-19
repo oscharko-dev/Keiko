@@ -64,6 +64,17 @@ function clientDiagnosticLine(sink: BufferedServerLogSink): Record<string, unkno
   return JSON.parse(line ?? "{}") as Record<string, unknown>;
 }
 
+function clientStageEvents(
+  sink: BufferedServerLogSink,
+  op: "client.stage.started" | "client.stage.settled",
+): readonly ServerLogEvent[] {
+  return sink.events.filter((event) => event.op === op);
+}
+
+function clientDiagnosticRejectedEvents(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
+  return sink.events.filter((event) => event.op === "client.diagnostic.rejected");
+}
+
 describe("POST /api/diagnostics/client", () => {
   beforeEach(() => {
     resetClientDiagnosticsIngestStateForTests();
@@ -344,5 +355,120 @@ describe("POST /api/diagnostics/client", () => {
     expect(
       sink.events.find((event) => event.op === "client.diagnostic.rate-limited")?.extra,
     ).toMatchObject({ completeness: "complete", loss: "event-dropped" });
+  });
+
+  // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`) must ride its own
+  // lifecycle operation at info, never the failure-shaped `client.diagnostic` at warn — that
+  // misclassification is exactly what buried real failures in a live log's warning storm.
+  describe("stage evidence", () => {
+    it("logs a started stage report as client.stage.started, at info, with no errorKind", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "stage",
+        stage: "chat bind",
+        phase: "started",
+        ordinal: 3,
+      });
+
+      const result = await handleClientDiagnosticIngest(context(body));
+
+      expect(result).toEqual({ status: 204, body: null });
+      const events = clientStageEvents(sink, "client.stage.started");
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      expect(event?.level).toBe("info");
+      expect(event?.category).toBe("diagnostic");
+      expect(event?.errorKind).toBeUndefined();
+      expect(event?.correlationId).toBe(CORRELATION_ID);
+      expect(event?.extra).toMatchObject({
+        stage: "chat-bind",
+        ordinal: 3,
+        completeness: "complete",
+        loss: "none",
+      });
+      // Never ALSO counted as the failure-shaped diagnostic line.
+      expect(clientDiagnosticEvents(sink)).toEqual([]);
+    });
+
+    it("logs a settled stage report as client.stage.settled, at info, carrying durationMs", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "stage",
+        stage: "window chunk",
+        phase: "settled",
+        ordinal: 7,
+        durationMs: 42,
+      });
+
+      const result = await handleClientDiagnosticIngest(context(body));
+
+      expect(result).toEqual({ status: 204, body: null });
+      const events = clientStageEvents(sink, "client.stage.settled");
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      expect(event?.level).toBe("info");
+      expect(event?.errorKind).toBeUndefined();
+      expect(event?.durationMs).toBe(42);
+      expect(event?.correlationId).toBe(CORRELATION_ID);
+      expect(event?.extra).toMatchObject({
+        stage: "window-chunk",
+        ordinal: 7,
+        completeness: "complete",
+        loss: "none",
+      });
+    });
+
+    it.each([
+      ["an unknown stage", { kind: "stage", stage: "bogus", phase: "started", ordinal: 1 }],
+      ["an unknown phase", { kind: "stage", stage: "chat bind", phase: "pending", ordinal: 1 }],
+      [
+        "an out-of-range durationMs",
+        { kind: "stage", stage: "chat bind", phase: "settled", ordinal: 1, durationMs: -1 },
+      ],
+      [
+        "an extra field",
+        { kind: "stage", stage: "chat bind", phase: "started", ordinal: 1, extra: "value" },
+      ],
+    ])(
+      "rejects a malformed stage report (%s) fail-closed and counts it",
+      async (_label, payload) => {
+        const sink = captureServerLog();
+
+        const result = await handleClientDiagnosticIngest(context(JSON.stringify(payload)));
+
+        expect(result.status).toBe(400);
+        expect(clientStageEvents(sink, "client.stage.started")).toEqual([]);
+        expect(clientStageEvents(sink, "client.stage.settled")).toEqual([]);
+        expect(clientDiagnosticEvents(sink)).toEqual([]);
+        expect(clientDiagnosticRejectedEvents(sink)).toHaveLength(1);
+        expect(clientDiagnosticRejectedEvents(sink)[0]?.extra).toMatchObject({
+          rejection: "invalid-shape",
+        });
+      },
+    );
+
+    it("still logs a plain message diagnostic at warn, exactly as before, alongside stage evidence", async () => {
+      const sink = captureServerLog();
+      const stageBody = JSON.stringify({
+        kind: "stage",
+        stage: "chat bind",
+        phase: "started",
+        ordinal: 1,
+      });
+      const messageBody = JSON.stringify({
+        message: "boundary caught TypeError",
+        clientTs: CLIENT_TS,
+        kind: "boundary",
+      });
+
+      await handleClientDiagnosticIngest(context(stageBody));
+      await handleClientDiagnosticIngest(context(messageBody));
+
+      expect(clientStageEvents(sink, "client.stage.started")).toHaveLength(1);
+      const diagnosticEvents = clientDiagnosticEvents(sink);
+      expect(diagnosticEvents).toHaveLength(1);
+      expect(diagnosticEvents[0]?.level).toBe("warn");
+      expect(diagnosticEvents[0]?.errorKind).toBe("internal");
+    });
   });
 });

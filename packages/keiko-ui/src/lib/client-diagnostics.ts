@@ -39,13 +39,30 @@ import {
   type ClientDiagnosticLossCountKey,
   type ClientDiagnosticLossCounts,
   type ClientDiagnosticWorkspaceTrustBinding,
+  type ClientStageId,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
+// Routine desktop-window stage evidence (`useWindowStageEvidence`) rides `meta.stageReport` instead
+// of the `kind`/`gitChangeDescription`/`workspaceTrustBinding` fields above, which all describe a
+// FAILURE report's context. `message` still carries the same human-readable text those call sites
+// always built (so console output is unchanged); the transport below prefers this structured,
+// closed-vocabulary report over the message when building the wire body, because a stage that
+// starts and settles is the ordinary case, never a diagnostic.
+export type ClientDiagnosticStageReport =
+  | { readonly stage: ClientStageId; readonly phase: "started"; readonly ordinal: number }
+  | {
+      readonly stage: ClientStageId;
+      readonly phase: "settled";
+      readonly ordinal: number;
+      readonly durationMs: number;
+    };
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly stageReport?: ClientDiagnosticStageReport | undefined;
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;
@@ -112,6 +129,10 @@ let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
  * when supplied, must be the ORIGINAL failed request's id (e.g. a caught `ApiError`'s
  * `.correlationId`) — never this report's own; a transport re-validates its shape independently
  * before trusting it for anything (never assume a caller-supplied value is well-formed).
+ *
+ * `meta.stageReport`, when supplied, means `message` is routine stage evidence rather than a
+ * failure: a transport sends the structured report instead of the message, but still writes
+ * `message` to the console unchanged (`useWindowStageEvidence`).
  */
 export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
   writer(message, meta);

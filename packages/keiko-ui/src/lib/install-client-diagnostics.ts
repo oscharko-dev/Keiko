@@ -40,10 +40,12 @@ import type {
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
   ClientDiagnosticReadyState,
+  ClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   type ClientDiagnosticMeta,
+  type ClientDiagnosticStageReport,
   recordClientDiagnosticLoss,
   restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
@@ -103,6 +105,21 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
   return 1;
 }
 
+// The stage wire body carries no `message`, `clientTs`, `correlationId` or `loss`: a stage mount is
+// not itself a server request (there is nothing to correlate against) and its evidence is already
+// closed and bounded, never free text (KEIKO-3557).
+function clientStagePostBody(report: ClientDiagnosticStageReport): ClientStageIngestRequest {
+  return report.phase === "started"
+    ? { kind: "stage", stage: report.stage, phase: "started", ordinal: report.ordinal }
+    : {
+        kind: "stage",
+        stage: report.stage,
+        phase: "settled",
+        ordinal: report.ordinal,
+        durationMs: report.durationMs,
+      };
+}
+
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
 // time (not at the original `reportClientDiagnostic` call), which is close enough for an operator
 // diagnostic and avoids threading a timestamp through the sink's string-only contract.
@@ -110,12 +127,14 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
 // are all typed `T | undefined` (keiko-contracts), so assigning `undefined` outright is legal — and
 // `JSON.stringify` drops an `undefined`-valued key from the wire body regardless, so an absent
 // correlation id never reaches the request at all. `loss` carries the page's counted delivery loss
-// since its last delivered report (#3532).
+// since its last delivered report (#3532). `meta.stageReport`, when present, means `message` is
+// routine stage evidence: the structured report is sent instead, never folded into this shape.
 function clientDiagnosticPostBody(
   message: string,
   meta: ClientDiagnosticMeta | undefined,
   loss: ClientDiagnosticLossCounts | undefined,
-): ClientDiagnosticIngestRequest {
+): ClientDiagnosticIngestRequest | ClientStageIngestRequest {
+  if (meta?.stageReport !== undefined) return clientStagePostBody(meta.stageReport);
   const bounded =
     message.length > CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH
       ? message.slice(0, CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH)
@@ -216,6 +235,10 @@ function sendClientDiagnostic(
   }
 }
 
+// A stage report's wire shape has no `loss` field (it carries no server-request context to hang
+// one on), so draining the ledger here would silently discard it — never taken, so it keeps
+// accumulating for the next message report or the pagehide flush to carry, exactly as it already
+// does today when a burst of one kind of report happens to fall between two of another.
 function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
   if (!admittedByClientPostRateLimit(Date.now())) {
     postThrottledCount += 1;
@@ -224,7 +247,8 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
     if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
     return;
   }
-  sendClientDiagnostic(message, meta, takeClientDiagnosticLoss());
+  const loss = meta?.stageReport === undefined ? takeClientDiagnosticLoss() : undefined;
+  sendClientDiagnostic(message, meta, loss);
 }
 
 // Loss counted after the page's last report would otherwise stay in the tab forever: a storm of

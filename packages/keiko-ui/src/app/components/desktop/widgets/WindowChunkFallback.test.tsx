@@ -28,12 +28,18 @@ describe("createWindowChunkFallback", () => {
     expect(placeholder).toHaveStyle({ display: "block" });
     expect(reportClientDiagnostic).toHaveBeenLastCalledWith(
       expect.stringMatching(/^desktop editor widget chunk #\d+: started$/),
+      expect.objectContaining({
+        stageReport: expect.objectContaining({ stage: "editor widget chunk", phase: "started" }),
+      }),
     );
 
     unmount();
 
     expect(reportClientDiagnostic).toHaveBeenLastCalledWith(
       expect.stringMatching(/^desktop editor widget chunk #\d+: settled after \d+ms$/),
+      expect.objectContaining({
+        stageReport: expect.objectContaining({ stage: "editor widget chunk", phase: "settled" }),
+      }),
     );
   });
 
@@ -49,6 +55,9 @@ describe("createWindowChunkFallback", () => {
 
     expect(reportClientDiagnostic).toHaveBeenLastCalledWith(
       expect.stringMatching(/^desktop files widget chunk #\d+: started$/),
+      expect.objectContaining({
+        stageReport: expect.objectContaining({ stage: "files widget chunk", phase: "started" }),
+      }),
     );
   });
 });

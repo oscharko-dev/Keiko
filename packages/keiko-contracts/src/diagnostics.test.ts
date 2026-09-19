@@ -9,11 +9,15 @@ import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_DIAGNOSTIC_READY_STATES,
+  CLIENT_STAGE_DURATION_MS_MAX,
+  CLIENT_STAGE_IDS,
+  CLIENT_STAGE_ORDINAL_MAX,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
   isActivityLogReadinessSnapshot,
   isClientDiagnosticIngestRequest,
   isClientDiagnosticKind,
   isClientDiagnosticLossCount,
+  isClientStageIngestRequest,
   isLinuxGatewayDiagnosticKind,
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
@@ -180,6 +184,87 @@ describe("isClientDiagnosticIngestRequest", () => {
     expect(
       isClientDiagnosticIngestRequest({ ...validRequest(), correlationId: "not valid!!" }),
     ).toBe(true);
+  });
+});
+
+// KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`) rides this closed,
+// free-text-free shape instead of the failure-shaped message report above.
+describe("isClientStageIngestRequest", () => {
+  function startedRequest(): Record<string, unknown> {
+    return { kind: "stage", stage: "chat bind", phase: "started", ordinal: 1 };
+  }
+
+  function settledRequest(): Record<string, unknown> {
+    return { kind: "stage", stage: "chat bind", phase: "settled", ordinal: 1, durationMs: 5 };
+  }
+
+  it("accepts a well-formed started report for every closed stage id", () => {
+    for (const stage of CLIENT_STAGE_IDS) {
+      expect(isClientStageIngestRequest({ ...startedRequest(), stage })).toBe(true);
+    }
+  });
+
+  it("accepts a well-formed settled report, including a genuinely instant 0ms settle", () => {
+    expect(isClientStageIngestRequest(settledRequest())).toBe(true);
+    expect(isClientStageIngestRequest({ ...settledRequest(), durationMs: 0 })).toBe(true);
+  });
+
+  it("rejects a non-object value and a value whose kind is not the stage literal", () => {
+    expect(isClientStageIngestRequest(null)).toBe(false);
+    expect(isClientStageIngestRequest(undefined)).toBe(false);
+    expect(isClientStageIngestRequest("a string")).toBe(false);
+    expect(isClientStageIngestRequest(["array"])).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), kind: "boundary" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), kind: undefined })).toBe(false);
+  });
+
+  it("rejects a stage outside the closed vocabulary", () => {
+    expect(isClientStageIngestRequest({ ...startedRequest(), stage: "unknown stage" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), stage: "" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), stage: 1 })).toBe(false);
+  });
+
+  it("rejects a phase outside the closed started|settled vocabulary", () => {
+    expect(isClientStageIngestRequest({ ...startedRequest(), phase: "pending" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), phase: "STARTED" })).toBe(false);
+  });
+
+  it("rejects an out-of-range or non-integer ordinal", () => {
+    expect(isClientStageIngestRequest({ ...startedRequest(), ordinal: 0 })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), ordinal: -1 })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), ordinal: 1.5 })).toBe(false);
+    expect(
+      isClientStageIngestRequest({ ...startedRequest(), ordinal: CLIENT_STAGE_ORDINAL_MAX + 1 }),
+    ).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), ordinal: "1" })).toBe(false);
+    expect(
+      isClientStageIngestRequest({ ...startedRequest(), ordinal: CLIENT_STAGE_ORDINAL_MAX }),
+    ).toBe(true);
+  });
+
+  it("rejects an out-of-range or non-integer durationMs on a settled report", () => {
+    expect(isClientStageIngestRequest({ ...settledRequest(), durationMs: -1 })).toBe(false);
+    expect(isClientStageIngestRequest({ ...settledRequest(), durationMs: 1.5 })).toBe(false);
+    expect(
+      isClientStageIngestRequest({
+        ...settledRequest(),
+        durationMs: CLIENT_STAGE_DURATION_MS_MAX + 1,
+      }),
+    ).toBe(false);
+    expect(
+      isClientStageIngestRequest({ ...settledRequest(), durationMs: CLIENT_STAGE_DURATION_MS_MAX }),
+    ).toBe(true);
+  });
+
+  it("rejects a settled report with a missing durationMs, and a started report carrying one", () => {
+    const { durationMs: _durationMs, ...settledWithoutDuration } = settledRequest();
+    expect(isClientStageIngestRequest(settledWithoutDuration)).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), durationMs: 5 })).toBe(false);
+  });
+
+  it("refuses the whole report for an unknown extra field", () => {
+    expect(isClientStageIngestRequest({ ...startedRequest(), extra: "value" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...settledRequest(), message: "not allowed" })).toBe(false);
   });
 });
 

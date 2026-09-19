@@ -152,4 +152,47 @@ describe("client diagnostics loss evidence", () => {
     expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
     expect(lines("client.diagnostic")).toEqual([]);
   });
+
+  // KEIKO-3557: proves the new lifecycle operations reach the production file sink with a complete
+  // v2 identity, exactly like every other registered operation — not merely a buffered test event.
+  it("persists a started stage report as client.stage.started", async () => {
+    const body = JSON.stringify({
+      kind: "stage",
+      stage: "editor widget chunk",
+      phase: "started",
+      ordinal: 2,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.stage.started");
+    expect(expectActivityLogProof("client.stage.started.line", line ?? "")).toMatchObject({
+      correlationId: CORRELATION_ID,
+      stage: "editor-widget-chunk",
+      ordinal: 2,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  it("persists a settled stage report as client.stage.settled, with durationMs on the envelope", async () => {
+    const body = JSON.stringify({
+      kind: "stage",
+      stage: "editor widget chunk",
+      phase: "settled",
+      ordinal: 2,
+      durationMs: 17,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.stage.settled");
+    const record = expectActivityLogProof("client.stage.settled.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: CORRELATION_ID,
+      durationMs: 17,
+      stage: "editor-widget-chunk",
+      ordinal: 2,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
 });

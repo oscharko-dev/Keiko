@@ -16,6 +16,13 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 // React StrictMode mounts effects twice, which shows as `#n started, #n settled after 0ms` followed
 // by `#n+1 started`: an artifact of the dev runtime, not a settled stage; the static export does not
 // double-invoke.
+//
+// This IS the routine case, not a failure — every window goes through it — so alongside the
+// human-readable `message` (kept for the console, unchanged), each report also carries a structured
+// `meta.stageReport`. That is what the server persists, as its own `client.stage.started`/
+// `client.stage.settled` lifecycle operation, instead of the failure-shaped `client.diagnostic` the
+// free-text message alone used to become (KEIKO-3557: 416 of 449 `client.diagnostic` lines in a live
+// log were this evidence, all misclassified warn/unknown and burying the rare real failures).
 export type WindowStage =
   "window chunk" | "chat window chunk" | "editor widget chunk" | "files widget chunk" | "chat bind";
 
@@ -29,11 +36,17 @@ export function useWindowStageEvidence(stage: WindowStage): void {
     sequence.current = token;
     const startedAt = Date.now();
     // i18n-exempt: body-free diagnostic message for the activity log, never rendered
-    reportClientDiagnostic(`desktop ${stage} #${String(token)}: started`);
+    reportClientDiagnostic(`desktop ${stage} #${String(token)}: started`, {
+      stageReport: { stage, phase: "started", ordinal: token },
+    });
     return (): void => {
+      const durationMs = Date.now() - startedAt;
       // i18n-exempt: body-free diagnostic message for the activity log, never rendered
       reportClientDiagnostic(
-        `desktop ${stage} #${String(token)}: settled after ${String(Date.now() - startedAt)}ms`,
+        `desktop ${stage} #${String(token)}: settled after ${String(durationMs)}ms`,
+        {
+          stageReport: { stage, phase: "settled", ordinal: token, durationMs },
+        },
       );
     };
   }, [stage]);

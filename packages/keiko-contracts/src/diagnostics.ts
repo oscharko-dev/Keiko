@@ -380,6 +380,101 @@ export function isClientDiagnosticIngestRequest(
   return hasValidClientDiagnosticContext(value);
 }
 
+// ─── UI stage evidence (KEIKO-3557) ──────────────────────────────────────────────
+//
+// `useWindowStageEvidence` (keiko-ui) reports routine desktop-window lifecycle evidence — a
+// placeholder stage mounting and later unmounting — through this same ingest route. That evidence
+// is not a failure (a stage that starts and settles is the ordinary case), so it must never share
+// `ClientDiagnosticIngestRequest`'s failure-shaped `message`/`kind` wire shape: a live log showed
+// 416 of 449 `client.diagnostic` lines were exactly this routine evidence, all persisted as
+// warn/unknown and burying the rare real failures. This closed, bounded, free-text-free shape is
+// the alternative the server registers and logs as its own lifecycle operation instead
+// (`client-diagnostics-routes.ts`'s `client.stage.started`/`client.stage.settled`).
+
+// Exactly the stage ids `useWindowStageEvidence` (keiko-ui) reports — never a free-form label.
+export const CLIENT_STAGE_IDS = [
+  "window chunk",
+  "chat window chunk",
+  "editor widget chunk",
+  "files widget chunk",
+  "chat bind",
+] as const;
+export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
+
+export const CLIENT_STAGE_PHASES = ["started", "settled"] as const;
+export type ClientStagePhase = (typeof CLIENT_STAGE_PHASES)[number];
+
+// `useWindowStageEvidence`'s per-tab mount sequence number. Generous relative to any plausible
+// number of desktop-window mounts in one page lifetime; a report beyond it is refused outright
+// rather than silently truncated.
+export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
+
+// A settle reported more than a day after its stage started is not timing evidence for that stage
+// anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
+export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
+
+export interface ClientStageStartedIngestRequest {
+  readonly kind: "stage";
+  readonly stage: ClientStageId;
+  readonly phase: "started";
+  readonly ordinal: number;
+}
+
+export interface ClientStageSettledIngestRequest {
+  readonly kind: "stage";
+  readonly stage: ClientStageId;
+  readonly phase: "settled";
+  readonly ordinal: number;
+  readonly durationMs: number;
+}
+
+/** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
+export type ClientStageIngestRequest =
+  ClientStageStartedIngestRequest | ClientStageSettledIngestRequest;
+
+const CLIENT_STAGE_ID_SET: ReadonlySet<string> = new Set(CLIENT_STAGE_IDS);
+const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "stage",
+  "phase",
+  "ordinal",
+  "durationMs",
+]);
+
+function isClientStageId(value: unknown): value is ClientStageId {
+  return typeof value === "string" && CLIENT_STAGE_ID_SET.has(value);
+}
+
+// `ordinal` is a 1-based mount counter (never 0); `durationMs` is a genuine elapsed time and a
+// same-tick settle (React StrictMode's double-invoke, or a truly instant bind) is legitimately 0.
+function isBoundedPositiveInteger(value: unknown, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum;
+}
+
+function isBoundedNonNegativeInteger(value: unknown, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+}
+
+/**
+ * True for a closed, bounded stage report. An unknown `stage`/`phase`, an out-of-range `ordinal` or
+ * `durationMs`, a `durationMs` on a "started" report, a missing `durationMs` on a "settled" report,
+ * or any field this shape does not declare refuses the whole report rather than admitting part of
+ * it — the same fail-closed discipline `isClientDiagnosticIngestRequest` applies to the message
+ * shape.
+ */
+export function isClientStageIngestRequest(value: unknown): value is ClientStageIngestRequest {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => !CLIENT_STAGE_INGEST_REQUEST_KEYS.has(key))) return false;
+  if (value.kind !== "stage") return false;
+  if (!isClientStageId(value.stage)) return false;
+  if (!isBoundedPositiveInteger(value.ordinal, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (value.phase === "started") return value.durationMs === undefined;
+  if (value.phase === "settled") {
+    return isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX);
+  }
+  return false;
+}
+
 // ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────
 //
 // Whether this process can currently produce machine-reconstruction evidence. `ready` holds only

@@ -924,6 +924,9 @@ describe("ChatWindowSessionHost target missing", () => {
     await screen.findByRole("status");
     expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
       expect.stringMatching(/^desktop chat bind #\d+: started$/),
+      expect.objectContaining({
+        stageReport: expect.objectContaining({ stage: "chat bind", phase: "started" }),
+      }),
     );
     const settledBefore = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
       /^desktop chat bind #\d+: settled/.test(String(message)),
@@ -986,6 +989,12 @@ describe("ChatWindowSessionHost target missing", () => {
       );
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
         expect.stringMatching(new RegExp(`^${expected[key]} #\\d+: started$`)),
+        expect.objectContaining({
+          stageReport: expect.objectContaining({
+            stage: expected[key].replace(/^desktop /, ""),
+            phase: "started",
+          }),
+        }),
       );
       view.unmount();
     }

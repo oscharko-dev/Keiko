@@ -547,6 +547,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-stage",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: ["client.stage.started"],
+      state: [],
+      end: ["client.stage.settled"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.stage.settled", "client.stage.started"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.stage.settled", "client.stage.started"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.stage.settled", "client.stage.started"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-app-session-channel",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
