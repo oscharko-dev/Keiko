@@ -16,6 +16,21 @@ still described OpenCode V1. The bundle mismatch reproduces on the same static e
 Node 24.18.0. Runtime migration measurement now has an explicit path that retains the previous
 performance ceilings and rejects a simultaneous reference-machine or toolchain change.
 
+Both native V2 measurement series completed on the pinned macOS reference with Node 24.18.0
+and npm 11.16.0: two warmups plus 30 retained samples per series. The independent candidate's
+p95 values are 1,654.962 ms cold start, 2.002 ms readiness, 2.866 ms SSE first byte, and
+108.564 ms bounded throughput. The source-freshness gate passes. No ceiling was raised;
+the existing ratchet lowered the cold-start ceiling. Each native sample also emitted a
+`safe-activity-dropped-validation-rejected` diagnostic; performance passing does not qualify
+that remaining activity-projection loss as correct behavior.
+
+The CI Node 26 warmup timeout was not reproduced locally: with the normal development server
+stopped, both real runner-readiness tests passed in 25 seconds. No timeout or assertion was
+weakened. The full refreshed scripts coverage run passed 6,406 tests with 27 existing skips;
+the combined local new-code report is 85.2% over 2,481 lines/conditions. Hosted checks must still
+run on the new head. One earlier SonarCloud processing task failed independently of the other
+successful current-head analysis; it is not treated as a coverage failure or a green CI result.
+
 The approved runtime is OpenCode 2.0.10 (`scripts/portable-runtime-approvals.mjs` and
 `packages/keiko-tool-catalog/src/dialect.ts`). The runtime, server protocol, plugin registration,
 question forms, portable staging, and approval fixtures now use V2. V1 archives and adapter

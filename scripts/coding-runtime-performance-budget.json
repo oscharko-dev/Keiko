@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "target": "coding-runtime",
   "policy": "observed-maximum-plus-full-range-v1",
-  "calibrationSha256": "bc8c550481e6c7b98736bbb505f55da7273a5f169ae1ba1e5c287aedab8e294d",
+  "calibrationSha256": "f10c2833b66dcbce4478eaa18220c88ec50959e688bb147de7f445fd0b4424ee",
   "maximumP95Ms": {
-    "coldStartMs": 2834.2457920000015,
+    "coldStartMs": 1764.1211250000051,
     "readinessMs": 3.06812699999864,
     "sseFirstByteMs": 3.1499580000090646,
     "boundedThroughputMs": 262.94270700000925
