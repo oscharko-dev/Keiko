@@ -11,7 +11,10 @@ import {
   sseStreamErrorDiagnostic,
 } from "../../../../../lib/client-diagnostics";
 import { newClientCorrelationId } from "../../../../../lib/bff-correlation";
-import { repairLocalCodingAppSessionForStream } from "../../../../../lib/coding-app-session-client";
+import {
+  repairLocalCodingAppSessionForStream,
+  reportStreamSessionRecovered,
+} from "../../../../../lib/coding-app-session-client";
 
 type SharedEventListener = (event: MessageEvent<string>) => void;
 
@@ -38,6 +41,9 @@ interface SharedEventSourceEntry {
   // request id, so the streak's error diagnostics and its session-repair outcomes share this one.
   // A successful open ends the streak.
   failureStreakCorrelationId: string | undefined;
+  // The streak's acknowledged repair, reported as recovered only once the stream opens again: an
+  // acknowledgement alone does not say a session cookie was issued (#3557 review).
+  acknowledgedRepairCorrelationId: string | undefined;
 }
 
 const sourcesByUrl = new Map<string, SharedEventSourceEntry>();
@@ -150,10 +156,26 @@ function repairSessionOnce(entry: SharedEventSourceEntry, streakCorrelationId: s
   if (entry.sessionRepairAttempted) return;
   entry.sessionRepairAttempted = true;
   void repairLocalCodingAppSessionForStream("shared-event-source", streakCorrelationId).then(
-    (repaired) => {
-      if (!repaired) entry.sessionRepairAttempted = false;
+    (repair) => {
+      // A streak that ended meanwhile keeps nothing.
+      if (entry.failureStreakCorrelationId !== streakCorrelationId) return;
+      if (repair.acknowledged) entry.acknowledgedRepairCorrelationId = repair.repairCorrelationId;
+      else entry.sessionRepairAttempted = false;
     },
   );
+}
+
+// A successful open ends the failure streak; after an acknowledged repair it is the recovery.
+function endFailureStreak(entry: SharedEventSourceEntry): void {
+  const streak = entry.failureStreakCorrelationId;
+  const repair = entry.acknowledgedRepairCorrelationId;
+  if (streak !== undefined && repair !== undefined) {
+    reportStreamSessionRecovered("shared-event-source", streak, repair);
+  }
+  entry.reconnectAttempts = 0;
+  entry.sessionRepairAttempted = false;
+  entry.failureStreakCorrelationId = undefined;
+  entry.acknowledgedRepairCorrelationId = undefined;
 }
 
 function openEntrySource(entry: SharedEventSourceEntry): void {
@@ -172,9 +194,7 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   entry.sourceGeneration = nextSourceGeneration;
   entry.source = source;
   source.onopen = () => {
-    entry.reconnectAttempts = 0;
-    entry.sessionRepairAttempted = false;
-    entry.failureStreakCorrelationId = undefined;
+    endFailureStreak(entry);
   };
   source.onerror = () => {
     const streak = (entry.failureStreakCorrelationId ??= newClientCorrelationId());
@@ -249,6 +269,7 @@ function entryForUrl(url: string): SharedEventSourceEntry {
     sourceGeneration: 0,
     sessionRepairAttempted: false,
     failureStreakCorrelationId: undefined,
+    acknowledgedRepairCorrelationId: undefined,
   };
   sourcesByUrl.set(url, entry);
   ensureVisibilityListener();

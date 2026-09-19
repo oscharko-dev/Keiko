@@ -16,6 +16,7 @@ import {
   repairLocalCodingAppSession,
   repairLocalCodingAppSessionForStream,
   repairLocalCodingAppSessionWithEvidence,
+  reportStreamSessionRecovered,
   useCodingAppSessionRedemptions,
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
@@ -428,18 +429,28 @@ describe("repairLocalCodingAppSessionForStream", () => {
     return reports;
   }
 
-  it("reports a repaired stream with the repair request's id", async () => {
+  // #3557 review: the endpoint acknowledges whether or not it issued a cookie, so an acknowledged
+  // repair reports nothing yet; the stream reports its recovery once it opens again.
+  it("reports nothing for an acknowledged repair, and the recovery once the stream opens", async () => {
     const reports = captureReports();
     const fetchMock = vi.fn((_path: string, _init: RequestInit) =>
       Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      repairLocalCodingAppSessionForStream("run-events", "ui_stream-streak-0001"),
-    ).resolves.toBe(true);
+    const repair = await repairLocalCodingAppSessionForStream(
+      "run-events",
+      "ui_stream-streak-0001",
+    );
 
     const headers = fetchMock.mock.calls[0]?.[1].headers as Record<string, string>;
+    expect(repair).toEqual({
+      acknowledged: true,
+      repairCorrelationId: headers["X-Keiko-Correlation-Id"],
+    });
+    expect(reports).toEqual([]);
+
+    reportStreamSessionRecovered("run-events", "ui_stream-streak-0001", repair.repairCorrelationId);
     expect(reports).toEqual([
       {
         message: "[keiko] run-events stream session repair: stream-repaired",
@@ -447,9 +458,8 @@ describe("repairLocalCodingAppSessionForStream", () => {
           correlationId: "ui_stream-streak-0001",
           sessionRepairReport: {
             outcome: "stream-repaired",
-            repairCorrelationId: headers["X-Keiko-Correlation-Id"],
+            repairCorrelationId: repair.repairCorrelationId,
             stream: "run-events",
-            errorKind: undefined,
           },
         },
       },
@@ -465,7 +475,7 @@ describe("repairLocalCodingAppSessionForStream", () => {
 
     await expect(
       repairLocalCodingAppSessionForStream("shared-event-source", "ui_stream-streak-0002"),
-    ).resolves.toBe(false);
+    ).resolves.toMatchObject({ acknowledged: false });
 
     const [ensure, repair] = reports;
     expect(ensure?.meta).toMatchObject({ errorKind: "unavailable" });

@@ -10,12 +10,24 @@ import {
   subscribeSharedEventSource,
 } from "./sharedEventSource";
 
+interface StreamRepair {
+  readonly acknowledged: boolean;
+  readonly repairCorrelationId: string;
+}
+const ACKNOWLEDGED: StreamRepair = { acknowledged: true, repairCorrelationId: "ui_repair-0001" };
+const REFUSED: StreamRepair = { acknowledged: false, repairCorrelationId: "ui_repair-0002" };
 const ensureLocalSession = vi.hoisted(() =>
-  vi.fn((_stream: string, _streakCorrelationId: string) => Promise.resolve(false)),
+  vi.fn((_stream: string, _streakCorrelationId: string): Promise<StreamRepair> =>
+    Promise.resolve({ acknowledged: false, repairCorrelationId: "ui_repair-0000" }),
+  ),
+);
+const reportRecovered = vi.hoisted(() =>
+  vi.fn((_stream: string, _streakCorrelationId: string, _repairCorrelationId: string) => undefined),
 );
 
 vi.mock("../../../../../lib/coding-app-session-client", () => ({
   repairLocalCodingAppSessionForStream: ensureLocalSession,
+  reportStreamSessionRecovered: reportRecovered,
 }));
 
 class FakeEventSource {
@@ -60,6 +72,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   resetClientDiagnosticWriter();
   ensureLocalSession.mockClear();
+  reportRecovered.mockClear();
 });
 
 describe("subscribeSharedEventSource", () => {
@@ -279,7 +292,7 @@ describe("subscribeSharedEventSource", () => {
   it("repairs the app session once per failure streak once the repair succeeds", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("EventSource", FakeEventSource);
-    ensureLocalSession.mockResolvedValueOnce(true);
+    ensureLocalSession.mockResolvedValueOnce(ACKNOWLEDGED);
     const unsubscribe = subscribeSharedEventSource(
       "/api/editor/workspace-watch/events?root=workspace-1",
       ["editor-watch:changed"],
@@ -319,7 +332,7 @@ describe("subscribeSharedEventSource", () => {
   it("retries the app session repair on the next onerror after a failed repair in the same streak", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("EventSource", FakeEventSource);
-    ensureLocalSession.mockResolvedValueOnce(false);
+    ensureLocalSession.mockResolvedValueOnce(REFUSED);
     const unsubscribe = subscribeSharedEventSource(
       "/api/editor/workspace-watch/events?root=workspace-1",
       ["editor-watch:changed"],
@@ -374,6 +387,39 @@ describe("subscribeSharedEventSource", () => {
     expect(calls.map(([stream]) => stream)).toEqual(["shared-event-source", "shared-event-source"]);
     expect(calls[1]?.[1]).not.toBe(calls[0]?.[1]);
 
+    unsubscribe();
+    vi.useRealTimers();
+  });
+
+  // #3557 review: an acknowledged repair is not yet a recovery (the endpoint acknowledges whether
+  // or not it issued a cookie); only the stream opening again reports it, under the streak.
+  it("reports a recovered stream only once it opens again after an acknowledged repair", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const reported: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => reported.push(meta));
+    ensureLocalSession.mockResolvedValueOnce(ACKNOWLEDGED);
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/editor/workspace-watch/events?root=workspace-1",
+      ["editor-watch:changed"],
+      () => {},
+    );
+    const first = FakeEventSource.instances[0];
+    if (first === undefined) throw new Error("Expected stream.");
+
+    first.onerror?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    // Acknowledged, but the stream is still down: nothing is recovered yet.
+    expect(reportRecovered).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1_500);
+    const second = FakeEventSource.instances[1];
+    if (second === undefined) throw new Error("Expected reconnected stream.");
+    second.onopen?.();
+
+    const streak = reported[0]?.correlationId;
+    expect(reportRecovered.mock.calls).toEqual([["shared-event-source", streak, "ui_repair-0001"]]);
     unsubscribe();
     vi.useRealTimers();
   });

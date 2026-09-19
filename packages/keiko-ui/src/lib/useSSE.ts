@@ -8,7 +8,10 @@
 import { useEffect, useRef, useState } from "react";
 import { newClientCorrelationId } from "./bff-correlation";
 import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
-import { repairLocalCodingAppSessionForStream } from "./coding-app-session-client";
+import {
+  repairLocalCodingAppSessionForStream,
+  reportStreamSessionRecovered,
+} from "./coding-app-session-client";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -66,6 +69,9 @@ let sessionRepairAttempted = false;
 // request id, so the streak's error diagnostics and its session-repair outcomes share this one,
 // and the log reads the retry sequence as one timeline. A successful open ends the streak.
 let failureStreakCorrelationId: string | undefined;
+// The streak's acknowledged repair. It is reported as recovered only once the stream opens again:
+// an acknowledgement alone does not say a session cookie was issued (#3557 review).
+let acknowledgedRepairCorrelationId: string | undefined;
 let visibilityListenerInstalled = false;
 
 function subscriberCount(): number {
@@ -207,9 +213,33 @@ function runEventsUrl(): string {
 function repairSessionOnce(streakCorrelationId: string): void {
   if (sessionRepairAttempted) return;
   sessionRepairAttempted = true;
-  void repairLocalCodingAppSessionForStream("run-events", streakCorrelationId).then((repaired) => {
-    if (!repaired) sessionRepairAttempted = false;
+  void repairLocalCodingAppSessionForStream("run-events", streakCorrelationId).then((repair) => {
+    // A streak that ended meanwhile (an open, or the last subscriber leaving) keeps nothing.
+    if (failureStreakCorrelationId !== streakCorrelationId) return;
+    if (repair.acknowledged) acknowledgedRepairCorrelationId = repair.repairCorrelationId;
+    else sessionRepairAttempted = false;
   });
+}
+
+// Forgets the failure streak and its repair. A new subscriber after the last one left starts a
+// genuinely new session: it must never find an old streak's repair latched (#3557 review).
+function forgetFailureStreak(): void {
+  sessionRepairAttempted = false;
+  failureStreakCorrelationId = undefined;
+  acknowledgedRepairCorrelationId = undefined;
+}
+
+// A successful open ends the failure streak; after an acknowledged repair it is the recovery.
+function endFailureStreak(): void {
+  if (failureStreakCorrelationId !== undefined && acknowledgedRepairCorrelationId !== undefined) {
+    reportStreamSessionRecovered(
+      "run-events",
+      failureStreakCorrelationId,
+      acknowledgedRepairCorrelationId,
+    );
+  }
+  reconnectAttempts = 0;
+  forgetFailureStreak();
 }
 
 function openSharedEventSource(): void {
@@ -219,17 +249,13 @@ function openSharedEventSource(): void {
   if (sharedEventSource === null) return;
 
   sharedEventSource.onopen = () => {
-    reconnectAttempts = 0;
-    sessionRepairAttempted = false;
-    failureStreakCorrelationId = undefined;
+    endFailureStreak();
     sharedEventSourceLive = true;
     notifyAll("live", null);
   };
 
   sharedEventSource.addEventListener("ready", () => {
-    reconnectAttempts = 0;
-    sessionRepairAttempted = false;
-    failureStreakCorrelationId = undefined;
+    endFailureStreak();
     sharedEventSourceLive = true;
     notifyAll("live", null);
   });
@@ -284,6 +310,7 @@ function subscribeRunEvents(runId: string, subscriber: RunEventSubscriber): () =
       // seen traffic before" signal into it (see its declaration for why sticky-within-a-session
       // is otherwise the correct behaviour).
       everObservedEvent = false;
+      forgetFailureStreak();
     }
     removeVisibilityListenerIfIdle();
   };

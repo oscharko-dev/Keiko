@@ -24,7 +24,10 @@ import {
 import { newClientCorrelationId } from "./bff-correlation";
 import type { ClientSessionRepairStream } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { reportClientDiagnostic } from "./client-diagnostics";
+import {
+  reportClientDiagnostic,
+  type ClientDiagnosticSessionRepairReport,
+} from "./client-diagnostics";
 import { clientErrorSummary } from "./client-error-summary";
 import { bffFetchJson, bffRequestErrorKind } from "./http";
 
@@ -167,29 +170,57 @@ export async function repairLocalCodingAppSession(): Promise<boolean> {
   return (await repairLocalCodingAppSessionWithEvidence()).repaired;
 }
 
+/** A stream's session repair: whether its local-session request was acknowledged, and its id. */
+export interface StreamSessionRepair {
+  readonly acknowledged: boolean;
+  readonly repairCorrelationId: string;
+}
+
+// An EventSource exposes no request id, so a stream's repair is reported under its failure streak,
+// the id its error diagnostics carry too (#3557 review).
+function reportStreamSessionRepair(
+  stream: ClientSessionRepairStream,
+  streakCorrelationId: string,
+  report: Omit<ClientDiagnosticSessionRepairReport, "stream">,
+): void {
+  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+  reportClientDiagnostic(`[keiko] ${stream} stream session repair: ${report.outcome}`, {
+    correlationId: streakCorrelationId,
+    sessionRepairReport: { ...report, stream },
+  });
+}
+
 /**
  * {@link repairLocalCodingAppSessionWithEvidence} for a stream whose reconnects a restarted BFF
- * denies (#3557 review). An EventSource exposes no request id, so the outcome is reported under
- * the stream's failure streak, the id its error diagnostics carry too: the stream, the repair
- * request's id and, on failure, its closed failure class. Returns the verdict.
+ * denies (#3557 review). A failed repair is reported at once, with its closed failure class. An
+ * acknowledged one is not yet a recovery: the endpoint acknowledges whether or not it issued a
+ * cookie, so only the stream's next successful open reports it ({@link reportStreamSessionRecovered}).
  */
 export async function repairLocalCodingAppSessionForStream(
   stream: ClientSessionRepairStream,
   streakCorrelationId: string,
-): Promise<boolean> {
+): Promise<StreamSessionRepair> {
   const repair = await repairLocalCodingAppSessionWithEvidence();
-  const outcome = repair.repaired ? "stream-repaired" : "repair-failed";
-  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
-  reportClientDiagnostic(`[keiko] ${stream} stream session repair: ${outcome}`, {
-    correlationId: streakCorrelationId,
-    sessionRepairReport: {
-      outcome,
+  if (!repair.repaired) {
+    reportStreamSessionRepair(stream, streakCorrelationId, {
+      outcome: "repair-failed",
       repairCorrelationId: repair.correlationId,
-      stream,
       errorKind: repair.errorKind,
-    },
+    });
+  }
+  return { acknowledged: repair.repaired, repairCorrelationId: repair.correlationId };
+}
+
+/** A stream opened again after an acknowledged repair in its failure streak: it recovered. */
+export function reportStreamSessionRecovered(
+  stream: ClientSessionRepairStream,
+  streakCorrelationId: string,
+  repairCorrelationId: string,
+): void {
+  reportStreamSessionRepair(stream, streakCorrelationId, {
+    outcome: "stream-repaired",
+    repairCorrelationId,
   });
-  return repair.repaired;
 }
 
 async function bootCodingAppSession(): Promise<boolean> {
