@@ -92,7 +92,14 @@ const MAX_CLIENT_DIAGNOSTIC_BODY_BYTES = 4_096;
 // rolling minute is generous for genuine crash/error reporting and bounds a flooding or hostile
 // page. `minIntervalMs: 0` disables the limiter's own burst/cooldown gate, so only the sliding
 // window cap below applies.
-const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY = "client-diagnostics";
+//
+// Two sliding windows (#3557): routine evidence (a stage, a binding that resolved, a session repair
+// that recovered) spends its own budget, so a page load's dozen stage reports can never use up the
+// budget a failure report needs.
+const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS = {
+  failure: "client-diagnostics",
+  routine: "client-diagnostics-routine",
+} as const;
 
 const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -848,6 +855,19 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
   return undefined;
 }
 
+function reportBudget(classified: ClassifiedClientReport): "failure" | "routine" {
+  switch (classified.shape) {
+    case "stage":
+      return "routine";
+    case "binding":
+      return classified.report.outcome === "resolved" ? "routine" : "failure";
+    case "session-repair":
+      return classified.report.outcome === "replayed" ? "routine" : "failure";
+    case "message":
+      return "failure";
+  }
+}
+
 function logClientReport(
   classified: ClassifiedClientReport,
   ingestCorrelationId: string | undefined,
@@ -939,15 +959,15 @@ export async function handleClientDiagnosticIngest(ctx: RouteContext): Promise<R
     noticeRejectedReport(outcome.rejection, ctx.correlationId);
     return outcome.result;
   }
-  // Every shape shares the same rate limit, size bound, and rejection/loss accounting below; only
-  // the operation it reaches differs.
+  // Every shape shares the same size bound and rejection/loss accounting below; routine evidence
+  // and failure reports each spend their own rate-limit budget.
   const classified = classifyClientReport(outcome.value);
   if (classified === undefined) {
     noticeRejectedReport("invalid-shape", ctx.correlationId);
     return badRequest("Request body is not a valid diagnostic report.", ctx.correlationId);
   }
   const now = Date.now();
-  if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY, now)) {
+  if (!rateLimiter.tryAcquire(CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS[reportBudget(classified)], now)) {
     noticeRateLimitedDrop(now, ctx.correlationId);
     return { status: 204, body: null };
   }

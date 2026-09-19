@@ -543,3 +543,39 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
     });
   });
 });
+
+// #3557: a page load posts about a dozen routine stage reports. With one shared budget, a failure
+// raised during boot (the one most likely to hold a real stall) was dropped console-only.
+describe("fanOutClientDiagnostic budgets", () => {
+  it("never lets routine evidence use up the budget of a failure report", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let ordinal = 1; ordinal <= 30; ordinal += 1) {
+      fanOutClientDiagnostic(`desktop window chunk #${String(ordinal)}: started`, {
+        stageReport: { stage: "window chunk", phase: "started", ordinal },
+      });
+    }
+    fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(31);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
+
+  it("still bounds routine evidence on its own budget", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let ordinal = 1; ordinal <= 61; ordinal += 1) {
+      fanOutClientDiagnostic(`desktop window chunk #${String(ordinal)}: started`, {
+        stageReport: { stage: "window chunk", phase: "started", ordinal },
+      });
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(60);
+    expect(clientDiagnosticPostThrottledCount()).toBe(1);
+  });
+});

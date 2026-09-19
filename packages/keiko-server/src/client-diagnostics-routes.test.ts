@@ -502,6 +502,30 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  // #3557: routine evidence (a dozen stage reports per page load) must never use up the budget a
+  // failure report needs; each keeps its own sliding window.
+  it("keeps a failure report admitted after a burst of routine stage evidence", async () => {
+    const sink = captureServerLog();
+    for (let ordinal = 1; ordinal <= 70; ordinal += 1) {
+      const stage = { kind: "stage", stage: "window chunk", phase: "started", ordinal };
+      await handleClientDiagnosticIngest(context(JSON.stringify(stage)));
+    }
+    const failure = JSON.stringify({
+      message: "boundary caught TypeError",
+      clientTs: CLIENT_TS,
+      kind: "boundary",
+    });
+
+    expect(await handleClientDiagnosticIngest(context(failure))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(1);
+    // The routine burst itself is still bounded, and its overflow is counted as a drop.
+    expect(sink.events.filter((event) => event.op === "client.stage.started")).toHaveLength(60);
+    expect(sink.events.some((event) => event.op === "client.diagnostic.rate-limited")).toBe(true);
+  });
+
   // #3557 review: both phases of one mounted stage carry the client-minted id, so they join.
   it("logs both phases of a stage under the stage's own correlation id", async () => {
     const sink = captureServerLog();

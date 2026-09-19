@@ -240,26 +240,51 @@ function clientDiagnosticPostBody(
 // able to grow the activity log without bound. The server independently rate-limits the same route
 // (client-diagnostics-routes.ts); this is defense in depth on the sending side, so a burst never
 // leaves the tab at all.
-const CLIENT_DIAGNOSTIC_POST_LIMIT_PER_WINDOW = 20;
+//
+// Two budgets (#3557): a page load posts about a dozen routine stage reports, and with one shared
+// budget a failure raised during boot, the one most likely to hold a real stall, was dropped
+// console-only. Routine evidence now spends its own budget and can never starve a failure report.
+const CLIENT_DIAGNOSTIC_POST_LIMITS = { failure: 20, routine: 60 } as const;
 const CLIENT_DIAGNOSTIC_POST_WINDOW_MS = 60_000;
 
-let postWindowStartedAtMs = 0;
-let postCountInWindow = 0;
+type ClientDiagnosticPostBudget = keyof typeof CLIENT_DIAGNOSTIC_POST_LIMITS;
+
+interface PostWindow {
+  startedAtMs: number;
+  count: number;
+  // Drops in the CURRENT window, reset with it: the throttle notice is written on the first drop of
+  // every window, so a burst in a later window leaves its own trace instead of vanishing behind a
+  // process-lifetime counter (#3376 review).
+  throttled: number;
+}
+
+function freshPostWindow(): PostWindow {
+  return { startedAtMs: 0, count: 0, throttled: 0 };
+}
+
+const postWindows: Record<ClientDiagnosticPostBudget, PostWindow> = {
+  failure: freshPostWindow(),
+  routine: freshPostWindow(),
+};
 let postFailureCount = 0;
 let postThrottledCount = 0;
-// Drops in the CURRENT window, reset with it: the throttle notice is written on the first drop of
-// every window, so a burst in a later window leaves its own trace instead of vanishing behind a
-// process-lifetime counter (#3376 review).
-let postThrottledInWindow = 0;
 
-function admittedByClientPostRateLimit(nowMs: number): boolean {
-  if (nowMs - postWindowStartedAtMs >= CLIENT_DIAGNOSTIC_POST_WINDOW_MS) {
-    postWindowStartedAtMs = nowMs;
-    postCountInWindow = 0;
-    postThrottledInWindow = 0;
+// Routine evidence: a stage, a binding that resolved, a session repair that recovered. Everything
+// else is a failure report.
+function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
+  if (meta?.stageReport !== undefined) return "routine";
+  if (meta?.bindingReport?.outcome === "resolved") return "routine";
+  return meta?.sessionRepairReport?.outcome === "replayed" ? "routine" : "failure";
+}
+
+function admittedByClientPostRateLimit(window: PostWindow, limit: number, nowMs: number): boolean {
+  if (nowMs - window.startedAtMs >= CLIENT_DIAGNOSTIC_POST_WINDOW_MS) {
+    window.startedAtMs = nowMs;
+    window.count = 0;
+    window.throttled = 0;
   }
-  if (postCountInWindow >= CLIENT_DIAGNOSTIC_POST_LIMIT_PER_WINDOW) return false;
-  postCountInWindow += 1;
+  if (window.count >= limit) return false;
+  window.count += 1;
   return true;
 }
 
@@ -275,11 +300,10 @@ export function clientDiagnosticPostThrottledCount(): number {
 
 /** Test-only: put the POST transport's rate limiter and failure/drop counters back to a clean start. */
 export function resetClientDiagnosticPostStateForTests(): void {
-  postWindowStartedAtMs = 0;
-  postCountInWindow = 0;
+  postWindows.failure = freshPostWindow();
+  postWindows.routine = freshPostWindow();
   postFailureCount = 0;
   postThrottledCount = 0;
-  postThrottledInWindow = 0;
 }
 
 // Best-effort POST to the server activity log. Never awaited by a call site and never lets a
@@ -324,11 +348,13 @@ function sendClientDiagnostic(
 // accumulating for the next message report or the pagehide flush to carry, exactly as it already
 // does today when a burst of one kind of report happens to fall between two of another.
 function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
-  if (!admittedByClientPostRateLimit(Date.now())) {
+  const budget = postBudget(meta);
+  const window = postWindows[budget];
+  if (!admittedByClientPostRateLimit(window, CLIENT_DIAGNOSTIC_POST_LIMITS[budget], Date.now())) {
     postThrottledCount += 1;
-    postThrottledInWindow += 1;
+    window.throttled += 1;
     recordClientDiagnosticLoss("postsThrottled");
-    if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
+    if (window.throttled === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
     return;
   }
   const loss = structuredPostBody(meta) === undefined ? takeClientDiagnosticLoss() : undefined;
