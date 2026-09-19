@@ -982,6 +982,16 @@ Sealing writes a final `activity-log.segment.sealed` line and fsyncs. The line c
 name; the writer never appends to it again, and the next maintenance pass recovers it. Lines over
 8 KiB are still replaced by `server-log.line-dropped`.
 
+A write that finds its segment full or expired rotates make-before-break (#3557): the next segment's
+file is created under its active name before the full one is sealed, and the admission re-check
+then runs with that new, still empty segment at its full reservation, so the byte bound is
+unchanged. A process that keeps writing is therefore never without an active segment, which is the
+one sign of a live writer a starting peer can see before it decides whether it may replace the
+store policy. Sealing first and opening the next segment only after a maintenance pass had left a
+busy writer invisible for that whole pass, and a peer starting then replaced a running writer's
+policy. Only the idle-segment timer, shutdown and a pin request seal without opening the next
+segment.
+
 **Recovery.** At startup and before every new segment, the writer seals orphaned active segments. A
 segment is orphaned when:
 

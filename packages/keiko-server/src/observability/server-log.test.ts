@@ -377,6 +377,28 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
+// #3557 CI: what a peer that starts right now would conclude from each listing this process's
+// writer makes. The mock passes every listing through; only while `observing` is set does it also
+// judge the listing from a foreign peer's side, which sees this process as alive.
+const peerView = vi.hoisted(() => ({ observing: false, soleVerdicts: [] as boolean[] }));
+const PEER_IDENTITY = { pid: 2_147_483_000, instanceId: "0e0e0e0e", isAlive: (): boolean => true };
+
+vi.mock("./activity-log-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./activity-log-store.js")>();
+  return {
+    ...actual,
+    listActivityLogDirectory: (
+      directory: string,
+    ): ReturnType<typeof actual.listActivityLogDirectory> => {
+      const listing = actual.listActivityLogDirectory(directory);
+      if (peerView.observing) {
+        peerView.soleVerdicts.push(actual.isSoleActivityLogWriter(listing.files, PEER_IDENTITY));
+      }
+      return listing;
+    },
+  };
+});
+
 const BURST_EVENT_COUNT = 2_000;
 
 // Storage evidence the writer adds on its own, taken from the producer. Caller-facing assertions
@@ -2780,6 +2802,63 @@ describe("activity log store policy", () => {
       ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)
       : undefined;
   }
+
+  // #3557 CI: a writer rolled a full segment over by sealing it first and opening the next one only
+  // after a whole maintenance pass. For that pass the busy writer held no active segment, so a peer
+  // starting then judged itself the store's sole live writer and replaced the governing policy.
+  function observePeerVerdicts(write: () => void): readonly boolean[] {
+    peerView.soleVerdicts.length = 0;
+    peerView.observing = true;
+    try {
+      write();
+    } finally {
+      peerView.observing = false;
+    }
+    return [...peerView.soleVerdicts];
+  }
+
+  it("never leaves a peer judging itself the sole writer while this writer rolls segments over", () => {
+    const env = storageEnv({ KEIKO_LOG_SEGMENT_BYTES: String(SMALL_SEGMENT) });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "http", op: "rotation.first" });
+
+    const verdicts = observePeerVerdicts(() => {
+      for (let index = 0; index < 400; index += 1) {
+        sink.write({ category: "http", op: "rotation.busy", extra: { index } });
+      }
+    });
+
+    const seals = linesWithOp(stateDir, "activity-log.segment.sealed");
+    expect(seals.length).toBeGreaterThanOrEqual(3);
+    for (const seal of seals) expect(seal).toMatchObject({ sealReason: "size-limit" });
+    expect(verdicts.length).toBeGreaterThan(0);
+    expect(verdicts).not.toContain(true);
+    expect(segmentFiles(stateDir, "active")).toHaveLength(1);
+  });
+
+  it("never leaves a peer judging itself the sole writer when a write rotates an expired segment", () => {
+    const env = storageEnv({ KEIKO_LOG_SEGMENT_SECONDS: "1" });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "http", op: "rotation.first" });
+    const realNow = Date.now.bind(Date);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 2_000);
+
+    let verdicts: readonly boolean[];
+    try {
+      verdicts = observePeerVerdicts(() => {
+        sink.write({ category: "http", op: "rotation.after-expiry" });
+      });
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(linesWithOp(stateDir, "activity-log.segment.sealed")).toEqual([
+      expect.objectContaining({ sealReason: "age-limit" }),
+    ]);
+    expect(verdicts.length).toBeGreaterThan(0);
+    expect(verdicts).not.toContain(true);
+    expect(segmentFiles(stateDir, "active")).toHaveLength(1);
+  });
 
   it("keeps total disk use within the FIRST writer's stored budget when cooperating processes disagree on retention", async () => {
     const smallBudget = 256 * 1024;
