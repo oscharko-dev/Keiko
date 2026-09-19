@@ -951,9 +951,12 @@ request":
     keeps it: the window shows the conversation, so the person can check it, and offers to keep
     it (`client.binding.choice-kept`) or to withdraw it and choose again
     (`client.binding.choice-withdrawn`, which returns the window to the chats it may have shown).
-    Keeping needs the chosen chat on screen: once it is missing, while the window shows it or
-    after a reload, the choice can only be withdrawn, and the withdrawal names the chat by the
-    fingerprint the window persisted, under the list loads that found it gone. The browser and
+    Keeping needs the chosen chat on screen: while it opens, while its lookup failed, and once it
+    is missing, while the window shows it or after a reload, the choice can only be withdrawn,
+    and the withdrawal names the chat by the fingerprint the window persisted, under the list
+    loads that found it gone. A fingerprint that no listed chat has any more is reported missing
+    as that fingerprint (`referenceShape: fingerprint`, `targetFingerprint`) under the lookup's
+    own loads, never like a marker that named nothing. The browser and
     the server budget binding reports by one rule (`CLIENT_BINDING_FAILURE_OUTCOMES`): only a
     missing target spends the failure budget.
     A binding found again after redaction (`fingerprint`, `user-selected`) and each decision
