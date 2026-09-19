@@ -1741,6 +1741,47 @@ describe("ChatWindowSessionHost target missing", () => {
     );
   });
 
+  // #3557 review: a legacy binding that resolves was decided by the list it resolved in, not by
+  // every list the lookup may have scanned.
+  it("names only the resolving project's list load on a resolved legacy binding", async (): Promise<void> => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const live = { ...chatFixture("legacy-live", "Live chat", 2), projectPath: projectB.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.activeChat = live;
+    chatSessionState.chats = [live];
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.loading = false;
+    chatListCorrelationIdMock.mockImplementation((projectPath: string) =>
+      projectPath === "/repo-a" ? "ui_chat-list-load-a" : "ui_chat-list-load-b",
+    );
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-live" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("binding resolved"),
+        {
+          correlationId: "ui_chat-list-load-b",
+          bindingReport: expect.not.objectContaining({
+            relatedCorrelationIds: expect.anything() as unknown,
+          }) as unknown,
+        },
+      ),
+    );
+  });
+
   // #3557 review: two windows restored from one list answer must stay apart in the evidence.
   it("names each window in its own binding report", async (): Promise<void> => {
     chatSessionState.activeChat = undefined;

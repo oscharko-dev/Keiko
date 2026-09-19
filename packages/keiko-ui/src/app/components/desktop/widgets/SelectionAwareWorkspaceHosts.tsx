@@ -1068,21 +1068,28 @@ function useBoundChatBindingEvidence(
   routing: BoundChatRouting,
   session: ChatSessionApi,
 ): void {
+  const outcome = chatBindingOutcome(routing, configuration.chatId);
   useChatBindingEvidence({
     routing,
     chatId: configuration.chatId,
     windowId: ctx.windowId,
-    projectPaths: chatBindingProjectPaths(configuration.projectPath, session),
+    projectPaths: chatBindingProjectPaths(outcome, configuration.projectPath, session),
   });
 }
 
-// Every project list the verdict depended on: the active project's, or, for a legacy binding
-// without a persisted project, every project the lookup scanned (#3557 review).
+// The project lists the verdict depended on (#3557 review). A resolved binding was decided by the
+// list of the project it resolved in, the active one. A legacy binding without a persisted project
+// is judged missing only after the lookup scanned every project and none held the chat, so that
+// verdict names every scanned list. A failed lookup reports no binding outcome: it records its own
+// correlated diagnostic when a project list cannot be read.
 function chatBindingProjectPaths(
+  outcome: ChatBindingOutcome | undefined,
   configuredProjectPath: string | undefined,
   session: ChatSessionApi,
 ): readonly string[] {
-  if (configuredProjectPath === undefined) return session.projects.map((project) => project.path);
+  if (outcome === "target-missing" && configuredProjectPath === undefined) {
+    return session.projects.map((project) => project.path);
+  }
   return session.activeProject === undefined ? [] : [session.activeProject.path];
 }
 
