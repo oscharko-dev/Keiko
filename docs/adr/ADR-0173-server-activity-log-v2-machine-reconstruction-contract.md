@@ -880,10 +880,39 @@ request":
   structurally have no id (native `EventSource`, message-only notices) say so in their doc comments
   rather than inventing one.
 
+- **Routine browser evidence is not a failure, and every browser report is a closed shape**
+  (#3557). A live dev log showed 416 of 449 `client.diagnostic` lines were a window's routine
+  stage evidence, all at `warn` with `errorKind: unknown`, burying the real failures. The route
+  now accepts four closed shapes, each with its own operations:
+  - a message: `client.diagnostic`, a failure at `warn`, as above;
+  - a window stage: `client.stage.started` / `client.stage.settled` at `info`. One
+    client-minted correlation id per mount joins both phases, and the duration is monotonic and
+    bounded to the contract's ceiling;
+  - a restored window's binding: `client.binding.resolved` at `info`, or
+    `client.binding.target-missing` at `warn` with `errorKind: unavailable`. It carries the
+    persisted reference's closed shape (`uuid`, `opaque`, `redacted`), whether the reference
+    survived persistence only through the reference-field exemption from the card-number
+    heuristic, and the digest of the window's own id, never the reference itself. Its correlation
+    id is that of the chat list load that decided the outcome, and a missing legacy binding names
+    every scanned list in `relatedCorrelationIds`;
+  - a stale-session repair: `client.session-repair.recovered` at `info`, or
+    `client.session-repair.failed` at `warn` with outcome `replay-failed`, `replay-skipped`
+    or `repair-failed`. It sits on the denied request's timeline, because the replay reuses that
+    request's correlation id, and it names the repair request's id.
+  Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
+  budget in the browser (60 per minute, failures 20) and on the server (a separate 60-per-minute
+  sliding window), so it can never starve a failure report. Every drop is still counted as loss.
+
 The agent-reading step this adds: **for a failed request**, read `routeTemplate`,
 `queryParamNames`, `responseBytes`, `aborted` and — for a stream — the `sse.stream.closed` line's
 `reason`, then look for a `client.diagnostic` line sharing the `correlationId` to learn what the
 browser saw. Everything on these lines is a count, a closed label, a template, or an id.
+**For a restored window that shows "not found"**, read its `client.binding.target-missing` line.
+`referenceShape: redacted` means the reference was lost at persistence. `uuid` means the target
+is really gone. The line's correlation id, and `relatedCorrelationIds`, name the list loads the
+verdict came from. **For a conversation refused as not ready**, read `readinessObservation` on the
+rejection. `unobserved` means no check ran in that process. `not-ready` means a check ran and
+failed. Then read the `gateway.readiness.started` / `.completed` lines of that check.
 
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 
