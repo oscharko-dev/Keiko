@@ -48,15 +48,37 @@ describe("newReferenceId (#3557 review)", () => {
     expect(looksLikeSecretShape(CLEAN_ID)).toBe(false);
   });
 
-  it("returns a clean first draw and records nothing", () => {
+  // #3557 review: the checked allocation leaves evidence on its normal branch too, so the log tells
+  // a clean first draw apart from a path that never ran the guard.
+  it("records a clean first draw as issued, with no flagged draws", () => {
     const sink = captureServerLog();
 
-    expect(newReferenceId({ kind: "chat", draw: draws(CLEAN_ID) })).toBe(CLEAN_ID);
-    expect(sink.events.filter((event) => event.op.startsWith("reference-id."))).toEqual([]);
+    expect(
+      newReferenceId({
+        kind: "qi-run",
+        correlationId: "corr-start-qi-0001",
+        draw: draws(CLEAN_ID),
+      }),
+    ).toBe(CLEAN_ID);
+    const events = sink.events.filter((line) => line.op.startsWith("reference-id."));
+    expect(events).toHaveLength(1);
+    expect(
+      expectActivityLogProof(
+        "reference-id.issued.line",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({
+      level: "info",
+      correlationId: "corr-start-qi-0001",
+      kind: "qi-run",
+      flaggedDraws: 0,
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   // #3557 review: the re-draw must leave typed, correlated evidence with its attempt count.
-  it("draws again when the heuristic flags an id, and records the re-draw", () => {
+  it("draws again when the heuristic flags an id, and records the re-draws", () => {
     const sink = captureServerLog();
 
     const id = newReferenceId({
@@ -66,9 +88,13 @@ describe("newReferenceId (#3557 review)", () => {
     });
 
     expect(id).toBe(CLEAN_ID);
-    const [event] = sink.events.filter((line) => line.op === "reference-id.redrawn");
+    const issued = sink.events.filter((line) => line.op === "reference-id.issued");
+    expect(issued).toHaveLength(1);
     expect(
-      expectActivityLogProof("reference-id.redrawn.line", formatActivityLogProofLine(event ?? {})),
+      expectActivityLogProof(
+        "reference-id.issued.line",
+        formatActivityLogProofLine(issued[0] ?? {}),
+      ),
     ).toMatchObject({
       level: "info",
       correlationId: "corr-create-chat-0001",
@@ -154,7 +180,7 @@ describe("UI store chat ids", () => {
       });
 
       expect(chat.id).toBe(CLEAN_ID);
-      expect(sink.events.filter((line) => line.op === "reference-id.redrawn")).toEqual([
+      expect(sink.events.filter((line) => line.op === "reference-id.issued")).toEqual([
         expect.objectContaining({
           correlationId: "corr-create-chat-0002",
           extra: expect.objectContaining({ kind: "chat", flaggedDraws: 1 }) as unknown,

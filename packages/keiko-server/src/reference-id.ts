@@ -6,7 +6,8 @@
 // payment-card rule reads the digits across a random UUID's last hyphen as a Luhn-valid card
 // number for about 2 in 10,000 ids, so such an id was redacted at persistence, and a restored
 // window could never find its target again. The server owns these ids, so it draws only ids the
-// heuristic never flags. A re-draw and an exhausted draw both leave typed evidence.
+// heuristic never flags. Every issued id leaves typed evidence with the number of draws the
+// heuristic flagged first, zero included, and an exhausted draw fails with typed evidence.
 
 import { randomUUID } from "node:crypto";
 import {
@@ -32,25 +33,27 @@ const REFERENCE_ID_FIELDS = {
     required: true,
     values: ["chat", "pr-description-proposal", "figma-snapshot-run", "qi-run", "agent-run"],
   },
-  // How many draws the heuristic flagged before the returned one, or before the bound.
+  // How many draws the heuristic flagged before the issued one (zero for a clean first draw), or
+  // before the bound.
   flaggedDraws: { type: "integer", dataClass: "count", required: true },
   completeness: { type: "string", dataClass: "completeness-state", required: true },
   loss: { type: "string", dataClass: "loss-state", required: true },
 } as const;
 
-const REFERENCE_ID_REDRAWN_OPERATION = defineActivityLogOperation({
+// An issued reference id: the checked allocation ran, whether its first draw was clean or not.
+const REFERENCE_ID_ISSUED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "reference-id.redrawn",
+  op: "reference-id.issued",
   category: "diagnostic",
   owner: "keiko-server",
-  emitter: "reference-id.logReferenceIdRedrawn",
+  emitter: "reference-id.logReferenceIdIssued",
   fields: REFERENCE_ID_FIELDS,
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["reference-id"],
-  proofIds: ["reference-id.redrawn.line"],
+  proofIds: ["reference-id.issued.line"],
   releaseImpact: "patch",
 });
 
@@ -70,14 +73,14 @@ const REFERENCE_ID_EXHAUSTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function logReferenceIdRedrawn(
+function logReferenceIdIssued(
   kind: ReferenceIdKind,
   flaggedDraws: number,
   correlationId: string | undefined,
 ): void {
   getServerLogger().info(
     activityLogEvent(
-      REFERENCE_ID_REDRAWN_OPERATION,
+      REFERENCE_ID_ISSUED_OPERATION,
       { correlationId: correlationIdOrUnknown(correlationId) },
       { kind, flaggedDraws, completeness: "complete", loss: "none" },
     ),
@@ -120,7 +123,7 @@ export function newReferenceId(options: NewReferenceIdOptions): string {
   for (let flaggedDraws = 0; flaggedDraws < MAX_REFERENCE_ID_DRAWS; flaggedDraws += 1) {
     const id = `${prefix}${draw()}`;
     if (looksLikeSecretShape(id)) continue;
-    if (flaggedDraws > 0) logReferenceIdRedrawn(kind, flaggedDraws, correlationId);
+    logReferenceIdIssued(kind, flaggedDraws, correlationId);
     return id;
   }
   logReferenceIdExhausted(kind, correlationId);
