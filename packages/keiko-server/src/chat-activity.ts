@@ -128,7 +128,7 @@ const CHAT_RESPONSE_MESSAGE_OPERATION = defineActivityLogOperation({
   op: "chat.response.message",
   category: "gateway",
   owner: "keiko-server",
-  emitter: "chat-activity.logChatResponseMessages",
+  emitter: "chat-activity.logChatResponseMessage",
   fields: {
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -315,19 +315,26 @@ export function logChatResponseMessages(body: unknown, correlationId: string | u
   const messages: readonly unknown[] = body.messages;
   for (const message of messages) {
     if (!isAssistantMessageIdentity(message)) continue;
-    getServerLogger().info(
-      activityLogEvent(
-        CHAT_RESPONSE_MESSAGE_OPERATION,
-        {
-          correlationId: message.id,
-          ...(correlationId === undefined || correlationId === message.id
-            ? {}
-            : { parentCorrelationId: correlationId }),
-        },
-        { completeness: "complete", loss: "none" },
-      ),
-    );
+    logChatResponseMessage(message.id, correlationId);
   }
+}
+
+export function logChatResponseMessage(
+  assistantMessageId: string,
+  correlationId: string | undefined,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_RESPONSE_MESSAGE_OPERATION,
+      {
+        correlationId: assistantMessageId,
+        ...(correlationId === undefined || correlationId === assistantMessageId
+          ? {}
+          : { parentCorrelationId: correlationId }),
+      },
+      { completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 function isAssistantMessageIdentity(message: unknown): message is { readonly id: string } {

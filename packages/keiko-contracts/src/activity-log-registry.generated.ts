@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1721c9f6c39119a265408590eb98cfb5307c1407455a9b9c9f8c8a9e557cc53b" as const;
+  "d90a36fd052fc18d4f0de41fb3569ae7f3da2c00b4ec1e6de2f105181b039e8c" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -987,7 +987,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "chat.response.message",
     category: "gateway",
     owner: "keiko-server",
-    emitter: "chat-activity.logChatResponseMessages",
+    emitter: "chat-activity.logChatResponseMessage",
     fields: {
       completeness: {
         type: "string",

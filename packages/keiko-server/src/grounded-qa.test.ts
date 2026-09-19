@@ -2001,6 +2001,36 @@ describe("handleGroundedAsk", () => {
   // ADR-0173 D5: the folder single-source answerer must stamp the request's correlation id into
   // GatewayCallRequest.logContext so a gateway retry/circuit-breaker line for this call joins the
   // same trail as the HTTP request that triggered it.
+  it("links grounded assistant rendering to its originating request", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const correlationId = "grounded-render-request";
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION, modelId: CHAT_MODEL }),
+          ),
+          correlationId,
+        },
+        deps(fakeModel("Grounded answer [src/foo.ts:1-3]", [])),
+      );
+      expect(result.status).toBe(200);
+      const answer = result.body as GroundedAnswer;
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          op: "chat.response.message",
+          correlationId: answer.assistantMessageId,
+          parentCorrelationId: correlationId,
+        }),
+      );
+    } finally {
+      resetServerLogger();
+    }
+  });
+
   it("threads the request correlation id into the Model Gateway call's logContext", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     seedScopedRepo(projectPath);
