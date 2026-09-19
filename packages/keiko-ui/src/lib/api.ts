@@ -174,10 +174,6 @@ import {
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
-import {
-  validateGitSyncExecuteResponse,
-  validateGitSyncPreview,
-} from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 // Only the one numeric bound below is a genuine eager dependency: `GITHUB_ISSUE_REFERENCE_MAX_CHARS`
 // is a value re-export consumed synchronously by CodingWorkbenchIssueIntake.tsx (a `maxLength` prop,
 // not behind the dynamic() boundary the rest of the Coding Workbench tree sits behind). Every other
@@ -3159,6 +3155,7 @@ export async function fetchGitDeliverySyncPreview(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
+  const { validateGitSyncPreview } = await import("@oscharko-dev/keiko-contracts/runtime/git-sync");
   return fetchJson(
     gitDeliverySyncPath(input.operation, "preview"),
     {
@@ -3174,6 +3171,8 @@ export async function fetchGitDeliverySyncExecute(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
+  const { validateGitSyncExecuteResponse } =
+    await import("@oscharko-dev/keiko-contracts/runtime/git-sync");
   return fetchJson(
     gitDeliverySyncPath(input.operation, "execute"),
     {
