@@ -82,7 +82,8 @@ export interface ClientDiagnosticBindingReport {
 // is the denied request's id, which the replay reuses; for a stream, its failure streak's id.
 export interface ClientDiagnosticSessionRepairReport {
   readonly outcome: ClientSessionRepairOutcome;
-  readonly repairCorrelationId?: string | undefined;
+  // The local-session repair request every outcome follows; the ingest contract requires it.
+  readonly repairCorrelationId: string;
   // The closed class of the step that failed: the repair request, or the replay.
   readonly errorKind?: ActivityLogErrorKind | undefined;
   // The stream whose failure streak asked for the repair.

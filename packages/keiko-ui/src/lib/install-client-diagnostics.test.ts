@@ -583,12 +583,30 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
 
     fanOutClientDiagnostic("[keiko] stale session repair: replayed", {
       correlationId: "not a safe id",
-      sessionRepairReport: { outcome: "replayed" },
+      sessionRepairReport: { outcome: "replayed", repairCorrelationId: "ui_repair-0001" },
     });
 
     expect(lastPostedBody(fetchMock)).toMatchObject({
       message: "[keiko] stale session repair: replayed",
     });
+  });
+
+  // #3557 review: the ingest contract requires the repair request's id, so a report whose repair id
+  // is not safe is never posted as a repair report the server would refuse.
+  it("falls back to a plain message report when a session repair has no safe repair id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] stale session repair: replayed", {
+      correlationId: "ui_denied-0001",
+      sessionRepairReport: { outcome: "replayed", repairCorrelationId: "not a safe id" },
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      message: "[keiko] stale session repair: replayed",
+    });
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("kind", "session-repair");
   });
 });
 
@@ -636,7 +654,11 @@ describe("fanOutClientDiagnostic budgets", () => {
     for (let index = 1; index <= 25; index += 1) {
       fanOutClientDiagnostic("[keiko] run-events stream session repair: stream-repaired", {
         correlationId: `ui_stream-streak-${String(index).padStart(4, "0")}`,
-        sessionRepairReport: { outcome: "stream-repaired", stream: "run-events" },
+        sessionRepairReport: {
+          outcome: "stream-repaired",
+          repairCorrelationId: `ui_repair-${String(index).padStart(4, "0")}`,
+          stream: "run-events",
+        },
       });
     }
     fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });

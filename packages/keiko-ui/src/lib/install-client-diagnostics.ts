@@ -167,18 +167,20 @@ function clientBindingPostBody(
   };
 }
 
-// A session-repair report (#3557) belongs to the denied request's timeline, so it needs that id.
+// A session-repair report (#3557) belongs to the denied request's timeline, so it needs that id,
+// and it links the repair request it describes, so it needs that one too.
 function clientSessionRepairPostBody(
   report: ClientDiagnosticSessionRepairReport,
   correlationId: string | undefined,
 ): ClientSessionRepairIngestRequest | undefined {
   const id = validCorrelationId(correlationId);
-  if (id === undefined) return undefined;
+  const repairCorrelationId = validCorrelationId(report.repairCorrelationId);
+  if (id === undefined || repairCorrelationId === undefined) return undefined;
   return {
     kind: "session-repair",
     outcome: report.outcome,
     correlationId: id,
-    repairCorrelationId: validCorrelationId(report.repairCorrelationId),
+    repairCorrelationId,
     errorKind: report.errorKind,
     stream: report.stream,
   };

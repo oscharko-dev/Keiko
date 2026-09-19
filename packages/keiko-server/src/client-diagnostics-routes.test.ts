@@ -803,6 +803,33 @@ describe("POST /api/diagnostics/client", () => {
       ).toBe(false);
     });
 
+    // #3557 review: a repair report the Activity Log cannot link to its repair request is refused
+    // as malformed and counted, never recorded as a complete repair.
+    it.each([
+      ["without the repair request's id", undefined],
+      ["with a repair id outside the server's correlation rule", "short"],
+    ])("refuses a repair report %s", async (_label, repairCorrelationId) => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "session-repair",
+        outcome: "repair-acknowledged",
+        stream: "run-events",
+        correlationId: "ui_stream-streak-0004",
+        repairCorrelationId,
+      });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+
+      expect(sink.events.some((event) => event.op.startsWith("client.session-repair."))).toBe(
+        false,
+      );
+      expect(sink.events.filter((event) => event.op === "client.diagnostic.rejected")).toEqual([
+        expect.objectContaining({
+          extra: expect.objectContaining({ rejection: "invalid-shape" }) as unknown,
+        }),
+      ]);
+    });
+
     // #3557 review: a stream repair is routine evidence, like a replayed read.
     it("keeps a failure report admitted after a burst of stream repairs", async () => {
       const sink = captureServerLog();
@@ -812,9 +839,12 @@ describe("POST /api/diagnostics/client", () => {
           outcome: "stream-repaired",
           stream: "run-events",
           correlationId: `ui_stream-streak-${String(index).padStart(4, "0")}`,
+          repairCorrelationId: `ui_session-repair-${String(index).padStart(4, "0")}`,
         };
         await handleClientDiagnosticIngest(context(JSON.stringify(repair)));
       }
+      // Every repair was admitted and spent the routine budget, none was refused.
+      expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
       const failure = JSON.stringify({
         message: "boundary",
         clientTs: CLIENT_TS,

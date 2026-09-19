@@ -461,6 +461,19 @@ describe("isClientBindingIngestRequest", () => {
     ).toBe(true);
   });
 
+  // #3557 review (P0): a snapshot an older build wrote has no fingerprint; its chat was found again
+  // as the only listed chat whose id persistence redacts.
+  it("accepts a resolved, flagged binding found again as the sole candidate", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "sole-candidate",
+        heuristicFlagged: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a heuristic flag only for a server-issued UUID", () => {
     expect(
       isClientBindingIngestRequest({
@@ -559,7 +572,7 @@ describe("isClientSessionRepairIngestRequest", () => {
     };
   }
 
-  it("accepts every closed outcome, with and without the repair's correlation id", () => {
+  it("accepts every closed outcome with the repair's correlation id", () => {
     for (const outcome of CLIENT_SESSION_REPAIR_OUTCOMES) {
       const streamOnly = outcome === "stream-repaired" || outcome === "repair-acknowledged";
       const stream = streamOnly ? { stream: "run-events" } : {};
@@ -567,9 +580,6 @@ describe("isClientSessionRepairIngestRequest", () => {
         true,
       );
     }
-    expect(
-      isClientSessionRepairIngestRequest({ ...repairRequest(), repairCorrelationId: undefined }),
-    ).toBe(true);
     expect(
       isClientSessionRepairIngestRequest({
         ...repairRequest(),
@@ -595,6 +605,21 @@ describe("isClientSessionRepairIngestRequest", () => {
   ])("refuses %s", (_label, patch) => {
     const value = typeof patch === "string" ? patch : { ...repairRequest(), ...patch };
     expect(isClientSessionRepairIngestRequest(value)).toBe(false);
+  });
+
+  // #3557 review: every outcome follows a repair attempt whose id the page minted before sending it,
+  // so a report that cannot name that attempt is refused instead of recorded as complete.
+  it("refuses every outcome without the repair request's id", () => {
+    for (const outcome of CLIENT_SESSION_REPAIR_OUTCOMES) {
+      const streamOnly = outcome === "stream-repaired" || outcome === "repair-acknowledged";
+      const stream = streamOnly ? { stream: "run-events" } : {};
+      const report = { ...repairRequest(), outcome, ...stream };
+      expect(
+        isClientSessionRepairIngestRequest({ ...report, repairCorrelationId: undefined }),
+      ).toBe(false);
+      const { repairCorrelationId: _omitted, ...withoutRepairId } = report;
+      expect(isClientSessionRepairIngestRequest(withoutRepairId)).toBe(false);
+    }
   });
 
   // #3557 review: a stream repair reports under its failure streak, naming its stream.

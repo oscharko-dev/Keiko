@@ -303,6 +303,7 @@ const CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES = [
   "opaque",
   "redacted",
   "fingerprint",
+  "sole-candidate",
 ] as const;
 
 const CLIENT_BINDING_FIELDS = {
@@ -318,7 +319,8 @@ const CLIENT_BINDING_FIELDS = {
     required: true,
     values: CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES,
   },
-  // The hyphenated reference trips the card-number heuristic; it survived as its compact form.
+  // The chat id trips the card-number heuristic: a raw UUID, or one found again after persistence
+  // redacted it (through its fingerprint, or as the sole candidate).
   heuristicFlagged: { type: "boolean", dataClass: "closed-enum", required: true },
   // The digest of the window's own persisted id, computed here from the validated reference: two
   // windows restored from one list answer stay apart, and a later failure of the same window
@@ -404,7 +406,7 @@ const CLIENT_SESSION_REPAIR_RECOVERED_OPERATION = defineActivityLogOperation({
     repairCorrelationId: {
       type: "string",
       dataClass: "opaque-id",
-      required: false,
+      required: true,
       maxLength: 128,
     },
   },
@@ -437,7 +439,7 @@ const CLIENT_SESSION_REPAIR_ACKNOWLEDGED_OPERATION = defineActivityLogOperation(
     repairCorrelationId: {
       type: "string",
       dataClass: "opaque-id",
-      required: false,
+      required: true,
       maxLength: 128,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -474,7 +476,7 @@ const CLIENT_SESSION_REPAIR_FAILED_OPERATION = defineActivityLogOperation({
     repairCorrelationId: {
       type: "string",
       dataClass: "opaque-id",
-      required: false,
+      required: true,
       maxLength: 128,
     },
   },
@@ -899,13 +901,14 @@ function logClientBinding(
   logClientBindingTargetMissing(request, correlationId);
 }
 
+// Every repair report names its repair request (the ingest contract refuses one that does not), so
+// the line always links the repair attempt it describes (#3557 review).
 function sessionRepairCorrelation(request: ClientSessionRepairIngestRequest): {
-  readonly repairCorrelationId?: string;
+  readonly repairCorrelationId: string;
   readonly stream?: NonNullable<ClientSessionRepairIngestRequest["stream"]>;
 } {
-  const id = request.repairCorrelationId;
   return {
-    ...(id !== undefined && isValidCorrelationId(id) ? { repairCorrelationId: id } : {}),
+    repairCorrelationId: request.repairCorrelationId,
     ...(request.stream === undefined ? {} : { stream: request.stream }),
   };
 }
@@ -1012,7 +1015,11 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
   if (isClientStageIngestRequest(value)) return { shape: "stage", report: value };
   if (isClientBindingIngestRequest(value)) return { shape: "binding", report: value };
   if (isClientSessionRepairIngestRequest(value)) {
-    return { shape: "session-repair", report: value };
+    // The repair id becomes a line field, so it meets the server's own correlation rule or the
+    // report is refused like any other malformed one (#3557 review).
+    return isValidCorrelationId(value.repairCorrelationId)
+      ? { shape: "session-repair", report: value }
+      : undefined;
   }
   if (isClientDiagnosticIngestRequest(value)) return { shape: "message", report: value };
   return undefined;

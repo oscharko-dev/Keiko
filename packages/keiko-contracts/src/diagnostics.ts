@@ -503,12 +503,15 @@ export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 
 // `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
 // `opaque`: any other opaque reference; `fingerprint`: persisted as the redaction marker plus the
-// id's one-way fingerprint, through which the window found its chat again.
+// id's one-way fingerprint, through which the window found its chat again; `sole-candidate`:
+// persisted as the redaction marker without a fingerprint (a snapshot an older build wrote), and
+// found again as the only listed chat whose id persistence redacts.
 export const CLIENT_BINDING_REFERENCE_SHAPES = [
   "uuid",
   "opaque",
   "redacted",
   "fingerprint",
+  "sole-candidate",
 ] as const;
 export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPES)[number];
 
@@ -556,19 +559,21 @@ function isOneOf<T extends string>(value: unknown, values: readonly T[]): value 
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }
 
-// Only a server-issued UUID (raw or through its fingerprint) can be flagged by the heuristic, and a
-// redaction marker can never have resolved to a live target; every other impossible combination is
-// refused as well.
+// Only a server-issued UUID (raw, or found again through its fingerprint or as the sole candidate)
+// can be flagged by the heuristic, and a redaction marker can never have resolved to a live target;
+// every other impossible combination is refused as well.
+const HEURISTIC_FLAGGABLE_REFERENCE_SHAPES: ReadonlySet<ClientBindingReferenceShape> = new Set([
+  "uuid",
+  "fingerprint",
+  "sole-candidate",
+]);
+
 function hasConsistentBindingReference(value: Record<string, unknown>): boolean {
   if (!isOneOf(value.outcome, CLIENT_BINDING_OUTCOMES)) return false;
   if (!isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES)) return false;
   if (typeof value.heuristicFlagged !== "boolean") return false;
   if (value.outcome === "resolved" && value.referenceShape === "redacted") return false;
-  return (
-    !value.heuristicFlagged ||
-    value.referenceShape === "uuid" ||
-    value.referenceShape === "fingerprint"
-  );
+  return !value.heuristicFlagged || HEURISTIC_FLAGGABLE_REFERENCE_SHAPES.has(value.referenceShape);
 }
 
 function isDecidingLoadCount(value: unknown): boolean {
@@ -634,8 +639,9 @@ export interface ClientSessionRepairIngestRequest {
   readonly outcome: ClientSessionRepairOutcome;
   // The denied request, which the replay reuses.
   readonly correlationId: string;
-  // The local-session repair request.
-  readonly repairCorrelationId?: string | undefined;
+  // The local-session repair request. Every outcome follows a repair attempt, whose id the page
+  // mints before it sends the request, so a report without it cannot be linked and is refused.
+  readonly repairCorrelationId: string;
   // The closed class of the step that failed (the repair request or the replay), so a 502 or a
   // transport failure is never recorded as an authority denial.
   readonly errorKind?: ActivityLogErrorKind | undefined;
@@ -680,8 +686,7 @@ export function isClientSessionRepairIngestRequest(
   if (!isOptional(value.errorKind, isActivityLogErrorKind)) return false;
   if (!hasConsistentRepairStream(value.outcome, value.stream)) return false;
   return (
-    isCorrelationIdShape(value.correlationId) &&
-    isOptional(value.repairCorrelationId, isCorrelationIdShape)
+    isCorrelationIdShape(value.correlationId) && isCorrelationIdShape(value.repairCorrelationId)
   );
 }
 
