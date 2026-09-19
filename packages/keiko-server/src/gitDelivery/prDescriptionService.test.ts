@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
   PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
@@ -6,6 +6,15 @@ import {
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionPreview } from "./prDescriptionTypes.js";
+import type { NewReferenceIdOptions } from "../reference-id.js";
+
+const newReferenceIdSpy = vi.hoisted(() => vi.fn<(options: NewReferenceIdOptions) => string>());
+
+vi.mock("../reference-id.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../reference-id.js")>();
+  newReferenceIdSpy.mockImplementation(actual.newReferenceId);
+  return { ...actual, newReferenceId: newReferenceIdSpy };
+});
 
 const GIT_FIXTURE_TIMEOUT_MS = 15_000;
 
@@ -112,6 +121,22 @@ describe("body-only description application", () => {
     expect(fixture.service.review(held.proposalId)).toBeUndefined();
     expect(fixture.service.issueApproval(held.proposalId)).toBeUndefined();
     expect(fixture.service.consumeApproval(held.proposalId)).toBeUndefined();
+  });
+
+  // #3557 review: a governed pull request window persists the proposal id, so the id is issued under
+  // the retaining run's correlation and a re-draw joins that run's timeline.
+  it("issues the draft proposal id under the retaining run's correlation", async () => {
+    const artifact = await fixture.generateArtifact("Generic Workbench draft");
+    newReferenceIdSpy.mockClear();
+
+    const held = fixture.service.holdDraftArtifact(artifact, fixture.now, "run-draft-0001");
+
+    expect(newReferenceIdSpy).toHaveBeenCalledTimes(1);
+    expect(newReferenceIdSpy).toHaveBeenCalledWith({
+      kind: "pr-description-proposal",
+      correlationId: "run-draft-0001",
+    });
+    expect(held?.proposalId).toBe(newReferenceIdSpy.mock.results[0]?.value);
   });
 
   it("rejects a pre-generated artifact bound to another snapshot", async () => {

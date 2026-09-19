@@ -4692,7 +4692,7 @@ async function retainWorkbenchArtifact(
       context.activeWorkspaceRoot,
       scope,
       snapshotDigest,
-    )?.holdDraftArtifact(artifact, Date.now())?.proposalId;
+    )?.holdDraftArtifact(artifact, Date.now(), scope.runId)?.proposalId;
   }
   return retainWorkbenchApplicationArtifact(
     context,
