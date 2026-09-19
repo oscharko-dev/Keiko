@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "591b5745472beec5881b61a9eabaff1b719fbd8acd4d22a2797831aaa6132723" as const;
+  "287626fe210d4700b0ae0956428c3a9bb6f77650ab20ba5b7c56fab983243bec" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1748,7 +1748,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["uuid", "opaque", "redacted"],
+        values: ["uuid", "opaque", "redacted", "fingerprint"],
       },
       heuristicFlagged: {
         type: "boolean",
@@ -1809,7 +1809,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["uuid", "opaque", "redacted"],
+        values: ["uuid", "opaque", "redacted", "fingerprint"],
       },
       heuristicFlagged: {
         type: "boolean",
@@ -2043,6 +2043,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["client-diagnostic-rejection"],
     proofIds: ["client.diagnostic.rejected.line", "client.diagnostic.rejected.shutdown-flush"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.session-repair.acknowledged",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientSessionRepairAcknowledged",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      stream: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["run-events", "shared-event-source"],
+      },
+      repairCorrelationId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-session-repair"],
+    proofIds: ["client.session-repair.acknowledged.line"],
+    releaseImpact: "patch",
   },
   {
     contractKind: "activity-log-operation",
@@ -19902,6 +19940,80 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "reference-id.exhausted",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "reference-id.logReferenceIdExhausted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      kind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat", "pr-description-proposal", "figma-snapshot-run", "qi-run", "agent-run"],
+      },
+      flaggedDraws: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["reference-id"],
+    proofIds: ["reference-id.exhausted.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "reference-id.redrawn",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "reference-id.logReferenceIdRedrawn",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      kind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["chat", "pr-description-proposal", "figma-snapshot-run", "qi-run", "agent-run"],
+      },
+      flaggedDraws: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["reference-id"],
+    proofIds: ["reference-id.redrawn.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "repository.fingerprint-diff.completed",
     category: "indexing",
     owner: "keiko-local-knowledge",
@@ -25927,8 +26039,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 313,
-  completeClassCount: 313,
+  supportedClassCount: 314,
+  completeClassCount: 314,
   completeness: "complete",
   classes: [
     {
@@ -28569,15 +28681,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "client-session-repair",
       requirementContract: "client-session-repair",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end", "failure"],
+      lifecycleTransitions: ["end", "failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: [],
+        state: ["client.session-repair.acknowledged"],
         end: ["client.session-repair.recovered"],
         failure: ["client.session-repair.failed"],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "client.session-repair.acknowledged",
+          mode: "correlation",
+        },
         {
           op: "client.session-repair.failed",
           mode: "correlation",
@@ -28588,9 +28704,39 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: [],
-      resourceSignals: ["client.session-repair.recovered"],
+      resourceSignals: ["client.session-repair.acknowledged", "client.session-repair.recovered"],
       replayReferences: [],
       operations: [
+        {
+          op: "client.session-repair.acknowledged",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "repairCorrelationId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "stream",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.session-repair.acknowledged.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "client.session-repair.failed",
           owner: "keiko-server",
@@ -50798,6 +50944,96 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "reference-id",
+      requirementContract: "reference-id",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["failure", "state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["reference-id.redrawn"],
+        end: [],
+        failure: ["reference-id.exhausted"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "reference-id.exhausted",
+          mode: "correlation",
+        },
+        {
+          op: "reference-id.redrawn",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["reference-id.redrawn"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "reference-id.exhausted",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "flaggedDraws",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "kind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["reference-id.exhausted.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "reference-id.redrawn",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "flaggedDraws",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "kind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["reference-id.redrawn.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "repository-fingerprint-diff",
       requirementContract: "repository-fingerprint-diff",
       productSurfaces: ["keiko-local-knowledge"],
@@ -57701,6 +57937,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
     "client.diagnostic.rejected": "client-diagnostics",
+    "client.session-repair.acknowledged": "client-diagnostics",
     "client.session-repair.failed": "client-diagnostics",
     "client.session-repair.recovered": "client-diagnostics",
     "client.stage.settled": "client-diagnostics",
@@ -58006,6 +58243,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "process.heartbeat": "ui",
     "process.started": "ui",
     "project.workspace.reconnect": "bff",
+    "reference-id.exhausted": "bff",
+    "reference-id.redrawn": "bff",
     "repository.fingerprint-diff.completed": "memory-knowledge",
     request: "bff",
     "runtime.confinement.failed": "tools-workflows",

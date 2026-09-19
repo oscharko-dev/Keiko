@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "591b5745472beec5881b61a9eabaff1b719fbd8acd4d22a2797831aaa6132723"
+    "catalogDigest": "287626fe210d4700b0ae0956428c3a9bb6f77650ab20ba5b7c56fab983243bec"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 433,
-    "proofCount": 441,
-    "resolvedProofCount": 441,
-    "failureClassCount": 313,
+    "operationCount": 436,
+    "proofCount": 444,
+    "resolvedProofCount": 444,
+    "failureClassCount": 314,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -95,6 +95,8 @@
         "pr-description.chat.turn.admitted",
         "pr-description.chat.turn.denied",
         "project.workspace.reconnect",
+        "reference-id.exhausted",
+        "reference-id.redrawn",
         "request",
         "server.diagnostic.failure",
         "sse.run-events.resume",
@@ -114,6 +116,7 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.session-repair.acknowledged",
         "client.session-repair.failed",
         "client.session-repair.recovered",
         "client.stage.settled",
@@ -844,6 +847,7 @@
     "process-startup": ["ui.dependency-failure"],
     "read-only-child-run": ["tools-workflows.dependency-failure"],
     "read-only-child-runner": ["tools-workflows.dependency-failure"],
+    "reference-id": ["bff.dependency-failure"],
     "repository-fingerprint-diff": ["memory-knowledge.dependency-failure"],
     "rerank-degradation": ["memory-knowledge.dependency-failure"],
     "runtime-confinement": ["tools-workflows.dependency-failure"],
@@ -1009,6 +1013,9 @@
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
     "client.diagnostic.rejected.shutdown-flush": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.session-repair.acknowledged.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
     "client.session-repair.failed.line": [
@@ -1845,6 +1852,8 @@
     "process.started.runtime": ["packages/keiko-cli/src/ui.activity-log-proof.test.ts"],
     "process.started.configuration": ["packages/keiko-cli/src/ui.activity-log-proof.test.ts"],
     "project.workspace.reconnect.outcome": ["packages/keiko-server/src/store-handlers.test.ts"],
+    "reference-id.exhausted.line": ["packages/keiko-server/src/reference-id.test.ts"],
+    "reference-id.redrawn.line": ["packages/keiko-server/src/reference-id.test.ts"],
     "repository.fingerprint-diff.completed.counts": [
       "packages/keiko-local-knowledge/src/repository-pod.test.ts"
     ],
