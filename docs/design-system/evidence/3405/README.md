@@ -1,11 +1,11 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-09-18 for PR #3554 (Epic #3527 Wave 1). Its
-sources change four pinned files: `api.ts` (the health response now carries the diagnostics
-readiness the footer reads), the English and German i18n messages (eleven diagnostics-footer strings
-each), and the outage harness, which no longer prints a stdout marker because the UI child's output
-is no longer captured. Current-branch verification passed all eight Chromium checks, including the
-real-BFF outage journey, and refreshed the tracked updater artifacts. It proves the startup notice
+The current repair evidence was regenerated on 2026-09-19 for PR #3557 (Epic #3527 Wave 1
+follow-ups). Its sources change three pinned files: `api.ts` (a chat list load now carries its own
+correlation id), and the English and German i18n messages (the Figma snapshot window's strings
+moved to the optional widget catalog that loads with the window). No updater string changed.
+Current-branch verification passed all eight Chromium checks, including the real-BFF outage
+journey, and refreshed the tracked updater artifacts. It proves the startup notice
 yields only while a visible, foreground **ready** Update window owns the same critical context and
 actions; the notice returns when that window is backgrounded or minimized, and remains available
 while the foreground updater is loading or contains only a load error.

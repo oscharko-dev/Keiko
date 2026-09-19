@@ -263,6 +263,9 @@ const fsCalls = vi.hoisted(() => ({
   // `logs` directory (1 = the next one) with EACCES, the error class `readdirSync` rethrows.
   failLogsListingCall: null as number | null,
   logsListings: 0,
+  // Fails the next listing of a `logs` directory that already holds an active segment: the
+  // admission re-check right after a new segment's exclusive create, whatever ran before it.
+  failListingOnceActive: false,
   // `null` passes every write through untouched. A number is a byte budget: the descriptor accepts
   // that many more bytes and then reports 0, which is what a stalled descriptor reports and the
   // only way to produce a short write on a regular file.
@@ -280,6 +283,7 @@ function resetFsKnobs(): void {
   fsCalls.freeBytes = null;
   fsCalls.failLogsListingCall = null;
   fsCalls.logsListings = 0;
+  fsCalls.failListingOnceActive = false;
 }
 
 // The four-argument Buffer overload is the only one the module under test uses, and the only one
@@ -305,6 +309,15 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...actual,
     readdirSync: ((...args: readonly unknown[]): unknown => {
+      const logsDir = /(?:^|[\\/])logs$/u.test(String(args[0])) ? String(args[0]) : undefined;
+      if (
+        fsCalls.failListingOnceActive &&
+        logsDir !== undefined &&
+        actual.readdirSync(logsDir).some((entry) => entry.endsWith(".active.jsonl"))
+      ) {
+        fsCalls.failListingOnceActive = false;
+        throw Object.assign(new Error("forced listing failure"), { code: "EACCES" });
+      }
       if (fsCalls.failLogsListingCall !== null && /(?:^|[\\/])logs$/u.test(String(args[0]))) {
         fsCalls.logsListings += 1;
         if (fsCalls.logsListings === fsCalls.failLogsListingCall) {
@@ -373,6 +386,28 @@ vi.mock("node:fs", async (importOriginal) => {
         ffree: numeric.ffree,
         frsize: numeric.frsize,
       };
+    },
+  };
+});
+
+// #3557 CI: what a peer that starts right now would conclude from each listing this process's
+// writer makes. The mock passes every listing through; only while `observing` is set does it also
+// judge the listing from a foreign peer's side, which sees this process as alive.
+const peerView = vi.hoisted(() => ({ observing: false, soleVerdicts: [] as boolean[] }));
+const PEER_IDENTITY = { pid: 2_147_483_000, instanceId: "0e0e0e0e", isAlive: (): boolean => true };
+
+vi.mock("./activity-log-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./activity-log-store.js")>();
+  return {
+    ...actual,
+    listActivityLogDirectory: (
+      directory: string,
+    ): ReturnType<typeof actual.listActivityLogDirectory> => {
+      const listing = actual.listActivityLogDirectory(directory);
+      if (peerView.observing) {
+        peerView.soleVerdicts.push(actual.isSoleActivityLogWriter(listing.files, PEER_IDENTITY));
+      }
+      return listing;
     },
   };
 });
@@ -723,6 +758,20 @@ describe("server activity log", () => {
     vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  // #3557 review: a re-check that throws admitted nothing, so the new segment is withdrawn instead
+  // of taking later writes whose reservation was never confirmed.
+  it("withdraws a new segment when its admission re-check throws", () => {
+    const sink = createFileServerLogSink(stateDir);
+    fsCalls.failListingOnceActive = true;
+
+    sink.write({ category: "indexing", op: "while-the-re-check-fails" });
+
+    expect(fsCalls.failListingOnceActive).toBe(false);
+    expect(
+      readdirSync(logsDirectory(stateDir)).filter((name) => name.endsWith(".active.jsonl")),
+    ).toStrictEqual([]);
   });
 
   it("writes one JSON line per event into this process's own active segment", () => {
@@ -2019,6 +2068,69 @@ describe("activity log retention", () => {
 
   const retentionEnv = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(SMALL_BUDGET) });
 
+  // #3557 review: a writer rotating make-before-break holds, for a moment, its full segment and its
+  // next one, still empty. A peer admitting its first event at the minimum budget counts that writer
+  // once: two writers fit, so the event is persisted, never dropped.
+  // #3557 review: a writer whose full segment can be neither sealed nor recovered still holds it under
+  // its active name. Its own admission of the next segment must reserve both, so at the minimum
+  // budget, beside a peer's nearly full segment, it refuses the next one instead of writing past the
+  // byte bound.
+  it("refuses the next segment while its full one is stranded under its active name", () => {
+    const env = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(64 * 1024),
+      KEIKO_LOG_SEGMENT_BYTES: String(32 * 1024),
+    });
+    seedSegment(stateDir, {
+      identity: { startMs: Date.now(), pid: process.ppid, instanceId: "0b0c0d0e", index: 1 },
+      state: "active",
+      content: syntheticLines(32 * 1024 - 1024),
+    });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "http", op: "stranded.first" });
+    const ownSegments = (): readonly { readonly index: number; readonly sizeBytes: number }[] =>
+      segmentFiles(stateDir, "active").flatMap((info) => {
+        const file = parseActivityLogFileName(info.name);
+        return file?.kind === "active" && file.instanceId === serverLogInstanceId()
+          ? [{ index: file.index, sizeBytes: info.sizeBytes }]
+          : [];
+      });
+    expect(ownSegments()).toEqual([expect.objectContaining({ index: 1 })]);
+    // The seal of segment 1 fails, and so does every recovery of it.
+    fsCalls.failFsync = true;
+    fsCalls.failOpenMatching = /-000001\.active\.jsonl$/u;
+
+    for (let index = 0; index < 160; index += 1) {
+      sink.write({ category: "http", op: "stranded.fill", extra: { index } });
+    }
+
+    const successors = ownSegments().filter((segment) => segment.index > 1);
+    expect(successors.every((segment) => segment.sizeBytes === 0)).toBe(true);
+    expect(ownSegments().find((segment) => segment.index === 1)?.sizeBytes).toBeLessThanOrEqual(
+      32 * 1024,
+    );
+  });
+
+  it("admits a peer at the minimum budget while another writer is between its two segments", () => {
+    const env = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(64 * 1024),
+      KEIKO_LOG_SEGMENT_BYTES: String(32 * 1024),
+    });
+    const writer = { startMs: Date.now(), pid: process.ppid, instanceId: "0a0b0c0d" };
+    seedSegment(stateDir, {
+      identity: { ...writer, index: 1 },
+      state: "active",
+      content: syntheticLines(32 * 1024 - 1024),
+    });
+    seedSegment(stateDir, { identity: { ...writer, index: 2 }, state: "active", content: "" });
+    const lostBefore = activityLogLossCounters()["persistence-failed"];
+
+    createFileServerLogSink(stateDir, { env }).write({ category: "http", op: "peer.first-event" });
+
+    expect(linesWithOp(stateDir, "peer.first-event")).toHaveLength(1);
+    expect(linesWithOp(stateDir, "activity-log.pressure")).toEqual([]);
+    expect(activityLogLossCounters()["persistence-failed"]).toBe(lostBefore);
+  });
+
   it("prunes the oldest files first until the byte budget holds the new segment's reservation", () => {
     const archive = seedLegacyFile(stateDir, "server-2026-09-01.log", 40 * 1024);
     const legacyCurrent = seedLegacyFile(stateDir, "server.log", 20 * 1024);
@@ -2501,6 +2613,59 @@ describe("activity log retention pins", () => {
     );
   });
 
+  it("protects a pinned window from byte retention, although its segments are the oldest", () => {
+    const now = Date.now();
+    const env = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(SMALL_BUDGET) });
+    const pid = exitedProcessId();
+    const sealedAt = (minutesAgo: number, instanceId: string): string =>
+      seedSegment(stateDir, {
+        identity: { startMs: now - (minutesAgo + 5) * 60_000, pid, instanceId, index: 1 },
+        state: "sealed",
+        content: syntheticLines(40 * 1024),
+        mtimeMs: now - minutesAgo * 60_000,
+      });
+    const pinned = [sealedAt(90, "0a0a0a0a"), sealedAt(60, "0b0b0b0b")];
+    expect(
+      pinActivityLogWindow(
+        stateDir,
+        {
+          scope: { kind: "window", fromMs: now - 2 * 3_600_000, toMs: now - 30 * 60_000 },
+          expiresAtMs: now + 86_400_000,
+          correlationId: "incident-pin-bytes",
+        },
+        env,
+      ),
+    ).toMatchObject({ status: "pinned", pinnedSegmentCount: 2, quotaStatus: "within-quota" });
+    // Newer history outside the window pushes the unprotected usage past the 128 KiB budget. The
+    // budget prunes oldest first, so without the pin it would take the two pinned segments.
+    const newer = ["010c0c0c", "020c0c0c", "030c0c0c", "040c0c0c"].map((instanceId, index) =>
+      sealedAt(20 - index * 5, instanceId),
+    );
+    // Seal the segment the pin evidence opened; opening the next one runs retention.
+    writeSegments(stateDir, env, 1);
+    createFileServerLogSink(stateDir, { env }).write({ category: "http", op: "retention.pass" });
+
+    for (const path of pinned) expect(existsSync(path)).toBe(true);
+    expect(existsSync(newer[0] ?? "")).toBe(false);
+    const pinnedBytes = pinned.reduce((total, path) => total + statSync(path).size, 0);
+    const passes = linesWithOp(stateDir, "activity-log.retention.pruned");
+    expect(passes.length).toBeGreaterThan(0);
+    for (const pass of passes) {
+      expect(pass).toMatchObject({
+        retentionStatus: "pruned",
+        prunedByAgeCount: 0,
+        protectedPinnedBytes: pinnedBytes,
+        retentionBudgetBytes: SMALL_BUDGET,
+      });
+    }
+    const prunedByBudget = passes.reduce(
+      (total, pass) => total + Number(pass.prunedByBudgetCount),
+      0,
+    );
+    expect(prunedByBudget).toBeGreaterThan(0);
+    expect(directoryBytes(logsDirectory(stateDir))).toBeLessThanOrEqual(SMALL_BUDGET + pinnedBytes);
+  });
+
   it("reports quota exhaustion exactly once with exact segment counts and sequence span", () => {
     const env = storageEnv({ KEIKO_LOG_PIN_QUOTA_BYTES: String(12 * 1024) });
     writeSegments(stateDir, env, 3);
@@ -2727,6 +2892,63 @@ describe("activity log store policy", () => {
       ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)
       : undefined;
   }
+
+  // #3557 CI: a writer rolled a full segment over by sealing it first and opening the next one only
+  // after a whole maintenance pass. For that pass the busy writer held no active segment, so a peer
+  // starting then judged itself the store's sole live writer and replaced the governing policy.
+  function observePeerVerdicts(write: () => void): readonly boolean[] {
+    peerView.soleVerdicts.length = 0;
+    peerView.observing = true;
+    try {
+      write();
+    } finally {
+      peerView.observing = false;
+    }
+    return [...peerView.soleVerdicts];
+  }
+
+  it("never leaves a peer judging itself the sole writer while this writer rolls segments over", () => {
+    const env = storageEnv({ KEIKO_LOG_SEGMENT_BYTES: String(SMALL_SEGMENT) });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "http", op: "rotation.first" });
+
+    const verdicts = observePeerVerdicts(() => {
+      for (let index = 0; index < 400; index += 1) {
+        sink.write({ category: "http", op: "rotation.busy", extra: { index } });
+      }
+    });
+
+    const seals = linesWithOp(stateDir, "activity-log.segment.sealed");
+    expect(seals.length).toBeGreaterThanOrEqual(3);
+    for (const seal of seals) expect(seal).toMatchObject({ sealReason: "size-limit" });
+    expect(verdicts.length).toBeGreaterThan(0);
+    expect(verdicts).not.toContain(true);
+    expect(segmentFiles(stateDir, "active")).toHaveLength(1);
+  });
+
+  it("never leaves a peer judging itself the sole writer when a write rotates an expired segment", () => {
+    const env = storageEnv({ KEIKO_LOG_SEGMENT_SECONDS: "1" });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "http", op: "rotation.first" });
+    const realNow = Date.now.bind(Date);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 2_000);
+
+    let verdicts: readonly boolean[];
+    try {
+      verdicts = observePeerVerdicts(() => {
+        sink.write({ category: "http", op: "rotation.after-expiry" });
+      });
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(linesWithOp(stateDir, "activity-log.segment.sealed")).toEqual([
+      expect.objectContaining({ sealReason: "age-limit" }),
+    ]);
+    expect(verdicts.length).toBeGreaterThan(0);
+    expect(verdicts).not.toContain(true);
+    expect(segmentFiles(stateDir, "active")).toHaveLength(1);
+  });
 
   it("keeps total disk use within the FIRST writer's stored budget when cooperating processes disagree on retention", async () => {
     const smallBudget = 256 * 1024;

@@ -20,6 +20,11 @@ import {
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
+
+// A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.
+const CODING_CHAT_DIGEST = modelIdEvidence("coding-chat").modelIdDigest;
+const TEST_CHAT_MODEL_DIGEST = modelIdEvidence("test-chat-model").modelIdDigest;
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
@@ -261,12 +266,12 @@ describe("gateway readiness route", () => {
     expect(events[0]).toMatchObject({
       op: "gateway.readiness.automatic.started",
       correlationId: "coding-readiness-0001",
-      extra: { modelId: "coding-chat", probeCount: 2 },
+      extra: { modelIdDigest: CODING_CHAT_DIGEST, probeCount: 2 },
     });
     expect(events[1]).toMatchObject({
       op: "gateway.readiness.automatic.completed",
       correlationId: "coding-readiness-0001",
-      extra: { modelId: "coding-chat", overallStatus: "ready", probeCount: 2 },
+      extra: { modelIdDigest: CODING_CHAT_DIGEST, overallStatus: "ready", probeCount: 2 },
     });
     const startedProof = expectActivityLogProof(
       "gateway.readiness.automatic.started.line",
@@ -274,7 +279,7 @@ describe("gateway readiness route", () => {
     );
     expect(startedProof).toMatchObject({
       correlationId: "coding-readiness-0001",
-      modelId: "coding-chat",
+      modelIdDigest: CODING_CHAT_DIGEST,
       probeCount: 2,
     });
     const completedProof = expectActivityLogProof(
@@ -283,14 +288,100 @@ describe("gateway readiness route", () => {
     );
     expect(completedProof).toMatchObject({
       correlationId: "coding-readiness-0001",
-      modelId: "coding-chat",
+      modelIdDigest: CODING_CHAT_DIGEST,
       overallStatus: "ready",
       probeCount: 2,
     });
     deps.store.close();
   });
 
-  it("bounds a configured model id only at the 240-character activity-log projection", async () => {
+  // #3557: only the automatic run used to leave a line. A settings check now does too, under the
+  // request's correlation id, with its outcome, so a later refusal can name what the check found.
+  it.each([
+    ["passes", chatPayload("OK"), 200, "ready"],
+    ["fails", { error: { message: "upstream unavailable" } }, 503, "failed"],
+  ] as const)(
+    "logs a settings check that %s under the request's correlation id",
+    async (_label, payload, status, overallStatus) => {
+      const events: ServerLogEvent[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsWith(
+          gatewayConfig(),
+          vi.fn(() => Promise.resolve(jsonResponse(payload, status))),
+        ),
+        activityLog: { write: (event): void => void events.push(event) },
+      };
+
+      await runGatewayReadiness(
+        { modelId: "test-chat-model", options: { probes: [] } },
+        deps,
+        "corr-settings-readiness-0001",
+        "settings",
+      );
+
+      const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+      expect(readiness.map((event) => [event.op, event.correlationId])).toEqual([
+        ["gateway.readiness.started", "corr-settings-readiness-0001"],
+        ["gateway.readiness.completed", "corr-settings-readiness-0001"],
+      ]);
+      expect(
+        expectActivityLogProof(
+          "gateway.readiness.started.line",
+          formatActivityLogProofLine(readiness[0] ?? {}),
+        ),
+      ).toMatchObject({
+        modelIdDigest: TEST_CHAT_MODEL_DIGEST,
+        trigger: "settings",
+        probeCount: 1,
+      });
+      expect(
+        expectActivityLogProof(
+          "gateway.readiness.completed.line",
+          formatActivityLogProofLine(readiness[1] ?? {}),
+        ),
+      ).toMatchObject({
+        modelIdDigest: TEST_CHAT_MODEL_DIGEST,
+        trigger: "settings",
+        overallStatus,
+        probeCount: 1,
+      });
+      expect(JSON.stringify(readiness)).not.toContain("upstream unavailable");
+      deps.store.close();
+    },
+  );
+
+  // The settings dialog reaches readiness through this route, so the route names the settings
+  // trigger; the on-demand probe records its lifecycle with the automatic lines instead (#3559).
+  it("logs a check the settings dialog runs through the route as a settings check", async () => {
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(
+        gatewayConfig(),
+        vi.fn(() => Promise.resolve(jsonResponse(chatPayload("OK"), 200))),
+      ),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    await handleGatewayReadiness(
+      {
+        ...ctx({ modelId: "test-chat-model", options: { probes: [] } }),
+        correlationId: "corr-settings-route-0001",
+      },
+      deps,
+    );
+
+    const readiness = events.filter((event) => event.op.startsWith("gateway.readiness."));
+    expect(readiness.map((event) => [event.op, event.correlationId, event.extra?.trigger])).toEqual(
+      [
+        ["gateway.readiness.started", "corr-settings-route-0001", "settings"],
+        ["gateway.readiness.completed", "corr-settings-route-0001", "settings"],
+      ],
+    );
+  });
+
+  // The full id serves provider selection and the response; the log carries only the digest of the
+  // whole id, never a truncated prefix that two long ids could share (#3557 review).
+  it("logs a long configured model id only as a whole-id digest", async () => {
     const modelId = `coding-${"x".repeat(250)}`;
     const config: GatewayConfig = {
       ...gatewayConfig(modelId),
@@ -322,10 +413,11 @@ describe("gateway readiness route", () => {
     if ("status" in result) return;
     expect(result.modelId).toBe(modelId);
     expect(events).toHaveLength(2);
-    expect(events.map((event) => event.extra?.modelId)).toEqual([
-      modelId.slice(0, 240),
-      modelId.slice(0, 240),
-    ]);
+    expect(events.map((event) => event.extra?.modelId)).toEqual([undefined, undefined]);
+    const digests = events.map((event) => event.extra?.modelIdDigest);
+    expect(digests[0]).toMatch(/^[a-f0-9]{16}$/u);
+    expect(digests[1]).toBe(digests[0]);
+    expect(JSON.stringify(events)).not.toContain("xxxxxxxxxx");
     deps.store.close();
   });
 

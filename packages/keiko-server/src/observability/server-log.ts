@@ -2558,6 +2558,7 @@ function applyRetention(
       nowMs,
       reserveBytes,
       skipNames: pendingRetries(active.failedDeletions, listing, nowMs),
+      ownInstanceId: INSTANCE_ID,
     },
     (entry) => removeRetentionTarget(active, entry),
   );
@@ -2627,17 +2628,25 @@ function installSegment(
   return segment;
 }
 
+function admissionBlocked(active: ActiveLog, nowMs: number): boolean {
+  return active.blocked.has("budget-exceeded") && nowMs < active.admissionRetryAtMs;
+}
+
 function admitNewSegment(active: ActiveLog, cursor: WriteCursor): void {
   const nowMs = Date.now();
-  if (active.blocked.has("budget-exceeded") && nowMs < active.admissionRetryAtMs) {
-    throw new ActivityLogBudgetError();
-  }
+  if (admissionBlocked(active, nowMs)) throw new ActivityLogBudgetError();
   if (runMaintenance(active, cursor, active.config.segmentBytes)) return;
   active.admissionRetryAtMs = nowMs + ADMISSION_RETRY_MS;
   throw new ActivityLogBudgetError();
 }
 
-function createSegmentFile(active: ActiveLog, cursor: WriteCursor): ActiveSegment {
+interface CreatedSegmentFile {
+  readonly identity: ActivityLogSegmentIdentity;
+  readonly handle: number;
+}
+
+// Creates the next segment's file under its active name, empty and not yet installed.
+function createSegmentHandle(active: ActiveLog): CreatedSegmentFile {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const identity = nextSegmentIdentity(active);
     const path = join(active.directory, activityLogSegmentFileName(identity, "active"));
@@ -2647,13 +2656,18 @@ function createSegmentFile(active: ActiveLog, cursor: WriteCursor): ActiveSegmen
         mode: "exclusive-create",
         trustedRoot: active.trustedRoot,
       });
-      return installSegment(active, identity, handle, cursor);
+      return { identity, handle };
     } catch (error) {
       // Only a leftover of this very instance can own the name; skip to the next index.
       if (!(error instanceof SafeArtifactFileError) || error.kind !== "target-exists") throw error;
     }
   }
   throw new SafeArtifactFileError("activity-log", "target-exists");
+}
+
+function createSegmentFile(active: ActiveLog, cursor: WriteCursor): ActiveSegment {
+  const created = createSegmentHandle(active);
+  return installSegment(active, created.identity, created.handle, cursor);
 }
 
 // Gives back a segment whose admission a concurrent process invalidated. It is still empty, so the
@@ -2673,18 +2687,52 @@ function withdrawSegment(
   }
 }
 
-// Admission is checked before the exclusive create and again after it: two processes can observe
-// the same free reservation, but only while their new segments are still empty. The re-check sees
-// every peer's new segment at its full reservation and prunes further or withdraws this one, so the
-// bytes on disk never exceed the budget.
-function openSegment(active: ActiveLog, cursor: WriteCursor): ActiveSegment {
-  admitNewSegment(active, cursor);
-  const segment = createSegmentFile(active, cursor);
+// The re-check once a new segment exists: it sees every peer's new segment, and this one, at its
+// full reservation and prunes further or withdraws this still empty segment, so the bytes on disk
+// never exceed the budget.
+// A re-check that throws (a redirected directory, a failed listing) admitted nothing either: the
+// still empty segment is withdrawn before the error propagates, so no later write lands in a
+// segment whose reservation was never confirmed (#3557 review).
+function confirmAdmission(active: ActiveLog, cursor: WriteCursor, segment: ActiveSegment): void {
   const safeOpen = active.pendingEvidence[0];
-  if (runMaintenance(active, cursor, 0)) return segment;
+  let admitted: boolean;
+  try {
+    admitted = runMaintenance(active, cursor, 0);
+  } catch (error) {
+    if (safeOpen !== undefined) withdrawSegment(active, segment, safeOpen);
+    throw error;
+  }
+  if (admitted) return;
   if (safeOpen !== undefined) withdrawSegment(active, segment, safeOpen);
   active.admissionRetryAtMs = Date.now() + ADMISSION_RETRY_MS;
   throw new ActivityLogBudgetError();
+}
+
+// Admission is checked before the exclusive create and again after it: two processes can observe
+// the same free reservation, but only while their new segments are still empty.
+function openSegment(active: ActiveLog, cursor: WriteCursor): ActiveSegment {
+  admitNewSegment(active, cursor);
+  const segment = createSegmentFile(active, cursor);
+  confirmAdmission(active, cursor, segment);
+  return segment;
+}
+
+// Replaces a full or expired segment make-before-break (#3557): the next segment's file exists
+// before the full one gives up its active name, so a process that keeps writing always holds an
+// active segment. That file is the one sign of a live writer a starting peer can see when it decides
+// whether it may replace the store's governing policy (`isSoleActivityLogWriter`); sealing first and
+// opening only after a maintenance pass left a busy writer invisible for that whole pass. The new
+// file stays empty until the re-check admits it, so the byte bound is unchanged.
+function rotateSegment(active: ActiveLog, cursor: WriteCursor, reason: SealReason): void {
+  let next: CreatedSegmentFile | undefined;
+  try {
+    if (!admissionBlocked(active, Date.now())) next = createSegmentHandle(active);
+  } finally {
+    // Sealed whether or not the next segment could be created, exactly as before.
+    sealSegment(active, cursor, reason);
+  }
+  if (next === undefined) throw new ActivityLogBudgetError();
+  confirmAdmission(active, cursor, installSegment(active, next.identity, next.handle, cursor));
 }
 
 interface OpenSegment {
@@ -2922,7 +2970,7 @@ function placeRecord(
 
 function rollOver(active: ActiveLog, cursor: WriteCursor, rollovers: number): number {
   if (rollovers >= MAX_ROLLOVERS_PER_WRITE) throw new ActivityLogBackpressureError();
-  sealSegment(active, cursor, "size-limit");
+  rotateSegment(active, cursor, "size-limit");
   return rollovers + 1;
 }
 
@@ -2977,8 +3025,17 @@ function recordDroppedEvent(active: ActiveLog, error: unknown): void {
   active.blocked.set(state, (active.blocked.get(state) ?? 0) + 1);
 }
 
+// A write rotates an expired segment make-before-break; only the idle-segment timer seals one
+// without opening the next.
+function rotateIfExpired(active: ActiveLog, cursor: WriteCursor): void {
+  const segment = active.segment;
+  if (segment === undefined) return;
+  const reason = segmentExpiryReason(segment, active.config);
+  if (reason !== undefined) rotateSegment(active, cursor, reason);
+}
+
 function persistCallerEvent(active: ActiveLog, event: ServerLogEvent, cursor: WriteCursor): void {
-  sealIfExpired(active, cursor);
+  rotateIfExpired(active, cursor);
   writeQueued(active, cursor, event);
 }
 

@@ -5,7 +5,7 @@
 // test here calls the captured listener and then waits for the observable side effect (`err`/
 // `exit` being called) rather than awaiting a return value — the same way Node itself never waits.
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -27,7 +27,9 @@ type FatalListener = (reason: unknown) => void;
 // Installs the guards against a fresh `vi.spyOn(process, "on")` and hands back the two captured
 // listeners plus a cleanup callback. Kept as one function so the spy's precise mock type never
 // crosses an abstractly-typed parameter boundary (doing so previously widened it to `any`).
-function installAndCapture(sink: ProcessGuardSink): {
+// `Partial` mirrors `installProcessGuards`'s own signature (#3557) so a test can exercise a
+// partial sink — e.g. the dev BFF's real `{ env }`-only call shape — without reconstructing err/exit.
+function installAndCapture(sink: Partial<ProcessGuardSink>): {
   readonly uncaught: FatalListener | undefined;
   readonly rejection: FatalListener | undefined;
   readonly cleanup: () => void;
@@ -160,6 +162,54 @@ describe("installProcessGuards — real classifier (no injected loadServer)", ()
     } finally {
       cleanup();
       rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  // #3557 review finding 1: the dev BFF calls `installProcessGuards()` before it ever mutates
+  // `process.env`, and computes its own effective state directory (default `.keiko/dev`,
+  // distinct from the generic CLI default) separately. Before the fix, the fatal path always read
+  // bare `process.env` — so on an ordinary launch with no externally set `KEIKO_STATE_DIR`, a crash
+  // would land in the WRONG directory even though every other evidence path in that process wrote
+  // to the right one. `sink.env` must be consulted instead of `process.env` when the caller
+  // supplies it — proven here against the REAL classifier and the REAL persisted file, not a fake.
+  it("resolves the fatal-crash state directory from sink.env, never process.env, when both disagree", async () => {
+    const wrongStateDir = mkdtempSync(join(tmpdir(), "keiko-fatal-wrong-"));
+    const effectiveStateDir = mkdtempSync(join(tmpdir(), "keiko-fatal-effective-"));
+    // `process.env.KEIKO_STATE_DIR` names a directory the fatal guard must NEVER write to once
+    // `sink.env` is supplied — simulating the dev BFF's own effective/`process.env` divergence.
+    vi.stubEnv("KEIKO_STATE_DIR", wrongStateDir);
+    const err = vi.fn();
+    const exit = vi.fn();
+    const sink: ProcessGuardSink = { err, exit, env: { KEIKO_STATE_DIR: effectiveStateDir } };
+    const { uncaught, cleanup } = installAndCapture(sink);
+    try {
+      uncaught?.(new Error("secret-token-789"));
+      await vi.waitFor(
+        () => {
+          expect(err).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 15_000 },
+      );
+      expect(exit).toHaveBeenCalledWith(1);
+      const raw = readPersistedActivityLog(effectiveStateDir);
+      expect(raw).not.toContain("secret-token-789");
+      const [fatal] = persistedActivityLogLines(raw, "process.fatal");
+      expect(expectActivityLogProof("process.fatal.body-free", fatal ?? "")).toMatchObject({
+        kind: "uncaught-exception",
+        failureKind: "Error",
+      });
+      // The process.env-derived directory must never receive the fatal lifecycle itself. (It may
+      // still receive an UNRELATED `activity-log.loss` exit summary: `persistActivityLogLossSummary`
+      // has no `env`/`stateDir` parameter of its own — it always resolves the process-wide singleton
+      // logger via bare `process.env`, a separate, pre-existing property this fix does not change.)
+      if (existsSync(join(wrongStateDir, "logs"))) {
+        const wrongRaw = readPersistedActivityLog(wrongStateDir);
+        expect(persistedActivityLogLines(wrongRaw, "process.fatal")).toEqual([]);
+      }
+    } finally {
+      cleanup();
+      rmSync(wrongStateDir, { recursive: true, force: true });
+      rmSync(effectiveStateDir, { recursive: true, force: true });
     }
   });
 });
@@ -305,6 +355,69 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
       const [event] = writes as [{ errorKind: string; extra: Record<string, unknown> }];
       expect(event.errorKind).toBe("timeout");
       expect(event.extra.failureKind).toBe("timeout");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// #3557 review finding 1, unit-tested against the wiring itself (see the real-classifier describe
+// block above for the end-to-end, real-file proof): `sink.env` — a NEW optional field — must be
+// what `resolveRuntimeStateDir` receives, never a hardcoded `process.env` read, and a caller that
+// supplies no override must still see today's `process.env`-derived behaviour unchanged.
+describe("installProcessGuards — sink.env resolves the fatal state directory (#3557)", () => {
+  it("passes sink.env to resolveRuntimeStateDir when the sink supplies one", async () => {
+    vi.stubEnv("KEIKO_STATE_DIR", "/process-env/state/dir");
+    const { module, createActivityLogSink } = fakeServerModule({ errorClass: "Error" });
+    const sink: ProcessGuardSink = {
+      err: vi.fn(),
+      exit: vi.fn(),
+      loadServer: () => Promise.resolve(module),
+      env: { KEIKO_STATE_DIR: "/effective/state/dir" },
+    };
+    const { uncaught, cleanup } = installAndCapture(sink);
+    try {
+      uncaught?.(new Error("boom"));
+      await vi.waitFor(() => {
+        expect(createActivityLogSink).toHaveBeenCalled();
+      });
+      expect(createActivityLogSink).toHaveBeenCalledWith("/effective/state/dir");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("still falls back to process.env when the sink supplies no env override", async () => {
+    vi.stubEnv("KEIKO_STATE_DIR", "/process-env/state/dir");
+    const { module, createActivityLogSink } = fakeServerModule({ errorClass: "Error" });
+    const sink: ProcessGuardSink = {
+      err: vi.fn(),
+      exit: vi.fn(),
+      loadServer: () => Promise.resolve(module),
+    };
+    const { uncaught, cleanup } = installAndCapture(sink);
+    try {
+      uncaught?.(new Error("boom"));
+      await vi.waitFor(() => {
+        expect(createActivityLogSink).toHaveBeenCalled();
+      });
+      expect(createActivityLogSink).toHaveBeenCalledWith("/process-env/state/dir");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The dev BFF's real call site is exactly `installProcessGuards({ env })` — no err/exit. This
+  // must register cleanly and keep using `DEFAULT_PROCESS_GUARD_SINK`'s err/exit, never leave them
+  // `undefined` (which a naive `{ ...DEFAULT, ...sink }` ordering mistake — or the reverse spread
+  // order — would silently do).
+  it("registers successfully when the sink supplies only env, the dev BFF's exact call shape", () => {
+    const { uncaught, rejection, cleanup } = installAndCapture({
+      env: { KEIKO_STATE_DIR: "/effective/state/dir" },
+    });
+    try {
+      expect(uncaught).toBeDefined();
+      expect(rejection).toBeDefined();
     } finally {
       cleanup();
     }

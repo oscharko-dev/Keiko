@@ -36,6 +36,7 @@ import {
   clearCanonicalVoicePageOutboxForTests,
   clearChatSessionBootstrapCacheForTests,
   canonicalTurnReferenceForClient,
+  chatListCorrelationId,
   isInFlight,
   notifyChatDeleted,
   notifyChatUpsert,
@@ -390,7 +391,10 @@ describe("useChatSession bootstrap", () => {
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(fetchChats).toHaveBeenCalledWith("/repo");
+    expect(fetchChats).toHaveBeenCalledWith("/repo", expect.any(String));
+    // The list load carries its own correlation id, remembered for evidence the load decides (#3557).
+    const [, listCorrelationId] = vi.mocked(fetchChats).mock.calls[0] ?? [];
+    expect(chatListCorrelationId("/repo")).toBe(listCorrelationId);
     expect(fetchChatMessages).toHaveBeenCalledWith("chat-latest", "/repo");
     expect(result.current.activeChat?.id).toBe("chat-latest");
     expect(result.current.selectedModel).toBe("chat-live");
@@ -417,6 +421,8 @@ describe("useChatSession bootstrap", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toContain("chat catalog unavailable");
+    // A failed load decides nothing, so no evidence may name it.
+    expect(chatListCorrelationId("/repo")).toBeUndefined();
     expect(result.current.activeProject).toBeUndefined();
   });
 

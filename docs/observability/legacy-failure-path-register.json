@@ -8367,12 +8367,6 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/coding-app-session-client.ts",
-      "owner": "ensureLocalCodingAppSession",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/coding-app-session-client.ts",
       "owner": "redeemCodingAppSessionPairingFragment",
       "kind": "unregistered-catch",
       "count": 1

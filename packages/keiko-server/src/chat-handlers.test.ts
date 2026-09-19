@@ -49,7 +49,10 @@ import type { RouteContext } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
+// A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
+const BREAKER_CHAT_DIGEST = modelIdEvidence("breaker-chat").modelIdDigest;
 const VALID_GROUNDING_SCOPE_IDENTITY = `gsi-v1:${"a".repeat(64)}`;
 const INVALID_CLIENT_TURN_ID = {
   status: 400,
@@ -270,6 +273,7 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "grounding-scope",
             modelKind: "chat",
+            modelIdDigest: BREAKER_CHAT_DIGEST,
             completeness: "complete",
             loss: "none",
           },
@@ -357,6 +361,9 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "readiness",
             modelKind: "chat",
+            // The on-demand probe ran and failed, so the refusal names a failed check (#3557).
+            modelIdDigest: BREAKER_CHAT_DIGEST,
+            readinessObservation: "not-ready",
             completeness: "complete",
             loss: "none",
           },
@@ -372,6 +379,8 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "readiness",
             modelKind: "chat",
+            modelIdDigest: BREAKER_CHAT_DIGEST,
+            readinessObservation: "not-ready",
             completeness: "complete",
             loss: "none",
           },
@@ -400,6 +409,12 @@ describe("desktop chat production gateway reuse", () => {
       );
 
       expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      // #3557 review finding A: "missing-model" is an unvalidated, caller-supplied request value
+      // that names no model the gateway configures (only "breaker-chat" is). It must never be
+      // logged raw. (This pin used to expect `modelId: "missing-model"` here, which was the
+      // vulnerability itself: any caller-chosen string, PII or not, passed straight through as if
+      // it were safe Activity Log evidence.) The refused candidate is still evidence, as a one-way
+      // digest only, so two refused candidates stay apart (#3557 review).
       expect(sink.events).toContainEqual(
         expect.objectContaining({
           category: "gateway",
@@ -410,12 +425,72 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "configuration",
             modelKind: "unknown",
+            modelIdDigest: expect.stringMatching(/^[a-f0-9]{16}$/) as unknown,
             completeness: "complete",
             loss: "none",
           },
         }),
       );
+      const [rejectionEvent] = sink.events.filter((event) => event.op === "chat.creation.rejected");
+      expect(rejectionEvent?.extra).not.toHaveProperty("modelId");
+      expect(JSON.stringify(sink.events)).not.toContain("missing-model");
     } finally {
+      resetServerLogger();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("digests a configured model id that is not itself body-free, instead of dropping the rejection line", async () => {
+    // Review finding A follow-up: gateway config accepts any nonempty modelId, so an operator can
+    // configure one that is email-shaped. Logging it raw would fail `activityLogEvent`'s own
+    // opaque-id validation and silently drop the WHOLE `chat.creation.rejected` line.
+    const fixture = await createGatewayBreakerFixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const runtimeConfig = fixture.deps.gatewayConfig;
+      if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
+      runtimeConfig.set(
+        parseGatewayConfig({
+          providers: [
+            {
+              modelId: "alice@example.com",
+              baseUrl: "https://provider.example.invalid/v1",
+              apiKey: "fake-test-key",
+              timeoutMs: 5_000,
+              maxRetries: 0,
+              retryBaseDelayMs: 1,
+            },
+          ],
+          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+        }),
+        true,
+      );
+      // Never previously probed: the on-demand readiness check `handleCreateDesktopChat` runs
+      // before admission attempts a real chat completion. Mirrors "keeps user content off the
+      // provider while probing an unready model on demand" above — an invalid provider host would
+      // otherwise mean a real DNS lookup on every run.
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const rejected = await handleCreateDesktopChat(
+        requestContext({
+          modelId: "alice@example.com",
+          projectPath: fixture.projectPath,
+          title: "must not be created",
+        }),
+        fixture.deps,
+      );
+
+      expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      const rejectionEvents = sink.events.filter((event) => event.op === "chat.creation.rejected");
+      expect(rejectionEvents).toHaveLength(1);
+      const [rejectionEvent] = rejectionEvents;
+      expect(rejectionEvent?.extra).not.toHaveProperty("modelId");
+      expect(rejectionEvent?.extra?.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
+      expect(JSON.stringify(sink.events)).not.toContain("alice@example.com");
+    } finally {
+      vi.unstubAllGlobals();
       resetServerLogger();
       await disposeGatewayBreakerFixture(fixture);
     }

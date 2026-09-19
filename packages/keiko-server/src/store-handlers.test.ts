@@ -42,6 +42,7 @@ import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ChatGitChangeScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   DEFAULT_CHAT_LIST_LIMIT as DEFAULT_CHAT_LIST_PAGE,
   handleDeleteChat,
@@ -70,6 +71,7 @@ import {
   setServerLogger,
   type ServerLogEvent,
 } from "./observability/index.js";
+import { resetServerLogFailureNotices } from "./observability/server-log.js";
 
 // One persisted assistant turn whose grounded answer carries an `indexLifecycle` block — the only
 // shape that makes the messages route open the local-knowledge store at all. Returns the assistant
@@ -494,14 +496,28 @@ describe("POST /api/projects", () => {
       },
     });
 
-    const res = await fetch(url("/api/projects"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({ path: fallbackProject }),
-    });
+    const droppedBefore = activityLogLossCounters()["diagnostic-sink-failed"];
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let res: Response;
+    let body: unknown;
+    let notices: string[];
+    try {
+      // The notice throttle is process-wide: start from a clean slate, and drop the reset's own
+      // flush of anything an earlier test suppressed, so only this request's notice is inspected.
+      resetServerLogFailureNotices();
+      stderrWrite.mockClear();
+      res = await fetch(url("/api/projects"), {
+        method: "POST",
+        headers: POST_HEADERS,
+        body: JSON.stringify({ path: fallbackProject }),
+      });
+      body = await res.json();
+      notices = stderrWrite.mock.calls.map(([chunk]) => String(chunk));
+    } finally {
+      stderrWrite.mockRestore();
+    }
 
     expect(res.status).toBe(201);
-    const body: unknown = await res.json();
     expect(body).toMatchObject({
       project: { path: fallbackProject },
       warning: {
@@ -510,6 +526,24 @@ describe("POST /api/projects", () => {
     });
     expect(body).toHaveProperty("warning.correlationId", expect.any(String));
     expect(store.listProjects()).toContainEqual(expect.objectContaining({ path: fallbackProject }));
+    // The unavailable sink does not make the lost diagnostic silent: it is counted and announced
+    // once on stderr, body-free, under the correlation id the response carries.
+    const correlationId = (body as { warning: { correlationId: string } }).warning.correlationId;
+    expect(activityLogLossCounters()["diagnostic-sink-failed"]).toBe(droppedBefore + 1);
+    expect(notices).toHaveLength(1);
+    expect(JSON.parse(notices[0] ?? "{}")).toMatchObject({
+      op: "server-log.write-failed",
+      failedOp: "server.diagnostic.failure",
+      correlationId,
+      loss: "event-dropped",
+    });
+    for (const secret of [
+      "diagnostic sink unavailable",
+      "foreign manifest body",
+      fallbackProject,
+    ]) {
+      expect(notices[0]).not.toContain(secret);
+    }
   });
 
   it("does not report a restricted project when the trust grant committed before failing", async () => {

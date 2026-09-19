@@ -1131,7 +1131,11 @@ describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", ()
       expect(view.result.current.loading).toBe(false);
     });
 
-    expect(fetchChatsSpy).toHaveBeenCalledWith("/current-project");
+    // The list load carries its own correlation id, which binding evidence names (#3557).
+    expect(fetchChatsSpy).toHaveBeenCalledWith(
+      "/current-project",
+      expect.stringMatching(/^[A-Za-z0-9._-]{8,128}$/),
+    );
     expect(view.result.current.activeProject?.path).toBe("/current-project");
     expect(view.result.current.projects.map((project) => project.path)).toEqual([
       "/current-project",

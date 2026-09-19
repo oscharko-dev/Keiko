@@ -10,6 +10,11 @@ import {
   reportClientDiagnostic,
   sseStreamErrorDiagnostic,
 } from "../../../../../lib/client-diagnostics";
+import { newClientCorrelationId } from "../../../../../lib/bff-correlation";
+import {
+  repairLocalCodingAppSessionForStream,
+  reportStreamSessionRecovered,
+} from "../../../../../lib/coding-app-session-client";
 
 type SharedEventListener = (event: MessageEvent<string>) => void;
 
@@ -24,6 +29,21 @@ interface SharedEventSourceEntry {
   reconnectAttempts: number;
   reconnectTimer: number | undefined;
   sourceGeneration: number;
+  // Set once an `onerror` in the current failure streak has a session repair in flight OR
+  // SUCCEEDED, so a streak of reconnect failures repairs at most once IN FLIGHT instead of
+  // hammering the local pairing endpoint on every attempt. A FAILED repair clears it again so the
+  // next `onerror` in the same streak gets its own attempt instead of being permanently locked out
+  // for the rest of the streak (#3557 review: the first repair can race a restarting BFF and
+  // legitimately fail). Also reset to `false` by a successful open (`onopen`), which starts a new
+  // streak.
+  sessionRepairAttempted: boolean;
+  // The client-minted id of the current failure streak (#3557 review). An EventSource exposes no
+  // request id, so the streak's error diagnostics and its session-repair outcomes share this one.
+  // A successful open ends the streak.
+  failureStreakCorrelationId: string | undefined;
+  // The streak's acknowledged repair, reported as recovered only once the stream opens again: an
+  // acknowledgement alone does not say a session cookie was issued (#3557 review).
+  acknowledgedRepairCorrelationId: string | undefined;
 }
 
 const sourcesByUrl = new Map<string, SharedEventSourceEntry>();
@@ -125,6 +145,52 @@ function scheduleReconnect(entry: SharedEventSourceEntry): void {
   }, reconnectDelay(entry));
 }
 
+// Repairs a stale local app session at most once IN FLIGHT per failure streak (ADR-0141 D5): a
+// restarted BFF invalidates its in-memory session, so every reconnect after that was denied again
+// forever, with nothing ever re-establishing one. Fire-and-forget — the repair is a fast loopback
+// POST that normally completes well before the reconnect timer's minimum 1s delay elapses, so the
+// next attempt carries a valid cookie without slowing the existing backoff. A failed repair
+// (single-flight `false`) re-arms the streak's attempt so the next `onerror` retries instead of
+// leaving the stream permanently unrepaired.
+function repairSessionOnce(entry: SharedEventSourceEntry, streakCorrelationId: string): void {
+  if (entry.sessionRepairAttempted) return;
+  entry.sessionRepairAttempted = true;
+  void repairLocalCodingAppSessionForStream("shared-event-source", streakCorrelationId).then(
+    (repair) => {
+      // A streak that ended meanwhile keeps nothing.
+      if (entry.failureStreakCorrelationId !== streakCorrelationId) return;
+      if (repair.acknowledged) entry.acknowledgedRepairCorrelationId = repair.repairCorrelationId;
+      else entry.sessionRepairAttempted = false;
+    },
+  );
+}
+
+// Forgets the failure streak and its repair. A stream resumed after a suspension starts a new
+// streak, which must never find an old streak's repair latched (#3557 review).
+function forgetFailureStreak(entry: SharedEventSourceEntry): void {
+  entry.sessionRepairAttempted = false;
+  entry.failureStreakCorrelationId = undefined;
+  entry.acknowledgedRepairCorrelationId = undefined;
+}
+
+// A successful open ends the failure streak; after an acknowledged repair it is the recovery.
+function endFailureStreak(entry: SharedEventSourceEntry): void {
+  const streak = entry.failureStreakCorrelationId;
+  const repair = entry.acknowledgedRepairCorrelationId;
+  if (streak !== undefined && repair !== undefined) {
+    reportStreamSessionRecovered("shared-event-source", streak, repair);
+  }
+  entry.reconnectAttempts = 0;
+  forgetFailureStreak(entry);
+}
+
+// A suspension (hidden document, reserved capacity) closes the stream on purpose; its streak ends.
+function suspendEntry(entry: SharedEventSourceEntry): void {
+  clearReconnectTimer(entry);
+  closeEntrySource(entry);
+  forgetFailureStreak(entry);
+}
+
 function openEntrySource(entry: SharedEventSourceEntry): void {
   if (
     entry.refCount === 0 ||
@@ -141,11 +207,15 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   entry.sourceGeneration = nextSourceGeneration;
   entry.source = source;
   source.onopen = () => {
-    entry.reconnectAttempts = 0;
+    endFailureStreak(entry);
   };
   source.onerror = () => {
-    reportClientDiagnostic(sseStreamErrorDiagnostic("shared-event-source", source.readyState));
+    const streak = (entry.failureStreakCorrelationId ??= newClientCorrelationId());
+    reportClientDiagnostic(sseStreamErrorDiagnostic("shared-event-source", source.readyState), {
+      correlationId: streak,
+    });
     closeEntrySource(entry);
+    repairSessionOnce(entry, streak);
     scheduleReconnect(entry);
   };
   for (const type of entry.subscribersByType.keys()) {
@@ -158,8 +228,7 @@ function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
     if (entry.essentialRefCount > 0) {
       openEntrySource(entry);
     } else if (backgroundStreamsSuspended) {
-      clearReconnectTimer(entry);
-      closeEntrySource(entry);
+      suspendEntry(entry);
     } else {
       openEntrySource(entry);
     }
@@ -168,10 +237,7 @@ function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
 
 function handleVisibilityChange(): void {
   if (documentHidden()) {
-    for (const entry of sourcesByUrl.values()) {
-      clearReconnectTimer(entry);
-      closeEntrySource(entry);
-    }
+    for (const entry of sourcesByUrl.values()) suspendEntry(entry);
     return;
   }
   for (const entry of sourcesByUrl.values()) {
@@ -210,6 +276,9 @@ function entryForUrl(url: string): SharedEventSourceEntry {
     reconnectAttempts: 0,
     reconnectTimer: undefined,
     sourceGeneration: 0,
+    sessionRepairAttempted: false,
+    failureStreakCorrelationId: undefined,
+    acknowledgedRepairCorrelationId: undefined,
   };
   sourcesByUrl.set(url, entry);
   ensureVisibilityListener();
@@ -257,8 +326,7 @@ export function subscribeSharedEventSource(
       entry.essentialRefCount === 0 &&
       backgroundBrowserStreamsSuspended()
     ) {
-      clearReconnectTimer(entry);
-      closeEntrySource(entry);
+      suspendEntry(entry);
     }
     if (entry.refCount > 0) return;
     clearReconnectTimer(entry);

@@ -2,11 +2,19 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { analyzeLogText, findTimeline } from "../packages/keiko-cli/src/support-analyze.js";
 import { createCodingSafeActivityProjection } from "../packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.js";
-import { createFileServerLogSink } from "../packages/keiko-server/src/observability/server-log.js";
+import {
+  closeFileServerLogSinks,
+  createFileServerLogSink,
+} from "../packages/keiko-server/src/observability/server-log.js";
+import {
+  drainSupportIncidentCandidates,
+  listSupportIncidents,
+  setSupportIncidentTriggerForTests,
+} from "../packages/keiko-server/src/observability/support-incident.js";
 import { readPersistedActivityLog } from "./support/activity-log-proof.js";
 
 describe("safe activity purge support reconstruction", () => {
@@ -56,6 +64,38 @@ describe("safe activity purge support reconstruction", () => {
       expect(serialized).not.toContain(bodyCanary);
     } finally {
       activityLog.close?.();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("opens no support incident when a server shutdown purges the projection", () => {
+    // Every BFF shutdown used to write an error-level server.diagnostic.failure for this routine
+    // purge, and the incident trigger turned each one into a pinned support incident.
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-safe-activity-shutdown-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    setSupportIncidentTriggerForTests(true);
+    const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
+    try {
+      const projection = createCodingSafeActivityProjection({ activityLog });
+      projection.open({
+        runId: "run-safe-activity-shutdown",
+        workspaceId: "workspace-safe-activity-shutdown",
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+
+      projection.purgeAll("shutdown", "shutdown-correlation-0002");
+      drainSupportIncidentCandidates();
+      closeFileServerLogSinks();
+
+      const serialized = readPersistedActivityLog(stateDir);
+      expect(serialized).toContain('"reason":"shutdown"');
+      expect(serialized).not.toContain('"op":"server.diagnostic.failure"');
+      expect(listSupportIncidents(stateDir)).toEqual([]);
+    } finally {
+      setSupportIncidentTriggerForTests(undefined);
+      closeFileServerLogSinks();
+      vi.unstubAllEnvs();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });

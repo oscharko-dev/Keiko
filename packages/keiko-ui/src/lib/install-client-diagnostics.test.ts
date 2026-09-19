@@ -294,6 +294,23 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
     expect(lastPostedBody(fetchMock)["kind"]).toBe("window-error");
   });
 
+  // #3557 review: a failure the caller classified keeps its closed class on the wire.
+  it("puts the caller's classified error kind on the wire", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    fanOutClientDiagnostic("[keiko] local app session ensure failed: TypeError", {
+      correlationId: "ui_session-ensure-0001",
+      errorKind: "unavailable",
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "ui_session-ensure-0001",
+      errorKind: "unavailable",
+    });
+  });
+
   it("flushes the remaining loss in one final report when the page is hidden", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -446,6 +463,361 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
     expect(body["correlationId"]).toBe("sse-req-0000001");
     expect(body["readyState"]).toBe(0);
     expect(body["kind"]).toBe("sse-error");
+  });
+});
+
+// KEIKO-3557: `useWindowStageEvidence` reports routine stage evidence through `meta.stageReport`
+// rather than the failure-shaped message/kind wire body above. The console still gets the exact
+// same human-readable text (nothing here decorates or replaces it) — only the POST body changes.
+describe("fanOutClientDiagnostic stage evidence", () => {
+  it("posts the closed stage wire shape for a started report, never the message body", () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("desktop chat bind #1: started", {
+      stageReport: { stage: "chat bind", phase: "started", ordinal: 1 },
+    });
+
+    // The console still gets the plain, human-readable text — the transport is the only thing that
+    // changes what reaches the server.
+    expect(consoleWarn).toHaveBeenCalledWith("desktop chat bind #1: started");
+    const body = lastPostedBody(fetchMock);
+    expect(body).toEqual({ kind: "stage", stage: "chat bind", phase: "started", ordinal: 1 });
+  });
+
+  it("posts the closed stage wire shape for a settled report, with durationMs and no other field", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("desktop chat bind #1: settled after 5ms", {
+      stageReport: { stage: "chat bind", phase: "settled", ordinal: 1, durationMs: 5 },
+    });
+
+    const body = lastPostedBody(fetchMock);
+    expect(body).toEqual({
+      kind: "stage",
+      stage: "chat bind",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 5,
+    });
+  });
+
+  it("never drains the page's pending delivery loss for a stage report, leaving it for the next report", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    recordClientDiagnosticLoss("rejectionsSuppressed", 3);
+
+    fanOutClientDiagnostic("desktop chat bind #1: started", {
+      stageReport: { stage: "chat bind", phase: "started", ordinal: 1 },
+    });
+
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("loss");
+    // Still pending: a stage report never took it, so the next delivered report still carries it.
+    expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 3 });
+  });
+});
+
+// #3557 review: a restored window's binding outcome posts its closed report with the correlation id
+// of the request that decided it, never the message body, and never drains the loss ledger.
+describe("fanOutClientDiagnostic binding evidence", () => {
+  it("posts the closed binding wire shape with the deciding request's correlation id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    recordClientDiagnosticLoss("rejectionsSuppressed", 2);
+
+    fanOutClientDiagnostic("[keiko] chat window restore target not found (reference=redacted)", {
+      correlationId: "ui_chat-list-load-0003",
+      bindingReport: {
+        surface: "chat-window",
+        outcome: "target-missing",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        windowRef: "chat-mfr3k2x1-2",
+        decidingLoadCount: 17,
+        relatedCorrelationIds: ["ui_chat-list-load-0004", "not a safe id"],
+      },
+    });
+
+    // Only safe related ids travel; the malformed one is dropped, never the whole report.
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "binding",
+      surface: "chat-window",
+      outcome: "target-missing",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      windowRef: "chat-mfr3k2x1-2",
+      correlationId: "ui_chat-list-load-0003",
+      relatedCorrelationIds: ["ui_chat-list-load-0004"],
+      decidingLoadCount: 17,
+    });
+    expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 2 });
+  });
+
+  // #3557 review: an offer carries its count, zero included, and a binding found again after
+  // redaction the fingerprint of the chat it bound to, so two choices from one list stay apart.
+  it("posts an offer's count, zero included, and a restored binding's target fingerprint", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const binding = {
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-3",
+      decidingLoadCount: 1,
+    } as const;
+
+    fanOutClientDiagnostic("[keiko] chat window offered conversations to choose from", {
+      correlationId: "ui_chat-list-load-0005",
+      bindingReport: {
+        ...binding,
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        candidateCount: 0,
+        disambiguatedCount: 0,
+      },
+    });
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "binding",
+      ...binding,
+      outcome: "candidates-offered",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      correlationId: "ui_chat-list-load-0005",
+      candidateCount: 0,
+      disambiguatedCount: 0,
+    });
+
+    fanOutClientDiagnostic("[keiko] chat window binding resolved (reference=user-selected)", {
+      correlationId: "ui_chat-list-load-0005",
+      bindingReport: {
+        ...binding,
+        outcome: "resolved",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+        targetFingerprint: "a1".repeat(32),
+      },
+    });
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "binding",
+      ...binding,
+      outcome: "resolved",
+      referenceShape: "user-selected",
+      heuristicFlagged: true,
+      correlationId: "ui_chat-list-load-0005",
+      targetFingerprint: "a1".repeat(32),
+    });
+  });
+});
+
+// #3557 review: a stage's two phases share one id, and a session repair joins the denied request.
+describe("fanOutClientDiagnostic correlated closed reports", () => {
+  it("posts a stage report under the stage's own correlation id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("desktop chat bind #2: started", {
+      correlationId: "ui_stage-0002",
+      stageReport: { stage: "chat bind", phase: "started", ordinal: 2 },
+    });
+
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "stage",
+      stage: "chat bind",
+      phase: "started",
+      ordinal: 2,
+      correlationId: "ui_stage-0002",
+    });
+  });
+
+  it("posts a session repair report on the denied request's timeline without draining loss", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    recordClientDiagnosticLoss("rejectionsSuppressed", 1);
+
+    fanOutClientDiagnostic("[keiko] stale session repair: replayed", {
+      correlationId: "ui_denied-read-0001",
+      sessionRepairReport: {
+        outcome: "replay-failed",
+        repairCorrelationId: "ui_session-repair-0001",
+        errorKind: "unavailable",
+      },
+    });
+
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "session-repair",
+      outcome: "replay-failed",
+      correlationId: "ui_denied-read-0001",
+      repairCorrelationId: "ui_session-repair-0001",
+      errorKind: "unavailable",
+    });
+    expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 1 });
+  });
+
+  // #3557 review: a stream repair travels under its failure streak, naming its stream.
+  it("posts a stream repair report with its stream under the failure streak's id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] run-events stream session repair: stream-repaired", {
+      correlationId: "ui_stream-streak-0001",
+      sessionRepairReport: {
+        outcome: "stream-repaired",
+        repairCorrelationId: "ui_session-repair-0002",
+        stream: "run-events",
+      },
+    });
+
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "session-repair",
+      outcome: "stream-repaired",
+      correlationId: "ui_stream-streak-0001",
+      repairCorrelationId: "ui_session-repair-0002",
+      stream: "run-events",
+    });
+  });
+
+  it("falls back to a plain message report when a session repair has no safe denied-request id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] stale session repair: replayed", {
+      correlationId: "not a safe id",
+      sessionRepairReport: { outcome: "replayed", repairCorrelationId: "ui_repair-0001" },
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      message: "[keiko] stale session repair: replayed",
+    });
+  });
+
+  // #3557 review: the ingest contract requires the repair request's id, so a report whose repair id
+  // is not safe is never posted as a repair report the server would refuse.
+  it("falls back to a plain message report when a session repair has no safe repair id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] stale session repair: replayed", {
+      correlationId: "ui_denied-0001",
+      sessionRepairReport: { outcome: "replayed", repairCorrelationId: "not a safe id" },
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      message: "[keiko] stale session repair: replayed",
+    });
+    expect(lastPostedBody(fetchMock)).not.toHaveProperty("kind", "session-repair");
+  });
+});
+
+// #3557: a page load posts about a dozen routine stage reports. With one shared budget, a failure
+// raised during boot (the one most likely to hold a real stall) was dropped console-only.
+describe("fanOutClientDiagnostic budgets", () => {
+  it("never lets routine evidence use up the budget of a failure report", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let ordinal = 1; ordinal <= 30; ordinal += 1) {
+      fanOutClientDiagnostic(`desktop window chunk #${String(ordinal)}: started`, {
+        stageReport: { stage: "window chunk", phase: "started", ordinal },
+      });
+    }
+    fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(31);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
+
+  it("still bounds routine evidence on its own budget", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let ordinal = 1; ordinal <= 61; ordinal += 1) {
+      fanOutClientDiagnostic(`desktop window chunk #${String(ordinal)}: started`, {
+        stageReport: { stage: "window chunk", phase: "started", ordinal },
+      });
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(60);
+    expect(clientDiagnosticPostThrottledCount()).toBe(1);
+  });
+
+  // #3557 review: a recovered stream is routine evidence, like a replayed read.
+  it("spends a stream repair from the routine budget, never the failure budget", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (let index = 1; index <= 25; index += 1) {
+      fanOutClientDiagnostic("[keiko] run-events stream session repair: stream-repaired", {
+        correlationId: `ui_stream-streak-${String(index).padStart(4, "0")}`,
+        sessionRepairReport: {
+          outcome: "stream-repaired",
+          repairCorrelationId: `ui_repair-${String(index).padStart(4, "0")}`,
+          stream: "run-events",
+        },
+      });
+    }
+    fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(26);
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
+
+  // #3557 review: an offer and a person's decisions are routine binding evidence. Only a missing
+  // target is a failure, so twenty-odd offers and withdrawals never crowd out the binding failure
+  // another window reports next.
+  it("spends binding offers and decisions from the routine budget, never the failure budget", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const binding = { surface: "chat-window", heuristicFlagged: false } as const;
+
+    for (let index = 1; index <= 12; index += 1) {
+      fanOutClientDiagnostic("[keiko] chat window offered conversations to choose from", {
+        bindingReport: {
+          ...binding,
+          outcome: "candidates-offered",
+          referenceShape: "redacted",
+          windowRef: `chat-offer-${String(index)}`,
+          candidateCount: 2,
+          disambiguatedCount: 0,
+        },
+      });
+      fanOutClientDiagnostic("[keiko] chat window withdrew the conversation the person chose", {
+        bindingReport: {
+          ...binding,
+          outcome: "choice-withdrawn",
+          referenceShape: "user-selected",
+          heuristicFlagged: true,
+          windowRef: `chat-offer-${String(index)}`,
+          targetFingerprint: "a1".repeat(32),
+        },
+      });
+    }
+    fanOutClientDiagnostic("[keiko] chat window restore target not found (reference=redacted)", {
+      bindingReport: {
+        ...binding,
+        outcome: "target-missing",
+        referenceShape: "redacted",
+        windowRef: "chat-missing-1",
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(25);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ outcome: "target-missing" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
   });
 });
 

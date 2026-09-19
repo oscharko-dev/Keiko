@@ -7,7 +7,6 @@
 // directly; no guard is reimplemented; no secret reaches any response (live payloads are redacted).
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -48,6 +47,7 @@ import {
   revokeAgentRunGovernance,
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
+import { newReferenceId } from "./reference-id.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 const AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT = 128;
@@ -341,7 +341,8 @@ function launchRun(
   request: RunRequest,
   model: ModelPort,
 ): RouteResult {
-  const runId = randomUUID();
+  // A review window persists a run id as its reference (#3557 review).
+  const runId = newReferenceId({ kind: "agent-run", correlationId: ctx.correlationId });
   const governance = isGovernedAgentRun(request)
     ? prepareAgentRunGovernance(ctx, request, deps, runId)
     : undefined;

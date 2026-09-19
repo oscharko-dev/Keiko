@@ -34,6 +34,11 @@
 import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
+  type ClientBindingOutcome,
+  type ClientBindingReferenceShape,
+  type ClientBindingSurface,
+  type ClientSessionRepairOutcome,
+  type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
   type ClientMarkdownLayout,
   type ClientErrorEvidence,
@@ -44,12 +49,65 @@ import {
   type ClientVoiceCaptureReason,
   type ClientVoiceCaptureError,
   type ClientDiagnosticWorkspaceTrustBinding,
+  type ClientStageId,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+// Routine desktop-window stage evidence (`useWindowStageEvidence`) rides `meta.stageReport` instead
+// of the `kind`/`gitChangeDescription`/`workspaceTrustBinding` fields above, which all describe a
+// FAILURE report's context. `message` still carries the same human-readable text those call sites
+// always built (so console output is unchanged); the transport below prefers this structured,
+// closed-vocabulary report over the message when building the wire body, because a stage that
+// starts and settles is the ordinary case, never a diagnostic.
+export type ClientDiagnosticStageReport =
+  | { readonly stage: ClientStageId; readonly phase: "started"; readonly ordinal: number }
+  | {
+      readonly stage: ClientStageId;
+      readonly phase: "settled";
+      readonly ordinal: number;
+      readonly durationMs: number;
+    };
+
+// A restored window's binding outcome (#3557), in closed values only: never the reference itself.
+// `meta.correlationId` names the request whose answer decided it.
+export interface ClientDiagnosticBindingReport {
+  readonly surface: ClientBindingSurface;
+  readonly outcome: ClientBindingOutcome;
+  readonly referenceShape: ClientBindingReferenceShape;
+  readonly heuristicFlagged: boolean;
+  // The window's own persisted id; the server logs only its digest.
+  readonly windowRef: string;
+  // Further list loads the verdict depended on, beyond `meta.correlationId`.
+  readonly relatedCorrelationIds?: readonly string[] | undefined;
+  // How many list loads decided the outcome in total, named or not.
+  readonly decidingLoadCount?: number | undefined;
+  // `candidates-offered` only: how many chats the window offered the person, zero included.
+  readonly candidateCount?: number | undefined;
+  // `candidates-offered` only: how many of those offers read alike and show a fingerprint reference.
+  readonly disambiguatedCount?: number | undefined;
+  // A binding found again after redaction, or a person's decision about a chosen chat: that chat's
+  // fingerprint, never its id.
+  readonly targetFingerprint?: string | undefined;
+}
+
+// The outcome of repairing and replaying a read a restarted BFF denied (#3557). `meta.correlationId`
+// is the denied request's id, which the replay reuses; for a stream, its failure streak's id.
+export interface ClientDiagnosticSessionRepairReport {
+  readonly outcome: ClientSessionRepairOutcome;
+  // The local-session repair request every outcome follows; the ingest contract requires it.
+  readonly repairCorrelationId: string;
+  // The closed class of the step that failed: the repair request, or the replay.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
+  // The stream whose failure streak asked for the repair.
+  readonly stream?: ClientSessionRepairStream | undefined;
+}
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  // The closed class of the failure, when the caller classified it (`bffRequestErrorKind`).
+  readonly errorKind?: ActivityLogErrorKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
@@ -58,6 +116,9 @@ export interface ClientDiagnosticMeta {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly stageReport?: ClientDiagnosticStageReport | undefined;
+  readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
+  readonly sessionRepairReport?: ClientDiagnosticSessionRepairReport | undefined;
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;
@@ -124,6 +185,10 @@ let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
  * when supplied, must be the ORIGINAL failed request's id (e.g. a caught `ApiError`'s
  * `.correlationId`) — never this report's own; a transport re-validates its shape independently
  * before trusting it for anything (never assume a caller-supplied value is well-formed).
+ *
+ * `meta.stageReport`, when supplied, means `message` is routine stage evidence rather than a
+ * failure: a transport sends the structured report instead of the message, but still writes
+ * `message` to the console unchanged (`useWindowStageEvidence`).
  */
 export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
   writer(message, meta);

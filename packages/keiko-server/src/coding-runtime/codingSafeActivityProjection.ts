@@ -196,7 +196,8 @@ export interface CodingSafeActivityProjection {
     count: number,
   ) => void;
   readonly purge: (runId: string, reason: CodingSafeActivityPurgeReason) => void;
-  readonly purgeAll: (reason: CodingSafeActivityPurgeReason) => void;
+  // `correlationId` is the calling operation (a server shutdown); see the implementation.
+  readonly purgeAll: (reason: CodingSafeActivityPurgeReason, correlationId?: string) => void;
   readonly markUnavailable: (runId: string) => void;
   readonly currentContent: () => CodingSafeActivityContent | null;
   readonly subscribeContent: (
@@ -417,8 +418,12 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     this.purgeCurrent(reason);
   }
 
-  public purgeAll(reason: CodingSafeActivityPurgeReason): void {
-    this.purgeCurrent(reason);
+  /**
+   * `correlationId` is the caller's operation (a server shutdown's). A purge with no run to tie it to
+   * carries that id instead of the unknown fallback; a purged run keeps its own.
+   */
+  public purgeAll(reason: CodingSafeActivityPurgeReason, correlationId?: string): void {
+    this.purgeCurrent(reason, correlationId);
   }
 
   public markUnavailable(runId: string): void {
@@ -491,9 +496,14 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     this.notifySubscribers(subscribers, null);
   }
 
-  private purgeCurrent(reason: CodingSafeActivityPurgeReason): void {
+  private purgeCurrent(
+    reason: CodingSafeActivityPurgeReason,
+    operationCorrelationId?: string,
+  ): void {
     const retained = this.entry !== undefined || this.subscribers.size > 0;
-    const correlationId = correlationIdOrUnknown(this.entry?.runId ?? this.subscriberRunId);
+    const correlationId = correlationIdOrUnknown(
+      this.entry?.runId ?? this.subscriberRunId ?? operationCorrelationId,
+    );
     const notify = this.entry !== undefined;
     const subscribers = [...this.subscribers];
     this.clearCurrentEntry();
@@ -501,7 +511,9 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     this.subscriberRunId = undefined;
     if (notify) this.notifySubscribers(subscribers, null);
     if (retained) {
-      emitPurgeDiagnostic(this.diagnostics, this.now, correlationId, reason);
+      if (reason === "invariant-violation") {
+        emitPurgeDiagnostic(this.diagnostics, this.now, correlationId, reason);
+      }
       this.activityLog?.write(
         activityLogEvent(
           CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
@@ -1116,8 +1128,8 @@ function capacityDropForApplication(
     : undefined;
 }
 
-// Issue #3245: both drop/purge reason unions are small and genuinely closed (5 members each), so
-// each (reason -> fixed vocabulary member) pairing is enumerated directly rather than moved to
+// Issue #3245: the fault drop/purge reasons are small and genuinely closed, so each
+// (reason -> fixed vocabulary member) pairing is enumerated directly rather than moved to
 // `code` — `code` already carries the fixed generic event code here (CODING_SAFE_ACTIVITY_*), and
 // the bounded count for a drop already has its own dedicated field (`occurrenceCount`), so nothing
 // about the drop/purge is lost by keeping `message` a closed-vocabulary lookup instead of a
@@ -1133,13 +1145,14 @@ const SAFE_ACTIVITY_DROP_SUMMARY: Readonly<Record<FaultDropReason, ServerDiagnos
   "subscriber-rejected": "safe-activity-dropped-subscriber-rejected",
 };
 
-const SAFE_ACTIVITY_PURGE_SUMMARY: Readonly<
-  Record<CodingSafeActivityPurgeReason, ServerDiagnosticSummary>
-> = {
-  stop: "safe-activity-purged-stop",
-  takeover: "safe-activity-purged-takeover",
-  shutdown: "safe-activity-purged-shutdown",
-  "workspace-switch": "safe-activity-purged-workspace-switch",
+// A routine purge (stop, takeover, shutdown, workspace switch) clears an in-memory UI projection
+// and loses nothing, so, like a capacity drop, it has no diagnostic: its `purged` line on
+// `coding-runtime.safe-activity` records it. Only an invariant violation is a fault. Reporting the
+// routine reasons as an error-level `server.diagnostic.failure` made every server shutdown open a
+// false support incident and pin evidence for it.
+type FaultPurgeReason = Extract<CodingSafeActivityPurgeReason, "invariant-violation">;
+
+const SAFE_ACTIVITY_PURGE_SUMMARY: Readonly<Record<FaultPurgeReason, ServerDiagnosticSummary>> = {
   "invariant-violation": "safe-activity-purged-invariant-violation",
 };
 
@@ -1166,7 +1179,7 @@ function emitPurgeDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
   correlationId: string,
-  reason: CodingSafeActivityPurgeReason,
+  reason: FaultPurgeReason,
 ): void {
   emitServerDiagnostic(sink, {
     correlationId,

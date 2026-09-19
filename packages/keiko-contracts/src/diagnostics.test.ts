@@ -4,19 +4,34 @@ import {
   ACTIVITY_LOG_READINESS_REASONS,
   ACTIVITY_LOG_READINESS_STATES,
   ACTIVITY_LOG_WRITER_KINDS,
+  CLIENT_BINDING_CANDIDATES_MAX,
+  CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_BINDING_OUTCOMES,
+  CLIENT_BINDING_REFERENCE_SHAPES,
+  CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
+  CLIENT_BINDING_DECIDING_LOADS_MAX,
+  CLIENT_SESSION_REPAIR_OUTCOMES,
+  CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
+  CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_DIAGNOSTIC_READY_STATES,
+  CLIENT_STAGE_DURATION_MS_MAX,
+  CLIENT_STAGE_IDS,
+  CLIENT_STAGE_ORDINAL_MAX,
   CLIENT_VOICE_DIALOGUE_STAGES,
   CLIENT_VOICE_CAPTURE_REASONS,
   CLIENT_VOICE_CAPTURE_ERRORS,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
   isActivityLogReadinessSnapshot,
+  isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
+  isClientSessionRepairIngestRequest,
   isClientDiagnosticKind,
   isClientDiagnosticLossCount,
+  isClientStageIngestRequest,
   isLinuxGatewayDiagnosticKind,
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
@@ -156,6 +171,17 @@ describe("isClientDiagnosticIngestRequest", () => {
     expect(isClientDiagnosticIngestRequest({ ...validRequest(), kind: "crash" })).toBe(false);
   });
 
+  // #3557 review: a failure the page classified keeps its closed class, e.g. a refused connection.
+  it("accepts a classified error kind from the closed vocabulary and refuses any other", () => {
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), errorKind: "unavailable" })).toBe(
+      true,
+    );
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), errorKind: "exploded" })).toBe(
+      false,
+    );
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), errorKind: 503 })).toBe(false);
+  });
+
   it("rejects a correlationId that is empty or over the bounded length", () => {
     expect(isClientDiagnosticIngestRequest({ ...validRequest(), correlationId: "" })).toBe(false);
     expect(
@@ -213,6 +239,87 @@ describe("isClientDiagnosticIngestRequest", () => {
     expect(
       isClientDiagnosticIngestRequest({ ...validRequest(), correlationId: "not valid!!" }),
     ).toBe(true);
+  });
+});
+
+// KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`) rides this closed,
+// free-text-free shape instead of the failure-shaped message report above.
+describe("isClientStageIngestRequest", () => {
+  function startedRequest(): Record<string, unknown> {
+    return { kind: "stage", stage: "chat bind", phase: "started", ordinal: 1 };
+  }
+
+  function settledRequest(): Record<string, unknown> {
+    return { kind: "stage", stage: "chat bind", phase: "settled", ordinal: 1, durationMs: 5 };
+  }
+
+  it("accepts a well-formed started report for every closed stage id", () => {
+    for (const stage of CLIENT_STAGE_IDS) {
+      expect(isClientStageIngestRequest({ ...startedRequest(), stage })).toBe(true);
+    }
+  });
+
+  it("accepts a well-formed settled report, including a genuinely instant 0ms settle", () => {
+    expect(isClientStageIngestRequest(settledRequest())).toBe(true);
+    expect(isClientStageIngestRequest({ ...settledRequest(), durationMs: 0 })).toBe(true);
+  });
+
+  it("rejects a non-object value and a value whose kind is not the stage literal", () => {
+    expect(isClientStageIngestRequest(null)).toBe(false);
+    expect(isClientStageIngestRequest(undefined)).toBe(false);
+    expect(isClientStageIngestRequest("a string")).toBe(false);
+    expect(isClientStageIngestRequest(["array"])).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), kind: "boundary" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), kind: undefined })).toBe(false);
+  });
+
+  it("rejects a stage outside the closed vocabulary", () => {
+    expect(isClientStageIngestRequest({ ...startedRequest(), stage: "unknown stage" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), stage: "" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), stage: 1 })).toBe(false);
+  });
+
+  it("rejects a phase outside the closed started|settled vocabulary", () => {
+    expect(isClientStageIngestRequest({ ...startedRequest(), phase: "pending" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), phase: "STARTED" })).toBe(false);
+  });
+
+  it("rejects an out-of-range or non-integer ordinal", () => {
+    expect(isClientStageIngestRequest({ ...startedRequest(), ordinal: 0 })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), ordinal: -1 })).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), ordinal: 1.5 })).toBe(false);
+    expect(
+      isClientStageIngestRequest({ ...startedRequest(), ordinal: CLIENT_STAGE_ORDINAL_MAX + 1 }),
+    ).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), ordinal: "1" })).toBe(false);
+    expect(
+      isClientStageIngestRequest({ ...startedRequest(), ordinal: CLIENT_STAGE_ORDINAL_MAX }),
+    ).toBe(true);
+  });
+
+  it("rejects an out-of-range or non-integer durationMs on a settled report", () => {
+    expect(isClientStageIngestRequest({ ...settledRequest(), durationMs: -1 })).toBe(false);
+    expect(isClientStageIngestRequest({ ...settledRequest(), durationMs: 1.5 })).toBe(false);
+    expect(
+      isClientStageIngestRequest({
+        ...settledRequest(),
+        durationMs: CLIENT_STAGE_DURATION_MS_MAX + 1,
+      }),
+    ).toBe(false);
+    expect(
+      isClientStageIngestRequest({ ...settledRequest(), durationMs: CLIENT_STAGE_DURATION_MS_MAX }),
+    ).toBe(true);
+  });
+
+  it("rejects a settled report with a missing durationMs, and a started report carrying one", () => {
+    const { durationMs: _durationMs, ...settledWithoutDuration } = settledRequest();
+    expect(isClientStageIngestRequest(settledWithoutDuration)).toBe(false);
+    expect(isClientStageIngestRequest({ ...startedRequest(), durationMs: 5 })).toBe(false);
+  });
+
+  it("refuses the whole report for an unknown extra field", () => {
+    expect(isClientStageIngestRequest({ ...startedRequest(), extra: "value" })).toBe(false);
+    expect(isClientStageIngestRequest({ ...settledRequest(), message: "not allowed" })).toBe(false);
   });
 });
 
@@ -332,6 +439,385 @@ describe("clientErrorClass", () => {
   // The activity log captures a class as `\w{1,64}` before it looks the name up.
   it("holds only bounded word-shaped names", () => {
     for (const name of CLIENT_ERROR_CLASSES) expect(name).toMatch(/^\w{1,64}$/u);
+  });
+});
+
+// #3557 review: a restored window's binding outcome rides a closed report of its own, so a
+// reference lost at persistence and a target that is really gone stay distinguishable.
+describe("isClientBindingIngestRequest", () => {
+  function bindingRequest(): Record<string, unknown> {
+    return {
+      kind: "binding",
+      surface: "chat-window",
+      outcome: "target-missing",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      windowRef: "chat-mfr3k2x1-2",
+    };
+  }
+
+  // A redaction marker never resolved to a live chat, only a redaction marker offers chats, and a
+  // person decides only about a chat the window found again after redaction.
+  function possibleBinding(outcome: string, referenceShape: string): boolean {
+    if (outcome === "resolved") return referenceShape !== "redacted";
+    if (outcome === "candidates-offered") return referenceShape === "redacted";
+    if (outcome === "target-missing") return true;
+    return referenceShape === "fingerprint" || referenceShape === "user-selected";
+  }
+
+  // The fields an outcome always carries.
+  function outcomeFields(outcome: string): Record<string, unknown> {
+    if (outcome === "candidates-offered") return { candidateCount: 1, disambiguatedCount: 0 };
+    if (outcome.startsWith("choice-")) return { targetFingerprint: "c".repeat(64) };
+    return {};
+  }
+
+  it("accepts every possible outcome and reference shape, with and without correlation ids", () => {
+    for (const outcome of CLIENT_BINDING_OUTCOMES) {
+      for (const referenceShape of CLIENT_BINDING_REFERENCE_SHAPES) {
+        if (!possibleBinding(outcome, referenceShape)) continue;
+        expect(
+          isClientBindingIngestRequest({
+            ...bindingRequest(),
+            outcome,
+            referenceShape,
+            ...outcomeFields(outcome),
+          }),
+        ).toBe(true);
+      }
+    }
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        correlationId: "ui_list-load-0001",
+        relatedCorrelationIds: ["ui_list-load-0002", "ui_list-load-0003"],
+      }),
+    ).toBe(true);
+  });
+
+  // #3557 review: a redaction marker can never have resolved to a live chat.
+  it("refuses a resolved outcome for a redacted reference", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "redacted",
+      }),
+    ).toBe(false);
+  });
+
+  // #3557 review: a chat restored through its id's fingerprint resolved, and its id was flagged.
+  it("accepts a resolved, flagged binding restored through a fingerprint", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "fingerprint",
+        heuristicFlagged: true,
+      }),
+    ).toBe(true);
+  });
+
+  // #3557 review: a window whose redacted id carries no fingerprint binds only to the chat the
+  // person chose; that chat's id was flagged.
+  it("accepts a resolved, flagged binding the person chose", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+      }),
+    ).toBe(true);
+  });
+
+  // #3557 review: a window whose redacted id carries no fingerprint says how many chats it offered,
+  // zero included. Nothing else carries a count, and only a redaction marker offers.
+  it("accepts an offer only with its candidate count, zero included, from a redaction marker", () => {
+    const offer = { ...bindingRequest(), outcome: "candidates-offered", disambiguatedCount: 0 };
+    for (const candidateCount of [0, 2, CLIENT_BINDING_CANDIDATES_MAX]) {
+      expect(isClientBindingIngestRequest({ ...offer, candidateCount })).toBe(true);
+    }
+    for (const candidateCount of [undefined, -1, 1.5, "2", CLIENT_BINDING_CANDIDATES_MAX + 1]) {
+      expect(isClientBindingIngestRequest({ ...offer, candidateCount })).toBe(false);
+    }
+    for (const referenceShape of CLIENT_BINDING_REFERENCE_SHAPES) {
+      if (referenceShape === "redacted") continue;
+      expect(isClientBindingIngestRequest({ ...offer, referenceShape, candidateCount: 1 })).toBe(
+        false,
+      );
+    }
+    for (const outcome of ["resolved", "target-missing"]) {
+      for (const counts of [{ candidateCount: 1 }, { disambiguatedCount: 0 }]) {
+        expect(
+          isClientBindingIngestRequest({
+            ...bindingRequest(),
+            outcome,
+            referenceShape: "uuid",
+            ...counts,
+          }),
+        ).toBe(false);
+      }
+    }
+  });
+
+  // #3557 review: an offer also says how many of its offers read alike and show a fingerprint
+  // reference, zero included, and never more than it offered.
+  it("accepts an offer's disambiguation count only up to its candidate count", () => {
+    const offer = { ...bindingRequest(), outcome: "candidates-offered", candidateCount: 3 };
+    for (const disambiguatedCount of [0, 2, 3]) {
+      expect(isClientBindingIngestRequest({ ...offer, disambiguatedCount })).toBe(true);
+    }
+    for (const disambiguatedCount of [undefined, -1, 1.5, "2", 4]) {
+      expect(isClientBindingIngestRequest({ ...offer, disambiguatedCount })).toBe(false);
+    }
+  });
+
+  // #3557 review: a chat the person chose stays a choice until they keep it or withdraw it; each
+  // decision names that chat by its fingerprint, and only a binding found again after redaction
+  // can be decided about.
+  it("accepts a choice decision only with the chosen chat's fingerprint, for a restored binding", () => {
+    const targetFingerprint = "c".repeat(64);
+    for (const outcome of ["choice-kept", "choice-withdrawn"]) {
+      const decision = { ...bindingRequest(), outcome, heuristicFlagged: true };
+      for (const referenceShape of ["fingerprint", "user-selected"]) {
+        expect(
+          isClientBindingIngestRequest({ ...decision, referenceShape, targetFingerprint }),
+        ).toBe(true);
+        expect(isClientBindingIngestRequest({ ...decision, referenceShape })).toBe(false);
+      }
+      for (const referenceShape of ["uuid", "opaque", "redacted"]) {
+        expect(
+          isClientBindingIngestRequest({
+            ...decision,
+            referenceShape,
+            heuristicFlagged: false,
+            targetFingerprint,
+          }),
+        ).toBe(false);
+      }
+    }
+  });
+
+  // #3557 review: a binding found again after redaction names the chat it bound to, only by the
+  // fingerprint the window persists and never by its id, so two choices from one list stay apart.
+  it("accepts a target fingerprint only on a binding found again after redaction", () => {
+    const targetFingerprint = "c".repeat(64);
+    const restored = { ...bindingRequest(), outcome: "resolved", heuristicFlagged: true };
+    for (const referenceShape of ["fingerprint", "user-selected"]) {
+      for (const outcome of ["resolved", "target-missing"]) {
+        expect(
+          isClientBindingIngestRequest({ ...restored, outcome, referenceShape, targetFingerprint }),
+        ).toBe(true);
+      }
+    }
+    for (const patch of [
+      { outcome: "resolved", referenceShape: "uuid" },
+      { outcome: "resolved", referenceShape: "opaque", heuristicFlagged: false },
+      { outcome: "target-missing", referenceShape: "redacted", heuristicFlagged: false },
+      {
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        candidateCount: 1,
+        disambiguatedCount: 0,
+      },
+    ]) {
+      expect(isClientBindingIngestRequest({ ...restored, ...patch, targetFingerprint })).toBe(
+        false,
+      );
+    }
+    for (const malformed of [
+      "1404206d-9ab6-4bca-8853-813867352087",
+      "c".repeat(63),
+      "C".repeat(64),
+      7,
+    ]) {
+      expect(
+        isClientBindingIngestRequest({
+          ...restored,
+          referenceShape: "fingerprint",
+          targetFingerprint: malformed,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("accepts a heuristic flag only for a server-issued UUID", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "uuid",
+        heuristicFlagged: true,
+      }),
+    ).toBe(true);
+    for (const referenceShape of ["opaque", "redacted"]) {
+      expect(
+        isClientBindingIngestRequest({
+          ...bindingRequest(),
+          referenceShape,
+          heuristicFlagged: true,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  // #3557 review: the window's own id reaches the server whole (it logs only its digest), so two
+  // windows can never share one; it is held to the shape persistence restores.
+  it("accepts a window reference up to its bound in the safe alphabet", () => {
+    for (const windowRef of ["files", "chat-mfr3k2x1-2", "w".repeat(128), "a.b_c-1"]) {
+      expect(isClientBindingIngestRequest({ ...bindingRequest(), windowRef })).toBe(true);
+    }
+  });
+
+  it("bounds the related correlation ids and the deciding load count", () => {
+    for (const decidingLoadCount of [1, CLIENT_BINDING_DECIDING_LOADS_MAX]) {
+      expect(isClientBindingIngestRequest({ ...bindingRequest(), decidingLoadCount })).toBe(true);
+    }
+    for (const decidingLoadCount of [0, CLIENT_BINDING_DECIDING_LOADS_MAX + 1, 1.5, "17"]) {
+      expect(isClientBindingIngestRequest({ ...bindingRequest(), decidingLoadCount })).toBe(false);
+    }
+    const related = Array.from(
+      { length: CLIENT_BINDING_RELATED_CORRELATIONS_MAX },
+      (_value, index) => `ui_list-load-${String(index).padStart(4, "0")}`,
+    );
+    expect(
+      isClientBindingIngestRequest({ ...bindingRequest(), relatedCorrelationIds: related }),
+    ).toBe(true);
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        relatedCorrelationIds: [...related, "ui_list-load-9999"],
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["a non-object", "binding"],
+    ["another kind", { kind: "stage" }],
+    ["an unknown surface", { surface: "files-window" }],
+    ["an unknown outcome", { outcome: "restored" }],
+    ["an unknown reference shape", { referenceShape: "chat-123" }],
+    ["a non-boolean heuristic flag", { heuristicFlagged: "false" }],
+    ["a missing heuristic flag", { heuristicFlagged: undefined }],
+    ["a missing window reference", { windowRef: undefined }],
+    ["an empty window reference", { windowRef: "" }],
+    ["an oversized window reference", { windowRef: "w".repeat(129) }],
+    ["a window reference outside the safe alphabet", { windowRef: "chat 1" }],
+    ["a window reference joining two window ids", { windowRef: "files-1~chat-1" }],
+    ["a non-string window reference", { windowRef: 7 }],
+    ["a browser digest instead of the reference", { windowDigest: "a".repeat(64) }],
+    ["an oversized correlation id", { correlationId: "c".repeat(129) }],
+    ["a related id that is not a string", { relatedCorrelationIds: [7] }],
+    ["related ids that are not a list", { relatedCorrelationIds: "ui_list-load-0001" }],
+    ["an undeclared field", { chatId: "chat-123" }],
+  ])("refuses %s", (_label, patch) => {
+    const value = typeof patch === "string" ? patch : { ...bindingRequest(), ...patch };
+    expect(isClientBindingIngestRequest(value)).toBe(false);
+  });
+});
+
+// #3557 review: the browser and the server budget their reports by one rule. Only a missing target
+// is a binding failure (an offer and a person's decisions are routine), and only a recovery is a
+// routine session repair.
+describe("client report budgets", () => {
+  it("classifies exactly the missing target as a binding failure", () => {
+    expect(
+      CLIENT_BINDING_OUTCOMES.filter((outcome) => CLIENT_BINDING_FAILURE_OUTCOMES.has(outcome)),
+    ).toEqual(["target-missing"]);
+  });
+
+  it("classifies exactly the recoveries as routine session repairs", () => {
+    expect(
+      CLIENT_SESSION_REPAIR_OUTCOMES.filter((outcome) =>
+        CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES.has(outcome),
+      ),
+    ).toEqual(["replayed", "stream-repaired", "repair-acknowledged"]);
+  });
+});
+
+// #3557 review: the stage lifecycle carries one client-minted id across both phases.
+describe("isClientStageIngestRequest correlation", () => {
+  it("accepts a well-formed correlation id on either phase and refuses a malformed one", () => {
+    const started = { kind: "stage", stage: "chat bind", phase: "started", ordinal: 1 };
+    const settled = { ...started, phase: "settled", durationMs: 5 };
+    expect(isClientStageIngestRequest({ ...started, correlationId: "ui_stage-0001" })).toBe(true);
+    expect(isClientStageIngestRequest({ ...settled, correlationId: "ui_stage-0001" })).toBe(true);
+    expect(isClientStageIngestRequest({ ...started, correlationId: "c".repeat(129) })).toBe(false);
+    expect(isClientStageIngestRequest({ ...settled, correlationId: 42 })).toBe(false);
+  });
+});
+
+// #3557 review: the stale-session repair links the denied request, the repair and the replay.
+describe("isClientSessionRepairIngestRequest", () => {
+  function repairRequest(): Record<string, unknown> {
+    return {
+      kind: "session-repair",
+      outcome: "replayed",
+      correlationId: "ui_denied-0001",
+      repairCorrelationId: "ui_repair-0001",
+    };
+  }
+
+  it("accepts every closed outcome with the repair's correlation id", () => {
+    for (const outcome of CLIENT_SESSION_REPAIR_OUTCOMES) {
+      const streamOnly = outcome === "stream-repaired" || outcome === "repair-acknowledged";
+      const stream = streamOnly ? { stream: "run-events" } : {};
+      expect(isClientSessionRepairIngestRequest({ ...repairRequest(), outcome, ...stream })).toBe(
+        true,
+      );
+    }
+    expect(
+      isClientSessionRepairIngestRequest({
+        ...repairRequest(),
+        outcome: "replay-failed",
+        errorKind: "unavailable",
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["a non-object", "session-repair"],
+    ["another kind", { kind: "binding" }],
+    ["an unknown outcome", { outcome: "healed" }],
+    ["a missing denied-request id", { correlationId: undefined }],
+    ["a malformed repair id", { repairCorrelationId: "" }],
+    ["an error kind outside the closed vocabulary", { errorKind: "gateway-exploded" }],
+    ["an undeclared field", { path: "/api/files" }],
+    ["an unknown stream", { stream: "chat-tokens" }],
+    ["a stream repair that names no stream", { outcome: "stream-repaired" }],
+    ["an acknowledged repair that names no stream", { outcome: "repair-acknowledged" }],
+    ["a stream on a replayed request", { stream: "run-events" }],
+    ["a stream on a failed replay", { outcome: "replay-failed", stream: "run-events" }],
+  ])("refuses %s", (_label, patch) => {
+    const value = typeof patch === "string" ? patch : { ...repairRequest(), ...patch };
+    expect(isClientSessionRepairIngestRequest(value)).toBe(false);
+  });
+
+  // #3557 review: every outcome follows a repair attempt whose id the page minted before sending it,
+  // so a report that cannot name that attempt is refused instead of recorded as complete.
+  it("refuses every outcome without the repair request's id", () => {
+    for (const outcome of CLIENT_SESSION_REPAIR_OUTCOMES) {
+      const streamOnly = outcome === "stream-repaired" || outcome === "repair-acknowledged";
+      const stream = streamOnly ? { stream: "run-events" } : {};
+      const report: Record<string, unknown> = { ...repairRequest(), outcome, ...stream };
+      expect(
+        isClientSessionRepairIngestRequest({ ...report, repairCorrelationId: undefined }),
+      ).toBe(false);
+      const { repairCorrelationId: _omitted, ...withoutRepairId } = report;
+      expect(isClientSessionRepairIngestRequest(withoutRepairId)).toBe(false);
+    }
+  });
+
+  // #3557 review: a stream repair reports under its failure streak, naming its stream.
+  it("accepts every stream on a stream repair and on a failed repair", () => {
+    for (const stream of CLIENT_SESSION_REPAIR_STREAMS) {
+      for (const outcome of ["stream-repaired", "repair-failed"]) {
+        expect(isClientSessionRepairIngestRequest({ ...repairRequest(), outcome, stream })).toBe(
+          true,
+        );
+      }
+    }
   });
 });
 

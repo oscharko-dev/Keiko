@@ -896,6 +896,199 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "{verified}, updated audio and Digital Twin settings, and verified Figma access token. Reloading Keiko…{skipped}",
   "gatewaySetup.voice.success.verifiedAudio":
     "{verified} and updated audio and Digital Twin settings. Reloading Keiko…{skipped}",
+  "figmaSnapshotWindow.railLabel": "Figma Snapshot",
+  "figmaSnapshotWindow.common.cancel": "Cancel",
+  "figmaSnapshotWindow.common.save": "Save",
+  "figmaSnapshotWindow.common.delete": "Delete",
+  "figmaSnapshotWindow.build.cancelNote":
+    "Cancelling stops this window from waiting — the server-side build continues on demand.",
+  "figmaSnapshotWindow.build.detachedNotice":
+    "This window is no longer waiting. The server may still be building the snapshot in the background. You can close this window safely.",
+  "figmaSnapshotWindow.build.reconnect": "Reconnect build",
+  "figmaSnapshotWindow.codegen.generateButton": "Generate code",
+  "figmaSnapshotWindow.codegen.generating": "Generating code…",
+  "figmaSnapshotWindow.codegen.proposalNote": "— proposal only, never auto-applied.",
+  "figmaSnapshotWindow.codegen.reviewableFilePlural": "{count} reviewable files",
+  "figmaSnapshotWindow.codegen.reviewableFileSingular": "{count} reviewable file",
+  "figmaSnapshotWindow.codegen.screenBreakdown":
+    "{rendered} rendered, {structural} structural, {unparseable} omitted as unparseable",
+  "figmaSnapshotWindow.count.screenPlural": "{count} screens",
+  "figmaSnapshotWindow.count.screenSingular": "{count} screen",
+  "figmaSnapshotWindow.dashboard.currentBadge": "Current",
+  "figmaSnapshotWindow.dashboard.deleteConfirmQuestion": "Delete this snapshot?",
+  "figmaSnapshotWindow.dashboard.deleteSnapshotAria": "Delete snapshot {title}",
+  "figmaSnapshotWindow.dashboard.eyebrow": "Snapshot dashboard",
+  "figmaSnapshotWindow.dashboard.hideMetadataAria": "Hide metadata for snapshot {title}",
+  "figmaSnapshotWindow.dashboard.load": "Load",
+  "figmaSnapshotWindow.dashboard.loadSnapshotAria": "Load snapshot {title}",
+  "figmaSnapshotWindow.dashboard.loadingSnapshots": "Loading snapshots…",
+  "figmaSnapshotWindow.dashboard.metadataTitle": "Metadata",
+  "figmaSnapshotWindow.dashboard.noBoardSelectedDetail":
+    "Paste a valid Figma board link or load a stored snapshot to see this board's history.",
+  "figmaSnapshotWindow.dashboard.noBoardSelectedTitle": "No board selected yet",
+  "figmaSnapshotWindow.dashboard.noBoardSnapshotsDetail":
+    "Take the first snapshot for this board to make it available here.",
+  "figmaSnapshotWindow.dashboard.noBoardSnapshotsTitle": "No snapshots stored for this board",
+  "figmaSnapshotWindow.dashboard.noRecentSnapshotsDetail":
+    "Stored Figma snapshots will appear here once the first board capture completes.",
+  "figmaSnapshotWindow.dashboard.noRecentSnapshotsTitle": "No snapshots stored yet",
+  "figmaSnapshotWindow.dashboard.noSkipped": ", no skipped renders",
+  "figmaSnapshotWindow.dashboard.refresh": "Refresh",
+  "figmaSnapshotWindow.dashboard.renameInputAria": "Snapshot name for {title}",
+  "figmaSnapshotWindow.dashboard.renameInputPlaceholder": "Snapshot name",
+  "figmaSnapshotWindow.dashboard.renameSnapshotAria": "Rename snapshot {title}",
+  "figmaSnapshotWindow.dashboard.renameTitle": "Rename",
+  "figmaSnapshotWindow.dashboard.showMetadataAria": "Show metadata for snapshot {title}",
+  "figmaSnapshotWindow.dashboard.skippedCount": ", {count} skipped",
+  "figmaSnapshotWindow.dashboard.tabBoard": "This board",
+  "figmaSnapshotWindow.dashboard.tabRecent": "Recent",
+  "figmaSnapshotWindow.dashboard.tabsAriaLabel": "Snapshot views",
+  "figmaSnapshotWindow.dashboard.title": "Stored snapshots",
+  "figmaSnapshotWindow.empty.note":
+    "The snapshot stores the captured screens and their structure as immutable evidence — connect this window to Quality Intelligence to ground generated tests in the design. Requires a Figma access token configured on the server.",
+  "figmaSnapshotWindow.empty.step1": "In Figma, select the frame or section you want to capture.",
+  "figmaSnapshotWindow.empty.step2":
+    "Copy its link (Copy link to selection) — it contains the node-id.",
+  "figmaSnapshotWindow.empty.step3":
+    "Paste it above, acknowledge the read-only scope, then take the snapshot.",
+  "figmaSnapshotWindow.empty.title": "Capture screens from a Figma board",
+  "figmaSnapshotWindow.error.buildTimeoutDetail":
+    "This window stopped waiting for the snapshot result. The server may still finish the build in the background.",
+  "figmaSnapshotWindow.error.buildTimeoutRemediation":
+    "Reconnect to the same board to keep waiting, or close this window and return later.",
+  "figmaSnapshotWindow.error.buildTimeoutTitle": "Figma snapshot is still running",
+  "figmaSnapshotWindow.error.consentCheckboxRequired":
+    "Tick the read-only acknowledgement checkbox below, then snapshot again.",
+  "figmaSnapshotWindow.error.consentRequiredSuffix":
+    "Tick the acknowledgement checkbox below, then snapshot again.",
+  "figmaSnapshotWindow.error.egressBlocked.caRemediation":
+    "A TLS certificate verification failure blocked the request. Check the CA bundle configuration, then retry. No snapshot was stored.",
+  "figmaSnapshotWindow.error.egressBlocked.networkRemediation":
+    "The outbound network request to Figma failed. Check DNS resolution and network connectivity, then retry. No snapshot was stored.",
+  "figmaSnapshotWindow.error.egressBlocked.proxyRemediation":
+    "Check the configured proxy, NO_PROXY rules, and CA bundle, then retry. No snapshot was stored.",
+  "figmaSnapshotWindow.error.egressBlocked.title": "Figma snapshot blocked by outbound egress",
+  "figmaSnapshotWindow.error.generic.title": "Figma snapshot failed",
+  "figmaSnapshotWindow.error.generic.unknownDetail": "An unexpected error occurred.",
+  "figmaSnapshotWindow.error.openTokenSettings": "Open Figma access token settings",
+  "figmaSnapshotWindow.error.runIdClearedSuffix": "The stored run ID has been cleared.",
+  "figmaSnapshotWindow.error.tokenAttention.remediation":
+    "Open the Figma access token settings to add or rotate the read-only token, then retry. No snapshot was stored.",
+  "figmaSnapshotWindow.error.tokenAttention.title": "Figma access token needs attention",
+  "figmaSnapshotWindow.error.upstreamUnavailable.remediation":
+    "Retry later — no snapshot was stored.",
+  "figmaSnapshotWindow.error.upstreamUnavailable.title": "Figma is currently unavailable",
+  "figmaSnapshotWindow.fact.file": "File",
+  "figmaSnapshotWindow.fact.integrity": "Integrity",
+  "figmaSnapshotWindow.fact.nameUpdated": "Name updated",
+  "figmaSnapshotWindow.fact.node": "Node",
+  "figmaSnapshotWindow.fact.run": "Run",
+  "figmaSnapshotWindow.fact.structural": "Structural",
+  "figmaSnapshotWindow.fact.version": "Version",
+  "figmaSnapshotWindow.form.boardLinkLabel": "Board link",
+  "figmaSnapshotWindow.form.boardLinkPlaceholder": "https://www.figma.com/design/…?node-id=…",
+  "figmaSnapshotWindow.form.building": "Building…",
+  "figmaSnapshotWindow.form.consentPrefix":
+    "I acknowledge the configured Figma PAT is read-only and least-privilege (",
+  "figmaSnapshotWindow.form.consentRequired": "Required before the first snapshot of a board.",
+  "figmaSnapshotWindow.form.consentSuffix": ").",
+  "figmaSnapshotWindow.form.hint":
+    "Paste a Figma board link with a node-id param (section or frame anchor). The access token is resolved server-side — it never reaches this page.",
+  "figmaSnapshotWindow.form.snapshotButton": "Snapshot",
+  "figmaSnapshotWindow.gallery.capturedScreenPlural": "{count} captured and structural screens",
+  "figmaSnapshotWindow.gallery.capturedScreenSingular": "{count} captured and structural screen",
+  "figmaSnapshotWindow.gallery.noScreensCaptured":
+    "No screens were captured from this board section.",
+  "figmaSnapshotWindow.gallery.selectedScreenPlural": "{count} selected screens",
+  "figmaSnapshotWindow.gallery.selectedScreenSingular": "{count} selected screen",
+  "figmaSnapshotWindow.gallery.showMore": "Show more screens",
+  "figmaSnapshotWindow.jsonInspector.ariaLabel": "Scoped JSON for {name}",
+  "figmaSnapshotWindow.jsonInspector.clipboardUnavailable": "Clipboard unavailable",
+  "figmaSnapshotWindow.jsonInspector.copied": "Copied",
+  "figmaSnapshotWindow.jsonInspector.copyFailed": "Copy failed",
+  "figmaSnapshotWindow.jsonInspector.copyJson": "Copy JSON",
+  "figmaSnapshotWindow.jsonInspector.createJsonSourceAria":
+    "Create a standalone JSON source for {name}",
+  "figmaSnapshotWindow.jsonInspector.dragJsonTitle": "Drag JSON for {name} to the workspace",
+  "figmaSnapshotWindow.jsonInspector.kicker": "Stored Screen-IR JSON",
+  "figmaSnapshotWindow.jsonInspector.relatedLinkPlural": "{count} related links",
+  "figmaSnapshotWindow.jsonInspector.relatedLinkSingular": "{count} related link",
+  "figmaSnapshotWindow.jsonInspector.screenJsonAriaLabel": "Screen-IR JSON for {screenId}",
+  "figmaSnapshotWindow.result.captured": "Captured {date}",
+  "figmaSnapshotWindow.result.resnapshotAria": "Re-snapshot this board",
+  "figmaSnapshotWindow.result.resnapshotButton": "Re-snapshot",
+  "figmaSnapshotWindow.result.scopeNote": "QI source scope: {scope}",
+  "figmaSnapshotWindow.result.skippedPlural":
+    "{count} screens could not be rendered and were skipped.",
+  "figmaSnapshotWindow.result.skippedSingular":
+    "{count} screen could not be rendered and was skipped.",
+  "figmaSnapshotWindow.revoke.confirmQuestion": "Really revoke the stored token?",
+  "figmaSnapshotWindow.revoke.confirmYes": "Yes, revoke",
+  "figmaSnapshotWindow.revoke.trigger": "Revoke stored token",
+  "figmaSnapshotWindow.scopes.readScopeDescription":
+    "— read design file structure, node metadata, and rendered images",
+  "figmaSnapshotWindow.scopes.summary": "Required Figma PAT scopes",
+  "figmaSnapshotWindow.scopes.tokenSourcePrefix":
+    "The token is read server-side from the vault, Keiko config, or",
+  "figmaSnapshotWindow.scopes.tokenSourceSuffix":
+    "environment variable. This window never holds or transmits the token.",
+  "figmaSnapshotWindow.screenCard.addToWorkspace": "Add to workspace",
+  "figmaSnapshotWindow.screenCard.addToWorkspaceAria":
+    "Add screen {name} to the workspace as a Quality Intelligence source",
+  "figmaSnapshotWindow.screenCard.alreadyActiveSource":
+    "{name} is already the active scoped source",
+  "figmaSnapshotWindow.screenCard.ariaLabel": "Screen {index}: {name}",
+  "figmaSnapshotWindow.screenCard.capturedPreviewAlt": "Captured preview for {name}",
+  "figmaSnapshotWindow.screenCard.irBadge": "IR",
+  "figmaSnapshotWindow.screenCard.previewAddHint":
+    "Drag screen {name} to the workspace, or click to add it as a Quality Intelligence source",
+  "figmaSnapshotWindow.screenCard.previewAlreadyActive":
+    "{name} preview is already the active scoped source",
+  "figmaSnapshotWindow.screenCard.sourceActive": "Source active",
+  "figmaSnapshotWindow.screenCard.structuralDataOnlyAlt": "Structural data only for {name}",
+  "figmaSnapshotWindow.screenCard.structuralIrOnly": "Structural IR only",
+  "figmaSnapshotWindow.screenCard.structuralIrOnlyWithReason": "Structural IR only ({reason})",
+  "figmaSnapshotWindow.snapshot.defaultName": "Snapshot {date}",
+  "figmaSnapshotWindow.status.buildingProgress": "Building snapshot — fetching screens from Figma…",
+  "figmaSnapshotWindow.status.codeGeneratedPlural":
+    "Code generated — {count} files ready for review.",
+  "figmaSnapshotWindow.status.codeGeneratedSingular":
+    "Code generated — {count} file ready for review.",
+  "figmaSnapshotWindow.status.elapsedSuffix": "{elapsed} elapsed.",
+  "figmaSnapshotWindow.status.largeBoardsNote": "Large boards can take several minutes.",
+  "figmaSnapshotWindow.status.loadingStoredSnapshot": "Loading stored snapshot…",
+  "figmaSnapshotWindow.status.snapshotCompleteAnnouncement": "Snapshot complete — {reductionHint}.",
+  "figmaSnapshotWindow.storedSnapshot.available": "A stored snapshot is available.",
+  "figmaSnapshotWindow.storedSnapshot.loadButton": "Load snapshot",
+  "figmaSnapshotWindow.storedSnapshot.loading": "Loading…",
+  "figmaSnapshotWindow.validation.invalidLink":
+    "This doesn't look like a Figma board link. Use a figma.com design/file link that includes a node-id parameter.",
+  "figmaSnapshotWindow.validation.missingNodeId":
+    "Add a node-id by selecting a frame or section in Figma and copying its link (Copy link to selection).",
+  "figmaSnapshotWindow.version.latest": "Latest",
+  "figmaSnapshotWindow.viewSource.ariaLabel": "Figma view source: {name}",
+  "figmaSnapshotWindow.viewSource.createImageSourceAria":
+    "Create a standalone image source for {name}",
+  "figmaSnapshotWindow.viewSource.dragImageTitle": "Drag image for {name} to the workspace",
+  "figmaSnapshotWindow.viewSource.factCaptured": "Captured",
+  "figmaSnapshotWindow.viewSource.factPreview": "Preview",
+  "figmaSnapshotWindow.viewSource.factScreen": "Screen",
+  "figmaSnapshotWindow.viewSource.factSnapshot": "Snapshot",
+  "figmaSnapshotWindow.viewSource.kicker": "QI view source",
+  "figmaSnapshotWindow.viewSource.structuralIrLabel": "Structural IR",
+  "figmaSnapshotWindow.viewSource.structuralIrWithReason": "Structural IR ({reason})",
+  "figmaSnapshotWindow.viewSourceMode.ariaLabel": "Figma view source {name}",
+  "figmaSnapshotWindow.viewSourceMode.badge": "QI source",
+  "figmaSnapshotWindow.viewSourceMode.eyebrow": "Figma view",
+  "figmaSnapshotWindow.viewSourceMode.inspectJson": "Inspect JSON",
+  "figmaSnapshotWindow.viewSourceMode.loadViewButton": "Load view",
+  "figmaSnapshotWindow.viewSourceMode.loadedAnnouncement": "Figma view loaded — {name}.",
+  "figmaSnapshotWindow.viewSourceMode.loadingJson": "Loading JSON…",
+  "figmaSnapshotWindow.viewSourceMode.loadingPreview": "Loading view preview…",
+  "figmaSnapshotWindow.viewSourceMode.loadingSelectedView": "Loading the selected view…",
+  "figmaSnapshotWindow.viewSourceMode.notLoaded": "Selected view preview not loaded.",
+  "figmaSnapshotWindow.viewSourceMode.screenNotPresent":
+    "The selected screen is not present in this stored snapshot.",
 } as const;
 
 export type OptionalWidgetMessageKey = keyof typeof OPTIONAL_WIDGET_EN_MESSAGES;

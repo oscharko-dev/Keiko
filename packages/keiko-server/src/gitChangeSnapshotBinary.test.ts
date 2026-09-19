@@ -129,6 +129,55 @@ describe("resolveSnapshotBinaryFiles: hostile — binary masquerading as text", 
   });
 });
 
+// #3557 P1: a bounded `cat-file blob` read (BINARY_PREFIX_BYTES, allowTruncation) can ALSO fail on
+// its own after streaming past the cap — a corrupt or unreadable object closing at a real nonzero
+// exit. That must never be consumed as a deliberate, complete prefix just because `truncated` is
+// also set; it must fail closed at the reader, the layer that turns a `GitProcessResult` into a
+// `GitSnapshotReadError`.
+describe("resolveSnapshotBinaryFiles: a bounded read that also failed on its own", () => {
+  it("fails closed instead of reading a failed cat-file's partial output as a deliberate prefix", async () => {
+    const runner: GitProcessRunner = (args) => {
+      if (args[2] === OLD_OBJECT) return Promise.resolve(ok("plain text\n"));
+      if (args[2] === NEW_OBJECT) {
+        return Promise.resolve({
+          exitCode: 128,
+          signal: null,
+          stdout: "some bytes streamed before the failure",
+          stderr: "fatal: unable to read blob object",
+          truncated: true,
+        });
+      }
+      throw new Error(`unexpected invocation: ${args.join(" ")}`);
+    };
+    await expect(
+      resolveSnapshotBinaryFiles(reader(runner), [meta()], 10, REVISIONS),
+    ).rejects.toThrow("Git snapshot read failed");
+  });
+
+  // The two legitimate shapes stay unaffected: an ordinary large-file sniff either closes via the
+  // runner's own SIGTERM/SIGKILL cap kill (`exitCode: null`) or, on the rarer race, exits 0 right
+  // as the cap trips. Both are still a deliberate, complete-enough prefix.
+  it.each([
+    { label: "the ordinary cap kill", overrides: { exitCode: null, signal: "SIGTERM" as const } },
+    { label: "the rarer exit-0 race", overrides: { exitCode: 0, signal: null } },
+  ])("still resolves the bounded prefix for $label", async ({ overrides }) => {
+    const runner: GitProcessRunner = (args) => {
+      if (args[2] === OLD_OBJECT) return Promise.resolve(ok("plain text\n"));
+      if (args[2] === NEW_OBJECT) {
+        return Promise.resolve({
+          ...overrides,
+          stdout: "binary\0payload",
+          stderr: "",
+          truncated: true,
+        });
+      }
+      throw new Error(`unexpected invocation: ${args.join(" ")}`);
+    };
+    const [result] = await resolveSnapshotBinaryFiles(reader(runner), [meta()], 10, REVISIONS);
+    expect(result?.binary).toBe(true);
+  });
+});
+
 describe("resolveSnapshotBinaryFiles: malformed statistics-repair lane", () => {
   it("fails closed when the repair patch has no section for a reclassified entry", async () => {
     const runner: GitProcessRunner = (args) => {

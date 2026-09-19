@@ -42,7 +42,7 @@ import type {
   ChatTurnAdmission,
   ChatTurnCompletion,
   ChatTurnInspection,
-  CreateChatOptions,
+  StoreCreateChatOptions,
   NewChatMessage,
   Project,
   StoredPdfCitationPreviewCitation,
@@ -57,6 +57,7 @@ import type {
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./types.js";
+import { newReferenceId } from "../reference-id.js";
 import { runMigrations, SCHEMA_VERSION } from "./schema.js";
 import {
   deleteProject as sqlDeleteProject,
@@ -171,13 +172,24 @@ export function isProjectAvailable(project: { readonly path: string }): boolean 
 interface ResolvedFactoryOptions {
   readonly now: () => number;
   readonly newId: () => string;
+  // A chat id is persisted by the browser as a window reference (#3557 review).
+  readonly newChatId: (correlationId: string | undefined) => string;
   readonly redactString: (s: string) => string;
+}
+
+// An injected id source (tests) keeps its ids; otherwise a chat id is a reference id.
+function chatIdFactory(
+  injected: (() => string) | undefined,
+): (correlationId: string | undefined) => string {
+  if (injected !== undefined) return (): string => injected();
+  return (correlationId): string => newReferenceId({ kind: "chat", correlationId });
 }
 
 function resolveOptions(opts: UiStoreFactoryOptions | undefined): ResolvedFactoryOptions {
   return {
     now: opts?.now ?? ((): number => Date.now()),
     newId: opts?.newId ?? randomUUID,
+    newChatId: chatIdFactory(opts?.newId),
     redactString: opts?.redactString ?? DEFAULT_REDACT,
   };
 }
@@ -194,14 +206,14 @@ function createChatRecord(
   projectPath: string,
   title: string,
   selectedModel: string,
-  opts: CreateChatOptions | undefined,
+  opts: StoreCreateChatOptions | undefined,
 ): Chat {
   const project = sqlGetProject(db, projectPath);
   if (project !== undefined && !isProjectAvailable(project)) {
     throw invalidRequest("Project path is unavailable.");
   }
   return sqlInsertChat(db, {
-    id: options.newId(),
+    id: options.newChatId(opts?.correlationId),
     projectPath,
     title,
     selectedModel,
@@ -679,7 +691,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       projectPath: string,
       title: string,
       selectedModel: string,
-      opts?: CreateChatOptions,
+      opts?: StoreCreateChatOptions,
     ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
     updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
       sqlUpdateChat(db, id, patch, options.now(), updateOptions),

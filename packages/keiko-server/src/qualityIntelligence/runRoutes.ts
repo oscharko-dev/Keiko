@@ -8,7 +8,6 @@
 // All stream payloads carry only ids / counts / safe enums — never prompts, model output, source
 // content, or credentials. A client disconnect aborts the run via the registry.
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isAbsolute } from "node:path";
 import type {
@@ -52,6 +51,7 @@ import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { QiRunConcurrencyLimitError, qiRunRegistry } from "./runRegistry.js";
 import { buildQiModelRoutingForRun, QiModelPolicyError } from "./modelPolicyRoutes.js";
+import { newReferenceId } from "../reference-id.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 export const DEFAULT_MAX_ACTIVE_QI_RUNS = 2;
@@ -652,7 +652,12 @@ export async function handleStartQiRun(
   const parsed = await parseStartBody(ctx.req);
   if (!parsed.ok) return parsed.result;
 
-  const runId = `qi-run-${randomUUID()}`;
+  // A QI run window persists it as a reference (#3557 review).
+  const runId = newReferenceId({
+    kind: "qi-run",
+    prefix: "qi-run-",
+    correlationId: ctx.correlationId,
+  });
   const registeredAt = new Date().toISOString();
   const maxActiveRuns = resolveMaxActiveQiRuns(deps.env);
   let controller: AbortController;

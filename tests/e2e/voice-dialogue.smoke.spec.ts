@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Chat, ChatMessage, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { evidenceScreenshotPath } from "./support/evidence.js";
+import { openChatComposer } from "./support/chat-composer.js";
 import { fakeDictationMediaInit } from "./support/dictation-media.js";
 
 const MEMORY_CAPTURE_TRANSCRIPT =
@@ -349,13 +350,6 @@ function fakeRealtimeInit({
       ${REALTIME_BROWSER_FAKE_SCRIPT}
     })();
   `;
-}
-
-async function openComposer(page: Page): Promise<void> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Chat History", exact: true }).click();
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 }
 
 async function stubCapability(page: Page, body: unknown): Promise<void> {
@@ -842,7 +836,7 @@ async function releaseCanonicalTts(page: Page): Promise<void> {
 
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -871,7 +865,7 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   const chatSends = captureVoiceChatSends(page);
   const synthesizedTexts = await captureSynthesizedTexts(page);
-  await openComposer(page);
+  await openChatComposer(page);
 
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
@@ -946,7 +940,7 @@ async function voiceMemoryCaptureFlow(page: Page, request: APIRequestContext): P
       body: JSON.stringify({ audio: "AA==", mimeType: "audio/mpeg" }),
     }),
   );
-  await openComposer(page);
+  await openChatComposer(page);
   const chatWindow = page.locator('section.window[data-top="true"]');
   const memoryControl = chatWindow.locator(".chat-memory-activation-toggle");
   await expect(memoryControl).toHaveAccessibleName("Enable MemoriaViva for this chat");
@@ -1146,7 +1140,7 @@ test("voice dialogue @smoke — Whisper-style STT and TTS complete a browser dia
   );
   const sends = captureVoiceChatSends(page);
   const speeches = await captureSynthesizedTexts(page);
-  await openComposer(page);
+  await openChatComposer(page);
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
@@ -1192,7 +1186,7 @@ test("voice dialogue @smoke — batch interrupt stops playback and retains the n
   );
   const sends = captureVoiceChatSends(page);
   const speeches = await captureSynthesizedTexts(page);
-  await openComposer(page);
+  await openChatComposer(page);
   const mode = page.getByRole("switch", { name: "Voice dialogue mode" });
   const finish = page.getByRole("button", { name: "Finish speaking" });
   const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
@@ -1256,7 +1250,7 @@ test("voice dialogue @smoke — long silent playback keeps interruption capture 
     });
   });
   await captureSynthesizedTexts(page);
-  await openComposer(page);
+  await openChatComposer(page);
   const mode = page.getByRole("switch", { name: "Voice dialogue mode" });
   await mode.click();
   await page.getByRole("button", { name: "Finish speaking" }).click();
@@ -1298,7 +1292,7 @@ async function startFailedBatchTurn(page: Page): Promise<void> {
   await page.route("**/api/desktop/chat", (route) =>
     route.request().method() === "POST" ? route.fulfill(failedChat) : route.continue(),
   );
-  await openComposer(page);
+  await openChatComposer(page);
   await page.getByRole("switch", { name: "Voice dialogue mode" }).click();
   await page.getByRole("button", { name: "Finish speaking" }).click();
   await expect(
@@ -1346,7 +1340,7 @@ test("voice dialogue @smoke — Ogg from an Azure-style stream falls back to bro
     });
   });
   const speeches = await captureSynthesizedTexts(page);
-  await openComposer(page);
+  await openChatComposer(page);
   await page.getByRole("switch", { name: "Voice dialogue mode" }).click();
   await page.getByRole("button", { name: "Finish speaking" }).click();
   await expect.poll(() => speeches.length).toBe(1);
@@ -1371,7 +1365,7 @@ test("voice dialogue @smoke — turn-based identity memory stays in the private 
   );
   const sends = captureVoiceChatSends(page);
   await captureSynthesizedTexts(page);
-  await openComposer(page);
+  await openChatComposer(page);
   const chatWindow = page.locator('section.window[data-top="true"]');
   await chatWindow.getByRole("button", { name: "Enable MemoriaViva for this chat" }).click();
   await expect(
@@ -1404,7 +1398,7 @@ test("voice dialogue @smoke — Composer and Voice preserve persisted grounding 
 async function micLifecycleFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit({ instrumentMic: true }));
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
@@ -1441,7 +1435,7 @@ test("voice dialogue @smoke — switch starts WebRTC microphone and leave releas
 // browser smoke now covers every configured capability profile (AC1).
 async function unavailableProfileFlow(page: Page, capability: unknown): Promise<void> {
   await stubCapability(page, capability);
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -1457,7 +1451,7 @@ async function unavailableProfileFlow(page: Page, capability: unknown): Promise<
 async function activeComposerControlsFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit());
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await dialogSwitch.click();
@@ -1505,7 +1499,7 @@ test("voice dialogue @smoke — full-realtime without WebRTC uses turn-based cap
 }) => {
   await page.addInitScript(BATCH_AUDIO_INIT);
   await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
@@ -1535,7 +1529,7 @@ async function reducedMotionComposerFlow(page: Page): Promise<void> {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(fakeRealtimeInit());
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   const composer = page.locator(".cmp-box");
   const normalLayer = composer.locator('[data-composer-layer="normal"]');
@@ -1582,7 +1576,7 @@ async function enterDialogue(page: Page): Promise<void> {
 async function personaStorageFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit());
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   await page.evaluate(() => {
     window.localStorage.setItem("keiko.voice.dialog.persona", "male");
   });

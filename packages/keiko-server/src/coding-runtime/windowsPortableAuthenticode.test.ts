@@ -39,6 +39,14 @@ const HAS_POWERSHELL =
 // Loading the producer SignedCms verifier can block in Apple's Security framework. The runtime
 // DER-only probe remains active on macOS; full producer parity runs on Linux and Windows.
 const HAS_PARITY_POWERSHELL = HAS_POWERSHELL && process.platform !== "darwin";
+// Each probe runs pwsh through spawnSync, which blocks this worker until pwsh exits, and the parity
+// probe also compiles the producer source with Add-Type. A test must therefore allow its probe's own
+// budget: under the 15 s suite default, a parity probe that finished in 30.7 s on a loaded CI runner
+// (well inside its budget) still failed as a timeout. The margin lets a probe that overruns its
+// budget fail with its own error, not the runner's.
+const RUNTIME_DER_PROBE_TIMEOUT_MS = 30_000;
+const PARITY_PROBE_TIMEOUT_MS = 60_000;
+const PROBE_TEST_MARGIN_MS = 10_000;
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const PRODUCER_RFC3161_SOURCE = readFileSync(
   resolve(REPOSITORY_ROOT, "scripts/windows-portable-rfc3161.cs"),
@@ -99,7 +107,7 @@ function runtimeDerEvidence(): RuntimeDerEvidence {
   return powershellJsonProbe(
     [windowsAuthenticodeVerifierAssemblyInput()],
     script,
-    30_000,
+    RUNTIME_DER_PROBE_TIMEOUT_MS,
   ) as RuntimeDerEvidence;
 }
 
@@ -119,7 +127,7 @@ function rfc3161ParityEvidence(): Rfc3161ParityEvidence {
   return powershellJsonProbe(
     [windowsAuthenticodeVerifierAssemblyInput(), PRODUCER_RFC3161_SOURCE],
     script,
-    60_000,
+    PARITY_PROBE_TIMEOUT_MS,
   ) as Rfc3161ParityEvidence;
 }
 
@@ -208,6 +216,7 @@ describe("Windows portable Authenticode identity", (): void => {
         trailingZero: false,
       });
     },
+    RUNTIME_DER_PROBE_TIMEOUT_MS + PROBE_TEST_MARGIN_MS,
   );
 
   it.skipIf(!HAS_PARITY_POWERSHELL)(
@@ -222,6 +231,7 @@ describe("Windows portable Authenticode identity", (): void => {
       expect(evidence.oid).toBe("2.999.3");
       expect(evidence.producerOid).toBe(evidence.oid);
     },
+    PARITY_PROBE_TIMEOUT_MS + PROBE_TEST_MARGIN_MS,
   );
 
   it("rejects private-root substitution at the runtime publisher boundary", (): void => {

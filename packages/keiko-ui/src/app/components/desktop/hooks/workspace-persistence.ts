@@ -4,6 +4,7 @@ import {
   GITHUB_ISSUE_NUMBER_MAX,
   isGitHubOwnerAndRepo,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CLIENT_BINDING_WINDOW_REF_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
 // parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
@@ -22,7 +23,21 @@ import {
 
 type JsonScalar = string | number | boolean;
 
-const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
+export const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
+// A chat window's one-way fingerprint of a chat id the heuristic redacts (#3557 review): the window
+// finds its chat again by comparing it with the chats the server lists, and nothing expands it back
+// into the id (widgets/chatReferenceFingerprint.ts).
+export const CHAT_ID_FINGERPRINT_CFG_KEY = "chatIdFingerprint";
+// A chat window bound to the chat the person chose for a redacted snapshot, which they have not kept
+// yet (#3557 review): until they keep it, the window offers to withdraw it and choose again.
+export const CHAT_ID_CHOSEN_CFG_KEY = "chatIdChosen";
+// An RFC 9562 version-4 UUID, the shape of every server-issued id. Shape alone is never proof of
+// origin, so no value of this shape is exempted from the secret heuristic, and no stored form works
+// around it (#3557 review). The shared card-number rule reads the digits across a random UUID's
+// last hyphen as a card number for about 2 in 10,000 ids, so the server issues every reference a
+// window persists through `newReferenceId` (keiko-server), which never draws such an id.
+const SERVER_ISSUED_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_REFERENCE_VALUE_LENGTH = 256;
 const MAX_FIGMA_SELECTED_SCREEN_IDS = 16;
 const MAX_FIGMA_SCREEN_NAME_LENGTH = 256;
@@ -87,6 +102,8 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // was introduced to remove.
   chat: [
     "chatId",
+    CHAT_ID_FINGERPRINT_CFG_KEY,
+    CHAT_ID_CHOSEN_CFG_KEY,
     "memoryEnabled",
     "projectPath",
     "projectPathPrivacy",
@@ -158,12 +175,19 @@ function sanitizeSha256Digest(value: unknown): AppWindow["cfg"][string] {
   return typeof value === "string" && SHA256_HEX_DIGEST.test(value) ? value : undefined;
 }
 
+// A marker that is either set or absent: only `true` persists.
+function sanitizeSetMarker(value: unknown): AppWindow["cfg"][string] {
+  return value === true ? true : undefined;
+}
+
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
   "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,
   "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
   "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
   "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
+  [`chat:${CHAT_ID_FINGERPRINT_CFG_KEY}`]: sanitizeSha256Digest,
+  [`chat:${CHAT_ID_CHOSEN_CFG_KEY}`]: sanitizeSetMarker,
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -251,6 +275,44 @@ function isAllowedReferenceChar(char: string): boolean {
   return isDigit || isUpper || isLower || isPunct;
 }
 
+// Reports the SHAPE only; it grants nothing. Shape alone is never proof of origin (#3557 review).
+function isServerIssuedUuidReference(value: string): boolean {
+  return SERVER_ISSUED_UUID_PATTERN.test(value);
+}
+
+/**
+ * The closed, body-free shape of a restored reference, for evidence: whether it was persisted as
+ * the redaction marker, is a server-issued UUID, or is some other opaque value. Never the value.
+ */
+export function persistedReferenceShape(value: string): "redacted" | "uuid" | "opaque" {
+  if (value === REDACTED_WORKSPACE_CONFIG_VALUE) return "redacted";
+  return isServerIssuedUuidReference(value) ? "uuid" : "opaque";
+}
+
+/**
+ * The body-free evidence of a bound reference (#3557): its closed shape, and whether it is a
+ * server-issued UUID the shared secret heuristic reads as a card number. The server no longer
+ * issues such ids, but an older chat can still carry one, and persistence redacts it, so a flagged
+ * binding tells why a window will lose its target on reload (this evidence function is called with
+ * a chat window's chatId only). Never the value.
+ */
+export function persistedReferenceEvidence(value: string): {
+  readonly referenceShape: "redacted" | "uuid" | "opaque";
+  readonly heuristicFlagged: boolean;
+} {
+  const referenceShape = persistedReferenceShape(value);
+  return {
+    referenceShape,
+    heuristicFlagged: referenceShape === "uuid" && isSecretShapedString(value),
+  };
+}
+
+// The generic opaque-reference check for every evidence-reference field with no dedicated
+// sanitizer — review.runId, qiRun.runId, figma*.snapshotRunId, governedPullRequest's
+// descriptionProposalId, and any future one. Deliberately carries NO UUID shortcut: #3557 review
+// found that a v4-shaped value was accepted outright here regardless of field, so a user could type
+// a v4-shaped, Luhn-valid-tail lookalike straight into the editable review.runId field and have it
+// persist unredacted. Every value is judged on its content, in every field.
 function isSafeOpaqueReference(value: string): boolean {
   if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH || value.startsWith("."))
     return false;
@@ -305,6 +367,10 @@ function isSafeFigmaImageSrc(value: string): boolean {
 
 function sanitizeFigmaConfigValue(key: string, value: unknown): JsonScalar | undefined {
   if (typeof value !== "string") return undefined;
+  // snapshotRunId is app-written-only (updateCfg from a server build/list response in
+  // FigmaSnapshotWindow.tsx) and absent from every figma* WIN_TYPES.config, so it is never
+  // user-typed. The server issues it through `newReferenceId("fs-")` (figmaSnapshotRoutes.ts),
+  // which never draws a value this check rejects.
   if (key === "snapshotRunId") return isSafeOpaqueReference(value) ? value : undefined;
   if (key === "screenId") return isSafeFigmaScreenId(value) ? value : undefined;
   if (key === "imageSrc") return isSafeFigmaImageSrc(value) ? value : undefined;
@@ -700,12 +766,19 @@ function sanitizePrev(prev: unknown): AppWindow["prev"] | undefined {
   };
 }
 
+// A window id reaches DOM attributes, connection ids and the binding evidence, so a restored one is
+// held to the closed shape the app itself mints (`type` or `type-<base36>…`); a window with any
+// other id is dropped rather than repaired (#3557 review).
+function isPersistableWindowId(value: unknown): value is string {
+  return typeof value === "string" && CLIENT_BINDING_WINDOW_REF_PATTERN.test(value);
+}
+
 function sanitizeWindow(win: unknown): AppWindow | null {
   if (!isRecord(win) || !hasWindowType(win["type"])) return null;
   const type = win["type"];
   if (WIN_META[type].persistence === "transient") return null;
   if (
-    typeof win["id"] !== "string" ||
+    !isPersistableWindowId(win["id"]) ||
     !isFiniteNumber(win["x"]) ||
     !isFiniteNumber(win["y"]) ||
     !isFiniteNumber(win["w"]) ||

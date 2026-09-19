@@ -1142,8 +1142,18 @@ export async function deleteProject(path: string): Promise<void> {
   clearProjectCache();
 }
 
-export async function fetchChats(projectPath: string): Promise<ChatsResponse> {
-  return fetchJson(`/api/chats?projectPath=${encodeURIComponent(projectPath)}`);
+// `correlationId`, when given, is the id this list load carries to the server, so evidence that
+// the load decided (a restored chat window's binding outcome) can name the same request.
+export async function fetchChats(
+  projectPath: string,
+  correlationId?: string,
+): Promise<ChatsResponse> {
+  return fetchJson(
+    `/api/chats?projectPath=${encodeURIComponent(projectPath)}`,
+    undefined,
+    undefined,
+    correlationId,
+  );
 }
 
 export interface CreateChatInput {

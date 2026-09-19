@@ -4,6 +4,7 @@ import type {
   GitChangeSnapshotUnavailableReason,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
+import { isCapTerminatedTruncation } from "./gitProcessActivity.js";
 
 export class GitSnapshotReadError extends Error {
   public constructor(public readonly reason: GitChangeSnapshotFailureReason) {
@@ -37,12 +38,23 @@ export interface GitSnapshotReader {
 
 export const SNAPSHOT_METADATA_BYTES = 8 * 1024 * 1024;
 
+// The `!result.truncated` exemption below is deliberately narrower than "any truncated result":
+// `isCapTerminatedTruncation` only exempts a run whose truncation is fully explained by Keiko's
+// own byte cap (an `exitCode: null` signal kill, or the rarer exit-0 race — see its doc comment in
+// `gitProcessActivity.ts`). A `cat-file` that streamed past the bounded binary-sniff prefix
+// (`allowTruncation`/`expectedTruncation` in `gitChangeSnapshotBinary.ts`) and THEN failed on its
+// own — an unreadable or corrupt object closing at a real nonzero exit — must fail HERE, at the
+// layer that owns turning a `GitProcessResult` into a `GitSnapshotReadError`, rather than being
+// handed back to `readSnapshotGit`'s caller as if the truncated output were a deliberate, complete
+// prefix (#3557).
 function requireProcess(result: GitProcessResult): void {
   if (result.aborted === true) throw new GitSnapshotReadError("cancelled");
   if (result.timedOut === true) throw new GitSnapshotReadError("timeout");
   if (result.refusal !== undefined) throw new GitSnapshotReadError("unsafe-repository");
   if (result.exitCode === 127) throw new GitSnapshotReadError("git-missing");
-  if (result.exitCode !== 0 && !result.truncated) throw new GitSnapshotReadError("git-error");
+  if (result.exitCode !== 0 && !isCapTerminatedTruncation(result)) {
+    throw new GitSnapshotReadError("git-error");
+  }
 }
 
 export async function readSnapshotGit(
@@ -56,6 +68,7 @@ export async function readSnapshotGit(
     maxBytes,
     timeoutMs: reader.timeoutMs,
     abortSignal: reader.signal,
+    ...(allowTruncation ? { expectedTruncation: true } : {}),
   });
   requireProcess(result);
   if (result.truncated && !allowTruncation) throw new GitSnapshotReadError("metadata-truncated");

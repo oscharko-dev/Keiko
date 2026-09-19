@@ -63,8 +63,11 @@ import type { ConversationId, ProjectId, WorkspaceId } from "@oscharko-dev/keiko
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
 const CHAT_MODEL = "example-chat-model";
+// A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
+const CHAT_MODEL_DIGEST = modelIdEvidence(CHAT_MODEL).modelIdDigest;
 const ALTERNATE_CHAT_MODEL = "alternate-chat-model";
 
 let tmp: string;
@@ -1422,6 +1425,13 @@ describe("desktop chat SSE streaming handler", () => {
         op: "chat.regeneration.rejected",
         correlationId: "corr-regeneration-admission-unready",
         errorKind: "unavailable",
+        // A check ran for this model in this process and failed: the refusal says so, so it never
+        // reads like a refusal without any check (#3557, the live dev log after a BFF restart).
+        extra: expect.objectContaining({
+          reason: "readiness",
+          modelIdDigest: CHAT_MODEL_DIGEST,
+          readinessObservation: "not-ready",
+        }) as unknown,
       }),
     );
     expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
@@ -1468,14 +1478,17 @@ describe("desktop chat SSE streaming handler", () => {
     const completed = activityEvents.find(
       (event) => event.op === "gateway.readiness.automatic.completed",
     );
+    // The model appears only as its digest on readiness lines (#3557 review).
     expect(started).toMatchObject({
       correlationId: "corr-regeneration-on-demand-ready",
-      extra: { modelId: CHAT_MODEL, probeCount: 1 },
+      extra: { modelIdDigest: CHAT_MODEL_DIGEST, probeCount: 1 },
     });
     expect(completed).toMatchObject({
       correlationId: "corr-regeneration-on-demand-ready",
-      extra: { modelId: CHAT_MODEL, overallStatus: "ready", probeCount: 1 },
+      extra: { modelIdDigest: CHAT_MODEL_DIGEST, overallStatus: "ready", probeCount: 1 },
     });
+    expect(started?.extra).not.toHaveProperty("modelId");
+    expect(completed?.extra).not.toHaveProperty("modelId");
     expect(JSON.stringify(vi.mocked(fetchImpl).mock.calls)).not.toContain(
       "private regeneration question",
     );
@@ -1560,6 +1573,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
+          modelIdDigest: CHAT_MODEL_DIGEST,
           completeness: "complete",
           loss: "none",
         },
@@ -1755,6 +1769,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
+          modelIdDigest: CHAT_MODEL_DIGEST,
           completeness: "complete",
           loss: "none",
         },
@@ -2037,6 +2052,7 @@ describe("desktop chat SSE streaming handler", () => {
         extra: {
           reason: "generation",
           modelKind: "chat",
+          modelIdDigest: CHAT_MODEL_DIGEST,
           completeness: "complete",
           loss: "none",
         },

@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import type {
   WorkspaceManifest,
   WorkspaceRootDescriptor,
@@ -25,6 +25,9 @@ import {
   useChatCreationCoordinator,
 } from "./SelectionAwareWorkspaceHosts";
 import { subText } from "../windows/connectionUtils";
+import { parsePersistedWindows, sanitizePersistedWindows } from "../hooks/workspace-persistence";
+import type { AppWindow } from "../windows/types";
+import { chatReferenceFingerprint } from "./chatReferenceFingerprint";
 import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
 
 const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
@@ -50,7 +53,10 @@ type UpdateChat = (
   patch: { readonly title: string },
 ) => Promise<{ readonly chat: Chat }>;
 const updateChatMock = vi.hoisted((): Mock<UpdateChat> => vi.fn<UpdateChat>());
-type FetchChats = (projectPath: string) => Promise<{ readonly chats: readonly Chat[] }>;
+type FetchChats = (
+  projectPath: string,
+  correlationId?: string,
+) => Promise<{ readonly chats: readonly Chat[] }>;
 const fetchChatsMock = vi.hoisted((): Mock<FetchChats> => vi.fn<FetchChats>());
 
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -99,10 +105,18 @@ const chatSessionState = vi.hoisted(() => ({
 const defaultOpenNewChat = chatSessionState.openNewChat;
 const useChatSessionMock = vi.hoisted(() => vi.fn());
 const providedChatSessions = vi.hoisted(() => [] as unknown[]);
+// The correlation id of the chat list load a restored window's binding evidence names (#3557).
+const chatListCorrelationIdMock = vi.hoisted(() =>
+  vi.fn((_projectPath: string): string | undefined => undefined),
+);
 
 vi.mock("../hooks/useChatSession", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useChatSession")>();
-  return { ...actual, useChatSession: (): unknown => useChatSessionMock() };
+  return {
+    ...actual,
+    chatListCorrelationId: chatListCorrelationIdMock,
+    useChatSession: (): unknown => useChatSessionMock(),
+  };
 });
 
 vi.mock("../context/ChatSessionContext", (): object => ({
@@ -330,6 +344,7 @@ afterEach(() => {
   providedChatSessions.length = 0;
   fetchChatsMock.mockReset();
   fetchChatsMock.mockResolvedValue({ chats: [] });
+  chatListCorrelationIdMock.mockReset();
 });
 
 useChatSessionMock.mockImplementation(() => chatSessionState);
@@ -924,6 +939,9 @@ describe("ChatWindowSessionHost target missing", () => {
     await screen.findByRole("status");
     expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
       expect.stringMatching(/^desktop chat bind #\d+: started$/),
+      expect.objectContaining({
+        stageReport: expect.objectContaining({ stage: "chat bind", phase: "started" }),
+      }),
     );
     const settledBefore = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
       /^desktop chat bind #\d+: settled/.test(String(message)),
@@ -986,6 +1004,12 @@ describe("ChatWindowSessionHost target missing", () => {
       );
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
         expect.stringMatching(new RegExp(`^${expected[key]} #\\d+: started$`)),
+        expect.objectContaining({
+          stageReport: expect.objectContaining({
+            stage: expected[key].replace(/^desktop /, ""),
+            phase: "started",
+          }),
+        }),
       );
       view.unmount();
     }
@@ -1629,6 +1653,960 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(
       screen.getByText("This conversation was deleted or is no longer available."),
     ).toBeInTheDocument();
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window restore target not found (reference=opaque)",
+        {
+          correlationId: undefined,
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "target-missing",
+            referenceShape: "opaque",
+            heuristicFlagged: false,
+            windowRef: "window-1",
+          },
+        },
+      ),
+    );
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain("chat-missing");
+  });
+
+  // #3557 review: the binding evidence names the chat list load whose answer decided it, so the
+  // load's request line and the outcome read as one timeline in the Activity Log.
+  it("names the deciding chat list load's correlation id on a missing target", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.activeProject = {
+      path: "/repo",
+      name: "Repo",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+    chatListCorrelationIdMock.mockImplementation((projectPath: string) =>
+      projectPath === "/repo" ? "ui_chat-list-load-0001" : undefined,
+    );
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: "chat-missing", projectPath: "/repo" }}
+          ctx={context()}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("restore target not found"),
+        {
+          correlationId: "ui_chat-list-load-0001",
+          bindingReport: expect.objectContaining({ decidingLoadCount: 1 }) as unknown,
+        },
+      ),
+    );
+  });
+
+  // #3557 review: a verdict whose deciding load has no known id still states that one load
+  // decided it, so the server records the unnamed load as loss instead of a complete line.
+  it("counts the deciding load even when its correlation id is unknown", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.activeProject = {
+      path: "/repo",
+      name: "Repo",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: "chat-missing", projectPath: "/repo" }}
+          ctx={context()}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("restore target not found"),
+        {
+          correlationId: undefined,
+          bindingReport: expect.objectContaining({ decidingLoadCount: 1 }) as unknown,
+        },
+      ),
+    );
+  });
+
+  // #3557 review: a legacy binding without a persisted project is judged missing by a scan over
+  // every project's list, so its evidence names each of those loads, not just one.
+  it("names every scanned project's list load on a missing legacy binding", async (): Promise<void> => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.loading = false;
+    fetchChatsMock.mockResolvedValue({ chats: [] });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-missing" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    // The ids are the ones the scan's own list loads carried, not a cache lookup.
+    await waitFor((): void => expect(fetchChatsMock).toHaveBeenCalledTimes(2));
+    const loadIds = new Map(fetchChatsMock.mock.calls.map(([path, id]) => [path, id]));
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("restore target not found"),
+        {
+          correlationId: loadIds.get("/repo-a"),
+          bindingReport: expect.objectContaining({
+            outcome: "target-missing",
+            relatedCorrelationIds: [loadIds.get("/repo-b")],
+            decidingLoadCount: 2,
+          }) as unknown,
+        },
+      ),
+    );
+    expect(chatListCorrelationIdMock).not.toHaveBeenCalled();
+  });
+
+  // #3557 review: 40 projects, none holding the chat — every one of the 40 answers decided the
+  // verdict, and each is named with the id its own load carried, however many lists the page
+  // loaded before.
+  it("names all of a large legacy scan's list loads with the ids they carried", async (): Promise<void> => {
+    const projects = Array.from({ length: 40 }, (_value, index): ProjectWithAvailability => ({
+      path: `/repo-${String(index)}`,
+      name: `Repo ${String(index)}`,
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    }));
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.projects = projects;
+    chatSessionState.loading = false;
+    fetchChatsMock.mockResolvedValue({ chats: [] });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-missing" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(fetchChatsMock).toHaveBeenCalledTimes(40));
+    const loadIds = new Map(fetchChatsMock.mock.calls.map(([path, id]) => [path, id]));
+    const expected = projects.map((project) => loadIds.get(project.path));
+    expect(new Set(expected).size).toBe(40);
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("restore target not found"),
+        {
+          correlationId: expected[0],
+          bindingReport: expect.objectContaining({
+            relatedCorrelationIds: expected.slice(1),
+            decidingLoadCount: 40,
+          }) as unknown,
+        },
+      ),
+    );
+  });
+
+  // #3557 review: a legacy binding that resolves was decided by the list it resolved in, not by
+  // every list the lookup may have scanned.
+  it("names only the resolving project's list load on a resolved legacy binding", async (): Promise<void> => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const live = { ...chatFixture("legacy-live", "Live chat", 2), projectPath: projectB.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.activeChat = live;
+    chatSessionState.chats = [live];
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.loading = false;
+    chatListCorrelationIdMock.mockImplementation((projectPath: string) =>
+      projectPath === "/repo-a" ? "ui_chat-list-load-a" : "ui_chat-list-load-b",
+    );
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-live" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("binding resolved"),
+        {
+          correlationId: "ui_chat-list-load-b",
+          bindingReport: expect.not.objectContaining({
+            relatedCorrelationIds: expect.anything() as unknown,
+          }) as unknown,
+        },
+      ),
+    );
+  });
+
+  // #3557 review: two windows restored from one list answer must stay apart in the evidence.
+  it("names each window in its own binding report", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-missing-1" }} ctx={context()} />
+        <ChatWindowSessionHost
+          cfg={{ chatId: "chat-missing-2" }}
+          ctx={context({ windowId: "window-2" })}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => {
+      const windows = reportClientDiagnosticMock.mock.calls.flatMap(([message, meta]) =>
+        String(message).includes("restore target not found")
+          ? [(meta as { bindingReport: { windowRef: string } }).bindingReport.windowRef]
+          : [],
+      );
+      expect([...windows].sort()).toEqual(["window-1", "window-2"]);
+    });
+  });
+
+  // #3557 review: a Luhn-looking server-issued UUID that survived persistence only through its
+  // compact stored form and resolved to its live chat must be told apart from no restore attempt.
+  it("reports a binding whose reference the heuristic flags, resolved, once", async (): Promise<void> => {
+    const flaggedId = "1404206d-9ab6-4bca-8853-813867352087";
+    const live = chatFixture(flaggedId, "Deploy status", 3);
+    chatSessionState.activeChat = live;
+    chatSessionState.chats = [live];
+    chatSessionState.loading = false;
+    const host = (
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: flaggedId }} ctx={context()} />
+      </I18nProvider>
+    );
+
+    const { rerender } = render(host);
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=uuid, heuristic-flagged)",
+        {
+          correlationId: undefined,
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "resolved",
+            referenceShape: "uuid",
+            heuristicFlagged: true,
+            windowRef: "window-1",
+          },
+        },
+      ),
+    );
+    rerender(host);
+
+    const resolved = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).startsWith("[keiko] chat window binding resolved"),
+    );
+    expect(resolved).toHaveLength(1);
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(flaggedId);
+  });
+
+  // Plays the workspace for a restored window: persists `window` the way the product does, then
+  // renders it so that a window's cfg update reaches the next render, as it does in the product.
+  function restoreChatWindow(window: AppWindow): {
+    readonly restoredCfg: Record<string, unknown>;
+    readonly ctx: WindowRenderContext;
+    readonly rerender: () => void;
+  } {
+    const restored = parsePersistedWindows(JSON.stringify(sanitizePersistedWindows([window])));
+    const restoredCfg = restored?.[0]?.cfg ?? {};
+    const ctx = context();
+    function RestoredWindow(): ReactNode {
+      const [cfg, setCfg] = useState<Record<string, unknown>>(restoredCfg);
+      const updateCfg = useCallback((patch: AppWindow["cfg"]): void => {
+        (ctx.updateCfg as (patch: AppWindow["cfg"]) => void)(patch);
+        setCfg((previous) => ({ ...previous, ...patch }));
+      }, []);
+      return <ChatWindowSessionHost cfg={cfg} ctx={{ ...ctx, updateCfg }} />;
+    }
+    const view = render(
+      <I18nProvider>
+        <RestoredWindow />
+      </I18nProvider>,
+    );
+    const rerender = (): void => {
+      view.rerender(
+        <I18nProvider>
+          <RestoredWindow />
+        </I18nProvider>,
+      );
+    };
+    return { restoredCfg, ctx, rerender };
+  }
+
+  function flaggedChatWindow(cfg: AppWindow["cfg"]): AppWindow {
+    return { id: "chat-1", type: "chat", x: 0, y: 0, w: 320, h: 240, z: 1, max: false, cfg };
+  }
+
+  function listFlaggedChat(flaggedId: string): string {
+    const repo: ProjectWithAvailability = {
+      path: "/repo",
+      name: "Repo",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const live = chatFixture(flaggedId, "Deploy status", 3);
+    chatSessionState.activeProject = repo;
+    chatSessionState.projects = [repo];
+    chatSessionState.activeChat = live;
+    chatSessionState.chats = [live];
+    chatSessionState.loading = false;
+    fetchChatsMock.mockResolvedValue({ chats: [live] });
+    // The active project's own list load since the lookup: the evidence must never borrow its id.
+    chatListCorrelationIdMock.mockReturnValue("ui_list-active-0002");
+    return flaggedId;
+  }
+
+  function lookupLoadId(): string | undefined {
+    return fetchChatsMock.mock.calls.find(([path]) => path === "/repo")?.[1];
+  }
+
+  function expectNoMissingReport(): void {
+    expect(screen.queryByText("Chat not found")).toBeNull();
+    const missing = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).includes("restore target not found"),
+    );
+    expect(missing).toEqual([]);
+  }
+
+  // #3557 review (P0), the real-CI pin relocated to the layer that now owns it: a chat whose server
+  // id the shared heuristic reads as a card number must reopen after a reload. Persistence redacts
+  // the id, and the window finds its conversation again through the id's fingerprint. The binding
+  // names the chat list load that decided it, never the active project's later one.
+  it("reopens a chat whose id persistence redacts, through the id's fingerprint", async (): Promise<void> => {
+    const flaggedId = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const window = flaggedChatWindow({
+      chatId: flaggedId,
+      chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+      projectPath: "/repo",
+    });
+
+    const { restoredCfg, ctx } = restoreChatWindow(window);
+
+    // The id itself never reaches storage; its one-way fingerprint does.
+    expect(restoredCfg).toMatchObject({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: window.cfg["chatIdFingerprint"],
+    });
+    expect(JSON.stringify(restoredCfg)).not.toContain(flaggedId);
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: flaggedId }));
+    expect(lookupLoadId()).toEqual(expect.any(String));
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=fingerprint, heuristic-flagged)",
+        {
+          correlationId: lookupLoadId(),
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "resolved",
+            referenceShape: "fingerprint",
+            heuristicFlagged: true,
+            windowRef: "window-1",
+            decidingLoadCount: 1,
+            targetFingerprint: chatReferenceFingerprint(flaggedId),
+          },
+        },
+      ),
+    );
+    expectNoMissingReport();
+    // The chat it bound to is named only by its fingerprint, never by its id.
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(flaggedId);
+  });
+
+  // #3557 review (P0): the snapshot an older build actually wrote holds only the redaction marker,
+  // with no fingerprint. Its chat A still exists and must reopen, but nothing in the snapshot proves
+  // which chat it named: another flagged chat B is listed beside it. So the window never guesses. It
+  // reports its chat as missing, offers the chats it may have shown, and reopens A once the person
+  // chooses it, recording that choice as the binding's reference shape.
+  it("reopens chat A from a snapshot an older build wrote once the person chooses it", async (): Promise<void> => {
+    const chatA = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const chatB = "2404206d-9ab6-4bca-8853-813867352087";
+    const liveA = chatFixture(chatA, "Deploy status", 3);
+    const liveB = chatFixture(chatB, "Release notes", 2);
+    chatSessionState.chats = [liveA, liveB];
+    fetchChatsMock.mockResolvedValue({ chats: [liveA, liveB] });
+    const window = flaggedChatWindow({ chatId: chatA, projectPath: "/repo" });
+
+    const { restoredCfg, ctx } = restoreChatWindow(window);
+
+    expect(restoredCfg).toEqual({ chatId: "[REDACTED]", projectPath: "/repo" });
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    const reopenA = await screen.findByRole("button", {
+      name: /^Open Deploy status, last active /u,
+    });
+    expect(
+      screen.getByRole("button", { name: /^Open Release notes, last active /u }),
+    ).toBeInTheDocument();
+    // Never on its own.
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: chatA }));
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: chatB }));
+    // The offer itself is evidence: the load that decided it, and how many chats it holds.
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window offered conversations to choose from (candidates=2, disambiguated=0)",
+        {
+          correlationId: lookupLoadId(),
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "candidates-offered",
+            referenceShape: "redacted",
+            heuristicFlagged: false,
+            windowRef: "window-1",
+            candidateCount: 2,
+            disambiguatedCount: 0,
+            decidingLoadCount: 1,
+          },
+        },
+      ),
+    );
+
+    await userEvent.click(reopenA);
+
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: chatA, chatIdChosen: true }),
+    );
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=user-selected, heuristic-flagged)",
+        {
+          correlationId: lookupLoadId(),
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "resolved",
+            referenceShape: "user-selected",
+            heuristicFlagged: true,
+            windowRef: "window-1",
+            decidingLoadCount: 1,
+            targetFingerprint: chatReferenceFingerprint(chatA),
+          },
+        },
+      ),
+    );
+    expect(screen.queryByText("Chat not found")).toBeNull();
+    const reported = JSON.stringify(reportClientDiagnosticMock.mock.calls);
+    expect(reported).not.toContain(chatA);
+    expect(reported).not.toContain(chatB);
+  });
+
+  // #3557 review: every chat starts as "New chat", so two offered chats can share a title. Each offer
+  // names when its chat was last active, so the person can tell them apart, and the chat they choose
+  // is the one the window binds to and the evidence names.
+  // #3557 review: a chat chosen without proof stays a choice until the person keeps it. The window
+  // shows the conversation, so the person can check it, and offers to keep it or choose another.
+  function offerChatsAandB(): { readonly chatA: string; readonly chatB: string } {
+    const chatA = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const chatB = "2404206d-9ab6-4bca-8853-813867352087";
+    const liveA = chatFixture(chatA, "Deploy status", 3_000);
+    const liveB = chatFixture(chatB, "Release notes", 2_000);
+    chatSessionState.chats = [liveA, liveB];
+    fetchChatsMock.mockResolvedValue({ chats: [liveA, liveB] });
+    return { chatA, chatB };
+  }
+
+  function decisionReports(outcome: string): readonly unknown[] {
+    return reportClientDiagnosticMock.mock.calls.flatMap(([, meta]) => {
+      const report = (meta as { bindingReport?: { outcome: string } } | undefined)?.bindingReport;
+      return report?.outcome === outcome ? [report] : [];
+    });
+  }
+
+  const CHOICE_NOTICE = /^You chose this conversation for this window\./u;
+
+  it("keeps a chosen chat open to change until the person keeps it", async (): Promise<void> => {
+    const { chatA } = offerChatsAandB();
+    const { ctx } = restoreChatWindow(flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    );
+
+    expect(await screen.findByText(CHOICE_NOTICE)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
+
+    await waitFor((): void => expect(screen.queryByText(CHOICE_NOTICE)).toBeNull());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ chatIdChosen: false });
+    expect(decisionReports("choice-kept")).toEqual([
+      {
+        surface: "chat-window",
+        outcome: "choice-kept",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+        windowRef: "window-1",
+        targetFingerprint: chatReferenceFingerprint(chatA),
+        decidingLoadCount: 1,
+      },
+    ]);
+  });
+
+  it("returns the window to the offered chats when the person chooses another", async (): Promise<void> => {
+    const { chatA, chatB } = offerChatsAandB();
+    const { ctx } = restoreChatWindow(flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    );
+    await screen.findByText(CHOICE_NOTICE);
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose another" }));
+
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: undefined,
+      chatIdChosen: false,
+    });
+    expect(decisionReports("choice-withdrawn")).toEqual([
+      expect.objectContaining({ targetFingerprint: chatReferenceFingerprint(chatA) }),
+    ]);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Release notes, last active /u }),
+    );
+    // The next choice binds the window again, and is again a choice.
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: chatB, chatIdChosen: true }),
+    );
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(chatA);
+  });
+
+  // A chat chosen again after the person withdrew it is a new binding on the log.
+  it("reports a chat the person chooses again after withdrawing it as a new binding", async (): Promise<void> => {
+    const { chatA } = offerChatsAandB();
+    restoreChatWindow(flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }));
+    const openA = { name: /^Open Deploy status, last active /u };
+    await userEvent.click(await screen.findByRole("button", openA));
+    await screen.findByText(CHOICE_NOTICE);
+    await waitFor((): void => expect(decisionReports("resolved")).toHaveLength(1));
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose another" }));
+    await userEvent.click(await screen.findByRole("button", openA));
+
+    await waitFor((): void => expect(decisionReports("resolved")).toHaveLength(2));
+  });
+
+  // #3557 review: once the chosen chat goes missing while the window shows it, the person can no
+  // longer keep it, only choose another.
+  it("offers only withdrawal once the chosen chat goes missing", async (): Promise<void> => {
+    const { chatA } = offerChatsAandB();
+    const { rerender } = restoreChatWindow(
+      flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    );
+    await screen.findByText(CHOICE_NOTICE);
+    expect(screen.getByRole("button", { name: "Keep" })).toBeInTheDocument();
+
+    const liveB = chatSessionState.chats.find((chat) => chat.id !== chatA);
+    chatSessionState.chats = liveB === undefined ? [] : [liveB];
+    chatSessionState.activeChat = undefined;
+    rerender();
+
+    expect(
+      await screen.findByText("The conversation you chose for this window is no longer available."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Choose another" })).toBeInTheDocument();
+  });
+
+  // #3557 review: while the chosen chat is still opening, or its lookup failed, the person cannot
+  // inspect it yet, so Keep waits until the chat is on screen.
+  it("offers Keep only once the chosen chat is on screen", async (): Promise<void> => {
+    const { chatA } = offerChatsAandB();
+    const liveA = chatSessionState.chats.find((chat) => chat.id === chatA);
+    chatSessionState.activeChat = undefined;
+    const { rerender } = restoreChatWindow(
+      flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    );
+
+    expect(
+      await screen.findByText(
+        "You chose this conversation for this window. Check it once it opens, or choose another.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+
+    chatSessionState.activeChat = liveA;
+    rerender();
+    expect(await screen.findByRole("button", { name: "Keep" })).toBeInTheDocument();
+
+    chatSessionState.projects = [];
+    rerender();
+    await waitFor((): void => expect(screen.queryByRole("button", { name: "Keep" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Choose another" })).toBeInTheDocument();
+  });
+
+  // #3557 review: the chosen chat was closed or deleted before a reload. Its fingerprint names no
+  // listed chat, so the window shows it missing and offers only withdrawal, which returns the window
+  // to the chats it may have shown.
+  it("returns a reloaded window whose chosen chat is gone to the offered chats", async (): Promise<void> => {
+    const { chatA, chatB } = offerChatsAandB();
+    const liveB = chatSessionState.chats.find((chat) => chat.id === chatB);
+    chatSessionState.chats = liveB === undefined ? [] : [liveB];
+    chatSessionState.activeChat = undefined;
+    fetchChatsMock.mockResolvedValue({ chats: liveB === undefined ? [] : [liveB] });
+
+    const { ctx } = restoreChatWindow(
+      flaggedChatWindow({
+        chatId: chatA,
+        chatIdFingerprint: chatReferenceFingerprint(chatA),
+        chatIdChosen: true,
+        projectPath: "/repo",
+      }),
+    );
+
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    expect(
+      await screen.findByText("The conversation you chose for this window is no longer available."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
+    // The missing line names the lookup that found A gone, never the active project's own load.
+    await waitFor((): void =>
+      expect(decisionReports("target-missing")).toEqual([
+        expect.objectContaining({
+          referenceShape: "fingerprint",
+          heuristicFlagged: true,
+          targetFingerprint: chatReferenceFingerprint(chatA),
+          decidingLoadCount: 1,
+        }),
+      ]),
+    );
+    const missingCall = reportClientDiagnosticMock.mock.calls.find(([message]) =>
+      String(message).includes("restore target not found"),
+    );
+    expect((missingCall?.[1] as { correlationId?: string } | undefined)?.correlationId).toBe(
+      lookupLoadId(),
+    );
+    expect(lookupLoadId()).not.toBe("ui_list-active-0002");
+    await userEvent.click(screen.getByRole("button", { name: "Choose another" }));
+
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: undefined,
+      chatIdChosen: false,
+    });
+    expect(decisionReports("choice-withdrawn")).toEqual([
+      expect.objectContaining({
+        referenceShape: "fingerprint",
+        targetFingerprint: chatReferenceFingerprint(chatA),
+      }),
+    ]);
+    expect(
+      await screen.findByRole("button", { name: /^Open Release notes, last active /u }),
+    ).toBeInTheDocument();
+  });
+
+  // After a reload the chosen chat is found again through its fingerprint, and the choice is still
+  // open until the person keeps it.
+  it("keeps offering to change a chosen chat after a reload", async (): Promise<void> => {
+    const flaggedId = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const { restoredCfg, ctx } = restoreChatWindow(
+      flaggedChatWindow({
+        chatId: flaggedId,
+        chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+        chatIdChosen: true,
+        projectPath: "/repo",
+      }),
+    );
+
+    expect(restoredCfg).toMatchObject({ chatId: "[REDACTED]", chatIdChosen: true });
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: flaggedId }));
+    expect(await screen.findByText(CHOICE_NOTICE)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(decisionReports("choice-kept")).toEqual([
+      expect.objectContaining({ referenceShape: "fingerprint" }),
+    ]);
+  });
+
+  // #3557 review: two "New chat" offers last active within one minute read apart by their seconds.
+  it("tells two offered chats with one title apart within one minute by their seconds", async (): Promise<void> => {
+    const first = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const second = "2404206d-9ab6-4bca-8853-813867352087";
+    const firstChat = chatFixture(first, "New chat", Date.parse("2026-06-15T12:00:01.001Z"));
+    const secondChat = chatFixture(second, "New chat", Date.parse("2026-06-15T12:00:59.999Z"));
+    chatSessionState.chats = [firstChat, secondChat];
+    fetchChatsMock.mockResolvedValue({ chats: [firstChat, secondChat] });
+
+    restoreChatWindow(flaggedChatWindow({ chatId: first, projectPath: "/repo" }));
+
+    const offers = await screen.findAllByRole("button", { name: /^Open New chat, last active /u });
+    const names = offers.map((offer) => offer.textContent ?? "");
+    expect(new Set(names).size).toBe(2);
+    expect(names.join()).not.toContain("reference");
+  });
+
+  // #3557 review: two "New chat" offers last active in one second would read alike. Each then shows
+  // the start of its chat's fingerprint, never the id, and the one chosen is the one bound.
+  it("tells two offered chats with one title apart within one second by a fingerprint reference", async (): Promise<void> => {
+    const first = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const second = "2404206d-9ab6-4bca-8853-813867352087";
+    const sameSecond = Date.parse("2026-06-15T12:00:30.000Z");
+    const firstChat = chatFixture(first, "New chat", sameSecond);
+    const secondChat = chatFixture(second, "New chat", sameSecond);
+    chatSessionState.chats = [firstChat, secondChat];
+    fetchChatsMock.mockResolvedValue({ chats: [firstChat, secondChat] });
+
+    const { ctx } = restoreChatWindow(flaggedChatWindow({ chatId: first, projectPath: "/repo" }));
+
+    const offers = await screen.findAllByRole("button", { name: /^Open New chat, last active /u });
+    const names = offers.map((offer) => offer.textContent ?? "");
+    expect(new Set(names).size).toBe(2);
+    expect(names.join()).not.toContain(first);
+    expect(names.join()).not.toContain(second);
+    const firstReference = `reference ${chatReferenceFingerprint(first).slice(0, 6)}`;
+    const pick = offers.find((offer) => offer.textContent?.endsWith(firstReference) === true);
+    if (pick === undefined) throw new Error("the first chat's offer names no reference");
+    await userEvent.click(pick);
+
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: first, chatIdChosen: true }),
+    );
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: second }));
+  });
+
+  it("tells two offered chats with one title apart by when each was last active", async (): Promise<void> => {
+    const older = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const newer = "2404206d-9ab6-4bca-8853-813867352087";
+    const olderChat = chatFixture(older, "New chat", Date.UTC(2025, 0, 15, 12));
+    const newerChat = chatFixture(newer, "New chat", Date.UTC(2026, 5, 15, 12));
+    chatSessionState.chats = [olderChat, newerChat];
+    fetchChatsMock.mockResolvedValue({ chats: [olderChat, newerChat] });
+
+    const { ctx } = restoreChatWindow(flaggedChatWindow({ chatId: older, projectPath: "/repo" }));
+
+    const offers = await screen.findAllByRole("button", { name: /^Open New chat, last active /u });
+    expect(offers).toHaveLength(2);
+    expect(new Set(offers.map((offer) => offer.textContent)).size).toBe(2);
+    // The most recently active first.
+    expect(offers[0]).toHaveTextContent("2026");
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Open New chat, last active .*2025/u }),
+    );
+
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: older, chatIdChosen: true }),
+    );
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: newer }));
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window binding resolved (reference=user-selected, heuristic-flagged)",
+        expect.objectContaining({
+          bindingReport: expect.objectContaining({
+            targetFingerprint: chatReferenceFingerprint(older),
+          }) as unknown,
+        }),
+      ),
+    );
+  });
+
+  // #3557 review: a failed project catalog is no answer about the chat; a fingerprinted window shows
+  // the failure instead of waiting forever, and records no missing verdict.
+  it("shows a failed project catalog instead of waiting forever", async (): Promise<void> => {
+    const flaggedId = "1404206d-9ab6-4bca-8853-813867352087";
+    chatSessionState.error = "Projects could not be loaded";
+    chatSessionState.projects = [];
+    chatSessionState.loading = false;
+    const window = flaggedChatWindow({
+      chatId: flaggedId,
+      chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+      projectPath: "/repo",
+    });
+
+    restoreChatWindow(window);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("Opening chat...")).toBeNull();
+    expect(screen.queryByText("Chat not found")).toBeNull();
+    const missing = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).includes("restore target not found"),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  // #3557 review: the snapshot an older build actually wrote holds only the redaction marker, with no
+  // fingerprint, and that marker identifies nothing. The chat it named may be gone while another
+  // flagged chat is the only one left, so the window must never guess: it stays unbound and reports
+  // its chat as missing, with the redacted reference's typed evidence.
+  it("keeps a snapshot an older build wrote unbound, never guessing the only flagged chat", async (): Promise<void> => {
+    const onlyFlagged = listFlaggedChat("2404206d-9ab6-4bca-8853-813867352087");
+    const window = flaggedChatWindow({
+      chatId: "1404206d-9ab6-4bca-8853-813867352087",
+      projectPath: "/repo",
+    });
+
+    const { restoredCfg, ctx } = restoreChatWindow(window);
+
+    expect(restoredCfg).toEqual({ chatId: "[REDACTED]", projectPath: "/repo" });
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window restore target not found (reference=redacted)",
+        expect.objectContaining({
+          bindingReport: expect.objectContaining({
+            outcome: "target-missing",
+            referenceShape: "redacted",
+          }) as unknown,
+        }),
+      ),
+    );
+    // It is offered to the person, never bound on its own.
+    expect(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    ).toBeInTheDocument();
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: onlyFlagged }),
+    );
+    const resolved = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).startsWith("[keiko] chat window binding resolved"),
+    );
+    expect(resolved).toEqual([]);
+  });
+
+  // #3557 review: a chat list that cannot be read decides nothing, and its failure is reported
+  // under the id that load was sent with, with a closed class, although no response ever arrived.
+  it("reports a lookup whose list cannot be read under that load's id, and keeps the window pending", async (): Promise<void> => {
+    const flaggedId = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    fetchChatsMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    const window = flaggedChatWindow({
+      chatId: flaggedId,
+      chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+      projectPath: "/repo",
+    });
+
+    const { ctx } = restoreChatWindow(window);
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat reference lookup failed: TypeError",
+        { correlationId: lookupLoadId(), errorKind: "unavailable" },
+      ),
+    );
+    expect(lookupLoadId()).toEqual(expect.any(String));
+    expect(screen.getByText("Opening chat...")).toBeInTheDocument();
+    expect(screen.queryByText("Chat not found")).toBeNull();
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: flaggedId });
+  });
+
+  // #3557 review: a fingerprint that no listed chat has any more is reported as that fingerprint,
+  // never like a marker that named nothing.
+  it("reports a fingerprint that matches no chat as a missing fingerprint reference", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.projects = [];
+    chatSessionState.loading = false;
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: "[REDACTED]", chatIdFingerprint: "a".repeat(64) }}
+          ctx={context()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "[keiko] chat window restore target not found (reference=fingerprint, heuristic-flagged)",
+        expect.objectContaining({
+          bindingReport: expect.objectContaining({
+            referenceShape: "fingerprint",
+            heuristicFlagged: true,
+            targetFingerprint: "a".repeat(64),
+          }) as unknown,
+        }),
+      ),
+    );
+  });
+
+  it("records the fingerprint of a chat whose id the heuristic flags", (): void => {
+    const flaggedId = "1404206d-9ab6-4bca-8853-813867352087";
+    const live = chatFixture(flaggedId, "Deploy status", 3);
+    chatSessionState.activeChat = live;
+    chatSessionState.chats = [live];
+    chatSessionState.loading = false;
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: flaggedId }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    // #3557 review: in the commit that shows the id, before any flush could store it alone.
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+    });
+  });
+
+  it("reports a binding lost to redaction once, as a redacted reference", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+    const host = (
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "[REDACTED]" }} ctx={context()} />
+      </I18nProvider>
+    );
+
+    const { rerender } = render(host);
+    expect(await screen.findByText("Chat not found")).toBeInTheDocument();
+    rerender(host);
+
+    const reports = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).startsWith("[keiko] chat window restore target not found"),
+    );
+    expect(reports).toEqual([
+      [
+        "[keiko] chat window restore target not found (reference=redacted)",
+        {
+          correlationId: undefined,
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "target-missing",
+            referenceShape: "redacted",
+            heuristicFlagged: false,
+            windowRef: "window-1",
+          },
+        },
+      ],
+    ]);
   });
 
   it("never retargets a missing binding onto a sibling conversation", async (): Promise<void> => {
@@ -1717,8 +2695,9 @@ describe("ChatWindowSessionHost target missing", () => {
     );
 
     await waitFor((): void => expect(fetchChatsMock).toHaveBeenCalledTimes(2));
-    expect(fetchChatsMock).toHaveBeenCalledWith(projectA.path);
-    expect(fetchChatsMock).toHaveBeenCalledWith(projectB.path);
+    // Each shared load carries its own correlation id (#3557), so binding evidence can name it.
+    expect(fetchChatsMock).toHaveBeenCalledWith(projectA.path, expect.any(String));
+    expect(fetchChatsMock).toHaveBeenCalledWith(projectB.path, expect.any(String));
     await act(async (): Promise<void> => {
       projectAChats.resolve({ chats: [] });
       projectBChats.resolve({ chats: [] });
@@ -1726,6 +2705,44 @@ describe("ChatWindowSessionHost target missing", () => {
     });
     await waitFor((): void => expect(screen.getAllByText("Chat not found")).toHaveLength(2));
     expect(fetchChatsMock).toHaveBeenCalledTimes(2);
+  });
+
+  // #3557 review: a legacy scan that could not read every project decides nothing, so it runs again
+  // after a bounded backoff instead of leaving the window failed until it is remounted.
+  it("recovers a legacy window once a list that failed can be read again", async () => {
+    vi.stubGlobal("reportError", vi.fn());
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const legacy = { ...chatFixture("legacy-chat", "Legacy chat", 1), projectPath: projectA.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [];
+    let failures = 1;
+    fetchChatsMock.mockImplementation(async (path) => {
+      if (path === projectA.path && failures > 0) {
+        failures -= 1;
+        throw new TypeError("temporary lookup failure");
+      }
+      return { chats: path === projectA.path ? [legacy] : [] };
+    });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-chat" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    await waitFor((): void => expect(chatSessionState.openProject).toHaveBeenCalledWith(projectA), {
+      timeout: 4_000,
+    });
   });
 
   it("surfaces a legacy project lookup failure without caching it as deletion", async () => {
@@ -1764,6 +2781,12 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(reported).toBeInstanceOf(Error);
     expect((reported as Error).message).toMatch(
       /^Chat project lookup failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
+    );
+    // #3557 review: the id the failed load was sent with, never a fresh one.
+    const failedLoadId = fetchChatsMock.mock.calls.find(([path]) => path === projectA.path)?.[1];
+    expect(failedLoadId).toEqual(expect.any(String));
+    expect((reported as Error).message).toBe(
+      `Chat project lookup failed. Correlation ID: ${String(failedLoadId)}`,
     );
     expect((reported as Error).message).not.toContain("temporary lookup failure");
   });

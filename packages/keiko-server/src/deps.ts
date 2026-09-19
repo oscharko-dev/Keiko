@@ -133,6 +133,7 @@ import {
 } from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
+import { closeFileServerLogSinks } from "./observability/server-log.js";
 import { resolveRuntimeStateDir } from "./observability/runtime-state-dir.js";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
@@ -1069,6 +1070,12 @@ export interface BuildHandlerDepsOptions {
   // `createUiHandlerDispose`). Production omits it and the process sink is used; a test injects a
   // recorder to assert the emitted lines (AGENTS.md §8).
   readonly activityLog?: ServerLogSink | undefined;
+  // Seal the Activity Log when `dispose` finishes. A process that owns its log for its whole life
+  // (the `keiko ui` launch, the dev BFF) sets it: `dispose` writes the runtime shutdown lines last,
+  // after the launcher's own close, so without this the process exits with an active segment that
+  // the next start recovers as an orphan. A test or embedded caller that builds and disposes deps
+  // more than once in one process leaves it unset.
+  readonly closeActivityLogOnDispose?: boolean | undefined;
   // Optional deployment replacement for the default memory category denylist. Production leaves
   // this unset unless an operator supplies a reviewed, ReDoS-safe policy at composition time.
   readonly memoryDeniedCategoryMatchers?:
@@ -4689,7 +4696,7 @@ async function retainWorkbenchArtifact(
       context.activeWorkspaceRoot,
       scope,
       snapshotDigest,
-    )?.holdDraftArtifact(artifact, Date.now())?.proposalId;
+    )?.holdDraftArtifact(artifact, Date.now(), scope.runId)?.proposalId;
   }
   return retainWorkbenchApplicationArtifact(
     context,
@@ -5020,6 +5027,7 @@ async function disposeRuntimeServices(
   services: UiHandlerRuntimeServices,
   atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
   codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
+  correlationId: string,
 ): Promise<void> {
   await runTeardownSteps([
     (): void => {
@@ -5029,7 +5037,10 @@ async function disposeRuntimeServices(
       services.runtimeComposition.dispose?.();
     },
     (): void => {
-      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
+      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll(
+        "shutdown",
+        correlationId,
+      );
     },
     async (): Promise<void> => {
       await shutdownHostLspPool();
@@ -5071,6 +5082,30 @@ async function disposeRuntimeServices(
   ]);
 }
 
+// `dispose` writes the runtime shutdown lines last. A process that owns its Activity Log seals it
+// here, so it never exits with an active segment; the seal runs even when the teardown faulted.
+async function thenSealActivityLog(
+  options: BuildHandlerDepsOptions,
+  teardown: () => Promise<void>,
+): Promise<void> {
+  try {
+    await teardown();
+  } finally {
+    if (options.closeActivityLogOnDispose === true) closeFileServerLogSinks();
+  }
+}
+
+type RuntimeShutdownOutcome = "not-applicable" | "ended" | "refused" | "faulted";
+
+async function shutdownCodingRuntime(
+  services: UiHandlerRuntimeServices,
+  correlationId: string,
+): Promise<Exclude<RuntimeShutdownOutcome, "faulted">> {
+  const orchestrator = services.codingRuntimeControlPlane?.orchestrator;
+  if (orchestrator === undefined) return "not-applicable";
+  return (await orchestrator.shutdown(correlationId)).ok ? "ended" : "refused";
+}
+
 function createUiHandlerDispose(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
@@ -5093,35 +5128,35 @@ function createUiHandlerDispose(
     // recording that as a clean stop told the one artifact a customer site has the opposite of what
     // happened (owner review, PR #3452). "not-applicable" is its own answer: no control plane means
     // there was nothing to stop, which is not the same as stopping cleanly.
-    let runtimeShutdown: "not-applicable" | "ended" | "refused" | "faulted" = "not-applicable";
+    let runtimeShutdown: RuntimeShutdownOutcome = "not-applicable";
     try {
-      const orchestrator = services.codingRuntimeControlPlane?.orchestrator;
-      if (orchestrator !== undefined) {
-        runtimeShutdown = (await orchestrator.shutdown()).ok ? "ended" : "refused";
-      }
+      runtimeShutdown = await shutdownCodingRuntime(services, correlationId);
     } catch (error) {
       runtimeShutdown = "faulted";
       throw error;
     } finally {
-      await disposeRuntimeServicesRecorded(
-        () =>
-          disposeRuntimeServices(
-            args,
-            services,
-            atlassianRegistries,
-            codingAppSessionDenialWindows,
-          ),
-        (cleanup) => {
-          logRuntimeShutdown(activityLog, correlationId, {
-            state: "completed",
-            durationMs: Date.now() - startedAtMs,
-            openSseStreamCount,
-            activeRunCount,
-            runtimeShutdown,
-            ...cleanup,
-          });
-        },
-        runtimeShutdown === "faulted",
+      await thenSealActivityLog(args.options, () =>
+        disposeRuntimeServicesRecorded(
+          () =>
+            disposeRuntimeServices(
+              args,
+              services,
+              atlassianRegistries,
+              codingAppSessionDenialWindows,
+              correlationId,
+            ),
+          (cleanup) => {
+            logRuntimeShutdown(activityLog, correlationId, {
+              state: "completed",
+              durationMs: Date.now() - startedAtMs,
+              openSseStreamCount,
+              activeRunCount,
+              runtimeShutdown,
+              ...cleanup,
+            });
+          },
+          runtimeShutdown === "faulted",
+        ),
       );
     }
   };

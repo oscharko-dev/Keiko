@@ -6,7 +6,12 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { newClientCorrelationId } from "./bff-correlation";
 import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
+import {
+  repairLocalCodingAppSessionForStream,
+  reportStreamSessionRecovered,
+} from "./coding-app-session-client";
 import { createSameOriginApiEventSource } from "./safe-event-source";
 import { secureRandomInt } from "./secure-random";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
@@ -53,6 +58,20 @@ let sharedEventSource: EventSource | null = null;
 let sharedEventSourceLive = false;
 let reconnectTimer: number | undefined;
 let reconnectAttempts = 0;
+// Set once an `onerror` in the current failure streak has a session repair in flight OR
+// SUCCEEDED (ADR-0141 D5 — a restarted BFF's in-memory session is gone and every reconnect was
+// denied again forever, with nothing re-establishing one). A FAILED repair clears it again so the
+// next `onerror` in the same streak gets its own attempt instead of being permanently locked out
+// for the rest of the streak (#3557 review: the first repair can race a restarting BFF and
+// legitimately fail). Also reset by a successful open, which starts a new streak.
+let sessionRepairAttempted = false;
+// The client-minted id of the current failure streak (#3557 review). An EventSource exposes no
+// request id, so the streak's error diagnostics and its session-repair outcomes share this one,
+// and the log reads the retry sequence as one timeline. A successful open ends the streak.
+let failureStreakCorrelationId: string | undefined;
+// The streak's acknowledged repair. It is reported as recovered only once the stream opens again:
+// an acknowledgement alone does not say a session cookie was issued (#3557 review).
+let acknowledgedRepairCorrelationId: string | undefined;
 let visibilityListenerInstalled = false;
 
 function subscriberCount(): number {
@@ -125,6 +144,9 @@ function handleVisibilityChange(): void {
   if (documentHidden()) {
     clearReconnectTimer();
     closeSharedEventSource();
+    // A suspended stream's streak is over: the next open after it is shown again starts a new one,
+    // which may need its own repair (#3557 review).
+    forgetFailureStreak();
     return;
   }
   if (subscriberCount() > 0) {
@@ -186,6 +208,44 @@ function runEventsUrl(): string {
   return `${RUN_EVENTS_URL}?resume=${cursors.join(",")}`;
 }
 
+// Repairs a stale local app session at most once IN FLIGHT per failure streak. Fire-and-forget —
+// the repair is a fast loopback POST that normally completes well before the reconnect timer's
+// minimum 1s delay elapses, so the next attempt carries a valid cookie without slowing the
+// existing backoff. A failed repair (single-flight `false`) re-arms the streak's attempt so the
+// next `onerror` retries instead of leaving the stream permanently unrepaired.
+function repairSessionOnce(streakCorrelationId: string): void {
+  if (sessionRepairAttempted) return;
+  sessionRepairAttempted = true;
+  void repairLocalCodingAppSessionForStream("run-events", streakCorrelationId).then((repair) => {
+    // A streak that ended meanwhile (an open, or the last subscriber leaving) keeps nothing.
+    if (failureStreakCorrelationId !== streakCorrelationId) return;
+    if (repair.acknowledged) acknowledgedRepairCorrelationId = repair.repairCorrelationId;
+    else sessionRepairAttempted = false;
+  });
+}
+
+// Forgets the failure streak and its repair. A new subscriber after the last one left, or a stream
+// resumed after a suspension, starts a genuinely new streak: it must never find an old streak's
+// repair latched (#3557 review).
+function forgetFailureStreak(): void {
+  sessionRepairAttempted = false;
+  failureStreakCorrelationId = undefined;
+  acknowledgedRepairCorrelationId = undefined;
+}
+
+// A successful open ends the failure streak; after an acknowledged repair it is the recovery.
+function endFailureStreak(): void {
+  if (failureStreakCorrelationId !== undefined && acknowledgedRepairCorrelationId !== undefined) {
+    reportStreamSessionRecovered(
+      "run-events",
+      failureStreakCorrelationId,
+      acknowledgedRepairCorrelationId,
+    );
+  }
+  reconnectAttempts = 0;
+  forgetFailureStreak();
+}
+
 function openSharedEventSource(): void {
   if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) return;
   closeSharedEventSource();
@@ -193,21 +253,25 @@ function openSharedEventSource(): void {
   if (sharedEventSource === null) return;
 
   sharedEventSource.onopen = () => {
-    reconnectAttempts = 0;
+    endFailureStreak();
     sharedEventSourceLive = true;
     notifyAll("live", null);
   };
 
   sharedEventSource.addEventListener("ready", () => {
-    reconnectAttempts = 0;
+    endFailureStreak();
     sharedEventSourceLive = true;
     notifyAll("live", null);
   });
 
   sharedEventSource.onerror = () => {
-    reportClientDiagnostic(sseStreamErrorDiagnostic("run-events", sharedEventSource?.readyState));
+    failureStreakCorrelationId ??= newClientCorrelationId();
+    reportClientDiagnostic(sseStreamErrorDiagnostic("run-events", sharedEventSource?.readyState), {
+      correlationId: failureStreakCorrelationId,
+    });
     notifyAll("error", "Stream disconnected. Attempting to reconnect…");
     closeSharedEventSource();
+    repairSessionOnce(failureStreakCorrelationId);
     scheduleReconnect();
   };
 
@@ -250,6 +314,7 @@ function subscribeRunEvents(runId: string, subscriber: RunEventSubscriber): () =
       // seen traffic before" signal into it (see its declaration for why sticky-within-a-session
       // is otherwise the correct behaviour).
       everObservedEvent = false;
+      forgetFailureStreak();
     }
     removeVisibilityListenerIfIdle();
   };

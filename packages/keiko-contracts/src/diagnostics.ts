@@ -31,6 +31,8 @@
 // `[redacted:key]` even though the value is already length-bounded here); the existing log-value
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
+import { isActivityLogErrorKind, type ActivityLogErrorKind } from "./observability.js";
+
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
 // or CLOSED (2). A closed vocabulary, not a raw number, so a future EventSource-shaped value can
 // never smuggle an out-of-range number onto the wire.
@@ -327,6 +329,9 @@ export interface ClientDiagnosticIngestRequest {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  // The closed class of the failure the page observed, when it classified one (a refused
+  // connection is `unavailable`, never `unknown`); otherwise the server derives it from `kind`.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
@@ -489,7 +494,9 @@ function isClientModuleLoadFailure(value: unknown): boolean {
 }
 
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } = value;
+  const { errorKind, gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } =
+    value;
+  if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
@@ -514,6 +521,405 @@ export function isClientDiagnosticIngestRequest(
   if (!isOptional(voiceDialogueStage, isClientVoiceDialogueStage)) return false;
   if ((kind === "voice-dialogue") !== (voiceDialogueStage !== undefined)) return false;
   return hasValidClientDiagnosticContext(value);
+}
+
+// ─── UI stage evidence (KEIKO-3557) ──────────────────────────────────────────────
+//
+// `useWindowStageEvidence` (keiko-ui) reports routine desktop-window lifecycle evidence — a
+// placeholder stage mounting and later unmounting — through this same ingest route. That evidence
+// is not a failure (a stage that starts and settles is the ordinary case), so it must never share
+// `ClientDiagnosticIngestRequest`'s failure-shaped `message`/`kind` wire shape: a live log showed
+// 416 of 449 `client.diagnostic` lines were exactly this routine evidence, all persisted as
+// warn/unknown and burying the rare real failures. This closed, bounded, free-text-free shape is
+// the alternative the server registers and logs as its own lifecycle operation instead
+// (`client-diagnostics-routes.ts`'s `client.stage.started`/`client.stage.settled`).
+
+// Exactly the stage ids `useWindowStageEvidence` (keiko-ui) reports — never a free-form label.
+export const CLIENT_STAGE_IDS = [
+  "window chunk",
+  "chat window chunk",
+  "editor widget chunk",
+  "files widget chunk",
+  "chat bind",
+] as const;
+export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
+
+export const CLIENT_STAGE_PHASES = ["started", "settled"] as const;
+export type ClientStagePhase = (typeof CLIENT_STAGE_PHASES)[number];
+
+// `useWindowStageEvidence`'s per-tab mount sequence number. Generous relative to any plausible
+// number of desktop-window mounts in one page lifetime; a report beyond it is refused outright
+// rather than silently truncated.
+export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
+
+// A settle reported more than a day after its stage started is not timing evidence for that stage
+// anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
+export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
+
+// One correlation id per mounted stage (#3557 review): `started` and `settled` carry the same id, so
+// the pair joins in the log even when another tab reuses the same stage and ordinal.
+export interface ClientStageStartedIngestRequest {
+  readonly kind: "stage";
+  readonly stage: ClientStageId;
+  readonly phase: "started";
+  readonly ordinal: number;
+  readonly correlationId?: string | undefined;
+}
+
+export interface ClientStageSettledIngestRequest {
+  readonly kind: "stage";
+  readonly stage: ClientStageId;
+  readonly phase: "settled";
+  readonly ordinal: number;
+  readonly durationMs: number;
+  readonly correlationId?: string | undefined;
+}
+
+/** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
+export type ClientStageIngestRequest =
+  ClientStageStartedIngestRequest | ClientStageSettledIngestRequest;
+
+const CLIENT_STAGE_ID_SET: ReadonlySet<string> = new Set(CLIENT_STAGE_IDS);
+const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "stage",
+  "phase",
+  "ordinal",
+  "durationMs",
+  "correlationId",
+]);
+
+function isClientStageId(value: unknown): value is ClientStageId {
+  return typeof value === "string" && CLIENT_STAGE_ID_SET.has(value);
+}
+
+// `ordinal` is a 1-based mount counter (never 0); `durationMs` is a genuine elapsed time and a
+// same-tick settle (React StrictMode's double-invoke, or a truly instant bind) is legitimately 0.
+function isBoundedPositiveInteger(value: unknown, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximum;
+}
+
+function isBoundedNonNegativeInteger(value: unknown, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+}
+
+/**
+ * True for a closed, bounded stage report. An unknown `stage`/`phase`, an out-of-range `ordinal` or
+ * `durationMs`, a `durationMs` on a "started" report, a missing `durationMs` on a "settled" report,
+ * or any field this shape does not declare refuses the whole report rather than admitting part of
+ * it — the same fail-closed discipline `isClientDiagnosticIngestRequest` applies to the message
+ * shape.
+ */
+export function isClientStageIngestRequest(value: unknown): value is ClientStageIngestRequest {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => !CLIENT_STAGE_INGEST_REQUEST_KEYS.has(key))) return false;
+  if (value.kind !== "stage") return false;
+  if (!isClientStageId(value.stage)) return false;
+  if (!isBoundedPositiveInteger(value.ordinal, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
+  if (value.phase === "started") return value.durationMs === undefined;
+  if (value.phase === "settled") {
+    return isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX);
+  }
+  return false;
+}
+
+// ─── Restored window binding evidence (#3557) ────────────────────────────────────
+//
+// A desktop window restored from the persisted workspace binds a server-issued reference (a chat
+// window: its chat id). Whether that binding resolved, and what shape the persisted reference had,
+// is what tells a reference lost at persistence (stored as the redaction marker) from a target that
+// is really gone. A message-only report reduced every case to one opaque digest with an unknown
+// error kind (review on #3557). This closed shape carries closed values only, never the reference.
+
+export const CLIENT_BINDING_SURFACES = ["chat-window"] as const;
+export type ClientBindingSurface = (typeof CLIENT_BINDING_SURFACES)[number];
+
+// `candidates-offered`: a window whose chat id persistence redacted without a fingerprint listed the
+// chats it may have shown, for the person to choose from (#3557 review). `choice-kept` and
+// `choice-withdrawn`: the person kept the chat they chose for such a window, or withdrew it and
+// returned the window to the chats it may have shown.
+export const CLIENT_BINDING_OUTCOMES = [
+  "resolved",
+  "target-missing",
+  "candidates-offered",
+  "choice-kept",
+  "choice-withdrawn",
+] as const;
+export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
+// The binding outcomes that report a failure; every other one is routine evidence. The browser and
+// the server budget binding reports by this one rule, so routine offers and decisions never spend
+// the capacity a failure report needs (#3557 review).
+export const CLIENT_BINDING_FAILURE_OUTCOMES: ReadonlySet<ClientBindingOutcome> = new Set([
+  "target-missing",
+]);
+
+// `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
+// `opaque`: any other opaque reference; `fingerprint`: persisted as the redaction marker plus the
+// id's one-way fingerprint, through which the window found its chat again; `user-selected`:
+// persisted as the redaction marker without a fingerprint, and bound to the chat the person chose
+// among the ones it may have shown.
+export const CLIENT_BINDING_REFERENCE_SHAPES = [
+  "uuid",
+  "opaque",
+  "redacted",
+  "fingerprint",
+  "user-selected",
+] as const;
+export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPES)[number];
+
+// A legacy binding (no persisted project) is decided by a scan over every project's list; the report
+// names each list load it depended on beyond `correlationId`, up to this bound, and states how many
+// loads decided it in total. Any deciding load the report cannot name is recorded as classified
+// loss on a partial line, never silently cut (#3557 review).
+export const CLIENT_BINDING_RELATED_CORRELATIONS_MAX = 63;
+export const CLIENT_BINDING_DECIDING_LOADS_MAX = 10_000;
+// The window's own persisted id, which workspace persistence bounds to this safe shape (a
+// restored window with any other id is dropped). The server logs only its digest, and no
+// truncation ever happens, so two windows can never share one (#3557 review). `~` stays out: it
+// joins two window ids into a connection id.
+export const CLIENT_BINDING_WINDOW_REF_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
+// How many chats one offer may report.
+export const CLIENT_BINDING_CANDIDATES_MAX = 10_000;
+// The one-way SHA-256 fingerprint a chat window records for a chat id persistence redacts; a binding
+// names the chat it was restored to only in this form, never by its id.
+export const CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/u;
+
+export interface ClientBindingIngestRequest {
+  readonly kind: "binding";
+  readonly surface: ClientBindingSurface;
+  readonly outcome: ClientBindingOutcome;
+  readonly referenceShape: ClientBindingReferenceShape;
+  // The persisted reference is a server-issued UUID whose hyphenated form the shared secret
+  // heuristic reads as a card number: it survived persistence only through its compact stored form.
+  readonly heuristicFlagged: boolean;
+  readonly windowRef: string;
+  // The request whose answer decided the outcome (the target list load), when the client knows it.
+  readonly correlationId?: string | undefined;
+  readonly relatedCorrelationIds?: readonly string[] | undefined;
+  // How many list loads decided the outcome in total; any the report does not name is loss.
+  readonly decidingLoadCount?: number | undefined;
+  // `candidates-offered` only, and always there: how many chats the window offered, zero included.
+  readonly candidateCount?: number | undefined;
+  // `candidates-offered` only, and always there: how many of those offers read alike and show a
+  // reference from their chat's fingerprint, zero included.
+  readonly disambiguatedCount?: number | undefined;
+  // A binding found again after redaction (`fingerprint`, `user-selected`), resolved or found gone,
+  // and always a person's decision about a chosen chat: the fingerprint of that chat, never its id.
+  readonly targetFingerprint?: string | undefined;
+}
+
+const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "surface",
+  "outcome",
+  "referenceShape",
+  "heuristicFlagged",
+  "windowRef",
+  "correlationId",
+  "relatedCorrelationIds",
+  "decidingLoadCount",
+  "candidateCount",
+  "disambiguatedCount",
+  "targetFingerprint",
+]);
+
+function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
+  return typeof value === "string" && (values as readonly string[]).includes(value);
+}
+
+// Only a server-issued UUID (raw, found again through its fingerprint, or chosen by the person) can
+// be flagged by the heuristic, and a redaction marker can never have resolved to a live target;
+// every other impossible combination is refused as well.
+const HEURISTIC_FLAGGABLE_REFERENCE_SHAPES: ReadonlySet<ClientBindingReferenceShape> = new Set([
+  "uuid",
+  "fingerprint",
+  "user-selected",
+]);
+
+function hasConsistentBindingReference(value: Record<string, unknown>): boolean {
+  if (!isOneOf(value.outcome, CLIENT_BINDING_OUTCOMES)) return false;
+  if (!isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES)) return false;
+  if (typeof value.heuristicFlagged !== "boolean") return false;
+  if (value.outcome === "resolved" && value.referenceShape === "redacted") return false;
+  return !value.heuristicFlagged || HEURISTIC_FLAGGABLE_REFERENCE_SHAPES.has(value.referenceShape);
+}
+
+const RESTORED_REFERENCE_SHAPES: ReadonlySet<ClientBindingReferenceShape> = new Set([
+  "fingerprint",
+  "user-selected",
+]);
+
+const CLIENT_BINDING_CHOICE_DECISIONS: ReadonlySet<unknown> = new Set([
+  "choice-kept",
+  "choice-withdrawn",
+]);
+
+function isCandidateCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CLIENT_BINDING_CANDIDATES_MAX
+  );
+}
+
+// An offer always states its count and how many of its offers read alike, and nothing else does;
+// only a redaction marker offers.
+function hasConsistentOffer(value: Record<string, unknown>): boolean {
+  const { candidateCount, disambiguatedCount } = value;
+  if (value.outcome !== "candidates-offered") {
+    return candidateCount === undefined && disambiguatedCount === undefined;
+  }
+  return (
+    value.referenceShape === "redacted" &&
+    isCandidateCount(candidateCount) &&
+    isCandidateCount(disambiguatedCount) &&
+    disambiguatedCount <= candidateCount
+  );
+}
+
+// A binding found again after redaction may name the chat it bound to, or the chat its fingerprint
+// no longer finds, and a person's decision about a chosen chat always does; each only by the chat's
+// fingerprint.
+function hasConsistentTargetFingerprint(value: Record<string, unknown>): boolean {
+  const { targetFingerprint } = value;
+  const decision = CLIENT_BINDING_CHOICE_DECISIONS.has(value.outcome);
+  if (targetFingerprint === undefined) return !decision;
+  if (
+    typeof targetFingerprint !== "string" ||
+    !CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN.test(targetFingerprint)
+  ) {
+    return false;
+  }
+  return (
+    (decision || value.outcome === "resolved" || value.outcome === "target-missing") &&
+    isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES) &&
+    RESTORED_REFERENCE_SHAPES.has(value.referenceShape)
+  );
+}
+
+function isDecidingLoadCount(value: unknown): boolean {
+  return isBoundedPositiveInteger(value, CLIENT_BINDING_DECIDING_LOADS_MAX);
+}
+
+function hasBindingCorrelations(value: Record<string, unknown>): boolean {
+  if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
+  if (!isOptional(value.decidingLoadCount, isDecidingLoadCount)) return false;
+  const related = value.relatedCorrelationIds;
+  if (related === undefined) return true;
+  return (
+    Array.isArray(related) &&
+    related.length <= CLIENT_BINDING_RELATED_CORRELATIONS_MAX &&
+    related.every(isCorrelationIdShape)
+  );
+}
+
+/**
+ * True for a closed binding report. An unknown surface, outcome or reference shape, an impossible
+ * outcome/reference combination, a missing or oversized window reference, a malformed correlation
+ * id, or any undeclared field refuses the whole report, with the same fail-closed discipline as the
+ * message and stage shapes.
+ */
+export function isClientBindingIngestRequest(value: unknown): value is ClientBindingIngestRequest {
+  if (!isRecord(value) || value.kind !== "binding") return false;
+  if (Object.keys(value).some((key) => !CLIENT_BINDING_INGEST_REQUEST_KEYS.has(key))) return false;
+  if (!isOneOf(value.surface, CLIENT_BINDING_SURFACES)) return false;
+  if (
+    typeof value.windowRef !== "string" ||
+    !CLIENT_BINDING_WINDOW_REF_PATTERN.test(value.windowRef)
+  ) {
+    return false;
+  }
+  return (
+    hasConsistentBindingReference(value) &&
+    hasConsistentOffer(value) &&
+    hasConsistentTargetFingerprint(value) &&
+    hasBindingCorrelations(value)
+  );
+}
+
+// ─── Stale-session repair evidence (#3557) ───────────────────────────────────────
+//
+// keiko-ui repairs a read that a restarted BFF denied with 403 DENIED (a local-session request) and
+// replays it once. The denied request, the repair and the replay are separate requests; this report
+// links them under the denied request's correlation id, which the replay reuses, and names the
+// outcome, so a self-healed refusal and one that stayed denied are both reconstructable. A stream
+// (EventSource) repair reports under its failure streak's id instead, with the closed stream name:
+// an EventSource carries no request correlation the page can read. The local-session endpoint
+// acknowledges whether or not it issued a cookie, so a stream reports an acknowledged repair
+// (`repair-acknowledged`) at once and its recovery (`stream-repaired`) only when it opens again.
+
+export const CLIENT_SESSION_REPAIR_OUTCOMES = [
+  "replayed",
+  "stream-repaired",
+  "repair-acknowledged",
+  "replay-failed",
+  "replay-skipped",
+  "repair-failed",
+] as const;
+export const CLIENT_SESSION_REPAIR_STREAMS = ["run-events", "shared-event-source"] as const;
+export type ClientSessionRepairStream = (typeof CLIENT_SESSION_REPAIR_STREAMS)[number];
+export type ClientSessionRepairOutcome = (typeof CLIENT_SESSION_REPAIR_OUTCOMES)[number];
+// A replayed read, a reopened stream and an acknowledged repair are routine evidence; the browser
+// and the server budget repair reports by this one rule.
+export const CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> =
+  new Set(["replayed", "stream-repaired", "repair-acknowledged"]);
+
+export interface ClientSessionRepairIngestRequest {
+  readonly kind: "session-repair";
+  readonly outcome: ClientSessionRepairOutcome;
+  // The denied request, which the replay reuses.
+  readonly correlationId: string;
+  // The local-session repair request. Every outcome follows a repair attempt, whose id the page
+  // mints before it sends the request, so a report without it cannot be linked and is refused.
+  readonly repairCorrelationId: string;
+  // The closed class of the step that failed (the repair request or the replay), so a 502 or a
+  // transport failure is never recorded as an authority denial.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
+  // The stream whose failure streak asked for the repair.
+  readonly stream?: ClientSessionRepairStream | undefined;
+}
+
+const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "outcome",
+  "correlationId",
+  "repairCorrelationId",
+  "errorKind",
+  "stream",
+]);
+
+// Only a repair's own outcome can name a stream (a stream is never replayed), and a stream-only
+// outcome always names one.
+const STREAM_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> = new Set([
+  "stream-repaired",
+  "repair-acknowledged",
+  "repair-failed",
+]);
+const STREAM_ONLY_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> = new Set([
+  "stream-repaired",
+  "repair-acknowledged",
+]);
+
+function hasConsistentRepairStream(outcome: ClientSessionRepairOutcome, stream: unknown): boolean {
+  if (stream === undefined) return !STREAM_ONLY_REPAIR_OUTCOMES.has(outcome);
+  return isOneOf(stream, CLIENT_SESSION_REPAIR_STREAMS) && STREAM_REPAIR_OUTCOMES.has(outcome);
+}
+
+export function isClientSessionRepairIngestRequest(
+  value: unknown,
+): value is ClientSessionRepairIngestRequest {
+  if (!isRecord(value) || value.kind !== "session-repair") return false;
+  if (Object.keys(value).some((key) => !CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS.has(key))) {
+    return false;
+  }
+  if (!isOneOf(value.outcome, CLIENT_SESSION_REPAIR_OUTCOMES)) return false;
+  if (!isOptional(value.errorKind, isActivityLogErrorKind)) return false;
+  if (!hasConsistentRepairStream(value.outcome, value.stream)) return false;
+  return (
+    isCorrelationIdShape(value.correlationId) && isCorrelationIdShape(value.repairCorrelationId)
+  );
 }
 
 // ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────
