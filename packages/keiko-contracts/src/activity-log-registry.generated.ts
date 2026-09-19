@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "83c7dbc74d602876780a280bc98b2c38f4d638e3e0255d4da4547ac1151899aa" as const;
+  "7d6dd0407be6c999249602713a99dfbc331c0241b8b84d527511354d491bfdde" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -872,6 +872,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 240,
       },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
+      },
       readinessObservation: {
         type: "string",
         dataClass: "closed-enum",
@@ -921,6 +927,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "opaque-id",
         required: false,
         maxLength: 240,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
       },
       readinessObservation: {
         type: "string",
@@ -1102,6 +1114,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "opaque-id",
         required: false,
         maxLength: 240,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
       },
       readinessObservation: {
         type: "string",
@@ -10145,8 +10163,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       modelId: {
         type: "string",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 240,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
       },
       overallStatus: {
         type: "string",
@@ -10188,8 +10212,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       modelId: {
         type: "string",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 240,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
       },
       probeCount: {
         type: "integer",
@@ -10225,8 +10255,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       modelId: {
         type: "string",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 240,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
       },
       trigger: {
         type: "string",
@@ -10256,6 +10292,50 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "gateway.readiness.joined",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-readiness.logReadinessJoined",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 240,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
+      },
+      probeCorrelationId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-readiness"],
+    proofIds: ["gateway.readiness.joined.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.readiness.started",
     category: "gateway",
     owner: "keiko-server",
@@ -10274,8 +10354,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       modelId: {
         type: "string",
         dataClass: "opaque-id",
-        required: true,
+        required: false,
         maxLength: 240,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
       },
       trigger: {
         type: "string",
@@ -27414,6 +27500,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "modelKind",
               type: "string",
               dataClass: "closed-enum",
@@ -27432,7 +27524,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -27456,6 +27554,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "modelKind",
               type: "string",
               dataClass: "closed-enum",
@@ -27474,7 +27578,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -27498,6 +27608,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "modelKind",
               type: "string",
               dataClass: "closed-enum",
@@ -27516,7 +27632,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -39321,10 +39443,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "gateway-readiness",
       requirementContract: "gateway-readiness",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end", "start"],
+      lifecycleTransitions: ["end", "start", "state"],
       lifecycleOperations: {
         start: ["gateway.readiness.automatic.started", "gateway.readiness.started"],
-        state: [],
+        state: ["gateway.readiness.joined"],
         end: ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
         failure: [],
         loss: [],
@@ -39343,6 +39465,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "gateway.readiness.joined",
+          mode: "correlation",
+        },
+        {
           op: "gateway.readiness.started",
           mode: "correlation",
         },
@@ -39352,6 +39478,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.started",
         "gateway.readiness.completed",
+        "gateway.readiness.joined",
         "gateway.readiness.started",
       ],
       replayReferences: [],
@@ -39368,7 +39495,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "modelId",
               type: "string",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
+            },
+            {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
             {
               name: "overallStatus",
@@ -39387,6 +39520,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "loss-state",
             "opaque-id",
           ],
@@ -39410,7 +39544,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "modelId",
               type: "string",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
+            },
+            {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
             {
               name: "probeCount",
@@ -39419,7 +39559,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["completeness-state", "count", "loss-state", "opaque-id"],
+          evidenceClasses: ["completeness-state", "count", "digest", "loss-state", "opaque-id"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -39440,7 +39580,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "modelId",
               type: "string",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
+            },
+            {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
             {
               name: "overallStatus",
@@ -39465,6 +39611,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "loss-state",
             "opaque-id",
           ],
@@ -39473,6 +39620,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.readiness.completed.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.readiness.joined",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "probeCorrelationId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "digest", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.readiness.joined.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -39488,7 +39671,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "modelId",
               type: "string",
               dataClass: "opaque-id",
-              required: true,
+              required: false,
+            },
+            {
+              name: "modelIdDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
             },
             {
               name: "probeCount",
@@ -39507,6 +39696,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "loss-state",
             "opaque-id",
           ],
@@ -57750,6 +57940,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.readiness.automatic.completed": "model-gateway",
     "gateway.readiness.automatic.started": "model-gateway",
     "gateway.readiness.completed": "model-gateway",
+    "gateway.readiness.joined": "model-gateway",
     "gateway.readiness.started": "model-gateway",
     "gateway.retry.budget-exhausted": "model-gateway",
     "gateway.retry.exhausted": "model-gateway",
