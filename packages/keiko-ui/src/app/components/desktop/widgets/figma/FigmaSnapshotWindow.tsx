@@ -42,7 +42,10 @@ import Image from "next/image";
 import { Icons } from "../../Icons";
 import { ApiError } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/format";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import {
   triggerFigmaSnapshot,
   loadFigmaSnapshotSummary,
@@ -174,7 +177,7 @@ function snapshotDisplayName(
     readonly displayName?: string | undefined;
     readonly fetchedAt: string;
   },
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   return (
     snapshot.displayName ??
@@ -182,7 +185,7 @@ function snapshotDisplayName(
   );
 }
 
-function snapshotVersionLabel(version: string | undefined, t: I18nTranslate): string {
+function snapshotVersionLabel(version: string | undefined, t: OptionalWidgetTranslate): string {
   return version === undefined || version.length === 0
     ? t("figmaSnapshotWindow.version.latest")
     : version;
@@ -269,7 +272,7 @@ const FIGMA_PAT_ERRORS: ReadonlySet<string> = new Set([
   "FIGMA_INSUFFICIENT_SCOPE",
 ]);
 
-function formatSnapshotError(err: unknown, t: I18nTranslate): SnapshotErrorNotice {
+function formatSnapshotError(err: unknown, t: OptionalWidgetTranslate): SnapshotErrorNotice {
   if (err instanceof ApiError) {
     // Issue #1399: surface PAT/credential problems as an actionable alert that links straight to
     // the Figma access-token settings, so the operator does not have to hunt for the setting.
@@ -334,7 +337,7 @@ function formatSnapshotError(err: unknown, t: I18nTranslate): SnapshotErrorNotic
   };
 }
 
-function formatError(err: unknown, t: I18nTranslate): string {
+function formatError(err: unknown, t: OptionalWidgetTranslate): string {
   const notice = formatSnapshotError(err, t);
   return notice.status === undefined ? notice.detail : `${notice.detail} (${notice.status})`;
 }
@@ -352,7 +355,7 @@ function formatElapsed(ms: number): string {
 function screenCardSizeLabel(
   imageByteLength: number | undefined,
   structuralReason: string | undefined,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (imageByteLength !== undefined) return formatBytes(imageByteLength);
   if (structuralReason !== undefined) {
@@ -366,7 +369,7 @@ function screenCardSizeLabel(
 function viewSourcePreviewLabel(
   imageByteLength: number | undefined,
   structuralReason: string | undefined,
-  t: I18nTranslate,
+  t: OptionalWidgetTranslate,
 ): string {
   if (imageByteLength !== undefined) return formatBytes(imageByteLength);
   if (structuralReason !== undefined) {
@@ -386,7 +389,7 @@ function galleryAriaLabel({
   readonly displayedCount: number;
   readonly isScreenScopedSource: boolean;
   readonly totalCount: number;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
 }): string {
   if (isScreenScopedSource) {
     return displayedCount === 1
@@ -402,7 +405,7 @@ function galleryAriaLabel({
  * Differentiated validation microcopy (WCAG 3.3.1 Error Identification) for a
  * non-empty, invalid board link. Returns null when the link is empty or valid.
  */
-function figmaLinkValidationMessage(raw: string, t: I18nTranslate): string | null {
+function figmaLinkValidationMessage(raw: string, t: OptionalWidgetTranslate): string | null {
   const trimmed = raw.trim();
   if (trimmed.length === 0 || isValidFigmaLink(trimmed)) return null;
   try {
@@ -490,7 +493,7 @@ function ScreenCard({
   isSourceSelected = false,
   dragPayload,
 }: ScreenCardProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const pointerDragRef = useRef<{
     readonly pointerId: number;
     readonly startX: number;
@@ -715,7 +718,7 @@ function FigmaViewSourceCard({
   capturedAt,
   imageDragPayload,
 }: FigmaViewSourceCardProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const imagePointerDragRef = useRef<{
     readonly pointerId: number;
     readonly startX: number;
@@ -968,7 +971,7 @@ interface RenameFigmaSnapshotParams {
   readonly controller: AbortController;
   readonly renameValue: string;
   readonly summaryRunId: string | undefined;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
   readonly updateMetadataImpl: typeof updateFigmaSnapshotMetadata;
   readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
   readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
@@ -1040,7 +1043,7 @@ interface DeleteFigmaSnapshotByRunIdParams {
   readonly controller: AbortController;
   readonly summaryRunId: string | undefined;
   readonly currentSnapshotRunId: string | undefined;
-  readonly t: I18nTranslate;
+  readonly t: OptionalWidgetTranslate;
   readonly deleteImpl: typeof deleteFigmaSnapshot;
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
   readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
@@ -1142,7 +1145,7 @@ export function FigmaSnapshotWindow({
   codegenImpl = generateFigmaCode,
   revokeImpl = revokeFigmaToken,
 }: FigmaSnapshotWindowProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const inputId = useId();
   const statusId = useId();
   const validationId = useId();
@@ -1994,7 +1997,7 @@ export function FigmaSnapshotWindow({
                     onClick={() => handleRequestDelete(snapshot.runId)}
                     disabled={itemBusy}
                     aria-label={t("figmaSnapshotWindow.dashboard.deleteSnapshotAria", { title })}
-                    title={t("common.delete")}
+                    title={t("figmaSnapshotWindow.common.delete")}
                   >
                     <TrashIcon aria-hidden="true" />
                   </button>
@@ -2040,7 +2043,7 @@ export function FigmaSnapshotWindow({
                     disabled={itemBusy}
                     aria-busy={itemBusy}
                   >
-                    {t("common.save")}
+                    {t("figmaSnapshotWindow.common.save")}
                   </button>
                   <button
                     type="button"
@@ -2048,7 +2051,7 @@ export function FigmaSnapshotWindow({
                     onClick={handleCancelRename}
                     disabled={itemBusy}
                   >
-                    {t("common.cancel")}
+                    {t("figmaSnapshotWindow.common.cancel")}
                   </button>
                 </form>
               ) : null}
@@ -2062,7 +2065,7 @@ export function FigmaSnapshotWindow({
                     disabled={itemBusy}
                     aria-busy={itemBusy}
                   >
-                    {t("common.delete")}
+                    {t("figmaSnapshotWindow.common.delete")}
                   </button>
                   <button
                     type="button"
@@ -2070,7 +2073,7 @@ export function FigmaSnapshotWindow({
                     onClick={() => setDeleteConfirmRunId(null)}
                     disabled={itemBusy}
                   >
-                    {t("common.cancel")}
+                    {t("figmaSnapshotWindow.common.cancel")}
                   </button>
                 </div>
               ) : null}
@@ -2386,7 +2389,7 @@ export function FigmaSnapshotWindow({
       {isBuilding ? (
         <div className="figma-snapshot-cancel-row">
           <button type="button" className="figma-snapshot-cancel-btn" onClick={handleCancel}>
-            {t("common.cancel")}
+            {t("figmaSnapshotWindow.common.cancel")}
           </button>
           <p className="figma-snapshot-cancel-note" role="status" aria-live="polite">
             {t("figmaSnapshotWindow.build.cancelNote")}
@@ -2623,7 +2626,7 @@ export function FigmaSnapshotWindow({
   );
 
   const renderSnapshotWorkspace = (): ReactNode => (
-    <section className="figma-snapshot-window" aria-label={t("rail.figma")}>
+    <section className="figma-snapshot-window" aria-label={t("figmaSnapshotWindow.railLabel")}>
       {/* ── Board link input ────────────────────────────────────────────── */}
       {renderSnapshotForm()}
 
@@ -2732,7 +2735,7 @@ export function FigmaSnapshotWindow({
                   className="figma-snapshot-codegen-cancel-btn"
                   onClick={handleCancelCodegen}
                 >
-                  {t("common.cancel")}
+                  {t("figmaSnapshotWindow.common.cancel")}
                 </button>
               )}
             </div>
@@ -2811,7 +2814,7 @@ export function FigmaSnapshotWindow({
                     className="figma-snapshot-revoke-cancel-btn"
                     onClick={handleRevokeCancel}
                   >
-                    {t("common.cancel")}
+                    {t("figmaSnapshotWindow.common.cancel")}
                   </button>
                 </span>
               ) : (
