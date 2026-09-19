@@ -2558,6 +2558,7 @@ function applyRetention(
       nowMs,
       reserveBytes,
       skipNames: pendingRetries(active.failedDeletions, listing, nowMs),
+      ownInstanceId: INSTANCE_ID,
     },
     (entry) => removeRetentionTarget(active, entry),
   );

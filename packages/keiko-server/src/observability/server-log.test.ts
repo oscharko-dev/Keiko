@@ -2044,6 +2044,45 @@ describe("activity log retention", () => {
   // #3557 review: a writer rotating make-before-break holds, for a moment, its full segment and its
   // next one, still empty. A peer admitting its first event at the minimum budget counts that writer
   // once: two writers fit, so the event is persisted, never dropped.
+  // #3557 review: a writer whose full segment can be neither sealed nor recovered still holds it under
+  // its active name. Its own admission of the next segment must reserve both, so at the minimum
+  // budget, beside a peer's nearly full segment, it refuses the next one instead of writing past the
+  // byte bound.
+  it("refuses the next segment while its full one is stranded under its active name", () => {
+    const env = storageEnv({
+      KEIKO_LOG_RETENTION_BYTES: String(64 * 1024),
+      KEIKO_LOG_SEGMENT_BYTES: String(32 * 1024),
+    });
+    seedSegment(stateDir, {
+      identity: { startMs: Date.now(), pid: process.ppid, instanceId: "0b0c0d0e", index: 1 },
+      state: "active",
+      content: syntheticLines(32 * 1024 - 1024),
+    });
+    const sink = createFileServerLogSink(stateDir, { env });
+    sink.write({ category: "http", op: "stranded.first" });
+    const ownSegments = (): readonly { readonly index: number; readonly sizeBytes: number }[] =>
+      segmentFiles(stateDir, "active").flatMap((info) => {
+        const file = parseActivityLogFileName(info.name);
+        return file?.kind === "active" && file.instanceId === serverLogInstanceId()
+          ? [{ index: file.index, sizeBytes: info.sizeBytes }]
+          : [];
+      });
+    expect(ownSegments()).toEqual([expect.objectContaining({ index: 1 })]);
+    // The seal of segment 1 fails, and so does every recovery of it.
+    fsCalls.failFsync = true;
+    fsCalls.failOpenMatching = /-000001\.active\.jsonl$/u;
+
+    for (let index = 0; index < 160; index += 1) {
+      sink.write({ category: "http", op: "stranded.fill", extra: { index } });
+    }
+
+    const successors = ownSegments().filter((segment) => segment.index > 1);
+    expect(successors.every((segment) => segment.sizeBytes === 0)).toBe(true);
+    expect(ownSegments().find((segment) => segment.index === 1)?.sizeBytes).toBeLessThanOrEqual(
+      32 * 1024,
+    );
+  });
+
   it("admits a peer at the minimum budget while another writer is between its two segments", () => {
     const env = storageEnv({
       KEIKO_LOG_RETENTION_BYTES: String(64 * 1024),

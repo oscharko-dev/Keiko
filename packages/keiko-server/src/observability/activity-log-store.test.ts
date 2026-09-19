@@ -364,6 +364,31 @@ describe("applyActivityLogRetention active reservations (#3557)", () => {
     ).toBe(false);
   });
 
+  // #3557 review: for the rotating writer itself this pass is the re-check a peer relies on. If its
+  // full segment could not be sealed or recovered, it still holds its active name, and the next one
+  // is admitted only if both fit beside the peer's segment.
+  it("never discounts the checking writer's own successor while its full segment is stranded", () => {
+    const outcome = applyActivityLogRetention(
+      {
+        files: [
+          active("0a0b0c0d", 1, segmentBytes - 512),
+          active("0a0b0c0d", 2, 0),
+          active("0e0e0e0e", 1, segmentBytes - 1024),
+        ],
+        pins: [],
+        pinRecordBytes: 0,
+        config,
+        nowMs: Date.now(),
+        reserveBytes: 0,
+        skipNames: new Set(),
+        ownInstanceId: "0a0b0c0d",
+      },
+      () => true,
+    );
+
+    expect(outcome.admitted).toBe(false);
+  });
+
   it("reserves another writer's empty segment in full", () => {
     expect(
       admitsAnotherSegment([active("0a0b0c0d", 1, segmentBytes - 512), active("0e0e0e0e", 1, 0)]),

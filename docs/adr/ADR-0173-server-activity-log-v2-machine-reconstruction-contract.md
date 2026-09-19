@@ -1002,7 +1002,9 @@ then runs with that new, still empty segment at its full reservation, so the byt
 unchanged. A peer that lists the directory in that moment counts the writer once: an empty active
 segment whose instance still holds an older active segment counts only its actual size, because
 its writer re-checks admission before it writes a byte into it. At the minimum budget two writers
-therefore still fit, and no peer drops an event while another rotates. A process that keeps writing is therefore never without an active segment, which is the
+therefore still fit, and no peer drops an event while another rotates. The writer's own re-check
+never discounts its own segments: when its full segment could be neither sealed nor recovered, it
+keeps its active name, and the next segment is admitted only if both fit. A process that keeps writing is therefore never without an active segment, which is the
 one sign of a live writer a starting peer can see before it decides whether it may replace the
 store policy. Sealing first and opening the next segment only after a maintenance pass had left a
 busy writer invisible for that whole pass, and a peer starting then replaced a running writer's

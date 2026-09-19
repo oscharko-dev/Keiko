@@ -777,6 +777,9 @@ export interface ActivityLogRetentionInput {
   readonly reserveBytes: number;
   // Names this process already failed to delete; counted, never retried in the same process.
   readonly skipNames: ReadonlySet<string>;
+  // The writer instance running this pass. Its own segments are always reserved in full: for it this
+  // pass is the re-check that a peer relies on (#3557 review).
+  readonly ownInstanceId?: string | undefined;
 }
 
 export interface ActivityLogRetentionOutcome {
@@ -800,10 +803,15 @@ function activeReservation(entry: ActivityLogFileEntry, segmentBytes: number): n
 
 // A writer rotating make-before-break holds, for a moment, two active segments: the full one it is
 // sealing, and its next one, created empty. It re-checks admission before it writes a byte into the
-// next one, so that one counts only its actual size while an older active segment of the same
-// instance exists, and a peer never reserves two segments for one writer (#3557 review). Once it
-// holds bytes, it is reserved in full again.
-function pendingSuccessorNames(files: readonly ActivityLogFileEntry[]): ReadonlySet<string> {
+// next one, so for a peer that one counts only its actual size while an older active segment of the
+// same instance exists, and a peer never reserves two segments for one writer (#3557 review). Once
+// it holds bytes, it is reserved in full again. The writer's own re-check never discounts it: if its
+// full segment could not be sealed or recovered, that segment keeps its active name, and the next
+// one is admitted only if both fit.
+function pendingSuccessorNames(
+  files: readonly ActivityLogFileEntry[],
+  ownInstanceId: string | undefined,
+): ReadonlySet<string> {
   const oldestIndex = new Map<string, number>();
   for (const { file } of files) {
     if (file.kind !== "active") continue;
@@ -812,7 +820,7 @@ function pendingSuccessorNames(files: readonly ActivityLogFileEntry[]): Readonly
   }
   const names = new Set<string>();
   for (const { file, sizeBytes } of files) {
-    if (file.kind !== "active" || sizeBytes !== 0) continue;
+    if (file.kind !== "active" || sizeBytes !== 0 || file.instanceId === ownInstanceId) continue;
     const oldest = oldestIndex.get(`${String(file.pid)}:${file.instanceId}`) ?? file.index;
     if (file.index > oldest) names.add(file.name);
   }
@@ -824,7 +832,7 @@ function unprotectedUsage(
   protectedNames: ReadonlySet<string>,
 ): number {
   let usage = input.pinRecordBytes + input.reserveBytes;
-  const successors = pendingSuccessorNames(input.files);
+  const successors = pendingSuccessorNames(input.files, input.ownInstanceId);
   for (const entry of input.files) {
     if (protectedNames.has(entry.file.name)) continue;
     usage +=
