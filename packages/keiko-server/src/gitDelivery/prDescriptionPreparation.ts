@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import { canonicalise, redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import { isGitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
@@ -18,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { validGitPrBodyText, type GitPrBody } from "@oscharko-dev/keiko-tools";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import { newReferenceId } from "../reference-id.js";
 import { reconcilePrDescriptionRegion } from "./prDescriptionRegion.js";
 import { applicationStatus } from "./prDescriptionProjection.js";
 import {
@@ -364,7 +364,8 @@ function finishPreparation({
 }: FinishPreparationInput): PreparedPrDescription {
   const region = preparedRegion(options, previous, artifact);
   const binding = bindingFor(context, previous, artifact, region);
-  const proposalId = randomUUID();
+  // A governed pull request window persists it as a reference (#3557 review).
+  const proposalId = newReferenceId();
   const completeness = artifact.outcome === "complete" ? "complete" : artifact.outcome;
   const status = applicationStatus(
     binding,

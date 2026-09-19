@@ -4,9 +4,7 @@ import {
   MAX_PERSISTED_CONNECTION_SCAN,
   parsePersistedConnections,
   parsePersistedWindows,
-  persistableWorkspace,
   persistedReferenceShape,
-  restoredWorkspace,
   sanitizePersistedConnections,
   sanitizePersistedWorkspace,
   sanitizePersistedWindows,
@@ -752,22 +750,17 @@ describe("workspace-persistence", () => {
     expect(JSON.stringify(persisted)).not.toContain(bearerToken);
   });
 
-  it("keeps a server-issued UUID that the payment-card rule misreads as a card number", () => {
-    // The chat id from a real CI failure: the 16 digits across its last hyphen pass the Luhn check.
-    // Persisted as the redaction marker, it left the restored chat window reporting its live
-    // conversation as deleted. The heuristic must still misread it, or this test proves nothing.
+  // #3557 review (P1): no stored form and no field works around the heuristic. The chat id from a
+  // real CI failure is flagged (the 16 digits across its last hyphen pass the Luhn check), so it is
+  // redacted or dropped in every reference field. The server no longer issues such an id
+  // (`newReferenceId`, keiko-server), which is what keeps a restored chat window's binding.
+  it("judges every reference by its content, a server-issued UUID included", () => {
     const id = "1404206d-9ab6-4bca-8853-813867352087";
-    const compact = "1404206d9ab64bca8853813867352087";
     expect(isSecretShapedString(id)).toBe(true);
-    // The stored form never trips the heuristic, so nothing is exempted from it (#3557 review).
-    expect(isSecretShapedString(compact)).toBe(false);
     const digest = "a".repeat(64);
-    const { wins: persisted } = persistableWorkspace(
+    const { wins: persisted } = sanitizePersistedWorkspace(
       [
         win({ id: "chat-1", type: "chat", cfg: { chatId: id, title: "Deploy status" } }),
-        // governedPullRequest.descriptionProposalId is the other field the app itself sets from a
-        // real server randomUUID() (gitDelivery/prDescriptionService.ts) and a user can never type
-        // (WIN_TYPES.governedPullRequest.config exposes only projectPath/headBranchName).
         win({
           id: "pr-1",
           type: "governedPullRequest",
@@ -779,27 +772,21 @@ describe("workspace-persistence", () => {
             descriptionSnapshotDigest: digest,
           },
         }),
-        // #3557 review (P1): review.runId and qiRun.runId are user-editable text fields
-        // (WIN_TYPES.review.config / WIN_TYPES.qiRun.config, both "text"), and figma.snapshotRunId
-        // is app-written but never in this bare shape (the server issues `fs-${randomUUID()}`).
-        // None of the three is a proven server-issued reference, so none gets the UUID exemption —
-        // even though this particular value IS one.
         win({ id: "review-1", type: "review", cfg: { runId: id } }),
         win({ id: "qi-run-1", type: "qiRun", cfg: { runId: id } }),
-        win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: id } }),
+        win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: `fs-${id}` } }),
       ],
       [],
     );
 
     expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
-      ["chat-1", { chatId: compact, title: "Deploy status" }],
+      ["chat-1", { chatId: "[REDACTED]", title: "Deploy status" }],
       [
         "pr-1",
         {
           projectPath: "/repo",
           descriptionOwnerAndRepo: "owner/repo",
           descriptionPrNumber: 42,
-          descriptionProposalId: compact,
           descriptionSnapshotDigest: digest,
         },
       ],
@@ -807,38 +794,41 @@ describe("workspace-persistence", () => {
       ["qi-run-1", {}],
       ["figma-1", {}],
     ]);
-    // Restore expands the stored form back to the id the server knows.
-    const restored = restoredWorkspace(JSON.parse(JSON.stringify(persisted)) as unknown[], []);
-    expect(restored.wins.find((entry) => entry.id === "chat-1")?.cfg["chatId"]).toBe(id);
-    expect(restored.wins.find((entry) => entry.id === "pr-1")?.cfg["descriptionProposalId"]).toBe(
-      id,
-    );
-    expect(parsePersistedWindows(JSON.stringify(persisted))?.[0]?.cfg["chatId"]).toBe(id);
+    expect(JSON.stringify(persisted)).not.toContain("8853-813867352087");
   });
 
   // #3557 review (P1): a restored snapshot is untrusted, and shape is no proof of server issuance.
-  // A hyphenated PAN-shaped v4 value in it is redacted like any other string, never kept verbatim.
-  it("redacts a hyphenated PAN-shaped chat id in a restored snapshot", () => {
+  // A hyphenated PAN-shaped v4 value in it is redacted like any other string, never kept verbatim,
+  // and a compact 32-hex value is an opaque string that is never expanded into that shape.
+  it("redacts a hyphenated PAN-shaped reference and never expands a compact one", () => {
     const hostile = "deadbeef-cafe-4abe-8853-813867352087";
+    const compact = "deadbeefcafe4abe8853813867352087";
     expect(isSecretShapedString(hostile)).toBe(true);
 
-    const restored = restoredWorkspace(
-      [
-        win({ id: "chat-1", type: "chat", cfg: { chatId: hostile } }),
-        win({
-          id: "pr-1",
-          type: "governedPullRequest",
-          cfg: { projectPath: "/repo", descriptionProposalId: hostile },
-        }),
-      ],
-      [],
-    );
+    const raw = JSON.stringify([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: hostile } }),
+      win({ id: "chat-2", type: "chat", cfg: { chatId: compact } }),
+      win({
+        id: "pr-1",
+        type: "governedPullRequest",
+        cfg: { projectPath: "/repo", descriptionProposalId: hostile },
+      }),
+      win({
+        id: "pr-2",
+        type: "governedPullRequest",
+        cfg: { projectPath: "/repo", descriptionProposalId: compact },
+      }),
+    ]);
+    const restored = parsePersistedWindows(raw) ?? [];
 
-    expect(restored.wins.map((entry) => [entry.id, entry.cfg])).toEqual([
+    expect(restored.map((entry) => [entry.id, entry.cfg])).toEqual([
       ["chat-1", { chatId: "[REDACTED]" }],
+      ["chat-2", { chatId: compact }],
       ["pr-1", { projectPath: "/repo" }],
+      ["pr-2", { projectPath: "/repo", descriptionProposalId: compact }],
     ]);
     expect(JSON.stringify(restored)).not.toContain(hostile);
+    expect(JSON.stringify(sanitizePersistedWindows(restored))).not.toContain(hostile);
   });
 
   // #3557 review (P1): isSafeOpaqueReference used to accept ANY v4-shaped value outright,
@@ -872,17 +862,15 @@ describe("workspace-persistence", () => {
     ]);
   });
 
-  // The exemption belongs to reference fields only. A free-text value that merely has a UUID's
-  // shape (here with a Luhn-valid 4111… tail and neither the v4 version nor variant nibble) is
-  // still redacted, in the title and in the reference fields alike.
-  it("never exempts a UUID-shaped card number outside a server-issued reference", () => {
+  // No exemption anywhere. A value that merely has a UUID's shape (here with a Luhn-valid 4111…
+  // tail and neither the v4 version nor variant nibble) is redacted in the title and in the
+  // reference fields alike.
+  it("never exempts a UUID-shaped card number in any field", () => {
     const lookalike = "deadbeef-cafe-babe-4111-111111111111";
-    const serverIssued = "1404206d-9ab6-4bca-8853-813867352087";
     expect(isSecretShapedString(lookalike)).toBe(true);
-    const { wins: persisted } = persistableWorkspace(
+    const { wins: persisted } = sanitizePersistedWorkspace(
       [
         win({ id: "chat-1", type: "chat", cfg: { chatId: lookalike, title: lookalike } }),
-        win({ id: "chat-2", type: "chat", cfg: { chatId: serverIssued, title: serverIssued } }),
         win({ id: "review-1", type: "review", cfg: { runId: lookalike } }),
         win({ id: "figma-1", type: "figma", cfg: { snapshotRunId: lookalike } }),
       ],
@@ -891,7 +879,6 @@ describe("workspace-persistence", () => {
 
     expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
       ["chat-1", { chatId: "[REDACTED]", title: "[REDACTED]" }],
-      ["chat-2", { chatId: serverIssued.replaceAll("-", ""), title: "[REDACTED]" }],
       ["review-1", {}],
       ["figma-1", {}],
     ]);

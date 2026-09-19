@@ -52,6 +52,7 @@ import { MAX_TIMER_DELAY_MS } from "../abort-race.js";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { newReferenceId } from "../reference-id.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { emitServerDiagnostic } from "../diagnostics-log.js";
 import {
@@ -945,7 +946,8 @@ function startCoalescedBuild(
       return figmaErrorResult(err, deps);
     }
 
-    const runId = `fs-${randomUUID()}`;
+    // A Figma window persists it as a reference (#3557 review).
+    const runId = newReferenceId("fs-");
     const stored = persistSnapshot(evidenceDir, runId, result, deps);
     if ("status" in stored) {
       appendSnapshotRouteFailureAudit(evidenceDir, result, body.isResnapshot, "FIGMA_INTERNAL");

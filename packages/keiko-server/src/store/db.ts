@@ -57,6 +57,7 @@ import type {
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./types.js";
+import { newReferenceId } from "../reference-id.js";
 import { runMigrations, SCHEMA_VERSION } from "./schema.js";
 import {
   deleteProject as sqlDeleteProject,
@@ -177,7 +178,8 @@ interface ResolvedFactoryOptions {
 function resolveOptions(opts: UiStoreFactoryOptions | undefined): ResolvedFactoryOptions {
   return {
     now: opts?.now ?? ((): number => Date.now()),
-    newId: opts?.newId ?? randomUUID,
+    // A chat id is persisted by the browser as a window reference (#3557 review).
+    newId: opts?.newId ?? ((): string => newReferenceId()),
     redactString: opts?.redactString ?? DEFAULT_REDACT,
   };
 }

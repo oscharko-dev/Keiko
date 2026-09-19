@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { evaluateGitPolicy } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import {
   PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
@@ -7,6 +6,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { evaluateGitPullRequestEffectivePolicy } from "@oscharko-dev/keiko-tools";
 import { basePinnedPrPolicyPacks } from "./basePinnedPrPolicy.js";
+import { newReferenceId } from "../reference-id.js";
 import { PrDescriptionApprovals } from "./prDescriptionApproval.js";
 import { descriptionFailureReason, logDescription } from "./prDescriptionProjection.js";
 import {
@@ -146,7 +146,8 @@ class DescriptionService implements PrDescriptionApplicationService {
     this.lastNow = now;
     const preview = {
       schemaVersion: "1" as const,
-      proposalId: randomUUID(),
+      // A governed pull request window persists it as a reference (#3557 review).
+      proposalId: newReferenceId(),
       expiresAt: new Date(now + PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS).toISOString(),
       artifact: structuredClone(artifact),
     };

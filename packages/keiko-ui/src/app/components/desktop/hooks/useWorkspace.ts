@@ -29,8 +29,7 @@ import type {
 import {
   MAX_WORKSPACE_WINDOWS,
   enforceWorkspaceWindowInvariants,
-  persistableWorkspace,
-  restoredWorkspace,
+  sanitizePersistedWorkspace,
 } from "./workspace-persistence";
 import {
   WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX,
@@ -840,7 +839,7 @@ function snapshotFromRaw(
   windows: readonly unknown[],
   connections: readonly unknown[],
 ): WorkspaceSnapshot {
-  return restoredWorkspace(windows, connections, {
+  return sanitizePersistedWorkspace(windows, connections, {
     onWindowScanLimitReached: (): void => {
       reportClientDiagnostic(`workspace-state: persisted window scan limit exceeded (${WS_LS})`);
     },
@@ -1206,7 +1205,7 @@ function buildServerWorkspaceSnapshot(
   readonly conns: readonly Connection[];
   readonly serialized: string;
 } {
-  const persisted = persistableWorkspace(wins, conns);
+  const persisted = sanitizePersistedWorkspace(wins, conns);
   return {
     wins: persisted.wins,
     conns: persisted.conns,
@@ -1261,7 +1260,7 @@ function serializePersistedSnapshot(snapshot: {
   readonly wins: readonly AppWindow[];
   readonly conns: readonly Connection[];
 }): string {
-  const persisted = persistableWorkspace(snapshot.wins, snapshot.conns);
+  const persisted = sanitizePersistedWorkspace(snapshot.wins, snapshot.conns);
   return JSON.stringify({
     windows: persisted.wins,
     connections: persisted.conns,
@@ -2254,7 +2253,7 @@ export function useWorkspace(
       suppressNextLocalPersistRef.current = false;
       return;
     }
-    const persisted = persistableWorkspace(wins, conns);
+    const persisted = sanitizePersistedWorkspace(wins, conns);
     persistList(WS_LS, persisted.wins);
     persistList(CONN_LS, persisted.conns);
     // Track what is now durably applied so a cross-tab storage event echoing this

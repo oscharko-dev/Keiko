@@ -24,24 +24,13 @@ import {
 type JsonScalar = string | number | boolean;
 
 const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
-// An RFC 9562 version-4 UUID, the shape of every server-issued id (`randomUUID()`). Shape alone
-// is never proof of origin, so no value of this shape is exempted from the secret heuristic
-// (#3557 review). See `COMPACT_SERVER_REFERENCE_PATTERN` for how a server reference is stored.
+// An RFC 9562 version-4 UUID, the shape of every server-issued id. Shape alone is never proof of
+// origin, so no value of this shape is exempted from the secret heuristic, and no stored form works
+// around it (#3557 review). The shared card-number rule reads the digits across a random UUID's
+// last hyphen as a card number for about 2 in 10,000 ids, so the server issues every reference a
+// window persists through `newReferenceId` (keiko-server), which never draws such an id.
 const SERVER_ISSUED_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-// The two references the app itself writes from a server response and a user can never type
-// (`WIN_TYPES` exposes neither key): a chat window's `chatId` and a governed pull request's
-// `descriptionProposalId`. They are stored compact, as 32 lowercase hex digits without hyphens,
-// and expanded again on restore. The shared card-number heuristic reads the digits across a
-// hyphenated UUID's separators as a card number for about 2 in 10,000 ids, which lost a restored
-// chat window its conversation. The compact form holds no separator-bounded digit run, so it never
-// trips the heuristic, and nothing needs an exemption from it. A restored snapshot stays untrusted:
-// a hyphenated value in it takes the same redaction as any other string.
-const COMPACT_SERVER_REFERENCE_PATTERN = /^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/u;
-const COMPACT_SERVER_REFERENCE_KEYS: ReadonlySet<string> = new Set([
-  "chat:chatId",
-  "governedPullRequest:descriptionProposalId",
-]);
 const MAX_REFERENCE_VALUE_LENGTH = 256;
 const MAX_FIGMA_SELECTED_SCREEN_IDS = 16;
 const MAX_FIGMA_SCREEN_NAME_LENGTH = 256;
@@ -181,9 +170,8 @@ const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueS
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
   "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,
   "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
-  "governedPullRequest:descriptionProposalId": sanitizeDescriptionProposalIdReference,
+  "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
   "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
-  "chat:chatId": sanitizeChatIdReference,
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -286,10 +274,11 @@ export function persistedReferenceShape(value: string): "redacted" | "uuid" | "o
 }
 
 /**
- * The body-free evidence of a restored reference (#3557): its closed shape, and whether it is a
- * server-issued UUID the shared secret heuristic reads as a card number in its hyphenated form,
- * i.e. one that survived persistence only through its compact stored form (this evidence function
- * is called with a chat window's chatId only). Never the value.
+ * The body-free evidence of a bound reference (#3557): its closed shape, and whether it is a
+ * server-issued UUID the shared secret heuristic reads as a card number. The server no longer
+ * issues such ids, but an older chat can still carry one, and persistence redacts it, so a flagged
+ * binding tells why a window will lose its target on reload (this evidence function is called with
+ * a chat window's chatId only). Never the value.
  */
 export function persistedReferenceEvidence(value: string): {
   readonly referenceShape: "redacted" | "uuid" | "opaque";
@@ -303,14 +292,11 @@ export function persistedReferenceEvidence(value: string): {
 }
 
 // The generic opaque-reference check for every evidence-reference field with no dedicated
-// sanitizer — review.runId, qiRun.runId, figma*.snapshotRunId, and any future one. Deliberately
-// carries NO UUID shortcut: #3557 review found that a v4-shaped value was accepted outright here
-// regardless of field, so a user could type a v4-shaped, Luhn-valid-tail lookalike straight into
-// the editable review.runId field and have it persist unredacted. A value that merely has a server
-// UUID's shape is judged on its content like any other reference from here on; only the couple of
-// fields the app itself proves it sets from a real server id get a shortcut, and they get it
-// through their OWN closed sanitizer (sanitizeChatIdReference, sanitizeDescriptionProposalIdReference),
-// never through this shared function.
+// sanitizer — review.runId, qiRun.runId, figma*.snapshotRunId, governedPullRequest's
+// descriptionProposalId, and any future one. Deliberately carries NO UUID shortcut: #3557 review
+// found that a v4-shaped value was accepted outright here regardless of field, so a user could type
+// a v4-shaped, Luhn-valid-tail lookalike straight into the editable review.runId field and have it
+// persist unredacted. Every value is judged on its content, in every field.
 function isSafeOpaqueReference(value: string): boolean {
   if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH || value.startsWith("."))
     return false;
@@ -367,9 +353,8 @@ function sanitizeFigmaConfigValue(key: string, value: unknown): JsonScalar | und
   if (typeof value !== "string") return undefined;
   // snapshotRunId is app-written-only (updateCfg from a server build/list response in
   // FigmaSnapshotWindow.tsx) and absent from every figma* WIN_TYPES.config, so it is never
-  // user-typed — but the server issues it as `fs-${randomUUID()}` (figmaSnapshotRoutes.ts), which
-  // never matches SERVER_ISSUED_UUID_PATTERN's bare shape. No dedicated UUID-exempt sanitizer is
-  // needed here: the plain check below already validates every real value this field ever holds.
+  // user-typed. The server issues it through `newReferenceId("fs-")` (figmaSnapshotRoutes.ts),
+  // which never draws a value this check rejects.
   if (key === "snapshotRunId") return isSafeOpaqueReference(value) ? value : undefined;
   if (key === "screenId") return isSafeFigmaScreenId(value) ? value : undefined;
   if (key === "imageSrc") return isSafeFigmaImageSrc(value) ? value : undefined;
@@ -727,54 +712,6 @@ function sanitizeGenericConfigValue(
   return persistence === "durable.ui" ? REDACTED_WORKSPACE_CONFIG_VALUE : undefined;
 }
 
-function isCompactServerReference(value: unknown): value is string {
-  return typeof value === "string" && COMPACT_SERVER_REFERENCE_PATTERN.test(value);
-}
-
-// A chat window's `chatId` in its compact stored form is kept; any other value keeps the generic
-// rule, the secret heuristic and its redaction marker included.
-function sanitizeChatIdReference(value: unknown): AppWindow["cfg"][string] {
-  if (isCompactServerReference(value)) return value;
-  return sanitizeGenericConfigValue("chat", "chatId", value);
-}
-
-// governedPullRequest's `descriptionProposalId`: every write site (GitChangeScopePill.tsx,
-// widgets/index.tsx) takes it from a server PrDescriptionApplicationResultWire response. The compact
-// stored form is kept; any other value keeps the generic evidence-reference rule.
-function sanitizeDescriptionProposalIdReference(value: unknown): AppWindow["cfg"][string] {
-  if (isCompactServerReference(value)) return value;
-  return sanitizeOpaqueReferenceValue(value);
-}
-
-function compactServerReference(value: AppWindow["cfg"][string]): AppWindow["cfg"][string] {
-  if (typeof value !== "string" || !isServerIssuedUuidReference(value)) return value;
-  return value.replaceAll("-", "").toLowerCase();
-}
-
-function expandServerReference(value: AppWindow["cfg"][string]): AppWindow["cfg"][string] {
-  if (!isCompactServerReference(value)) return value;
-  return [
-    value.slice(0, 8),
-    value.slice(8, 12),
-    value.slice(12, 16),
-    value.slice(16, 20),
-    value.slice(20),
-  ].join("-");
-}
-
-function mapServerReferences(
-  windows: readonly AppWindow[],
-  map: (value: AppWindow["cfg"][string]) => AppWindow["cfg"][string],
-): AppWindow[] {
-  return windows.map((win): AppWindow => {
-    const cfg = { ...win.cfg };
-    for (const [key, value] of Object.entries(win.cfg)) {
-      if (COMPACT_SERVER_REFERENCE_KEYS.has(`${win.type}:${key}`)) cfg[key] = map(value);
-    }
-    return { ...win, cfg };
-  });
-}
-
 function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["cfg"] {
   if (!isRecord(cfg)) return {};
   const persistence = WIN_META[type].persistence;
@@ -978,7 +915,7 @@ export function parsePersistedWindows(raw: string | null): AppWindow[] | null {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    const wins = mapServerReferences(sanitizePersistedWindows(parsed), expandServerReference);
+    const wins = sanitizePersistedWindows(parsed);
     return wins.length > 0 ? wins : null;
   } catch {
     return null;
@@ -1174,24 +1111,6 @@ export function sanitizePersistedWorkspace(
       options.onConnectionScanLimitReached,
     ),
   };
-}
-
-/** The live workspace, sanitized for storage: its server references are stored compact. */
-export function persistableWorkspace(
-  wins: readonly AppWindow[],
-  conns: readonly Connection[],
-): { readonly wins: AppWindow[]; readonly conns: Connection[] } {
-  return sanitizePersistedWorkspace(mapServerReferences(wins, compactServerReference), conns);
-}
-
-/** A stored, untrusted snapshot, sanitized for the live workspace: compact references expand. */
-export function restoredWorkspace(
-  wins: readonly unknown[],
-  conns: readonly unknown[],
-  options: PersistedWorkspaceSanitizerOptions = {},
-): { readonly wins: AppWindow[]; readonly conns: Connection[] } {
-  const sanitized = sanitizePersistedWorkspace(wins, conns, options);
-  return { ...sanitized, wins: mapServerReferences(sanitized.wins, expandServerReference) };
 }
 
 export function parsePersistedConnections(
