@@ -923,7 +923,7 @@ function logChatCreationRejection(
     status,
     reason: readinessFailure ? "readiness" : "configuration",
     modelKind,
-    ...modelIdEvidence(deps, modelId),
+    ...modelIdEvidence(modelId),
     readinessObservation: readinessFailure ? readinessObservationOf(deps, modelId) : undefined,
   });
 }
@@ -941,7 +941,7 @@ export function logChatRejection(
     status,
     reason,
     modelKind: chatCapability(deps, modelId)?.kind ?? "unknown",
-    ...modelIdEvidence(deps, modelId),
+    ...modelIdEvidence(modelId),
     readinessObservation:
       reason === "readiness" ? readinessObservationOf(deps, modelId) : undefined,
   });

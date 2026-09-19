@@ -9,6 +9,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -18,6 +19,8 @@ import {
 // production module, so these tests freeze Date.now to a fixed epoch instead of deriving
 // timestamps from the wall clock — a clock jump or a slow run can never move a "fresh"
 // observation across the 30 s boundary (review finding on #3221).
+// A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.
+const CHAT_MODEL_DIGEST = modelIdEvidence("chat-model").modelIdDigest;
 const NOW = 1_700_000_000_000;
 function freezeNow(): void {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -280,14 +283,14 @@ describe("on-demand readiness evidence", () => {
         "gateway.readiness.started.line",
         formatActivityLogProofLine(readiness[0] ?? {}),
       ),
-    ).toMatchObject({ modelId: "chat-model", trigger: "on-demand", probeCount: 1 });
+    ).toMatchObject({ modelIdDigest: CHAT_MODEL_DIGEST, trigger: "on-demand", probeCount: 1 });
     expect(
       expectActivityLogProof(
         "gateway.readiness.completed.line",
         formatActivityLogProofLine(readiness[1] ?? {}),
       ),
     ).toMatchObject({
-      modelId: "chat-model",
+      modelIdDigest: CHAT_MODEL_DIGEST,
       trigger: "on-demand",
       overallStatus: "ready",
       probeCount: 1,
@@ -325,7 +328,7 @@ describe("on-demand readiness evidence", () => {
     );
     expect(persisted).toMatchObject({
       probeCorrelationId: "corr-probe-A",
-      modelId: "chat-model",
+      modelIdDigest: CHAT_MODEL_DIGEST,
     });
 
     // The probe itself still ran exactly once, under the FIRST caller's correlation id — the

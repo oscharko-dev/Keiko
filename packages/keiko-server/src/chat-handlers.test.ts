@@ -49,7 +49,10 @@ import type { RouteContext } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
+// A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
+const BREAKER_CHAT_DIGEST = modelIdEvidence("breaker-chat").modelIdDigest;
 const VALID_GROUNDING_SCOPE_IDENTITY = `gsi-v1:${"a".repeat(64)}`;
 const INVALID_CLIENT_TURN_ID = {
   status: 400,
@@ -270,7 +273,7 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "grounding-scope",
             modelKind: "chat",
-            modelId: "breaker-chat",
+            modelIdDigest: BREAKER_CHAT_DIGEST,
             completeness: "complete",
             loss: "none",
           },
@@ -359,7 +362,7 @@ describe("desktop chat production gateway reuse", () => {
             reason: "readiness",
             modelKind: "chat",
             // The on-demand probe ran and failed, so the refusal names a failed check (#3557).
-            modelId: "breaker-chat",
+            modelIdDigest: BREAKER_CHAT_DIGEST,
             readinessObservation: "not-ready",
             completeness: "complete",
             loss: "none",
@@ -376,7 +379,7 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "readiness",
             modelKind: "chat",
-            modelId: "breaker-chat",
+            modelIdDigest: BREAKER_CHAT_DIGEST,
             readinessObservation: "not-ready",
             completeness: "complete",
             loss: "none",

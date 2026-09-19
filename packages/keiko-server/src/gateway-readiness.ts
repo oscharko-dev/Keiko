@@ -90,10 +90,9 @@ const RED_PIXEL_PNG_DATA_URL =
 const MINI_PDF_DATA_URL =
   "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMTQ0XSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MSA+PgpzdHJlYW0KQlQKL0YxIDE4IFRmCjUwIDgwIFRkCihLRUlLTyBQREYgUkVBRElORVNTIFBST0JFKSBUagpFVApzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNjIgMDAwMDAgbiAKMDAwMDAwMDM3MyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9Sb290IDEgMCBSIC9TaXplIDYgPj4Kc3RhcnR4cmVmCjQ0MgolJUVPRgo=";
 
-// `modelId`/`modelIdDigest`: projected by `observability/model-id-evidence.ts`, never a caller
-// value verbatim, and mutually exclusive — see its module doc (#3557 review finding A).
+// The checked model, only ever as the digest `observability/model-id-evidence.ts` projects: a
+// model id is operator-chosen text that no check proves body-free (#3557 review).
 const GATEWAY_READINESS_MODEL_ID_FIELDS = {
-  modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 240 },
   modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
 } as const;
 
@@ -406,7 +405,7 @@ function logAutomaticReadinessStarted(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(deps, modelId), probeCount },
+      { ...modelIdEvidence(modelId), probeCount },
     ),
   );
 }
@@ -421,7 +420,7 @@ function logAutomaticReadinessCompleted(
       GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION,
       { correlationId },
       {
-        ...modelIdEvidence(deps, report.modelId),
+        ...modelIdEvidence(report.modelId),
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
       },
@@ -440,7 +439,7 @@ function logReadinessStarted(
     activityLogEvent(
       GATEWAY_READINESS_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(deps, modelId), trigger, probeCount },
+      { ...modelIdEvidence(modelId), trigger, probeCount },
     ),
   );
 }
@@ -457,7 +456,7 @@ function logReadinessCompleted(
       GATEWAY_READINESS_COMPLETED_OPERATION,
       { correlationId, durationMs },
       {
-        ...modelIdEvidence(deps, report.modelId),
+        ...modelIdEvidence(report.modelId),
         trigger,
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
@@ -478,7 +477,7 @@ function logReadinessJoined(
     activityLogEvent(
       GATEWAY_READINESS_JOINED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(deps, modelId), probeCorrelationId },
+      { ...modelIdEvidence(modelId), probeCorrelationId },
     ),
   );
 }

@@ -727,29 +727,6 @@ function stringFieldFailure(
   return semanticStringFailure(name, contract, value);
 }
 
-// A neutral placeholder field name: it must never collide with `ACTIVITY_LOG_REDUCER_OWNED_FIELDS`
-// (a closed, small set — "clientNote", "diagnosticSummary", "path", "routeTemplate") or the
-// `error-kind` frame-field special case, since either would silently bypass the check this
-// function exists to run.
-const OPAQUE_ID_PROBE_FIELD_NAME = "value";
-
-/**
- * True when `value` would pass the `opaque-id` data class's semantic and bound checks — the exact
- * rule `activityLogEvent` applies to a field declared with that class (`stringFieldFailure`, the
- * same function a real registered field is validated through). A projection outside this package
- * that must decide whether a candidate value is safe to log raw, or must fall back to a digest,
- * calls this instead of re-deriving the body-free/redaction shape rules (#3557 review finding A).
- */
-export function isActivityLogOpaqueIdValue(value: string, maxLength: number): boolean {
-  return (
-    stringFieldFailure(
-      OPAQUE_ID_PROBE_FIELD_NAME,
-      { type: "string", dataClass: "opaque-id", required: true, maxLength },
-      value,
-    ) === undefined
-  );
-}
-
 function stringArrayFailure(
   name: string,
   contract: ActivityLogFieldContract,

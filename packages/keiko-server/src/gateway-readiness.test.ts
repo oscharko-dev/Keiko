@@ -20,6 +20,11 @@ import {
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
+import { modelIdEvidence } from "./observability/model-id-evidence.js";
+
+// A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.
+const CODING_CHAT_DIGEST = modelIdEvidence("coding-chat").modelIdDigest;
+const TEST_CHAT_MODEL_DIGEST = modelIdEvidence("test-chat-model").modelIdDigest;
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
@@ -261,12 +266,12 @@ describe("gateway readiness route", () => {
     expect(events[0]).toMatchObject({
       op: "gateway.readiness.automatic.started",
       correlationId: "coding-readiness-0001",
-      extra: { modelId: "coding-chat", probeCount: 2 },
+      extra: { modelIdDigest: CODING_CHAT_DIGEST, probeCount: 2 },
     });
     expect(events[1]).toMatchObject({
       op: "gateway.readiness.automatic.completed",
       correlationId: "coding-readiness-0001",
-      extra: { modelId: "coding-chat", overallStatus: "ready", probeCount: 2 },
+      extra: { modelIdDigest: CODING_CHAT_DIGEST, overallStatus: "ready", probeCount: 2 },
     });
     const startedProof = expectActivityLogProof(
       "gateway.readiness.automatic.started.line",
@@ -274,7 +279,7 @@ describe("gateway readiness route", () => {
     );
     expect(startedProof).toMatchObject({
       correlationId: "coding-readiness-0001",
-      modelId: "coding-chat",
+      modelIdDigest: CODING_CHAT_DIGEST,
       probeCount: 2,
     });
     const completedProof = expectActivityLogProof(
@@ -283,7 +288,7 @@ describe("gateway readiness route", () => {
     );
     expect(completedProof).toMatchObject({
       correlationId: "coding-readiness-0001",
-      modelId: "coding-chat",
+      modelIdDigest: CODING_CHAT_DIGEST,
       overallStatus: "ready",
       probeCount: 2,
     });
@@ -323,14 +328,18 @@ describe("gateway readiness route", () => {
           "gateway.readiness.started.line",
           formatActivityLogProofLine(readiness[0] ?? {}),
         ),
-      ).toMatchObject({ modelId: "test-chat-model", trigger: "settings", probeCount: 1 });
+      ).toMatchObject({
+        modelIdDigest: TEST_CHAT_MODEL_DIGEST,
+        trigger: "settings",
+        probeCount: 1,
+      });
       expect(
         expectActivityLogProof(
           "gateway.readiness.completed.line",
           formatActivityLogProofLine(readiness[1] ?? {}),
         ),
       ).toMatchObject({
-        modelId: "test-chat-model",
+        modelIdDigest: TEST_CHAT_MODEL_DIGEST,
         trigger: "settings",
         overallStatus,
         probeCount: 1,
@@ -340,10 +349,9 @@ describe("gateway readiness route", () => {
     },
   );
 
-  // The full id serves provider selection and the response; the log projection stays bounded. An
-  // over-bound id is logged as a digest of the whole id, never as a truncated prefix that two long
-  // ids could share (#3557 review).
-  it("bounds a configured model id only at the activity-log projection, as a whole-id digest", async () => {
+  // The full id serves provider selection and the response; the log carries only the digest of the
+  // whole id, never a truncated prefix that two long ids could share (#3557 review).
+  it("logs a long configured model id only as a whole-id digest", async () => {
     const modelId = `coding-${"x".repeat(250)}`;
     const config: GatewayConfig = {
       ...gatewayConfig(modelId),

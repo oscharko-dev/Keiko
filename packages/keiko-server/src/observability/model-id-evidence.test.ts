@@ -2,11 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 
 import type { UiHandlerDeps } from "../deps.js";
-import {
-  MAX_MODEL_ID_EVIDENCE_CHARS,
-  modelIdEvidence,
-  resolvedModelCapability,
-} from "./model-id-evidence.js";
+import { modelIdEvidence, resolvedModelCapability } from "./model-id-evidence.js";
 
 function provider(modelId: string): GatewayConfig["providers"][number] {
   return {
@@ -23,89 +19,40 @@ function depsWithConfiguredProvider(modelId: string): UiHandlerDeps {
   return { config: { providers: [provider(modelId)] } } as unknown as UiHandlerDeps;
 }
 
-// #3557 review finding A: a request-supplied model id must never be logged as Activity Log
-// evidence unless the effective capability source actually configures a model by that id. Any
-// other candidate is evidence of what was refused only as a one-way digest.
+// #3557 review: a model id reaches the Activity Log only as a digest. A request-supplied id is
+// caller content, and a configured one is operator-chosen text: an operator can name a provider
+// entry "patient-Alice-Jones", and neither the configured-model check nor the opaque-id shape
+// check proves such a value body-free.
 describe("modelIdEvidence — the owning projection from a candidate model id to evidence", () => {
-  it("digests, never logs, a request model id no gateway configures", () => {
-    // No gateway config at all: the built-in static registry ships empty by design, so this must
-    // never leak a caller-chosen string through the "no config" fallback either.
-    const evidence = modelIdEvidence({} as UiHandlerDeps, "patient-Alice-Jones");
-    expect(evidence.modelId).toBeUndefined();
-    expect(evidence.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
-    expect(JSON.stringify(evidence)).not.toContain("Alice");
+  it.each([
+    ["an operator-configured id", "patient-Alice-Jones"],
+    ["a request id no gateway configures", "typo-model-a"],
+    ["an id that fails the opaque-id shape", "alice@example.com"],
+  ])("digests %s and never carries the raw value", (_label, modelId) => {
+    const evidence = modelIdEvidence(modelId);
+
+    expect(evidence).toEqual({ modelIdDigest: expect.stringMatching(/^[a-f0-9]{16}$/) as unknown });
+    expect(JSON.stringify(evidence)).not.toContain(modelId);
   });
 
-  it("digests, never logs, a caller-supplied value the configured gateway does not name", () => {
-    const deps = depsWithConfiguredProvider("breaker-chat");
-    // "patient-Alice-Jones" is exactly the finding-A shape: a plausible, body-free-looking string
-    // that is nonetheless unvalidated caller content and names no configured model.
-    const evidence = modelIdEvidence(deps, "patient-Alice-Jones");
-    expect(evidence.modelId).toBeUndefined();
-    expect(evidence.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
-    expect(JSON.stringify(evidence)).not.toContain("Alice");
+  it("tells two candidates apart and a retried one as the same", () => {
+    const first = modelIdEvidence("typo-model-a");
+
+    expect(modelIdEvidence("typo-model-b").modelIdDigest).not.toBe(first.modelIdDigest);
+    expect(modelIdEvidence("typo-model-a")).toEqual(first);
   });
 
-  // #3557 review: two refused candidates must stay apart, and a retried one must read as the same.
-  it("tells two refused candidates apart and a retried one as the same", () => {
-    const deps = depsWithConfiguredProvider("breaker-chat");
-    const first = modelIdEvidence(deps, "typo-model-a");
-    const second = modelIdEvidence(deps, "typo-model-b");
+  // A truncated id would make two long ids sharing a prefix indistinguishable.
+  it("digests a long id whole, so two ids sharing a long prefix stay apart", () => {
+    const first = modelIdEvidence(`model-${"x".repeat(300)}-a`);
+    const second = modelIdEvidence(`model-${"x".repeat(300)}-b`);
 
-    expect(first.modelIdDigest).not.toBe(second.modelIdDigest);
-    expect(modelIdEvidence(deps, "typo-model-a")).toEqual(first);
+    expect(second.modelIdDigest).not.toBe(first.modelIdDigest);
   });
 
-  it("logs a configured, opaque-shaped id as modelId unchanged", () => {
-    const deps = depsWithConfiguredProvider("breaker-chat");
-    expect(modelIdEvidence(deps, "breaker-chat")).toEqual({ modelId: "breaker-chat" });
-  });
-
-  it("falls back to a digest for a configured id that fails the opaque-id shape check", () => {
-    // Follow-up finding: gateway config accepts any nonempty modelId, so an operator can configure
-    // an email-shaped one. Logging it raw would fail `activityLogEvent`'s own opaque-id validation
-    // and drop the WHOLE line; the digest keeps the line joinable without ever carrying the raw id.
-    const deps = depsWithConfiguredProvider("alice@example.com");
-    const evidence = modelIdEvidence(deps, "alice@example.com");
-    expect(evidence.modelId).toBeUndefined();
-    expect(evidence.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
-    // Deterministic and never the raw value or a substring of it.
-    expect(evidence.modelIdDigest).not.toContain("alice");
-    expect(modelIdEvidence(deps, "alice@example.com")).toEqual(evidence);
-  });
-
-  // CodeRabbit boundary findings (chat-activity.test.ts:255): an empty candidate and the exact
-  // 240-character bound, at the layer that now owns the decision.
-  it("never logs an empty model id, even with a gateway configured", () => {
-    const deps = depsWithConfiguredProvider("breaker-chat");
-    expect(modelIdEvidence(deps, "")).toEqual({});
-  });
-
-  it("logs a configured id of exactly the 240-character bound unchanged", () => {
-    const modelId = `model-${"x".repeat(MAX_MODEL_ID_EVIDENCE_CHARS - 6)}`;
-    expect(modelId).toHaveLength(MAX_MODEL_ID_EVIDENCE_CHARS);
-    const deps = depsWithConfiguredProvider(modelId);
-    expect(modelIdEvidence(deps, modelId)).toEqual({ modelId });
-  });
-
-  // A truncated raw id would make two long configured ids sharing a prefix indistinguishable.
-  it("digests a configured id over the 240-character bound, whole, instead of truncating it", () => {
-    const first = `model-${"x".repeat(300)}-a`;
-    const second = `model-${"x".repeat(300)}-b`;
-    const deps = {
-      config: { providers: [provider(first), provider(second)] },
-    } as unknown as UiHandlerDeps;
-
-    const firstEvidence = modelIdEvidence(deps, first);
-    const secondEvidence = modelIdEvidence(deps, second);
-
-    expect(firstEvidence.modelId).toBeUndefined();
-    expect(firstEvidence.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
-    expect(secondEvidence.modelIdDigest).not.toBe(firstEvidence.modelIdDigest);
-  });
-
-  it("yields no evidence for an absent model id and never throws", () => {
-    expect(modelIdEvidence({} as UiHandlerDeps, undefined)).toEqual({});
+  it("yields no evidence for an empty or absent model id", () => {
+    expect(modelIdEvidence("")).toEqual({});
+    expect(modelIdEvidence(undefined)).toEqual({});
   });
 });
 

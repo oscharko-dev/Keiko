@@ -224,7 +224,7 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
 // without any check in this process is never mistaken for a failed live check.
 describe("chat rejection readiness evidence (#3557)", () => {
   it.each(["unobserved", "not-ready"] as const)(
-    "chat.regeneration.rejected — persists the %s readiness observation with the model id",
+    "chat.regeneration.rejected — persists the %s readiness observation with the model digest",
     (readinessObservation) => {
       const sink = captureServerLog();
 
@@ -233,7 +233,7 @@ describe("chat rejection readiness evidence (#3557)", () => {
         status: 400,
         reason: "readiness",
         modelKind: "chat",
-        modelId: "example-chat-model",
+        modelIdDigest: "0123456789abcdef",
         readinessObservation,
       });
 
@@ -246,40 +246,16 @@ describe("chat rejection readiness evidence (#3557)", () => {
         correlationId: "corr-chat-regen-readiness-01",
         errorKind: "unavailable",
         reason: "readiness",
-        modelId: "example-chat-model",
+        modelIdDigest: "0123456789abcdef",
         readinessObservation,
       });
     },
   );
 
-  it("chat.creation.rejected — bounds a configured model id to the operation's 240 characters", () => {
-    const sink = captureServerLog();
-    const modelId = `model-${"x".repeat(300)}`;
-
-    logChatCreationRejectionEvent({
-      correlationId: "corr-chat-create-long-model",
-      status: 400,
-      reason: "configuration",
-      modelKind: "unknown",
-      modelId,
-    });
-
-    // The operation's bound applies to the projection; the persisted line then also passes the
-    // shared redaction, which may replace an overlong opaque run entirely.
-    const [event] = sink.events;
-    expect(event?.extra?.modelId).toBe(modelId.slice(0, 240));
-    const persisted = expectActivityLogProof(
-      "chat.creation.rejected.reason",
-      formatActivityLogProofLine(event ?? {}),
-    );
-    expect(persisted).not.toHaveProperty("readinessObservation");
-  });
-
-  // Review finding A follow-up: a configured model id that is not itself body-free (an operator
-  // can name a provider entry "alice@example.com") must still leave a line — as a digest, never as
-  // the raw id and never dropped. `model-id-evidence.test.ts` proves the projection that DECIDES
-  // this; this proves chat-activity.ts correctly emits whatever it is handed.
-  it("chat.creation.rejected — persists a modelIdDigest instead of a non-opaque model id", () => {
+  // #3557 review: a model id is operator-chosen text that no check proves body-free, so a rejection
+  // carries it only as a digest. `model-id-evidence.test.ts` proves the projection; this proves
+  // chat-activity.ts emits what it is handed and never a raw id.
+  it("chat.creation.rejected — persists the model only as its digest", () => {
     const sink = captureServerLog();
 
     logChatCreationRejectionEvent({
