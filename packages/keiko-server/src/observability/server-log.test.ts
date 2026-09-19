@@ -2501,6 +2501,59 @@ describe("activity log retention pins", () => {
     );
   });
 
+  it("protects a pinned window from byte retention, although its segments are the oldest", () => {
+    const now = Date.now();
+    const env = storageEnv({ KEIKO_LOG_RETENTION_BYTES: String(SMALL_BUDGET) });
+    const pid = exitedProcessId();
+    const sealedAt = (minutesAgo: number, instanceId: string): string =>
+      seedSegment(stateDir, {
+        identity: { startMs: now - (minutesAgo + 5) * 60_000, pid, instanceId, index: 1 },
+        state: "sealed",
+        content: syntheticLines(40 * 1024),
+        mtimeMs: now - minutesAgo * 60_000,
+      });
+    const pinned = [sealedAt(90, "0a0a0a0a"), sealedAt(60, "0b0b0b0b")];
+    expect(
+      pinActivityLogWindow(
+        stateDir,
+        {
+          scope: { kind: "window", fromMs: now - 2 * 3_600_000, toMs: now - 30 * 60_000 },
+          expiresAtMs: now + 86_400_000,
+          correlationId: "incident-pin-bytes",
+        },
+        env,
+      ),
+    ).toMatchObject({ status: "pinned", pinnedSegmentCount: 2, quotaStatus: "within-quota" });
+    // Newer history outside the window pushes the unprotected usage past the 128 KiB budget. The
+    // budget prunes oldest first, so without the pin it would take the two pinned segments.
+    const newer = ["010c0c0c", "020c0c0c", "030c0c0c", "040c0c0c"].map((instanceId, index) =>
+      sealedAt(20 - index * 5, instanceId),
+    );
+    // Seal the segment the pin evidence opened; opening the next one runs retention.
+    writeSegments(stateDir, env, 1);
+    createFileServerLogSink(stateDir, { env }).write({ category: "http", op: "retention.pass" });
+
+    for (const path of pinned) expect(existsSync(path)).toBe(true);
+    expect(existsSync(newer[0] ?? "")).toBe(false);
+    const pinnedBytes = pinned.reduce((total, path) => total + statSync(path).size, 0);
+    const passes = linesWithOp(stateDir, "activity-log.retention.pruned");
+    expect(passes.length).toBeGreaterThan(0);
+    for (const pass of passes) {
+      expect(pass).toMatchObject({
+        retentionStatus: "pruned",
+        prunedByAgeCount: 0,
+        protectedPinnedBytes: pinnedBytes,
+        retentionBudgetBytes: SMALL_BUDGET,
+      });
+    }
+    const prunedByBudget = passes.reduce(
+      (total, pass) => total + Number(pass.prunedByBudgetCount),
+      0,
+    );
+    expect(prunedByBudget).toBeGreaterThan(0);
+    expect(directoryBytes(logsDirectory(stateDir))).toBeLessThanOrEqual(SMALL_BUDGET + pinnedBytes);
+  });
+
   it("reports quota exhaustion exactly once with exact segment counts and sequence span", () => {
     const env = storageEnv({ KEIKO_LOG_PIN_QUOTA_BYTES: String(12 * 1024) });
     writeSegments(stateDir, env, 3);
