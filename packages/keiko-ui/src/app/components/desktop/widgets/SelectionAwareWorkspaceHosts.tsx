@@ -2,6 +2,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { updateChat } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/http";
@@ -25,7 +26,11 @@ import {
   type ChatSessionApi,
 } from "../hooks/useChatSession";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
-import { persistedReferenceEvidence } from "../hooks/workspace-persistence";
+import {
+  CHAT_ID_FINGERPRINT_CFG_KEY,
+  persistedReferenceEvidence,
+} from "../hooks/workspace-persistence";
+import { useChatReferenceFingerprint, useChatReferenceRebind } from "./chatReferenceFingerprint";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
@@ -1074,9 +1079,23 @@ function chatBindingOutcome(
   return routing.activeTarget?.id === chatId ? "resolved" : undefined;
 }
 
+// The persisted reference's closed shape; a binding restored through its fingerprint says so.
+type ChatBindingReferenceEvidence = Omit<
+  ReturnType<typeof persistedReferenceEvidence>,
+  "referenceShape"
+> & { readonly referenceShape: ClientBindingReferenceShape };
+
+function chatBindingReferenceEvidence(
+  chatId: string,
+  restoredByFingerprint: boolean,
+): ChatBindingReferenceEvidence {
+  const evidence = persistedReferenceEvidence(chatId);
+  return restoredByFingerprint ? { ...evidence, referenceShape: "fingerprint" } : evidence;
+}
+
 function chatBindingMessage(
   outcome: ChatBindingOutcome,
-  evidence: ReturnType<typeof persistedReferenceEvidence>,
+  evidence: ChatBindingReferenceEvidence,
 ): string {
   const head =
     outcome === "resolved" ? CHAT_BINDING_RESOLVED_DIAGNOSTIC : CHAT_TARGET_MISSING_DIAGNOSTIC;
@@ -1089,6 +1108,7 @@ function useBoundChatBindingEvidence(
   ctx: WindowRenderContext,
   routing: BoundChatRouting,
   session: ChatSessionApi,
+  restoredByFingerprint: boolean,
 ): void {
   const outcome = chatBindingOutcome(routing, configuration.chatId);
   useChatBindingEvidence({
@@ -1096,7 +1116,15 @@ function useBoundChatBindingEvidence(
     chatId: configuration.chatId,
     windowId: ctx.windowId,
     loads: chatBindingDecidingLoads(outcome, routing, session),
+    restoredByFingerprint,
   });
+  // A bound chat whose id the heuristic flags keeps its binding through the id's fingerprint.
+  useChatReferenceFingerprint(
+    configuration.chatId,
+    configuration.chatIdFingerprint,
+    outcome === "resolved",
+    ctx.updateCfg,
+  );
 }
 
 // The chat list loads a binding verdict depended on (#3557 review).
@@ -1130,6 +1158,7 @@ interface ChatBindingEvidenceArgs {
   readonly chatId: string | undefined;
   readonly windowId: string;
   readonly loads: ChatBindingDecidingLoads;
+  readonly restoredByFingerprint: boolean;
 }
 
 // A restored chat window whose conversation cannot be resolved renders "Chat not found". Without
@@ -1145,6 +1174,7 @@ function useChatBindingEvidence({
   chatId,
   windowId,
   loads,
+  restoredByFingerprint,
 }: ChatBindingEvidenceArgs): void {
   const reportedRef = useRef(new Set<string>());
   const outcome = chatBindingOutcome(routing, chatId);
@@ -1155,7 +1185,7 @@ function useChatBindingEvidence({
     const key = `${outcome}\u0000${chatId}`;
     if (reportedRef.current.has(key)) return;
     reportedRef.current.add(key);
-    const evidence = persistedReferenceEvidence(chatId);
+    const evidence = chatBindingReferenceEvidence(chatId, restoredByFingerprint);
     const [correlationId, ...related] = idsKey === "" ? [] : idsKey.split("\u0000");
     reportClientDiagnostic(chatBindingMessage(outcome, evidence), {
       correlationId,
@@ -1168,7 +1198,7 @@ function useChatBindingEvidence({
         ...(count === 0 ? {} : { decidingLoadCount: count }),
       },
     });
-  }, [chatId, count, idsKey, outcome, windowId]);
+  }, [chatId, count, idsKey, outcome, restoredByFingerprint, windowId]);
 }
 
 function ChatNotFound(): ReactNode {
@@ -1247,6 +1277,7 @@ function BoundChatBody({
 
 interface BoundChatConfig {
   readonly chatId: string | undefined;
+  readonly chatIdFingerprint: string | undefined;
   readonly memoryEnabled: boolean | undefined;
   readonly newChatRequestId: string | undefined;
   readonly projectPath: string | undefined;
@@ -1259,6 +1290,7 @@ function boundChatConfig(cfg: Record<string, unknown>): BoundChatConfig {
   const projectPathPrivacy = cfg["projectPathPrivacy"] === "omit" ? "omit" : undefined;
   return {
     chatId: str(cfg, "chatId"),
+    chatIdFingerprint: str(cfg, CHAT_ID_FINGERPRINT_CFG_KEY),
     memoryEnabled: bool(cfg, "memoryEnabled"),
     newChatRequestId: str(cfg, "newChatRequestId"),
     projectPath: str(cfg, "projectPath"),
@@ -1343,12 +1375,23 @@ export function ChatWindowSessionHost({
   readonly ctx: WindowRenderContext;
 }): ReactNode {
   const session = useChatSession({ autoCreate: false });
-  return <BoundChatWindowSessionHost cfg={cfg} ctx={ctx} session={session} />;
+  // A chat id persistence redacted is found again through its fingerprint before the window binds.
+  const rebind = useChatReferenceRebind(cfg, session, ctx.updateCfg);
+  if (rebind.pending) return <ChatBindPending />;
+  return (
+    <BoundChatWindowSessionHost
+      cfg={cfg}
+      ctx={ctx}
+      restoredByFingerprint={rebind.restored}
+      session={session}
+    />
+  );
 }
 
 interface BoundChatWindowSessionHostProps {
   readonly cfg: Record<string, unknown>;
   readonly ctx: WindowRenderContext;
+  readonly restoredByFingerprint?: boolean | undefined;
   readonly session: ChatSessionApi;
 }
 
@@ -1442,11 +1485,9 @@ function useBoundChatTitleSync(
   });
 }
 
-function BoundChatWindowSessionHost({
-  cfg,
-  ctx,
-  session,
-}: BoundChatWindowSessionHostProps): ReactNode {
+function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): ReactNode {
+  const { cfg, ctx, session } = props;
+  const restoredByFingerprint = props.restoredByFingerprint === true;
   const configuration = boundChatConfig(cfg);
   const routing = useBoundChatRouting({
     chatId: configuration.chatId,
@@ -1456,7 +1497,7 @@ function BoundChatWindowSessionHost({
     session,
     updateCfg: ctx.updateCfg,
   });
-  useBoundChatBindingEvidence(configuration, ctx, routing, session);
+  useBoundChatBindingEvidence(configuration, ctx, routing, session, restoredByFingerprint);
   useBoundChatWindowRuntime(configuration, ctx, routing, session);
   const memory = useBoundMemorySession({
     activeTarget: routing.activeTarget,

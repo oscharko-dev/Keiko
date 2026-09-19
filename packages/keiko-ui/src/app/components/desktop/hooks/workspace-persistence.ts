@@ -24,6 +24,10 @@ import {
 type JsonScalar = string | number | boolean;
 
 const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
+// A chat window's one-way fingerprint of a chat id the heuristic redacts (#3557 review): the window
+// finds its chat again by comparing it with the chats the server lists, and nothing expands it back
+// into the id (widgets/chatReferenceFingerprint.ts).
+export const CHAT_ID_FINGERPRINT_CFG_KEY = "chatIdFingerprint";
 // An RFC 9562 version-4 UUID, the shape of every server-issued id. Shape alone is never proof of
 // origin, so no value of this shape is exempted from the secret heuristic, and no stored form works
 // around it (#3557 review). The shared card-number rule reads the digits across a random UUID's
@@ -95,6 +99,7 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // was introduced to remove.
   chat: [
     "chatId",
+    CHAT_ID_FINGERPRINT_CFG_KEY,
     "memoryEnabled",
     "projectPath",
     "projectPathPrivacy",
@@ -172,6 +177,7 @@ const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueS
   "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
   "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
   "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
+  [`chat:${CHAT_ID_FINGERPRINT_CFG_KEY}`]: sanitizeSha256Digest,
 };
 
 function isFiniteNumber(value: unknown): value is number {

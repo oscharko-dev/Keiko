@@ -15,6 +15,7 @@ import {
 } from "../editorSidebarSizing";
 import { subText } from "../windows/connectionUtils";
 import { isSecretShapedString } from "./isSecretShapedString";
+import { chatReferenceFingerprint } from "../widgets/chatReferenceFingerprint";
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -750,17 +751,26 @@ describe("workspace-persistence", () => {
     expect(JSON.stringify(persisted)).not.toContain(bearerToken);
   });
 
-  // #3557 review (P1): no stored form and no field works around the heuristic. The chat id from a
-  // real CI failure is flagged (the 16 digits across its last hyphen pass the Luhn check), so it is
-  // redacted or dropped in every reference field. The server no longer issues such an id
-  // (`newReferenceId`, keiko-server), which is what keeps a restored chat window's binding.
-  it("judges every reference by its content, a server-issued UUID included", () => {
+  // The real-CI pin (#3557): the chat id from a CI failure is one the payment-card rule misreads as a
+  // card number (the 16 digits across its last hyphen pass the Luhn check). Persisted as the
+  // redaction marker alone, it left the restored chat window reporting its live conversation as
+  // deleted. The binding must survive the round trip, without any stored form that works around
+  // the heuristic (#3557 review): the id itself is redacted, and its one-way fingerprint persists,
+  // through which the restored window finds its chat again (SelectionAwareWorkspaceHosts.test.tsx,
+  // "reopens a chat whose id persistence redacts"). Every other reference field judges the id by
+  // its content and drops it; the server no longer issues such ids (`newReferenceId`).
+  it("keeps the binding of a server-issued UUID that the payment-card rule misreads as a card number", async () => {
     const id = "1404206d-9ab6-4bca-8853-813867352087";
     expect(isSecretShapedString(id)).toBe(true);
+    const fingerprint = await chatReferenceFingerprint(id);
     const digest = "a".repeat(64);
     const { wins: persisted } = sanitizePersistedWorkspace(
       [
-        win({ id: "chat-1", type: "chat", cfg: { chatId: id, title: "Deploy status" } }),
+        win({
+          id: "chat-1",
+          type: "chat",
+          cfg: { chatId: id, chatIdFingerprint: fingerprint, title: "Deploy status" },
+        }),
         win({
           id: "pr-1",
           type: "governedPullRequest",
@@ -780,7 +790,7 @@ describe("workspace-persistence", () => {
     );
 
     expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
-      ["chat-1", { chatId: "[REDACTED]", title: "Deploy status" }],
+      ["chat-1", { chatId: "[REDACTED]", chatIdFingerprint: fingerprint, title: "Deploy status" }],
       [
         "pr-1",
         {
@@ -795,6 +805,26 @@ describe("workspace-persistence", () => {
       ["figma-1", {}],
     ]);
     expect(JSON.stringify(persisted)).not.toContain("8853-813867352087");
+    // A reload keeps the binding: the restored window carries the fingerprint it rebinds through.
+    expect(parsePersistedWindows(JSON.stringify(persisted))?.[0]?.cfg).toEqual({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: fingerprint,
+      title: "Deploy status",
+    });
+  });
+
+  // Only a well-formed SHA-256 fingerprint persists: it is never read as anything but a digest.
+  it.each([
+    ["an uppercase digest", "A".repeat(64)],
+    ["a short digest", "a".repeat(63)],
+    ["free text", "patient-Alice-Jones"],
+    ["a chat id", "1404206d-9ab6-4bca-8853-813867352087"],
+  ])("drops a chat fingerprint that is %s", (_label, chatIdFingerprint) => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: "[REDACTED]", chatIdFingerprint } }),
+    ]);
+
+    expect(persisted[0]?.cfg).toEqual({ chatId: "[REDACTED]" });
   });
 
   // #3557 review (P1): a restored snapshot is untrusted, and shape is no proof of server issuance.
