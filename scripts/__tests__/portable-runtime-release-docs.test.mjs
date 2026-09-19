@@ -81,9 +81,20 @@ describe("portable runtime release documentation", () => {
     for (const declaration of declarations) {
       expect(JSON.parse(declaration[1])).toEqual(approved.upstream);
     }
-    expect(contract).not.toContain("1.18.30");
-    expect(contract).not.toContain("packages/sdk/openapi.json");
-    expect(contract).not.toContain('"adapterVersion": "1"');
+    const subscriptions = [...contract.matchAll(/"subscriptionAuth": (\{[\s\S]*?\})/gu)];
+    expect(subscriptions).toHaveLength(2);
+    for (const subscription of subscriptions) {
+      expect(JSON.parse(subscription[1])).toEqual(approved.releaseApproval.subscriptionAuth);
+    }
+    for (const document of [contract, workflow]) {
+      expect(document).toContain(approved.upstream.version);
+      expect(document).toContain(approved.upstream.commit);
+      expect(document).toContain(approved.protocolSchema.path);
+      expect(document).toContain(approved.protocolSchema.sha256);
+      expect(document).not.toContain("1.18.30");
+      expect(document).not.toContain("packages/sdk/openapi.json");
+      expect(document).not.toContain('"adapterVersion": "1"');
+    }
   });
 
   it("distinguishes immutable upstream evidence from signed shipped evidence", () => {

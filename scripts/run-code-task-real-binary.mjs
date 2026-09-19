@@ -25,6 +25,7 @@ import {
   loadConfigFromFile,
   resolveCodingSafeSidecarGatewayProfile,
 } from "@oscharko-dev/keiko-model-gateway";
+import { OPENCODE_PINNED_VERSION } from "../packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js";
 import { resolveOpenCodeContextGeometry } from "../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
 
 import { hostDevLaneTarget } from "./stage-dev-coding-runtime.mjs";
@@ -43,7 +44,6 @@ import { activityLogFiles, readActivityLogText } from "./lib/activity-log-files.
 const repoRoot = resolve(import.meta.dirname, "..");
 const MAX_DISTINCT_CONNECTIONS = 4_096;
 const MAX_ACTIVITY_LOG_BYTES = 32 * 1_024 * 1_024;
-const REAL_BINARY_VERSION = "1.18.30";
 const EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const QUALIFICATION_RECEIPTS_DIR_ENV = "KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR";
 const GEOMETRY_CREDENTIAL_PLACEHOLDER = "qualification-metadata-only";
@@ -430,7 +430,11 @@ export function buildJourneyReport(input) {
     issue: 2483,
     sourceHead: input.sourceHead,
     evidenceClass: "functional-not-platform-qualified",
-    runtime: { name: "opencode-compatible", version: REAL_BINARY_VERSION, target: input.target },
+    runtime: {
+      name: "opencode-compatible",
+      version: OPENCODE_PINNED_VERSION,
+      target: input.target,
+    },
     journey: {
       exitCode: input.exitCode,
       wallClockMs: input.wallClockMs,

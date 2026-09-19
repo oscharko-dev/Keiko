@@ -102,6 +102,20 @@ would not repair that bound, then stopped the run through the composer; the UI c
 This is not a completed test-generation task. It verifies continuation, reviewed edits, failed-test
 feedback, a successful repaired build, rejection, and composer stop. No commit or push occurred.
 
+A subsequent diagnostic-only turn ran the failing test once and correctly returned its assertion
+location and expected/actual focused elements. The gateway preserved that feedback. The next
+repair turn initially repeated the wrong tab order, then corrected it and passed the test verifier;
+the build failed after that edit. A proposed follow-up inserted a helper and a nested suite into the
+wrong test body, so it was rejected and the run was stopped. This isolates repair quality and scope
+preservation as remaining limitations; it does not establish a gateway-output loss or successful
+end-to-end test generation.
+
+The real-binary qualification runner now reports the pinned runtime version from the adapter's
+production owner instead of retaining a V1 literal. Geometry expectations derive from the actual
+gateway selection and launch-profile owners. Negative fixtures deliberately differ from the admitted
+limit, so they remain rejection proofs when the functional model's output allowance changes. All
+27 runner tests pass after reproducing the stale-limit failures and the incorrect-version report.
+
 ## Remaining qualification
 
 - Repeated selection of the same history task, concurrent refreshes, and title synchronization.

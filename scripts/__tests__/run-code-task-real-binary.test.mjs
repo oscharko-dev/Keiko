@@ -36,6 +36,9 @@ import {
   writeRealBinaryQualificationEvidence,
 } from "../run-code-task-real-binary.mjs";
 import { readReceipts } from "../check-coding-issue-journey-evidence.mjs";
+import { resolveCodingSafeSidecarGatewayProfile } from "@oscharko-dev/keiko-model-gateway";
+import { resolveOpenCodeContextGeometry } from "../../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
+import { OPENCODE_PINNED_VERSION } from "../../packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js";
 import { functionalGatewayConfig } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
 
 const H1_SEARCH = {
@@ -67,6 +70,14 @@ const MANAGED_CATALOG = {
     causalHandoff: true,
   },
 };
+
+function expectedProductionGeometry() {
+  const profile = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig());
+  if (profile.status !== "available") throw new TypeError("production profile is unavailable");
+  const geometry = resolveOpenCodeContextGeometry(profile.runMetadata);
+  if (geometry === undefined) throw new TypeError("production geometry is unavailable");
+  return geometry;
+}
 
 function productionDeclaredGeometry() {
   const stateDir = mkdtempSync(join(tmpdir(), "keiko-declared-geometry-"));
@@ -341,11 +352,7 @@ describe("#2483 real-binary observation helpers", () => {
   });
 
   it("derives the exact real-binary fixture geometry from the actual production owners", () => {
-    expect(productionDeclaredGeometry()).toMatchObject({
-      contextWindowTokens: 45_056,
-      maxInputTokens: 40_960,
-      maxOutputTokens: 4_096,
-    });
+    expect(productionDeclaredGeometry()).toMatchObject(expectedProductionGeometry());
   });
 
   it("derives geometry after production has migrated provider credentials to references", () => {
@@ -355,11 +362,7 @@ describe("#2483 real-binary observation helpers", () => {
       mkdirSync(dirname(configPath), { recursive: true });
       writeFileSync(configPath, JSON.stringify(persistedReferenceGatewayConfig()));
 
-      expect(readDeclaredChildGeometry(stateDir)).toMatchObject({
-        contextWindowTokens: 45_056,
-        maxInputTokens: 40_960,
-        maxOutputTokens: 4_096,
-      });
+      expect(readDeclaredChildGeometry(stateDir)).toMatchObject(expectedProductionGeometry());
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
@@ -477,7 +480,9 @@ describe("#2483 real-binary observation helpers", () => {
         ...complete,
         limits: {
           ...complete.limits,
-          observedGatewayOutputTokenLimits: [8_192],
+          observedGatewayOutputTokenLimits: [
+            complete.limits.declaredChildGeometry.maxOutputTokens + 1,
+          ],
         },
       }),
     ).toBe(false);
@@ -494,7 +499,7 @@ describe("#2483 real-binary observation helpers", () => {
       sourceCommitSha: SOURCE_HEAD,
       platformTarget: "macos-arm64",
       result: "passed",
-      runtime: { name: "opencode-compatible", version: "1.18.30" },
+      runtime: { name: "opencode-compatible", version: OPENCODE_PINNED_VERSION },
       run: {
         correlationId: MANAGED_CATALOG.correlationId,
         activityLogSha256: ACTIVITY_LOG.sha256,
@@ -613,7 +618,12 @@ describe("#2483 real-binary observation helpers", () => {
     expect(
       missingRealBinaryEvidence({
         ...complete,
-        limits: { ...complete.limits, observedGatewayOutputTokenLimits: [8_192] },
+        limits: {
+          ...complete.limits,
+          observedGatewayOutputTokenLimits: [
+            complete.limits.declaredChildGeometry.maxOutputTokens + 1,
+          ],
+        },
       }),
     ).toEqual(["no single materialized child geometry matched the admitted gateway output limit"]);
     expect(
@@ -852,7 +862,11 @@ describe("#2483 real-binary observation helpers", () => {
       issue: 2483,
       sourceHead: SOURCE_HEAD,
       evidenceClass: "functional-not-platform-qualified",
-      runtime: { name: "opencode-compatible", version: "1.18.30", target: "macos-arm64" },
+      runtime: {
+        name: "opencode-compatible",
+        version: OPENCODE_PINNED_VERSION,
+        target: "macos-arm64",
+      },
       journey: {
         exitCode: 0,
         wallClockMs: 41_128,

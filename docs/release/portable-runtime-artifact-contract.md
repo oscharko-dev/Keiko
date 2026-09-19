@@ -836,7 +836,7 @@ required contract vocabulary.
             },
             "subscriptionAuth": {
               "status": "not-applicable",
-              "reviewReference": "https://github.com/oscharko-dev/Keiko/pull/3561"
+              "reviewReference": "https://github.com/oscharko-dev/Keiko/issues/2253"
             }
           },
           "license": {
