@@ -1,5 +1,6 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CLIENT_STAGE_DURATION_MS_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { useWindowStageEvidence } from "./useWindowStageEvidence";
 import type { ClientDiagnosticStageReport } from "@/lib/client-diagnostics";
 
@@ -21,10 +22,62 @@ function stageReports(): readonly (ClientDiagnosticStageReport | undefined)[] {
   });
 }
 
+function correlationIds(): readonly (string | undefined)[] {
+  return reportClientDiagnostic.mock.calls.map((call) => {
+    const meta = call[1] as { readonly correlationId?: string } | undefined;
+    return meta?.correlationId;
+  });
+}
+
 describe("useWindowStageEvidence", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  // #3557 review: without one id across both phases, a started and a settled line of one mount
+  // could not be joined, least of all when another tab reuses the same stage and ordinal.
+  it("reports both phases of one mount under one correlation id, distinct per mount", () => {
+    reportClientDiagnostic.mockClear();
+    const first = renderHook(() => {
+      useWindowStageEvidence("chat bind");
+    });
+    const second = renderHook(() => {
+      useWindowStageEvidence("chat bind");
+    });
+    first.unmount();
+    second.unmount();
+
+    const [firstStarted, secondStarted, firstSettled, secondSettled] = correlationIds();
+    expect(firstStarted).toEqual(expect.any(String));
+    expect(firstSettled).toBe(firstStarted);
+    expect(secondSettled).toBe(secondStarted);
+    expect(secondStarted).not.toBe(firstStarted);
+  });
+
+  // #3557 review: a wall-clock step or a tab left open for days must still settle the stage with
+  // a duration the contract accepts, or the server refuses the report and a false stall remains.
+  it("measures monotonically and bounds the settled duration to the contract's ceiling", () => {
+    vi.useFakeTimers();
+    reportClientDiagnostic.mockClear();
+    const backwards = renderHook(() => {
+      useWindowStageEvidence("window chunk");
+    });
+    // The clock reads earlier at cleanup than at mount: the duration floors at 0, never below.
+    const now = vi.spyOn(performance, "now").mockReturnValue(performance.now() - 4_000);
+    backwards.unmount();
+    now.mockRestore();
+    const longLived = renderHook(() => {
+      useWindowStageEvidence("window chunk");
+    });
+    vi.advanceTimersByTime(CLIENT_STAGE_DURATION_MS_MAX + 60_000);
+    longLived.unmount();
+
+    const settled = stageReports().filter((report) => report?.phase === "settled");
+    expect(settled.map((report) => (report?.phase === "settled" ? report.durationMs : -1))).toEqual(
+      [0, CLIENT_STAGE_DURATION_MS_MAX],
+    );
   });
 
   it("reports the stage start on mount and its settlement, with the elapsed time, on unmount", () => {

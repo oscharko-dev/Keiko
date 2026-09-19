@@ -467,17 +467,79 @@ describe("fanOutClientDiagnostic binding evidence", () => {
         outcome: "target-missing",
         referenceShape: "redacted",
         heuristicExempt: false,
+        windowRef: "window-1",
+        relatedCorrelationIds: ["ui_chat-list-load-0004", "not a safe id"],
       },
     });
 
+    // Only safe related ids travel; the malformed one is dropped, never the whole report.
     expect(lastPostedBody(fetchMock)).toEqual({
       kind: "binding",
       surface: "chat-window",
       outcome: "target-missing",
       referenceShape: "redacted",
       heuristicExempt: false,
+      windowRef: "window-1",
       correlationId: "ui_chat-list-load-0003",
+      relatedCorrelationIds: ["ui_chat-list-load-0004"],
     });
     expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 2 });
+  });
+});
+
+// #3557 review: a stage's two phases share one id, and a session repair joins the denied request.
+describe("fanOutClientDiagnostic correlated closed reports", () => {
+  it("posts a stage report under the stage's own correlation id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("desktop chat bind #2: started", {
+      correlationId: "ui_stage-0002",
+      stageReport: { stage: "chat bind", phase: "started", ordinal: 2 },
+    });
+
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "stage",
+      stage: "chat bind",
+      phase: "started",
+      ordinal: 2,
+      correlationId: "ui_stage-0002",
+    });
+  });
+
+  it("posts a session repair report on the denied request's timeline without draining loss", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    recordClientDiagnosticLoss("rejectionsSuppressed", 1);
+
+    fanOutClientDiagnostic("[keiko] stale session repair: replayed", {
+      correlationId: "ui_denied-read-0001",
+      sessionRepairReport: { outcome: "replayed", repairCorrelationId: "ui_session-repair-0001" },
+    });
+
+    expect(lastPostedBody(fetchMock)).toEqual({
+      kind: "session-repair",
+      outcome: "replayed",
+      correlationId: "ui_denied-read-0001",
+      repairCorrelationId: "ui_session-repair-0001",
+    });
+    expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 1 });
+  });
+
+  it("falls back to a plain message report when a session repair has no safe denied-request id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] stale session repair: replayed", {
+      correlationId: "not a safe id",
+      sessionRepairReport: { outcome: "replayed" },
+    });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      message: "[keiko] stale session repair: replayed",
+    });
   });
 });

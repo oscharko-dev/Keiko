@@ -41,12 +41,18 @@ import type {
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
   ClientDiagnosticReadyState,
+  ClientSessionRepairIngestRequest,
   ClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
+  CLIENT_BINDING_WINDOW_REF_MAX_LENGTH,
+  CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   type ClientDiagnosticBindingReport,
   type ClientDiagnosticMeta,
+  type ClientDiagnosticSessionRepairReport,
   type ClientDiagnosticStageReport,
   recordClientDiagnosticLoss,
   restoreClientDiagnosticLoss,
@@ -110,15 +116,26 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
 // The stage wire body carries no `message`, `clientTs`, `correlationId` or `loss`: a stage mount is
 // not itself a server request (there is nothing to correlate against) and its evidence is already
 // closed and bounded, never free text (KEIKO-3557).
-function clientStagePostBody(report: ClientDiagnosticStageReport): ClientStageIngestRequest {
+function clientStagePostBody(
+  report: ClientDiagnosticStageReport,
+  correlationId: string | undefined,
+): ClientStageIngestRequest {
+  const id = validCorrelationId(correlationId);
   return report.phase === "started"
-    ? { kind: "stage", stage: report.stage, phase: "started", ordinal: report.ordinal }
+    ? {
+        kind: "stage",
+        stage: report.stage,
+        phase: "started",
+        ordinal: report.ordinal,
+        correlationId: id,
+      }
     : {
         kind: "stage",
         stage: report.stage,
         phase: "settled",
         ordinal: report.ordinal,
         durationMs: report.durationMs,
+        correlationId: id,
       };
 }
 
@@ -127,7 +144,56 @@ function clientBindingPostBody(
   report: ClientDiagnosticBindingReport,
   correlationId: string | undefined,
 ): ClientBindingIngestRequest {
-  return { kind: "binding", ...report, correlationId: validCorrelationId(correlationId) };
+  const related = (report.relatedCorrelationIds ?? [])
+    .flatMap((id): string[] => {
+      const valid = validCorrelationId(id);
+      return valid === undefined ? [] : [valid];
+    })
+    .slice(0, CLIENT_BINDING_RELATED_CORRELATIONS_MAX);
+  return {
+    kind: "binding",
+    surface: report.surface,
+    outcome: report.outcome,
+    referenceShape: report.referenceShape,
+    heuristicExempt: report.heuristicExempt,
+    windowRef: report.windowRef.slice(0, CLIENT_BINDING_WINDOW_REF_MAX_LENGTH),
+    correlationId: validCorrelationId(correlationId),
+    ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+  };
+}
+
+// A session-repair report (#3557) belongs to the denied request's timeline, so it needs that id.
+function clientSessionRepairPostBody(
+  report: ClientDiagnosticSessionRepairReport,
+  correlationId: string | undefined,
+): ClientSessionRepairIngestRequest | undefined {
+  const id = validCorrelationId(correlationId);
+  if (id === undefined) return undefined;
+  return {
+    kind: "session-repair",
+    outcome: report.outcome,
+    correlationId: id,
+    repairCorrelationId: validCorrelationId(report.repairCorrelationId),
+  };
+}
+
+type StructuredPostBody =
+  ClientStageIngestRequest | ClientBindingIngestRequest | ClientSessionRepairIngestRequest;
+
+// The closed report the metadata names, if any. A closed report carries no loss counts.
+function structuredPostBody(
+  meta: ClientDiagnosticMeta | undefined,
+): StructuredPostBody | undefined {
+  if (meta?.stageReport !== undefined) {
+    return clientStagePostBody(meta.stageReport, meta.correlationId);
+  }
+  if (meta?.bindingReport !== undefined) {
+    return clientBindingPostBody(meta.bindingReport, meta.correlationId);
+  }
+  if (meta?.sessionRepairReport !== undefined) {
+    return clientSessionRepairPostBody(meta.sessionRepairReport, meta.correlationId);
+  }
+  return undefined;
 }
 
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
@@ -166,12 +232,8 @@ function clientDiagnosticPostBody(
   message: string,
   meta: ClientDiagnosticMeta | undefined,
   loss: ClientDiagnosticLossCounts | undefined,
-): ClientDiagnosticIngestRequest | ClientStageIngestRequest | ClientBindingIngestRequest {
-  if (meta?.stageReport !== undefined) return clientStagePostBody(meta.stageReport);
-  if (meta?.bindingReport !== undefined) {
-    return clientBindingPostBody(meta.bindingReport, meta.correlationId);
-  }
-  return clientMessagePostBody(message, meta, loss);
+): ClientDiagnosticIngestRequest | StructuredPostBody {
+  return structuredPostBody(meta) ?? clientMessagePostBody(message, meta, loss);
 }
 
 // Process-wide (module-scope), not per-diagnostic: a flapping stream or a hostile page must not be
@@ -257,8 +319,8 @@ function sendClientDiagnostic(
   }
 }
 
-// A stage or binding report's wire shape has no `loss` field, so draining the ledger here would
-// silently discard it — never taken, so it keeps
+// A closed report's wire shape (stage, binding, session repair) has no `loss` field, so draining
+// the ledger here would silently discard it — never taken, so it keeps
 // accumulating for the next message report or the pagehide flush to carry, exactly as it already
 // does today when a burst of one kind of report happens to fall between two of another.
 function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMeta): void {
@@ -269,8 +331,7 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
     if (postThrottledInWindow === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
     return;
   }
-  const carriesLoss = meta?.stageReport === undefined && meta?.bindingReport === undefined;
-  const loss = carriesLoss ? takeClientDiagnosticLoss() : undefined;
+  const loss = structuredPostBody(meta) === undefined ? takeClientDiagnosticLoss() : undefined;
   sendClientDiagnostic(message, meta, loss);
 }
 

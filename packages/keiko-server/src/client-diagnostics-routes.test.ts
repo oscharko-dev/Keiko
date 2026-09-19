@@ -3,6 +3,7 @@ import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clientBindingDigest,
   clientDiagnosticNoteDigest,
   handleClientDiagnosticIngest,
   resetClientDiagnosticsIngestStateForTests,
@@ -371,6 +372,7 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
+        windowRef: "window-1",
         outcome: "target-missing",
         referenceShape: "redacted",
         heuristicExempt: false,
@@ -399,6 +401,7 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
+        windowRef: "window-1",
         outcome: "resolved",
         referenceShape: "uuid",
         heuristicExempt: true,
@@ -423,6 +426,7 @@ describe("POST /api/diagnostics/client", () => {
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
+        windowRef: "window-1",
         outcome: "target-missing",
         referenceShape: "uuid",
         heuristicExempt: false,
@@ -436,11 +440,55 @@ describe("POST /api/diagnostics/client", () => {
       );
     });
 
+    // #3557 review: two windows restored from one list answer stay apart by their window digest,
+    // and a legacy verdict names every list load it depended on.
+    it("gives each window its own digest and keeps the related list loads", async () => {
+      const sink = captureServerLog();
+      for (const windowRef of ["window-1", "window-2"]) {
+        const body = JSON.stringify({
+          kind: "binding",
+          surface: "chat-window",
+          windowRef,
+          outcome: "resolved",
+          referenceShape: "uuid",
+          heuristicExempt: false,
+          correlationId: "ui_chat-list-load-0001",
+          relatedCorrelationIds: ["ui_chat-list-load-0002", "not a safe id"],
+        });
+        expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+      }
+
+      const events = bindingEvents(sink, "client.binding.resolved");
+      expect(events.map((event) => event.extra?.bindingDigest)).toEqual([
+        clientBindingDigest("window-1"),
+        clientBindingDigest("window-2"),
+      ]);
+      // Only the safe related id survives; the window reference itself never reaches the log.
+      expect(events[0]?.extra?.relatedCorrelationIds).toEqual(["ui_chat-list-load-0002"]);
+      expect(JSON.stringify(events)).not.toContain("window-1");
+    });
+
+    it("refuses a resolved binding for a redacted reference", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "window-1",
+        outcome: "resolved",
+        referenceShape: "redacted",
+        heuristicExempt: false,
+      });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+      expect(bindingEvents(sink, "client.binding.resolved")).toEqual([]);
+    });
+
     it("refuses a binding report that claims an exemption for a non-UUID reference", async () => {
       const sink = captureServerLog();
       const body = JSON.stringify({
         kind: "binding",
         surface: "chat-window",
+        windowRef: "window-1",
         outcome: "resolved",
         referenceShape: "opaque",
         heuristicExempt: true,
@@ -451,6 +499,69 @@ describe("POST /api/diagnostics/client", () => {
       expect(clientDiagnosticRejectedEvents(sink)[0]?.extra).toMatchObject({
         rejection: "invalid-shape",
       });
+    });
+  });
+
+  // #3557 review: both phases of one mounted stage carry the client-minted id, so they join.
+  it("logs both phases of a stage under the stage's own correlation id", async () => {
+    const sink = captureServerLog();
+    for (const body of [
+      {
+        kind: "stage",
+        stage: "chat bind",
+        phase: "started",
+        ordinal: 4,
+        correlationId: "ui_stage-0004",
+      },
+      {
+        kind: "stage",
+        stage: "chat bind",
+        phase: "settled",
+        ordinal: 4,
+        durationMs: 12,
+        correlationId: "ui_stage-0004",
+      },
+    ]) {
+      await handleClientDiagnosticIngest(context(JSON.stringify(body)));
+    }
+
+    const stage = sink.events.filter((event) => event.op.startsWith("client.stage."));
+    expect(stage.map((event) => [event.op, event.correlationId])).toEqual([
+      ["client.stage.started", "ui_stage-0004"],
+      ["client.stage.settled", "ui_stage-0004"],
+    ]);
+  });
+
+  // #3557 review: the stale-session repair outcome joins the denied request's timeline.
+  describe("session repair evidence", () => {
+    it.each([
+      ["replayed", "client.session-repair.recovered", "info"],
+      ["replay-failed", "client.session-repair.failed", "warn"],
+      ["replay-skipped", "client.session-repair.failed", "warn"],
+      ["repair-failed", "client.session-repair.failed", "warn"],
+    ] as const)("logs a %s outcome as %s at %s", async (outcome, op, level) => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "session-repair",
+        outcome,
+        correlationId: "ui_denied-read-0001",
+        repairCorrelationId: "ui_session-repair-0001",
+      });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+      const events = sink.events.filter((event) => event.op === op);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        level,
+        correlationId: "ui_denied-read-0001",
+        extra: { repairCorrelationId: "ui_session-repair-0001" },
+      });
+      expect(events[0]?.errorKind).toBe(level === "warn" ? "authority-denied" : undefined);
+      if (op === "client.session-repair.failed") {
+        expect(events[0]?.extra?.outcome).toBe(outcome);
+      }
+      expect(clientDiagnosticEvents(sink)).toEqual([]);
     });
   });
 

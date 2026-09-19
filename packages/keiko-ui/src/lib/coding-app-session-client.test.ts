@@ -14,6 +14,7 @@ import {
   redeemCodingAppSessionPairingNavigation,
   redeemCodingAppSessionPairingOnBoot,
   repairLocalCodingAppSession,
+  repairLocalCodingAppSessionWithEvidence,
   useCodingAppSessionRedemptions,
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
@@ -301,5 +302,41 @@ describe("repairLocalCodingAppSession (ADR-0141 D5)", () => {
     await expect(repairLocalCodingAppSession()).resolves.toBe(true);
     await expect(repairLocalCodingAppSession()).resolves.toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// #3557 review: the repair's own request carries the id its evidence names.
+describe("repairLocalCodingAppSessionWithEvidence", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends the local-session request under the correlation id it returns", async () => {
+    const fetchMock = vi.fn((_path: string, _init: RequestInit) =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const repair = await repairLocalCodingAppSessionWithEvidence();
+
+    expect(repair.repaired).toBe(true);
+    const headers = fetchMock.mock.calls[0]?.[1].headers as Record<string, string>;
+    expect(headers["X-Keiko-Correlation-Id"]).toBe(repair.correlationId);
+  });
+
+  it("gives every joiner of one repair the same correlation id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+      ),
+    );
+
+    const [first, second] = await Promise.all([
+      repairLocalCodingAppSessionWithEvidence(),
+      repairLocalCodingAppSessionWithEvidence(),
+    ]);
+
+    expect(second.correlationId).toBe(first.correlationId);
   });
 });

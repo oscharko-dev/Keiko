@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5511791966a9b3a24b662254a6f8bb8220a1e4adc8a71a111efbaeef72c7e241" as const;
+  "3d642908551de32e5193bd45e08dbe542f7e8af0e02a5192f1be1fab8a4d6a07" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1755,6 +1755,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      bindingDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      relatedCorrelationIds: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+        maxItems: 15,
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -1797,6 +1810,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "boolean",
         dataClass: "closed-enum",
         required: true,
+      },
+      bindingDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      relatedCorrelationIds: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+        maxItems: 15,
       },
     },
     causal: "correlation",
@@ -2001,6 +2027,76 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["client-diagnostic-rejection"],
     proofIds: ["client.diagnostic.rejected.line", "client.diagnostic.rejected.shutdown-flush"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.session-repair.failed",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientSessionRepairFailed",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["replay-failed", "replay-skipped", "repair-failed"],
+      },
+      repairCorrelationId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["client-session-repair"],
+    proofIds: ["client.session-repair.failed.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.session-repair.recovered",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientSessionRepairRecovered",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      repairCorrelationId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-session-repair"],
+    proofIds: ["client.session-repair.recovered.line"],
+    releaseImpact: "patch",
   },
   {
     contractKind: "activity-log-operation",
@@ -25759,8 +25855,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 312,
-  completeClassCount: 312,
+  supportedClassCount: 313,
+  completeClassCount: 313,
   completeness: "complete",
   classes: [
     {
@@ -28006,6 +28102,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "bindingDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
               name: "heuristicExempt",
               type: "boolean",
               dataClass: "closed-enum",
@@ -28018,13 +28120,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "relatedCorrelationIds",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "surface",
               type: "string",
               dataClass: "closed-enum",
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -28042,6 +28156,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "bindingDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
               name: "heuristicExempt",
               type: "boolean",
               dataClass: "closed-enum",
@@ -28054,13 +28174,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "relatedCorrelationIds",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "surface",
               type: "string",
               dataClass: "closed-enum",
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -28334,6 +28466,90 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "client.diagnostic.rejected.line",
             "client.diagnostic.rejected.shutdown-flush",
           ],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-session-repair",
+      requirementContract: "client-session-repair",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end", "failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["client.session-repair.recovered"],
+        failure: ["client.session-repair.failed"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.session-repair.failed",
+          mode: "correlation",
+        },
+        {
+          op: "client.session-repair.recovered",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.session-repair.recovered"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.session-repair.failed",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "repairCorrelationId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.session-repair.failed.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.session-repair.recovered",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "repairCorrelationId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.session-repair.recovered.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -57358,6 +57574,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
     "client.diagnostic.rejected": "client-diagnostics",
+    "client.session-repair.failed": "client-diagnostics",
+    "client.session-repair.recovered": "client-diagnostics",
     "client.stage.settled": "client-diagnostics",
     "client.stage.started": "client-diagnostics",
     "coding-app-session.channel.closed": "tools-workflows",

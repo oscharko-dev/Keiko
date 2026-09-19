@@ -413,11 +413,14 @@ export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
 // anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
 export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
 
+// One correlation id per mounted stage (#3557 review): `started` and `settled` carry the same id, so
+// the pair joins in the log even when another tab reuses the same stage and ordinal.
 export interface ClientStageStartedIngestRequest {
   readonly kind: "stage";
   readonly stage: ClientStageId;
   readonly phase: "started";
   readonly ordinal: number;
+  readonly correlationId?: string | undefined;
 }
 
 export interface ClientStageSettledIngestRequest {
@@ -426,6 +429,7 @@ export interface ClientStageSettledIngestRequest {
   readonly phase: "settled";
   readonly ordinal: number;
   readonly durationMs: number;
+  readonly correlationId?: string | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -439,6 +443,7 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "phase",
   "ordinal",
   "durationMs",
+  "correlationId",
 ]);
 
 function isClientStageId(value: unknown): value is ClientStageId {
@@ -468,6 +473,7 @@ export function isClientStageIngestRequest(value: unknown): value is ClientStage
   if (value.kind !== "stage") return false;
   if (!isClientStageId(value.stage)) return false;
   if (!isBoundedPositiveInteger(value.ordinal, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
   if (value.phase === "started") return value.durationMs === undefined;
   if (value.phase === "settled") {
     return isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX);
@@ -494,6 +500,13 @@ export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 export const CLIENT_BINDING_REFERENCE_SHAPES = ["uuid", "opaque", "redacted"] as const;
 export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPES)[number];
 
+// The window's own persisted id, so two windows restored from one list answer stay apart and a
+// later failure of the same window is recognisable. The server logs only its digest.
+export const CLIENT_BINDING_WINDOW_REF_MAX_LENGTH = 256;
+// A legacy binding (no persisted project) is decided by a scan over every project's list; the report
+// names each list load it depended on beyond `correlationId`.
+export const CLIENT_BINDING_RELATED_CORRELATIONS_MAX = 15;
+
 export interface ClientBindingIngestRequest {
   readonly kind: "binding";
   readonly surface: ClientBindingSurface;
@@ -502,8 +515,10 @@ export interface ClientBindingIngestRequest {
   // The persisted reference is a server-issued UUID that the shared secret heuristic reads as a
   // card number: it survived persistence only through the reference-field exemption.
   readonly heuristicExempt: boolean;
+  readonly windowRef: string;
   // The request whose answer decided the outcome (the target list load), when the client knows it.
   readonly correlationId?: string | undefined;
+  readonly relatedCorrelationIds?: readonly string[] | undefined;
 }
 
 const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
@@ -512,32 +527,92 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "outcome",
   "referenceShape",
   "heuristicExempt",
+  "windowRef",
   "correlationId",
+  "relatedCorrelationIds",
 ]);
 
 function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }
 
-// Only a server-issued UUID can be exempt from the heuristic; any other combination is refused.
+// Only a server-issued UUID can be exempt from the heuristic, and a redaction marker can never
+// have resolved to a live target; every other impossible combination is refused as well.
 function hasConsistentBindingReference(value: Record<string, unknown>): boolean {
+  if (!isOneOf(value.outcome, CLIENT_BINDING_OUTCOMES)) return false;
   if (!isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES)) return false;
   if (typeof value.heuristicExempt !== "boolean") return false;
+  if (value.outcome === "resolved" && value.referenceShape === "redacted") return false;
   return !value.heuristicExempt || value.referenceShape === "uuid";
 }
 
+function hasBindingCorrelations(value: Record<string, unknown>): boolean {
+  if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
+  const related = value.relatedCorrelationIds;
+  if (related === undefined) return true;
+  return (
+    Array.isArray(related) &&
+    related.length <= CLIENT_BINDING_RELATED_CORRELATIONS_MAX &&
+    related.every(isCorrelationIdShape)
+  );
+}
+
 /**
- * True for a closed binding report. An unknown surface, outcome or reference shape, an exemption
- * claimed for anything but a UUID, a malformed correlation id, or any undeclared field refuses the
- * whole report, with the same fail-closed discipline as the message and stage shapes.
+ * True for a closed binding report. An unknown surface, outcome or reference shape, an impossible
+ * outcome/reference combination, a missing or oversized window reference, a malformed correlation
+ * id, or any undeclared field refuses the whole report, with the same fail-closed discipline as the
+ * message and stage shapes.
  */
 export function isClientBindingIngestRequest(value: unknown): value is ClientBindingIngestRequest {
   if (!isRecord(value) || value.kind !== "binding") return false;
   if (Object.keys(value).some((key) => !CLIENT_BINDING_INGEST_REQUEST_KEYS.has(key))) return false;
   if (!isOneOf(value.surface, CLIENT_BINDING_SURFACES)) return false;
-  if (!isOneOf(value.outcome, CLIENT_BINDING_OUTCOMES)) return false;
+  if (!isBoundedString(value.windowRef, CLIENT_BINDING_WINDOW_REF_MAX_LENGTH)) return false;
+  return hasConsistentBindingReference(value) && hasBindingCorrelations(value);
+}
+
+// ─── Stale-session repair evidence (#3557) ───────────────────────────────────────
+//
+// keiko-ui repairs a read that a restarted BFF denied with 403 DENIED (a local-session request) and
+// replays it once. The denied request, the repair and the replay are separate requests; this report
+// links them under the denied request's correlation id, which the replay reuses, and names the
+// outcome, so a self-healed refusal and one that stayed denied are both reconstructable.
+
+export const CLIENT_SESSION_REPAIR_OUTCOMES = [
+  "replayed",
+  "replay-failed",
+  "replay-skipped",
+  "repair-failed",
+] as const;
+export type ClientSessionRepairOutcome = (typeof CLIENT_SESSION_REPAIR_OUTCOMES)[number];
+
+export interface ClientSessionRepairIngestRequest {
+  readonly kind: "session-repair";
+  readonly outcome: ClientSessionRepairOutcome;
+  // The denied request, which the replay reuses.
+  readonly correlationId: string;
+  // The local-session repair request.
+  readonly repairCorrelationId?: string | undefined;
+}
+
+const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "outcome",
+  "correlationId",
+  "repairCorrelationId",
+]);
+
+export function isClientSessionRepairIngestRequest(
+  value: unknown,
+): value is ClientSessionRepairIngestRequest {
+  if (!isRecord(value) || value.kind !== "session-repair") return false;
+  if (Object.keys(value).some((key) => !CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS.has(key))) {
+    return false;
+  }
+  if (!isOneOf(value.outcome, CLIENT_SESSION_REPAIR_OUTCOMES)) return false;
   return (
-    hasConsistentBindingReference(value) && isOptional(value.correlationId, isCorrelationIdShape)
+    isCorrelationIdShape(value.correlationId) &&
+    isOptional(value.repairCorrelationId, isCorrelationIdShape)
   );
 }
 

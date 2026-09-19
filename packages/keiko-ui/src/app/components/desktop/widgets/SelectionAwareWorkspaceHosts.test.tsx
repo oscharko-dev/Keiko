@@ -338,6 +338,7 @@ afterEach(() => {
   providedChatSessions.length = 0;
   fetchChatsMock.mockReset();
   fetchChatsMock.mockResolvedValue({ chats: [] });
+  chatListCorrelationIdMock.mockReset();
 });
 
 useChatSessionMock.mockImplementation(() => chatSessionState);
@@ -1656,6 +1657,7 @@ describe("ChatWindowSessionHost target missing", () => {
             outcome: "target-missing",
             referenceShape: "opaque",
             heuristicExempt: false,
+            windowRef: "window-1",
           },
         },
       ),
@@ -1683,7 +1685,10 @@ describe("ChatWindowSessionHost target missing", () => {
 
     render(
       <I18nProvider>
-        <ChatWindowSessionHost cfg={{ chatId: "chat-missing" }} ctx={context()} />
+        <ChatWindowSessionHost
+          cfg={{ chatId: "chat-missing", projectPath: "/repo" }}
+          ctx={context()}
+        />
       </I18nProvider>,
     );
 
@@ -1693,6 +1698,73 @@ describe("ChatWindowSessionHost target missing", () => {
         expect.objectContaining({ correlationId: "ui_chat-list-load-0001" }),
       ),
     );
+  });
+
+  // #3557 review: a legacy binding without a persisted project is judged missing by a scan over
+  // every project's list, so its evidence names each of those loads, not just one.
+  it("names every scanned project's list load on a missing legacy binding", async (): Promise<void> => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.loading = false;
+    fetchChatsMock.mockResolvedValue({ chats: [] });
+    chatListCorrelationIdMock.mockImplementation((projectPath: string) =>
+      projectPath === "/repo-a" ? "ui_chat-list-load-a" : "ui_chat-list-load-b",
+    );
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-missing" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.stringContaining("restore target not found"),
+        {
+          correlationId: "ui_chat-list-load-a",
+          bindingReport: expect.objectContaining({
+            outcome: "target-missing",
+            relatedCorrelationIds: ["ui_chat-list-load-b"],
+          }) as unknown,
+        },
+      ),
+    );
+  });
+
+  // #3557 review: two windows restored from one list answer must stay apart in the evidence.
+  it("names each window in its own binding report", async (): Promise<void> => {
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "chat-missing-1" }} ctx={context()} />
+        <ChatWindowSessionHost
+          cfg={{ chatId: "chat-missing-2" }}
+          ctx={context({ windowId: "window-2" })}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => {
+      const windows = reportClientDiagnosticMock.mock.calls.flatMap(([message, meta]) =>
+        String(message).includes("restore target not found")
+          ? [(meta as { bindingReport: { windowRef: string } }).bindingReport.windowRef]
+          : [],
+      );
+      expect([...windows].sort()).toEqual(["window-1", "window-2"]);
+    });
   });
 
   // #3557 review: a Luhn-looking server-issued UUID that survived persistence only through the
@@ -1720,6 +1792,7 @@ describe("ChatWindowSessionHost target missing", () => {
             outcome: "resolved",
             referenceShape: "uuid",
             heuristicExempt: true,
+            windowRef: "window-1",
           },
         },
       ),
@@ -1760,6 +1833,7 @@ describe("ChatWindowSessionHost target missing", () => {
             outcome: "target-missing",
             referenceShape: "redacted",
             heuristicExempt: false,
+            windowRef: "window-1",
           },
         },
       ],

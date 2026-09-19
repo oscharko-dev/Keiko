@@ -13,9 +13,13 @@ import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client
 // here). vi.mock intercepts the module regardless of how it is imported, so the dynamic import
 // resolves to this stub exactly like a static one would.
 const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+const REPAIR_CORRELATION_ID = "ui_session-repair-0001";
 
 vi.mock("./coding-app-session-client", () => ({
-  repairLocalCodingAppSession: ensureLocalSession,
+  repairLocalCodingAppSessionWithEvidence: async (): Promise<{
+    readonly repaired: boolean;
+    readonly correlationId: string;
+  }> => ({ repaired: await ensureLocalSession(), correlationId: REPAIR_CORRELATION_ID }),
 }));
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -392,5 +396,91 @@ describe("bffFetchJson — session-denied 403 self-heal (ADR-0141 D5)", () => {
     await expect(bffFetchJson("/api/x")).rejects.toMatchObject({ code: "DENIED", status: 409 });
     expect(ensureLocalSession).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+// #3557 review: the denied request, the repair and the replay are three requests; the evidence links
+// them on the denied request's timeline and names the outcome, whatever it was.
+describe("bffFetchJson — session repair evidence", () => {
+  function deniedResponse(): Response {
+    return jsonResponse({ error: { code: "DENIED", message: "no" } }, 403);
+  }
+
+  function sentCorrelationId(fetchMock: ReturnType<typeof vi.fn>, index: number): string {
+    const init = (fetchMock.mock.calls[index] as [string, RequestInit])[1];
+    return (init.headers as Record<string, string>)["X-Keiko-Correlation-Id"] ?? "";
+  }
+
+  function captureReports(): { message: string; meta: unknown }[] {
+    const reports: { message: string; meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
+    return reports;
+  }
+
+  it("replays under the denied request's id and reports the recovery with the repair's id", async () => {
+    const reports = captureReports();
+    ensureLocalSession.mockResolvedValueOnce(true);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(deniedResponse())
+      .mockResolvedValueOnce(jsonResponse({ value: 1 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(bffFetchJson("/api/x")).resolves.toEqual({ value: 1 });
+
+    const deniedId = sentCorrelationId(fetchMock, 0);
+    expect(deniedId).not.toBe("");
+    expect(sentCorrelationId(fetchMock, 1)).toBe(deniedId);
+    expect(reports).toEqual([
+      {
+        message: "[keiko] stale session repair: replayed",
+        meta: {
+          correlationId: deniedId,
+          sessionRepairReport: { outcome: "replayed", repairCorrelationId: REPAIR_CORRELATION_ID },
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    ["repair-failed", false, "GET", 1],
+    ["replay-skipped", true, "POST", 1],
+    ["replay-failed", true, "GET", 2],
+  ] as const)(
+    "reports %s on the denied request's timeline",
+    async (outcome, repaired, method, requests) => {
+      const reports = captureReports();
+      ensureLocalSession.mockResolvedValueOnce(repaired);
+      const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(deniedResponse()));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(bffFetchJson("/api/x", { method })).rejects.toMatchObject({ code: "DENIED" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(requests);
+      expect(reports).toEqual([
+        {
+          message: `[keiko] stale session repair: ${outcome}`,
+          meta: {
+            correlationId: sentCorrelationId(fetchMock, 0),
+            sessionRepairReport: { outcome, repairCorrelationId: REPAIR_CORRELATION_ID },
+          },
+        },
+      ]);
+    },
+  );
+
+  it("reports nothing for a request that opts out of the repair", async () => {
+    const reports = captureReports();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => Promise.resolve(deniedResponse())),
+    );
+
+    await expect(bffFetchJson("/api/x", undefined, { repairSession: false })).rejects.toMatchObject(
+      { code: "DENIED" },
+    );
+    expect(reports).toEqual([]);
   });
 });

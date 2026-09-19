@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+import { CLIENT_STAGE_DURATION_MS_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 // The stages a desktop window passes through before its body is interactive. Each renders a named
@@ -28,23 +30,36 @@ export type WindowStage =
 
 let nextStageSequence = 0;
 
+// Monotonic, so a wall-clock step between mount and cleanup can never yield a negative duration,
+// and bounded to the contract's ceiling, so a tab left open for days still settles its stage
+// instead of sending a report the server must refuse, which would leave a false stall (#3557 review).
+function elapsedStageMs(startedAt: number): number {
+  const elapsed = Math.round(performance.now() - startedAt);
+  return Math.min(Math.max(elapsed, 0), CLIENT_STAGE_DURATION_MS_MAX);
+}
+
 export function useWindowStageEvidence(stage: WindowStage): void {
   const sequence = useRef<number | undefined>(undefined);
   useEffect((): (() => void) => {
     nextStageSequence += 1;
     const token = nextStageSequence;
     sequence.current = token;
-    const startedAt = Date.now();
+    // One id for the whole mounted stage: `started` and `settled` join in the log even when
+    // another tab reuses the same stage and ordinal (#3557 review).
+    const correlationId = newClientCorrelationId();
+    const startedAt = performance.now();
     // i18n-exempt: body-free diagnostic message for the activity log, never rendered
     reportClientDiagnostic(`desktop ${stage} #${String(token)}: started`, {
+      correlationId,
       stageReport: { stage, phase: "started", ordinal: token },
     });
     return (): void => {
-      const durationMs = Date.now() - startedAt;
+      const durationMs = elapsedStageMs(startedAt);
       // i18n-exempt: body-free diagnostic message for the activity log, never rendered
       reportClientDiagnostic(
         `desktop ${stage} #${String(token)}: settled after ${String(durationMs)}ms`,
         {
+          correlationId,
           stageReport: { stage, phase: "settled", ordinal: token, durationMs },
         },
       );

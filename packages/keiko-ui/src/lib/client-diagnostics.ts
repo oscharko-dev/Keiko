@@ -37,6 +37,7 @@ import {
   type ClientBindingOutcome,
   type ClientBindingReferenceShape,
   type ClientBindingSurface,
+  type ClientSessionRepairOutcome,
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticKind,
   type ClientDiagnosticLossCountKey,
@@ -67,6 +68,17 @@ export interface ClientDiagnosticBindingReport {
   readonly outcome: ClientBindingOutcome;
   readonly referenceShape: ClientBindingReferenceShape;
   readonly heuristicExempt: boolean;
+  // The window's own persisted id; the server logs only its digest.
+  readonly windowRef: string;
+  // Further list loads the verdict depended on, beyond `meta.correlationId`.
+  readonly relatedCorrelationIds?: readonly string[] | undefined;
+}
+
+// The outcome of repairing and replaying a read a restarted BFF denied (#3557). `meta.correlationId`
+// is the denied request's id, which the replay reuses.
+export interface ClientDiagnosticSessionRepairReport {
+  readonly outcome: ClientSessionRepairOutcome;
+  readonly repairCorrelationId?: string | undefined;
 }
 
 export interface ClientDiagnosticMeta {
@@ -76,6 +88,7 @@ export interface ClientDiagnosticMeta {
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
   readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
+  readonly sessionRepairReport?: ClientDiagnosticSessionRepairReport | undefined;
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;

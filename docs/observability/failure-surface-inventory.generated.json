@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5511791966a9b3a24b662254a6f8bb8220a1e4adc8a71a111efbaeef72c7e241"
+    "catalogDigest": "3d642908551de32e5193bd45e08dbe542f7e8af0e02a5192f1be1fab8a4d6a07"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 430,
-    "proofCount": 438,
-    "resolvedProofCount": 438,
-    "failureClassCount": 312,
+    "operationCount": 432,
+    "proofCount": 440,
+    "resolvedProofCount": 440,
+    "failureClassCount": 313,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -114,6 +114,8 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.session-repair.failed",
+        "client.session-repair.recovered",
         "client.stage.settled",
         "client.stage.started"
       ],
@@ -618,6 +620,7 @@
     "client-diagnostic": ["client-diagnostics.dependency-failure"],
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
+    "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
     "coding-app-session-channel": ["tools-workflows.dependency-failure"],
     "coding-app-session-pairing": ["tools-workflows.dependency-failure"],
@@ -1005,6 +1008,12 @@
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
     "client.diagnostic.rejected.shutdown-flush": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.session-repair.failed.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.session-repair.recovered.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
     "client.stage.settled.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],

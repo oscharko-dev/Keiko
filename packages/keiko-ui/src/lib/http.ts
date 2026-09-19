@@ -40,7 +40,10 @@
 
 import { ApiError } from "./api";
 import { buildBffHeaders, CORRELATION_HEADER, newClientCorrelationId } from "./bff-correlation";
-import { reportClientDiagnostic } from "./client-diagnostics";
+import {
+  reportClientDiagnostic,
+  type ClientDiagnosticSessionRepairReport,
+} from "./client-diagnostics";
 import { clientErrorSummary } from "./client-error-summary";
 
 // Re-exported for the existing consumers that import these two from "./http"
@@ -81,6 +84,11 @@ export interface BffFetchOptions<T> {
    * and a repair started from inside the repair would join its own attempt and never settle.
    */
   readonly repairSession?: boolean;
+  /**
+   * The correlation id this request carries, when the caller must name it in evidence (the session
+   * repair's own request, a replay that joins the denied request's timeline). Minted otherwise.
+   */
+  readonly correlationId?: string;
 }
 
 function defaultParseFailureMessage(status: number): string {
@@ -138,7 +146,7 @@ async function performBffFetch<T>(
   init: RequestInit | undefined,
   opts: BffFetchOptions<T> | undefined,
 ): Promise<T> {
-  const correlationId = newClientCorrelationId();
+  const correlationId = opts?.correlationId ?? newClientCorrelationId();
   const res = await fetch(path, {
     ...init,
     headers: buildBffHeaders(init, correlationId),
@@ -210,12 +218,57 @@ function isReplayableRead(init: RequestInit | undefined): boolean {
   return method === "GET" || method === "HEAD";
 }
 
+// The denied request, the repair and the replay are three requests; this report links them on the
+// denied request's timeline (the replay reuses its id) and names the outcome (#3557 review).
+function reportSessionRepair(
+  outcome: ClientDiagnosticSessionRepairReport["outcome"],
+  deniedCorrelationId: string,
+  repairCorrelationId: string,
+): void {
+  // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+  reportClientDiagnostic(`[keiko] stale session repair: ${outcome}`, {
+    correlationId: deniedCorrelationId,
+    sessionRepairReport: { outcome, repairCorrelationId },
+  });
+}
+
+async function repairAndReplay<T>(
+  denied: ApiError,
+  path: string,
+  init: RequestInit | undefined,
+  opts: BffFetchOptions<T> | undefined,
+): Promise<T> {
+  const { repairLocalCodingAppSessionWithEvidence } = await import("./coding-app-session-client");
+  const repair = await repairLocalCodingAppSessionWithEvidence();
+  const deniedCorrelationId = denied.correlationId ?? newClientCorrelationId();
+  if (!repair.repaired || !isReplayableRead(init)) {
+    reportSessionRepair(
+      repair.repaired ? "replay-skipped" : "repair-failed",
+      deniedCorrelationId,
+      repair.correlationId,
+    );
+    throw denied;
+  }
+  try {
+    const value = await performBffFetch(path, init, {
+      ...opts,
+      correlationId: deniedCorrelationId,
+    });
+    reportSessionRepair("replayed", deniedCorrelationId, repair.correlationId);
+    return value;
+  } catch (replayError) {
+    reportSessionRepair("replay-failed", deniedCorrelationId, repair.correlationId);
+    throw replayError;
+  }
+}
+
 /**
  * `performBffFetch`, self-healing a stale app session: on a 403 `DENIED` it runs the shared
- * `repairLocalCodingAppSession()` (one local-session request per denial burst, a no-op on a valid
- * cookie) and replays a safe read exactly once. A write is never replayed; the repair still runs, so
- * the user's next attempt carries the session. The replay's own result is returned as-is and a failed
- * repair returns the original error, so this never loops. A genuine denial costs one repeated read.
+ * `repairLocalCodingAppSession` (one local-session request per denial burst, a no-op on a valid
+ * cookie) and replays a safe read exactly once, under the denied request's own correlation id. A
+ * write is never replayed; the repair still runs, so the user's next attempt carries the session.
+ * The replay's own result is returned as-is and a failed repair returns the original error, so this
+ * never loops. A genuine denial costs one repeated read. Every repair outcome is reported.
  */
 export async function bffFetchJson<T>(
   path: string,
@@ -226,9 +279,6 @@ export async function bffFetchJson<T>(
     return await performBffFetch(path, init, opts);
   } catch (error) {
     if (!isDeniedError(error) || opts?.repairSession === false) throw error;
-    const { repairLocalCodingAppSession } = await import("./coding-app-session-client");
-    const repaired = await repairLocalCodingAppSession();
-    if (!repaired || !isReplayableRead(init)) throw error;
-    return performBffFetch(path, init, opts);
+    return repairAndReplay(error, path, init, opts);
   }
 }

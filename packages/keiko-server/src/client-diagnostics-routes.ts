@@ -49,6 +49,7 @@ import type {
   ClientBindingIngestRequest,
   ClientDiagnosticIngestRequest,
   ClientDiagnosticLossCounts,
+  ClientSessionRepairIngestRequest,
   ClientStageId,
   ClientStageIngestRequest,
   ClientStageSettledIngestRequest,
@@ -57,6 +58,7 @@ import type {
 import {
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
+  isClientSessionRepairIngestRequest,
   isClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
@@ -297,6 +299,17 @@ const CLIENT_BINDING_FIELDS = {
     values: CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES,
   },
   heuristicExempt: { type: "boolean", dataClass: "closed-enum", required: true },
+  // The digest of the window's own persisted id: two windows restored from one list answer stay
+  // apart, and a later failure of the same window carries the same digest (#3557 review).
+  bindingDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  // The other list loads a legacy binding's verdict depended on, beyond the line's correlation id.
+  relatedCorrelationIds: {
+    type: "string-array",
+    dataClass: "opaque-id",
+    required: false,
+    maxLength: 128,
+    maxItems: 15,
+  },
 } as const;
 
 const CLIENT_BINDING_RESOLVED_OPERATION = defineActivityLogOperation({
@@ -328,6 +341,67 @@ const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["client-binding"],
   proofIds: ["client.binding.target-missing.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review: a read a restarted BFF denied is repaired and replayed once (keiko-ui http.ts). The
+// line sits on the denied request's timeline (the replay reuses its id) and names the repair request,
+// so the self-heal, or the reason it did not happen, is reconstructable from the log alone.
+const CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES = [
+  "replay-failed",
+  "replay-skipped",
+  "repair-failed",
+] as const;
+
+const CLIENT_SESSION_REPAIR_RECOVERED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.session-repair.recovered",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSessionRepairRecovered",
+  fields: {
+    repairCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-session-repair"],
+  proofIds: ["client.session-repair.recovered.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_SESSION_REPAIR_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.session-repair.failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSessionRepairFailed",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES,
+    },
+    repairCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-session-repair"],
+  proofIds: ["client.session-repair.failed.line"],
   releaseImpact: "patch",
 });
 
@@ -608,16 +682,26 @@ function logClientStageSettled(
   );
 }
 
+// A client-supplied id when it is a safe correlation id, else the ingest POST's own.
+function reportCorrelationId(
+  clientCorrelationId: string | undefined,
+  ingestCorrelationId: string | undefined,
+): string {
+  return clientCorrelationId !== undefined && isValidCorrelationId(clientCorrelationId)
+    ? clientCorrelationId
+    : correlationIdOrUnknown(ingestCorrelationId);
+}
+
 // Projects a validated stage report onto its own lifecycle operation — never the failure-shaped
 // `client.diagnostic` above. Root cause of KEIKO-3557: 416 of 449 `client.diagnostic` lines in a
 // live log were exactly this routine evidence, all persisted as warn/unknown and burying the rare
-// real failures. Unlike `client.diagnostic`, no client-supplied correlation id: a stage mount is not
-// itself a server request, so only the ingest POST's own correlation id ever applies.
+// real failures. Both phases of one mounted stage carry the same client-minted correlation id, so the
+// pair joins in the log even when another tab reuses the stage and ordinal (#3557 review).
 function logClientStage(
   request: ClientStageIngestRequest,
   ingestCorrelationId: string | undefined,
 ): void {
-  const correlationId = correlationIdOrUnknown(ingestCorrelationId);
+  const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
   if (request.phase === "started") {
     logClientStageStarted(request, correlationId);
     return;
@@ -627,11 +711,23 @@ function logClientStage(
 
 type ClientBindingFields = ActivityLogFields<typeof CLIENT_BINDING_RESOLVED_OPERATION>;
 
+export function clientBindingDigest(windowRef: string): string {
+  return sha256Hex(`keiko-client-binding-v1\0${windowRef}`);
+}
+
+// Only safe correlation ids are kept; a malformed one is dropped rather than refusing the line.
+function relatedCorrelationIds(request: ClientBindingIngestRequest): readonly string[] {
+  return (request.relatedCorrelationIds ?? []).filter((id) => isValidCorrelationId(id));
+}
+
 function clientBindingFields(request: ClientBindingIngestRequest): ClientBindingFields {
+  const related = relatedCorrelationIds(request);
   return {
     surface: request.surface,
     referenceShape: request.referenceShape,
     heuristicExempt: request.heuristicExempt,
+    bindingDigest: clientBindingDigest(request.windowRef),
+    ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
     completeness: "complete",
     loss: "none",
   };
@@ -670,10 +766,7 @@ function logClientBinding(
   request: ClientBindingIngestRequest,
   ingestCorrelationId: string | undefined,
 ): void {
-  const correlationId =
-    request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
-      ? request.correlationId
-      : correlationIdOrUnknown(ingestCorrelationId);
+  const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
   if (request.outcome === "resolved") {
     logClientBindingResolved(request, correlationId);
     return;
@@ -681,17 +774,76 @@ function logClientBinding(
   logClientBindingTargetMissing(request, correlationId);
 }
 
-// The three closed report shapes this route accepts. They are mutually exclusive by construction:
-// a stage or binding report carries no `message`, and each declares its own `kind` literal, which
-// the message shape's closed `kind` vocabulary never contains.
+function sessionRepairCorrelation(request: ClientSessionRepairIngestRequest): {
+  readonly repairCorrelationId?: string;
+} {
+  const id = request.repairCorrelationId;
+  return id !== undefined && isValidCorrelationId(id) ? { repairCorrelationId: id } : {};
+}
+
+function logClientSessionRepairRecovered(
+  request: ClientSessionRepairIngestRequest,
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SESSION_REPAIR_RECOVERED_OPERATION,
+      { correlationId },
+      { ...sessionRepairCorrelation(request), completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
+function logClientSessionRepairFailed(
+  request: ClientSessionRepairIngestRequest & {
+    readonly outcome: (typeof CLIENT_SESSION_REPAIR_ACTIVITY_LOG_FAILURES)[number];
+  },
+  correlationId: string,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_SESSION_REPAIR_FAILED_OPERATION,
+      { correlationId, errorKind: "authority-denied" },
+      {
+        outcome: request.outcome,
+        ...sessionRepairCorrelation(request),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+// The line joins the denied request's own timeline: the report carries that request's id, which
+// the replay reused.
+function logClientSessionRepair(
+  request: ClientSessionRepairIngestRequest,
+  ingestCorrelationId: string | undefined,
+): void {
+  const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
+  const { outcome } = request;
+  if (outcome === "replayed") {
+    logClientSessionRepairRecovered(request, correlationId);
+    return;
+  }
+  logClientSessionRepairFailed({ ...request, outcome }, correlationId);
+}
+
+// The closed report shapes this route accepts. They are mutually exclusive by construction: only
+// the message shape carries `message`, and every other shape declares its own `kind` literal,
+// which the message shape's closed `kind` vocabulary never contains.
 type ClassifiedClientReport =
   | { readonly shape: "stage"; readonly report: ClientStageIngestRequest }
   | { readonly shape: "binding"; readonly report: ClientBindingIngestRequest }
+  | { readonly shape: "session-repair"; readonly report: ClientSessionRepairIngestRequest }
   | { readonly shape: "message"; readonly report: ClientDiagnosticIngestRequest };
 
 function classifyClientReport(value: unknown): ClassifiedClientReport | undefined {
   if (isClientStageIngestRequest(value)) return { shape: "stage", report: value };
   if (isClientBindingIngestRequest(value)) return { shape: "binding", report: value };
+  if (isClientSessionRepairIngestRequest(value)) {
+    return { shape: "session-repair", report: value };
+  }
   if (isClientDiagnosticIngestRequest(value)) return { shape: "message", report: value };
   return undefined;
 }
@@ -700,12 +852,18 @@ function logClientReport(
   classified: ClassifiedClientReport,
   ingestCorrelationId: string | undefined,
 ): void {
-  if (classified.shape === "stage") {
-    logClientStage(classified.report, ingestCorrelationId);
-  } else if (classified.shape === "binding") {
-    logClientBinding(classified.report, ingestCorrelationId);
-  } else {
-    logClientDiagnostic(classified.report, ingestCorrelationId);
+  switch (classified.shape) {
+    case "stage":
+      logClientStage(classified.report, ingestCorrelationId);
+      return;
+    case "binding":
+      logClientBinding(classified.report, ingestCorrelationId);
+      return;
+    case "session-repair":
+      logClientSessionRepair(classified.report, ingestCorrelationId);
+      return;
+    case "message":
+      logClientDiagnostic(classified.report, ingestCorrelationId);
   }
 }
 

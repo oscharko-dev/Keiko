@@ -6,6 +6,9 @@ import {
   ACTIVITY_LOG_WRITER_KINDS,
   CLIENT_BINDING_OUTCOMES,
   CLIENT_BINDING_REFERENCE_SHAPES,
+  CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
+  CLIENT_BINDING_WINDOW_REF_MAX_LENGTH,
+  CLIENT_SESSION_REPAIR_OUTCOMES,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
@@ -18,6 +21,7 @@ import {
   isActivityLogReadinessSnapshot,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
+  isClientSessionRepairIngestRequest,
   isClientDiagnosticKind,
   isClientDiagnosticLossCount,
   isClientStageIngestRequest,
@@ -400,20 +404,37 @@ describe("isClientBindingIngestRequest", () => {
       outcome: "target-missing",
       referenceShape: "redacted",
       heuristicExempt: false,
+      windowRef: "window-1",
     };
   }
 
-  it("accepts every closed outcome and reference shape, with and without a correlation id", () => {
+  it("accepts every possible outcome and reference shape, with and without correlation ids", () => {
     for (const outcome of CLIENT_BINDING_OUTCOMES) {
       for (const referenceShape of CLIENT_BINDING_REFERENCE_SHAPES) {
+        if (outcome === "resolved" && referenceShape === "redacted") continue;
         expect(isClientBindingIngestRequest({ ...bindingRequest(), outcome, referenceShape })).toBe(
           true,
         );
       }
     }
     expect(
-      isClientBindingIngestRequest({ ...bindingRequest(), correlationId: "ui_list-load-0001" }),
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        correlationId: "ui_list-load-0001",
+        relatedCorrelationIds: ["ui_list-load-0002", "ui_list-load-0003"],
+      }),
     ).toBe(true);
+  });
+
+  // #3557 review: a redaction marker can never have resolved to a live chat.
+  it("refuses a resolved outcome for a redacted reference", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "redacted",
+      }),
+    ).toBe(false);
   });
 
   it("accepts an exemption only for a server-issued UUID", () => {
@@ -436,18 +457,88 @@ describe("isClientBindingIngestRequest", () => {
     }
   });
 
+  it("bounds the window reference and the related correlation ids", () => {
+    const longest = "w".repeat(CLIENT_BINDING_WINDOW_REF_MAX_LENGTH);
+    expect(isClientBindingIngestRequest({ ...bindingRequest(), windowRef: longest })).toBe(true);
+    expect(isClientBindingIngestRequest({ ...bindingRequest(), windowRef: `${longest}w` })).toBe(
+      false,
+    );
+    const related = Array.from(
+      { length: CLIENT_BINDING_RELATED_CORRELATIONS_MAX },
+      (_value, index) => `ui_list-load-${String(index).padStart(4, "0")}`,
+    );
+    expect(
+      isClientBindingIngestRequest({ ...bindingRequest(), relatedCorrelationIds: related }),
+    ).toBe(true);
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        relatedCorrelationIds: [...related, "ui_list-load-9999"],
+      }),
+    ).toBe(false);
+  });
+
   it.each([
     ["a non-object", "binding"],
-    ["another kind", { ...{ kind: "stage" } }],
+    ["another kind", { kind: "stage" }],
     ["an unknown surface", { surface: "files-window" }],
     ["an unknown outcome", { outcome: "restored" }],
     ["an unknown reference shape", { referenceShape: "chat-123" }],
     ["a non-boolean exemption", { heuristicExempt: "false" }],
     ["a missing exemption", { heuristicExempt: undefined }],
+    ["a missing window reference", { windowRef: undefined }],
+    ["an empty window reference", { windowRef: "" }],
     ["an oversized correlation id", { correlationId: "c".repeat(129) }],
+    ["a related id that is not a string", { relatedCorrelationIds: [7] }],
+    ["related ids that are not a list", { relatedCorrelationIds: "ui_list-load-0001" }],
     ["an undeclared field", { chatId: "chat-123" }],
   ])("refuses %s", (_label, patch) => {
     const value = typeof patch === "string" ? patch : { ...bindingRequest(), ...patch };
     expect(isClientBindingIngestRequest(value)).toBe(false);
+  });
+});
+
+// #3557 review: the stage lifecycle carries one client-minted id across both phases.
+describe("isClientStageIngestRequest correlation", () => {
+  it("accepts a well-formed correlation id on either phase and refuses a malformed one", () => {
+    const started = { kind: "stage", stage: "chat bind", phase: "started", ordinal: 1 };
+    const settled = { ...started, phase: "settled", durationMs: 5 };
+    expect(isClientStageIngestRequest({ ...started, correlationId: "ui_stage-0001" })).toBe(true);
+    expect(isClientStageIngestRequest({ ...settled, correlationId: "ui_stage-0001" })).toBe(true);
+    expect(isClientStageIngestRequest({ ...started, correlationId: "c".repeat(129) })).toBe(false);
+    expect(isClientStageIngestRequest({ ...settled, correlationId: 42 })).toBe(false);
+  });
+});
+
+// #3557 review: the stale-session repair links the denied request, the repair and the replay.
+describe("isClientSessionRepairIngestRequest", () => {
+  function repairRequest(): Record<string, unknown> {
+    return {
+      kind: "session-repair",
+      outcome: "replayed",
+      correlationId: "ui_denied-0001",
+      repairCorrelationId: "ui_repair-0001",
+    };
+  }
+
+  it("accepts every closed outcome, with and without the repair's correlation id", () => {
+    for (const outcome of CLIENT_SESSION_REPAIR_OUTCOMES) {
+      expect(isClientSessionRepairIngestRequest({ ...repairRequest(), outcome })).toBe(true);
+    }
+    expect(
+      isClientSessionRepairIngestRequest({ ...repairRequest(), repairCorrelationId: undefined }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["a non-object", "session-repair"],
+    ["another kind", { kind: "binding" }],
+    ["an unknown outcome", { outcome: "healed" }],
+    ["a missing denied-request id", { correlationId: undefined }],
+    ["a malformed repair id", { repairCorrelationId: "" }],
+    ["an undeclared field", { path: "/api/files" }],
+  ])("refuses %s", (_label, patch) => {
+    const value = typeof patch === "string" ? patch : { ...repairRequest(), ...patch };
+    expect(isClientSessionRepairIngestRequest(value)).toBe(false);
   });
 });

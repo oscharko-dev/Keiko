@@ -1062,30 +1062,79 @@ function chatBindingMessage(
   return `${head} (reference=${evidence.referenceShape}${exempt})`;
 }
 
+function useBoundChatBindingEvidence(
+  configuration: BoundChatConfig,
+  ctx: WindowRenderContext,
+  routing: BoundChatRouting,
+  session: ChatSessionApi,
+): void {
+  useChatBindingEvidence({
+    routing,
+    chatId: configuration.chatId,
+    windowId: ctx.windowId,
+    projectPaths: chatBindingProjectPaths(configuration.projectPath, session),
+  });
+}
+
+// Every project list the verdict depended on: the active project's, or, for a legacy binding
+// without a persisted project, every project the lookup scanned (#3557 review).
+function chatBindingProjectPaths(
+  configuredProjectPath: string | undefined,
+  session: ChatSessionApi,
+): readonly string[] {
+  if (configuredProjectPath === undefined) return session.projects.map((project) => project.path);
+  return session.activeProject === undefined ? [] : [session.activeProject.path];
+}
+
+function listCorrelationIds(projectPaths: readonly string[]): readonly string[] {
+  const ids = projectPaths.flatMap((path): string[] => {
+    const id = chatListCorrelationId(path);
+    return id === undefined ? [] : [id];
+  });
+  return [...new Set(ids)];
+}
+
+interface ChatBindingEvidenceArgs {
+  readonly routing: BoundChatRouting;
+  readonly chatId: string | undefined;
+  readonly windowId: string;
+  readonly projectPaths: readonly string[];
+}
+
 // A restored chat window whose conversation cannot be resolved renders "Chat not found". Without
 // evidence, a lost binding (a persisted id that no longer names the chat) looked exactly like a
 // deleted conversation, and a binding that resolved only through the reference-field exemption
 // looked like no restore at all (#3557 review). Report each outcome once per bound id as a typed,
 // body-free binding report: the closed shape of the persisted reference and its exemption, never
-// the id, under the correlation id of the chat list load whose answer decided the outcome.
-function useChatBindingEvidence(
-  routing: BoundChatRouting,
-  chatId: string | undefined,
-  projectPath: string | undefined,
-): void {
+// the id; the window's own id (the server logs its digest), so two windows restored from one list
+// answer stay apart; and the correlation ids of every chat list load whose answer decided it.
+function useChatBindingEvidence({
+  routing,
+  chatId,
+  windowId,
+  projectPaths,
+}: ChatBindingEvidenceArgs): void {
   const reportedRef = useRef(new Set<string>());
   const outcome = chatBindingOutcome(routing, chatId);
+  const projectKey = projectPaths.join("\u0000");
   useEffect((): void => {
     if (outcome === undefined || chatId === undefined) return;
     const key = `${outcome}\u0000${chatId}`;
     if (reportedRef.current.has(key)) return;
     reportedRef.current.add(key);
     const evidence = persistedReferenceEvidence(chatId);
+    const [correlationId, ...related] = listCorrelationIds(projectKey.split("\u0000"));
     reportClientDiagnostic(chatBindingMessage(outcome, evidence), {
-      correlationId: projectPath === undefined ? undefined : chatListCorrelationId(projectPath),
-      bindingReport: { surface: "chat-window", outcome, ...evidence },
+      correlationId,
+      bindingReport: {
+        surface: "chat-window",
+        outcome,
+        ...evidence,
+        windowRef: windowId,
+        ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+      },
     });
-  }, [chatId, outcome, projectPath]);
+  }, [chatId, outcome, projectKey, windowId]);
 }
 
 function ChatNotFound(): ReactNode {
@@ -1373,7 +1422,7 @@ function BoundChatWindowSessionHost({
     session,
     updateCfg: ctx.updateCfg,
   });
-  useChatBindingEvidence(routing, configuration.chatId, session.activeProject?.path);
+  useBoundChatBindingEvidence(configuration, ctx, routing, session);
   useBoundChatWindowRuntime(configuration, ctx, routing, session);
   const memory = useBoundMemorySession({
     activeTarget: routing.activeTarget,

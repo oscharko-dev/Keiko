@@ -180,6 +180,7 @@ describe("client diagnostics loss evidence", () => {
     const body = JSON.stringify({
       kind: "binding",
       surface: "chat-window",
+      windowRef: "window-1",
       outcome: "target-missing",
       referenceShape: "redacted",
       heuristicExempt: false,
@@ -204,6 +205,7 @@ describe("client diagnostics loss evidence", () => {
     const body = JSON.stringify({
       kind: "binding",
       surface: "chat-window",
+      windowRef: "window-1",
       outcome: "resolved",
       referenceShape: "uuid",
       heuristicExempt: true,
@@ -218,6 +220,45 @@ describe("client diagnostics loss evidence", () => {
       heuristicExempt: true,
     });
     expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: both session-repair outcomes reach the production file sink with full identity.
+  it("persists a recovered session repair as client.session-repair.recovered", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "replayed",
+      correlationId: "ui_denied-read-0002",
+      repairCorrelationId: "ui_session-repair-0002",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.recovered");
+    const record = expectActivityLogProof("client.session-repair.recovered.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_denied-read-0002",
+      repairCorrelationId: "ui_session-repair-0002",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  it("persists a failed session repair as client.session-repair.failed", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "repair-failed",
+      correlationId: "ui_denied-read-0003",
+      repairCorrelationId: "ui_session-repair-0003",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.failed");
+    expect(expectActivityLogProof("client.session-repair.failed.line", line ?? "")).toMatchObject({
+      correlationId: "ui_denied-read-0003",
+      errorKind: "authority-denied",
+      outcome: "repair-failed",
+      repairCorrelationId: "ui_session-repair-0003",
+    });
   });
 
   it("persists a settled stage report as client.stage.settled, with durationMs on the envelope", async () => {

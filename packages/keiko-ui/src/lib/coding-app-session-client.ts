@@ -21,6 +21,7 @@ import {
   CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
   decodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { newClientCorrelationId } from "./bff-correlation";
 import { bffFetchJson } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
@@ -36,7 +37,11 @@ export interface CodingAppSessionPairingSeams {
   readonly postLocalSession?: () => Promise<unknown>;
 }
 
-function defaultSeams(): CodingAppSessionPairingSeams | undefined {
+// `localSessionCorrelationId`, when given, is the id the local-session request carries, so a repair
+// can name it in evidence.
+function defaultSeams(
+  localSessionCorrelationId?: string,
+): CodingAppSessionPairingSeams | undefined {
   if (typeof window === "undefined") return undefined;
   return {
     readFragment: (): string => window.location.hash,
@@ -53,7 +58,9 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
       bffFetchJson(
         LOCAL_SESSION_PATH,
         { method: "POST", cache: "no-store" },
-        WITHOUT_SESSION_REPAIR,
+        localSessionCorrelationId === undefined
+          ? WITHOUT_SESSION_REPAIR
+          : { ...WITHOUT_SESSION_REPAIR, correlationId: localSessionCorrelationId },
       ),
   };
 }
@@ -99,18 +106,35 @@ export async function ensureLocalCodingAppSession(
   }
 }
 
-let localSessionRepair: Promise<boolean> | undefined;
+/** One shared repair attempt: whether it succeeded, and the id its local-session request carried. */
+export interface LocalCodingAppSessionRepair {
+  readonly repaired: boolean;
+  readonly correlationId: string;
+}
+
+let localSessionRepair: Promise<LocalCodingAppSessionRepair> | undefined;
 
 /**
  * Re-establishes the local app session a restarted BFF dropped (ADR-0141 D5). A restart denies every
  * open surface at once; they all join the one attempt in flight instead of each posting its own, and
- * the next denial after it settled starts a fresh one.
+ * the next denial after it settled starts a fresh one. Every joiner learns the repair request's
+ * correlation id, so its own evidence can name the repair it waited for.
  */
-export function repairLocalCodingAppSession(): Promise<boolean> {
-  localSessionRepair ??= ensureLocalCodingAppSession().finally(() => {
-    localSessionRepair = undefined;
-  });
+export function repairLocalCodingAppSessionWithEvidence(): Promise<LocalCodingAppSessionRepair> {
+  if (localSessionRepair === undefined) {
+    const correlationId = newClientCorrelationId();
+    localSessionRepair = ensureLocalCodingAppSession(defaultSeams(correlationId))
+      .then((repaired): LocalCodingAppSessionRepair => ({ repaired, correlationId }))
+      .finally(() => {
+        localSessionRepair = undefined;
+      });
+  }
   return localSessionRepair;
+}
+
+/** {@link repairLocalCodingAppSessionWithEvidence}, for callers that need only the verdict. */
+export async function repairLocalCodingAppSession(): Promise<boolean> {
+  return (await repairLocalCodingAppSessionWithEvidence()).repaired;
 }
 
 async function bootCodingAppSession(): Promise<boolean> {
