@@ -165,6 +165,36 @@ const CLIENT_VOICE_DIALOGUE_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CLIENT_MARKDOWN_LAYOUT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.markdown.layout",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logMarkdownLayout",
+  fields: {
+    listNumbering: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["source-start"],
+    },
+    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },
+    clientPostsThrottled: { type: "integer", dataClass: "count", required: false },
+    clientPostsFailed: { type: "integer", dataClass: "count", required: false },
+    clientRejectionsSuppressed: { type: "integer", dataClass: "count", required: false },
+    clientErrorsSuppressed: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-diagnostic"],
+  proofIds: ["client.markdown.layout.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -185,6 +215,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
         "window-error",
         "sse-error",
         "voice-dialogue",
+        "markdown-layout",
         "other",
       ],
     },
@@ -410,6 +441,7 @@ const CLIENT_DIAGNOSTIC_ERROR_KINDS = {
   "window-error": "internal",
   "sse-error": "unavailable",
   "voice-dialogue": "internal",
+  "markdown-layout": "unknown",
   other: "unknown",
 } as const satisfies Record<ClientDiagnosticKind, ActivityLogErrorKind>;
 
@@ -474,6 +506,24 @@ function logVoiceDialogueStage(
   return true;
 }
 
+function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId: string): boolean {
+  if (request.kind !== "markdown-layout") return false;
+  const extra: Record<string, unknown> = {
+    listNumbering: "source-start",
+    completeness: "complete",
+    loss: "none",
+  };
+  projectClientLoss(request.loss, extra);
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_MARKDOWN_LAYOUT_OPERATION,
+      { correlationId },
+      extra as ActivityLogFields<typeof CLIENT_MARKDOWN_LAYOUT_OPERATION>,
+    ),
+  );
+  return true;
+}
+
 // Projects the validated request onto the activity log. `message` is admitted only as a digest;
 // `readyState`/`kind` ride along as bounded, closed-shape fields.
 function logClientDiagnostic(
@@ -484,7 +534,8 @@ function logClientDiagnostic(
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId
       : correlationIdOrUnknown(ingestCorrelationId);
-  if (logVoiceDialogueStage(request, correlationId)) return;
+  if (logVoiceDialogueStage(request, correlationId) || logMarkdownLayout(request, correlationId))
+    return;
   const extra: Record<string, unknown> = {
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
   };

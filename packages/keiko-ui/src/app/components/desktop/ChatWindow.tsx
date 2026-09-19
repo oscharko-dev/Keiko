@@ -2007,6 +2007,7 @@ interface VoiceDialogComposerControlsProps {
   readonly onInterrupt: (() => void) | undefined;
   readonly compact: boolean | undefined;
   readonly micMuteAvailable?: boolean | undefined;
+  readonly onFinishSpeaking?: (() => void) | undefined;
 }
 
 interface ComposerContextControlsProps {
@@ -2148,6 +2149,21 @@ function ComposerContextControls({
   );
 }
 
+function VoiceFinishSpeakingButton({ onClick }: { readonly onClick: () => void }): ReactNode {
+  const t = useTranslate();
+  return (
+    <button
+      type="button"
+      className="cmp-icon ui-tip"
+      aria-label={t("chat.voice.batchFinish")}
+      data-tip={t("chat.voice.batchFinish")}
+      onClick={onClick}
+    >
+      <ArrowUpIcon size={18} />
+    </button>
+  );
+}
+
 function VoiceDialogComposerControls({
   voiceMuted,
   onToggleVoiceMute,
@@ -2159,6 +2175,7 @@ function VoiceDialogComposerControls({
   onInterrupt,
   compact = false,
   micMuteAvailable = true,
+  onFinishSpeaking,
 }: VoiceDialogComposerControlsProps): ReactNode {
   return (
     <div className="cmp-bar cmp-bar-voice-dialog">
@@ -2177,8 +2194,15 @@ function VoiceDialogComposerControls({
             compact={compact}
           />
         ) : null}
+        {onFinishSpeaking !== undefined ? (
+          <VoiceFinishSpeakingButton onClick={onFinishSpeaking} />
+        ) : null}
         {onInterrupt !== undefined ? (
-          <VoiceDialogInterruptButton canInterrupt={canInterrupt} onInterrupt={onInterrupt} />
+          <VoiceDialogInterruptButton
+            iconOnly
+            canInterrupt={canInterrupt}
+            onInterrupt={onInterrupt}
+          />
         ) : null}
       </div>
     </div>
@@ -2812,7 +2836,7 @@ function BatchVoiceStatus({
   const error = dialogue.error ?? dialogue.dictation.error?.message;
   return (
     <>
-      <p className={styles.cmpBatchModeLabel}>{t("chat.voice.batchMode")}</p>
+      <span className="sr-only">{t("chat.voice.batchMode")}</span>
       {error !== undefined ? (
         <div role="alert" className="cmp-voice-memory-error">
           {error}
@@ -2828,11 +2852,6 @@ function BatchVoiceStatus({
             </>
           ) : null}
         </div>
-      ) : null}
-      {dialogue.dictation.phase === "recording" && !dialogue.waitingForAnswer ? (
-        <button type="button" className="cmp-voice-btn" onClick={dialogue.dictation.stop}>
-          {t("chat.voice.batchFinish")}
-        </button>
       ) : null}
     </>
   );
@@ -2895,6 +2914,9 @@ function ComposerVoiceOverlay({
         >
           <div className={styles["cmp-voice-content"]}>
             {batchActive ? (
+              <p className={styles.cmpBatchModeLabel}>{announcedVoiceHeadline}</p>
+            ) : null}
+            {batchActive ? (
               <BatchVoiceStatus
                 dialogue={batchDialogue}
                 onUseFailedTranscript={onUseFailedTranscript}
@@ -2926,11 +2948,23 @@ function ComposerVoiceOverlay({
               canInterrupt={
                 batchActive ? batchDialogue.canInterrupt : realtimeVoiceController.canInterrupt
               }
-              onInterrupt={composerVoiceInterruptAction(
-                batchActive ? batchDialogue : undefined,
-                voiceDialogActive,
-                realtimeVoiceController,
-              )}
+              onFinishSpeaking={
+                batchActive &&
+                batchDialogue.dictation.phase === "recording" &&
+                !batchDialogue.waitingForAnswer &&
+                !batchDialogue.canInterrupt
+                  ? batchDialogue.dictation.stop
+                  : undefined
+              }
+              onInterrupt={
+                batchActive && !batchDialogue.canInterrupt
+                  ? undefined
+                  : composerVoiceInterruptAction(
+                      batchActive ? batchDialogue : undefined,
+                      voiceDialogActive,
+                      realtimeVoiceController,
+                    )
+              }
               micMuteAvailable={!batchActive}
               voiceDialogButtonRef={voiceDialogButtonRef}
               compact={compact}

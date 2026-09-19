@@ -16,6 +16,7 @@ import {
   Fragment,
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -23,6 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import type { EditorAgentConflictCode } from "@oscharko-dev/keiko-contracts";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
@@ -549,7 +551,7 @@ function renderListNode(
 
     case "ol":
       return (
-        <ol key={key} className="sm-ol">
+        <ol key={key} className="sm-ol" start={node.start}>
           {renderChildren(node, key, options, trailing)}
         </ol>
       );
@@ -854,6 +856,18 @@ function renderMarkdownTree(
 // prop compare below).
 const EMPTY_ROOTS: readonly RepositoryReferenceRoot[] = Object.freeze([]);
 
+// A settled continuation records its layout decision without any response content.
+function useMarkdownListEvidence(tree: readonly SafeMarkdownNode[], streaming: boolean): void {
+  const lastReported = useRef<readonly SafeMarkdownNode[] | undefined>(undefined);
+  useEffect(() => {
+    if (streaming || lastReported.current === tree) return;
+    if (!tree.some((node) => node.kind === "ol" && node.start !== undefined && node.start !== 1))
+      return;
+    lastReported.current = tree;
+    reportClientDiagnostic("markdown:ordered-list-source-start", { kind: "markdown-layout" });
+  }, [tree, streaming]);
+}
+
 function SafeMarkdownImpl({
   source,
   applyScopeId,
@@ -865,6 +879,7 @@ function SafeMarkdownImpl({
   trailing,
 }: SafeMarkdownProps): ReactNode {
   const tree = useMemo(() => parseSafeMarkdown(source), [source]);
+  useMarkdownListEvidence(tree, streaming);
   const options = useMemo<RenderOptions>(
     () => ({
       applyScopeId,

@@ -65,6 +65,31 @@ describe("client diagnostics loss evidence", () => {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
   }
 
+  it("persists body-free Markdown layout evidence with counted loss", async () => {
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private model response must not be logged",
+          kind: "markdown-layout",
+          clientTs: CLIENT_TS,
+          loss: { postsThrottled: 2 },
+        }),
+      ),
+    );
+    expect(result.status).toBe(204);
+    const persisted = lines("client.markdown.layout");
+    expect(persisted).toHaveLength(1);
+    const line = expectActivityLogProof("client.markdown.layout.line", persisted[0] ?? "");
+    expect(line).toMatchObject({
+      correlationId: CORRELATION_ID,
+      level: "info",
+      listNumbering: "source-start",
+      clientPostsThrottled: 2,
+    });
+    expect(line).not.toHaveProperty("errorKind");
+    expect(persisted[0]).not.toContain("private model response");
+  });
+
   it("persists one throttled rejection line per refusal reason and counts every refusal", async () => {
     expect((await handleClientDiagnosticIngest(context("{not json"))).status).toBe(400);
     expect((await handleClientDiagnosticIngest(context("{still not json"))).status).toBe(400);

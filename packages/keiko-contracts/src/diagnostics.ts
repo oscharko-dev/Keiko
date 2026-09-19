@@ -66,6 +66,7 @@ export const CLIENT_DIAGNOSTIC_KINDS = [
   "window-error",
   "sse-error",
   "voice-dialogue",
+  "markdown-layout",
   "other",
 ] as const;
 export type ClientDiagnosticKind = (typeof CLIENT_DIAGNOSTIC_KINDS)[number];

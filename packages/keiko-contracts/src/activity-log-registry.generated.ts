@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1a91edd19d3861d2d904646ca78bec6ab59bb50056ae15f3ac223f42f772e11c" as const;
+  "eaacd07e4766e24f0a4feab0f511baf888d80bf38fb550999f9d26ff88ff3e5a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1723,6 +1723,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "window-error",
           "sse-error",
           "voice-dialogue",
+          "markdown-layout",
           "other",
         ],
       },
@@ -1902,6 +1903,63 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["client-diagnostic-rejection"],
     proofIds: ["client.diagnostic.rejected.line", "client.diagnostic.rejected.shutdown-flush"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.markdown.layout",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logMarkdownLayout",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      listNumbering: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["source-start"],
+      },
+      clientBufferEvicted: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      clientPostsThrottled: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      clientPostsFailed: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      clientRejectionsSuppressed: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      clientErrorsSuppressed: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-diagnostic"],
+    proofIds: ["client.markdown.layout.line"],
+    releaseImpact: "patch",
   },
   {
     contractKind: "activity-log-operation",
@@ -27780,7 +27838,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["voice.dialogue.stage"],
+        state: ["client.markdown.layout", "voice.dialogue.stage"],
         end: [],
         failure: ["client.diagnostic"],
         loss: [],
@@ -27791,12 +27849,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "client.markdown.layout",
+          mode: "correlation",
+        },
+        {
           op: "voice.dialogue.stage",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["voice.dialogue.stage"],
+      resourceSignals: ["client.markdown.layout", "voice.dialogue.stage"],
       replayReferences: [],
       operations: [
         {
@@ -27923,6 +27985,60 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.diagnostic.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.markdown.layout",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "clientBufferEvicted",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "clientErrorsSuppressed",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "clientPostsFailed",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "clientPostsThrottled",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "clientRejectionsSuppressed",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "listNumbering",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.markdown.layout.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -57004,6 +57120,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
     "client.diagnostic.rejected": "client-diagnostics",
+    "client.markdown.layout": "client-diagnostics",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
     "coding-app-session.local-session.issued": "tools-workflows",

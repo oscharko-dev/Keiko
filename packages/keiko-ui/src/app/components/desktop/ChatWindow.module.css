@@ -3,6 +3,7 @@
 }
 
 .cmpBatchModeLabel {
+  margin: 0 0 12px;
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.4;
@@ -148,6 +149,9 @@
 }
 
 .voiceLayer :global(.cmp-icon) {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
   border-color: color-mix(in oklch, var(--border-subtle) 58%, transparent);
   background: color-mix(in oklch, var(--surface-secondary) 42%, transparent);
 }

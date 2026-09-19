@@ -481,16 +481,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["voice.dialogue.stage"],
+      state: ["client.markdown.layout", "voice.dialogue.stage"],
       end: [],
       failure: ["client.diagnostic"],
       loss: [],
     },
-    requiredCausalOperations: ["client.diagnostic", "voice.dialogue.stage"],
+    requiredCausalOperations: [
+      "client.diagnostic",
+      "client.markdown.layout",
+      "voice.dialogue.stage",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["client.diagnostic", "voice.dialogue.stage"],
+    requiredProofOperations: [
+      "client.diagnostic",
+      "client.markdown.layout",
+      "voice.dialogue.stage",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["voice.dialogue.stage"],
+    requiredResourceOperations: ["client.markdown.layout", "voice.dialogue.stage"],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",

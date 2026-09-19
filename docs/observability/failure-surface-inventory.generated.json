@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1a91edd19d3861d2d904646ca78bec6ab59bb50056ae15f3ac223f42f772e11c"
+    "catalogDigest": "eaacd07e4766e24f0a4feab0f511baf888d80bf38fb550999f9d26ff88ff3e5a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 426,
-    "proofCount": 434,
-    "resolvedProofCount": 434,
+    "operationCount": 427,
+    "proofCount": 435,
+    "resolvedProofCount": 435,
     "failureClassCount": 311,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -112,6 +112,7 @@
         "client.diagnostic",
         "client.diagnostic.rate-limited",
         "client.diagnostic.rejected",
+        "client.markdown.layout",
         "voice.dialogue.stage"
       ],
       "scenarios": ["client-diagnostics.dependency-failure", "client-diagnostics.loss"]
@@ -998,6 +999,7 @@
     "client.diagnostic.rejected.shutdown-flush": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
+    "client.markdown.layout.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "coding-app-session.channel.closed.duration": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
     ],

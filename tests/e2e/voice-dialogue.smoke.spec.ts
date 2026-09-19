@@ -1146,7 +1146,7 @@ test("voice dialogue @smoke — Whisper-style STT and TTS complete a browser dia
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
   await expect(
-    page.getByText("Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.", {
+    page.getByText("Listening to you.", {
       exact: true,
     }),
   ).toBeVisible();
@@ -1401,7 +1401,7 @@ test("voice dialogue @smoke — full-realtime without WebRTC uses turn-based cap
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
   await expect(
-    page.getByText("Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.", {
+    page.getByText("Listening to you.", {
       exact: true,
     }),
   ).toBeVisible();
