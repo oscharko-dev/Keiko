@@ -24,19 +24,36 @@ function depsWithConfiguredProvider(modelId: string): UiHandlerDeps {
 }
 
 // #3557 review finding A: a request-supplied model id must never be logged as Activity Log
-// evidence unless the effective capability source actually configures a model by that id.
+// evidence unless the effective capability source actually configures a model by that id. Any
+// other candidate is evidence of what was refused only as a one-way digest.
 describe("modelIdEvidence — the owning projection from a candidate model id to evidence", () => {
-  it("never logs a caller-supplied value for a request model id no gateway configures", () => {
+  it("digests, never logs, a request model id no gateway configures", () => {
     // No gateway config at all: the built-in static registry ships empty by design, so this must
     // never leak a caller-chosen string through the "no config" fallback either.
-    expect(modelIdEvidence({} as UiHandlerDeps, "patient-Alice-Jones")).toEqual({});
+    const evidence = modelIdEvidence({} as UiHandlerDeps, "patient-Alice-Jones");
+    expect(evidence.modelId).toBeUndefined();
+    expect(evidence.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
+    expect(JSON.stringify(evidence)).not.toContain("Alice");
   });
 
-  it("never logs a caller-supplied value the configured gateway does not name", () => {
+  it("digests, never logs, a caller-supplied value the configured gateway does not name", () => {
     const deps = depsWithConfiguredProvider("breaker-chat");
     // "patient-Alice-Jones" is exactly the finding-A shape: a plausible, body-free-looking string
     // that is nonetheless unvalidated caller content and names no configured model.
-    expect(modelIdEvidence(deps, "patient-Alice-Jones")).toEqual({});
+    const evidence = modelIdEvidence(deps, "patient-Alice-Jones");
+    expect(evidence.modelId).toBeUndefined();
+    expect(evidence.modelIdDigest).toMatch(/^[a-f0-9]{16}$/);
+    expect(JSON.stringify(evidence)).not.toContain("Alice");
+  });
+
+  // #3557 review: two refused candidates must stay apart, and a retried one must read as the same.
+  it("tells two refused candidates apart and a retried one as the same", () => {
+    const deps = depsWithConfiguredProvider("breaker-chat");
+    const first = modelIdEvidence(deps, "typo-model-a");
+    const second = modelIdEvidence(deps, "typo-model-b");
+
+    expect(first.modelIdDigest).not.toBe(second.modelIdDigest);
+    expect(modelIdEvidence(deps, "typo-model-a")).toEqual(first);
   });
 
   it("logs a configured, opaque-shaped id as modelId unchanged", () => {
@@ -87,7 +104,7 @@ describe("modelIdEvidence — the owning projection from a candidate model id to
     expect(secondEvidence.modelIdDigest).not.toBe(firstEvidence.modelIdDigest);
   });
 
-  it("returns undefined for an unconfigured id and never throws", () => {
+  it("yields no evidence for an absent model id and never throws", () => {
     expect(modelIdEvidence({} as UiHandlerDeps, undefined)).toEqual({});
   });
 });

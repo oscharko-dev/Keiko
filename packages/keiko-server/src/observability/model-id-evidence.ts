@@ -8,15 +8,19 @@
 // value is whether the effective capability source actually configures a model by that id — the
 // SAME test the create/send/regenerate admission and the readiness provider selection already
 // apply (`resolvedModelCapability`), reused here so evidence and business decisions can never
-// disagree about what counts as "configured".
+// disagree about what counts as "configured". A candidate no gateway configures is still evidence
+// of what was refused, so it is logged as a one-way digest: two refused candidates stay apart, and
+// a retried one reads as the same (#3557 review).
 //
-// A configured id can still fail the opaque-id shape check — nothing stops an operator from naming
-// a provider entry "alice@example.com". `activityLogEvent` rejects the WHOLE event on one bad
-// field, so logging it raw would silently drop the entire rejection or readiness line instead of
-// just that one field (the follow-up finding). This projection falls back to a one-way digest of
-// the bounded value instead, so the line is always written and stays joinable without ever
-// carrying the raw id. `modelId` and `modelIdDigest` are mutually exclusive: at most one is ever
-// present in the fields this returns.
+// A configured id that passes the opaque-id check is logged raw under the same data class the
+// Model Gateway records it with on every call (`gateway.chat.*`, `gateway.stream.*`), so a
+// rejection or readiness line joins those lines directly. A configured id can still fail the
+// opaque-id shape check — nothing stops an operator from naming a provider entry
+// "alice@example.com". `activityLogEvent` rejects the WHOLE event on one bad field, so logging it
+// raw would silently drop the entire rejection or readiness line instead of just that one field
+// (the follow-up finding). This projection falls back to a one-way digest instead, so the line is
+// always written and stays joinable without ever carrying the raw id. `modelId` and
+// `modelIdDigest` are mutually exclusive: at most one is ever present in the fields this returns.
 
 import {
   findCapability,
@@ -58,17 +62,17 @@ export function resolvedModelCapability(
 }
 
 /**
- * Projects a candidate model id to Activity Log evidence. `undefined`, an empty string, or a
- * candidate naming no model the effective capability source configures yields no evidence at all
- * — never the caller's raw value. A configured id is logged raw only when it fits
- * `MAX_MODEL_ID_EVIDENCE_CHARS` and satisfies the SAME opaque-id validation `activityLogEvent`
- * applies. Anything else is logged as a digest of the WHOLE id: a truncated raw id would let two
- * long ids sharing a prefix collide in the log (#3557 review).
+ * Projects a candidate model id to Activity Log evidence. `undefined` or an empty string yields
+ * none. A configured id is logged raw only when it fits `MAX_MODEL_ID_EVIDENCE_CHARS` and satisfies
+ * the SAME opaque-id validation `activityLogEvent` applies. Anything else — a candidate no gateway
+ * configures, or a configured id outside that shape — is logged as a digest of the WHOLE id, never
+ * the raw value: a truncated raw id would let two long ids sharing a prefix collide in the log
+ * (#3557 review).
  */
 export function modelIdEvidence(deps: UiHandlerDeps, modelId: string | undefined): ModelIdEvidence {
   if (modelId === undefined || modelId.length === 0) return {};
-  if (resolvedModelCapability(deps, modelId) === undefined) return {};
-  return isActivityLogOpaqueIdValue(modelId, MAX_MODEL_ID_EVIDENCE_CHARS)
+  const configured = resolvedModelCapability(deps, modelId) !== undefined;
+  return configured && isActivityLogOpaqueIdValue(modelId, MAX_MODEL_ID_EVIDENCE_CHARS)
     ? { modelId }
     : { modelIdDigest: sha256Hex(modelId).slice(0, MODEL_ID_DIGEST_LENGTH) };
 }

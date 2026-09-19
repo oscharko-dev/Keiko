@@ -408,10 +408,10 @@ describe("desktop chat production gateway reuse", () => {
       expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
       // #3557 review finding A: "missing-model" is an unvalidated, caller-supplied request value
       // that names no model the gateway configures (only "breaker-chat" is). It must never be
-      // logged raw, and there is no configured id to digest either — the line carries neither
-      // `modelId` nor `modelIdDigest`. (This pin used to expect `modelId: "missing-model"` here,
-      // which was the vulnerability itself: any caller-chosen string, PII or not, passed straight
-      // through as if it were safe Activity Log evidence.)
+      // logged raw. (This pin used to expect `modelId: "missing-model"` here, which was the
+      // vulnerability itself: any caller-chosen string, PII or not, passed straight through as if
+      // it were safe Activity Log evidence.) The refused candidate is still evidence, as a one-way
+      // digest only, so two refused candidates stay apart (#3557 review).
       expect(sink.events).toContainEqual(
         expect.objectContaining({
           category: "gateway",
@@ -422,6 +422,7 @@ describe("desktop chat production gateway reuse", () => {
           extra: {
             reason: "configuration",
             modelKind: "unknown",
+            modelIdDigest: expect.stringMatching(/^[a-f0-9]{16}$/) as unknown,
             completeness: "complete",
             loss: "none",
           },
@@ -429,7 +430,6 @@ describe("desktop chat production gateway reuse", () => {
       );
       const [rejectionEvent] = sink.events.filter((event) => event.op === "chat.creation.rejected");
       expect(rejectionEvent?.extra).not.toHaveProperty("modelId");
-      expect(rejectionEvent?.extra).not.toHaveProperty("modelIdDigest");
       expect(JSON.stringify(sink.events)).not.toContain("missing-model");
     } finally {
       resetServerLogger();
