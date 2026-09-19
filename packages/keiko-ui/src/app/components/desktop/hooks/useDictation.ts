@@ -331,9 +331,10 @@ function armBatchCaptureLimit(input: {
           input.session.renewSilence === undefined
         ) {
           const remaining = deadline - Date.now();
+          const reason = captureBoundReason(input.renewable(), input.session);
           const stopAtBound = (): void => {
             if (!input.current()) return;
-            input.boundReached(captureBoundReason(input.renewable(), input.session));
+            input.boundReached(reason);
             input.stop();
           };
           if (remaining > 0) input.timer.current = setTimeout(stopAtBound, remaining);

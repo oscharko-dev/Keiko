@@ -630,9 +630,18 @@ describe("useDictation — capture bounds", () => {
     expect(transcribe).toHaveBeenCalledOnce();
     unmount();
   });
-  it("keeps the original bound when the detector cannot monitor the stream", async () => {
+  it("retains the bound decision when an unavailable detector resumes before expiry", async () => {
     vi.useFakeTimers();
-    const vad = makeFakeVad(false);
+    let available = false;
+    const vad: VoiceActivityDetector = {
+      start: () => ({
+        get available(): boolean {
+          return available;
+        },
+        stop: vi.fn(),
+      }),
+    };
+    const boundReached = vi.fn();
     const base = makeStreamingRecorder();
     const renewSilence = vi.fn(async () => 0);
     const { result, unmount } = renderHook(() =>
@@ -645,14 +654,18 @@ describe("useDictation — capture bounds", () => {
           }),
         }),
         transcribe: async () => ({ transcript: "retained speech" }),
-        vad: vad.vad,
+        vad,
+        onCaptureBoundReached: boundReached,
         postRollMs: 0,
       }),
     );
     act(() => result.current.start());
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(60_001);
+      available = true;
+      await vi.advanceTimersByTimeAsync(60_000);
     });
+    expect(boundReached).toHaveBeenCalledWith("vad-unavailable");
     expect(renewSilence).not.toHaveBeenCalled();
     expect(base.stop).toHaveBeenCalledOnce();
     expect(result.current.transcript).toBe("retained speech");
