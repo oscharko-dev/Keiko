@@ -893,10 +893,10 @@ request":
     `client.binding.target-missing` at `warn` with `errorKind: unavailable`. It carries the
     persisted reference's closed shape (`uuid`, `opaque`, `redacted`) and whether the
     card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
-    reference itself. No reference is exempt from that heuristic: the two server-issued references
-    a window stores (a chat window's `chatId`, a governed pull request's
-    `descriptionProposalId`) are persisted compact, as 32 hex digits, which the heuristic never
-    reads as a card number, and expanded on restore. The window's own persisted id, which
+    reference itself. No reference is exempt from that heuristic, and no stored form works around
+    it. The server issues every reference a window persists (chat ids, PR description proposal
+    ids, Figma snapshot run ids) through `newReferenceId`, which never draws an id the heuristic
+    flags, so a restored window keeps its binding. The window's own persisted id, which
     persistence holds to a closed safe shape, reaches the server whole and is logged only as its
     digest (`bindingDigest`), so two windows never share one. Its correlation id is that of the
     chat list load that decided the outcome; a missing legacy binding names every list its scan
@@ -909,8 +909,9 @@ request":
     request's timeline, because the replay reuses that request's correlation id. A stream
     (`EventSource`) exposes no request id, so its repair sits on the stream's failure streak: a
     client-minted id that the streak's `sse-error` diagnostics carry too, with the closed
-    `stream` name. Both name the repair request's id, and a failed repair its closed failure
-    class. The repair request itself (the local-session ensure) mints its id before it is sent, so
+    `stream` name. The local-session endpoint acknowledges whether or not it issued a cookie, so
+    a stream reports `stream-repaired` only when it opens again after an acknowledged repair.
+    Both name the repair request's id, and a failed repair its closed failure class. The repair request itself (the local-session ensure) mints its id before it is sent, so
     a failure that never reached the server is still recorded under that id with its closed
     class, which a message report may now carry as `errorKind`.
   Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
@@ -927,10 +928,11 @@ is really gone. The line's correlation id, and `relatedCorrelationIds`, name the
 verdict came from; a `partial` line says how many it could not name. **For a conversation
 refused as not ready**, read `readinessObservation` on the rejection. `unobserved` means no check
 ran in that process. `not-ready` means a check ran and failed. Then read the
-`gateway.readiness.started` / `.completed` lines of that check. A refused model id is logged raw
-(`modelId`) only when a configured gateway names it and it passes the opaque-id check, the data
-class the Model Gateway records it under on every call; any other candidate appears only as the
-16-hex `modelIdDigest` of the whole id, so two refused candidates stay apart.
+`gateway.readiness.started` / `.completed` lines of that check. A refused or checked model appears
+on these lines only as the 16-hex `modelIdDigest` of the whole id, never as the id itself: a model
+id is caller content or operator-chosen text that no check proves body-free. Two refused
+candidates stay apart, a retried one reads as the same, and a reader who holds the configuration
+recomputes the digest to name the model.
 
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 
