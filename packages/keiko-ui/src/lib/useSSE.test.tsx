@@ -644,6 +644,58 @@ describe("useSSE", () => {
     view.unmount();
   });
 
+  // #3557 review: a suspension ends the streak. A stream hidden after an acknowledged repair, before
+  // any successful reopen, repairs again when it is shown and denied, under a new streak.
+  it("forgets an acknowledged repair when the document hides the stream", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    ensureLocalSession.mockResolvedValue(ACKNOWLEDGED);
+    const setVisibility = (state: DocumentVisibilityState): void => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: (): DocumentVisibilityState => state,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    try {
+      const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
+        initialProps: { runId: "run 15" },
+      });
+      const first = FakeEventSource.instances[0];
+      if (first === undefined) throw new Error("Expected stream.");
+      act(() => {
+        first.onopen?.(new Event("open"));
+      });
+      await act(async () => {
+        first.onerror?.(new Event("error"));
+        await Promise.resolve();
+      });
+
+      act(() => {
+        setVisibility("hidden");
+        setVisibility("visible");
+      });
+      const resumed = FakeEventSource.instances.at(-1);
+      if (resumed === undefined || resumed === first) throw new Error("Expected a resumed stream.");
+      await act(async () => {
+        resumed.onerror?.(new Event("error"));
+        await Promise.resolve();
+      });
+
+      const calls = ensureLocalSession.mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.[1]).not.toBe(calls[0]?.[1]);
+      view.unmount();
+    } finally {
+      Reflect.deleteProperty(document, "visibilityState");
+      ensureLocalSession.mockReset();
+      ensureLocalSession.mockResolvedValue({
+        acknowledged: false,
+        repairCorrelationId: "ui_repair-0000",
+      });
+    }
+  });
+
   // #3557 review: the repair latch and the streak belong to one session. After the last subscriber
   // left, a new subscriber whose stream is denied repairs again, under its own streak.
   it("forgets an acknowledged repair when the last subscriber leaves", async () => {

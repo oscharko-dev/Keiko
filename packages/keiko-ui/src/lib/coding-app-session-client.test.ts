@@ -431,7 +431,9 @@ describe("repairLocalCodingAppSessionForStream", () => {
 
   // #3557 review: the endpoint acknowledges whether or not it issued a cookie, so an acknowledged
   // repair reports nothing yet; the stream reports its recovery once it opens again.
-  it("reports nothing for an acknowledged repair, and the recovery once the stream opens", async () => {
+  // #3557 review: an acknowledged repair is reported at once as its own state, so a stream that
+  // stays denied still links its streak to the repair request; the recovery waits for the reopen.
+  it("reports an acknowledged repair at once, and the recovery only once the stream opens", async () => {
     const reports = captureReports();
     const fetchMock = vi.fn((_path: string, _init: RequestInit) =>
       Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
@@ -448,10 +450,22 @@ describe("repairLocalCodingAppSessionForStream", () => {
       acknowledged: true,
       repairCorrelationId: headers["X-Keiko-Correlation-Id"],
     });
-    expect(reports).toEqual([]);
+    const acknowledged = {
+      message: "[keiko] run-events stream session repair: repair-acknowledged",
+      meta: {
+        correlationId: "ui_stream-streak-0001",
+        sessionRepairReport: {
+          outcome: "repair-acknowledged",
+          repairCorrelationId: repair.repairCorrelationId,
+          stream: "run-events",
+        },
+      },
+    };
+    expect(reports).toEqual([acknowledged]);
 
     reportStreamSessionRecovered("run-events", "ui_stream-streak-0001", repair.repairCorrelationId);
     expect(reports).toEqual([
+      acknowledged,
       {
         message: "[keiko] run-events stream session repair: stream-repaired",
         meta: {

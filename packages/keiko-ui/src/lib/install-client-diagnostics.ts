@@ -280,6 +280,7 @@ let postThrottledCount = 0;
 const ROUTINE_SESSION_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> = new Set([
   "replayed",
   "stream-repaired",
+  "repair-acknowledged",
 ]);
 
 // Routine evidence: a stage, a binding that resolved, a session repair that recovered. Everything

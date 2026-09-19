@@ -424,6 +424,53 @@ describe("subscribeSharedEventSource", () => {
     vi.useRealTimers();
   });
 
+  // #3557 review: a suspension ends the streak. A stream hidden after an acknowledged repair, before
+  // any successful reopen, repairs again when it is shown and denied, under a new streak.
+  it("forgets an acknowledged repair when the document hides the stream", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    ensureLocalSession.mockResolvedValue(ACKNOWLEDGED);
+    const setVisibility = (state: DocumentVisibilityState): void => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: (): DocumentVisibilityState => state,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    try {
+      const unsubscribe = subscribeSharedEventSource(
+        "/api/editor/workspace-watch/events?root=workspace-1",
+        ["editor-watch:changed"],
+        () => {},
+      );
+      const first = FakeEventSource.instances[0];
+      if (first === undefined) throw new Error("Expected stream.");
+      first.onerror?.();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      setVisibility("hidden");
+      setVisibility("visible");
+      const resumed = FakeEventSource.instances.at(-1);
+      if (resumed === undefined || resumed === first) throw new Error("Expected a resumed stream.");
+      resumed.onerror?.();
+      await Promise.resolve();
+
+      const calls = ensureLocalSession.mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.[1]).not.toBe(calls[0]?.[1]);
+      unsubscribe();
+    } finally {
+      Reflect.deleteProperty(document, "visibilityState");
+      ensureLocalSession.mockReset();
+      ensureLocalSession.mockResolvedValue({
+        acknowledged: false,
+        repairCorrelationId: "ui_repair-0000",
+      });
+      vi.useRealTimers();
+    }
+  });
+
   // #3557 review: the streak's error diagnostics and its repair share the streak's id, so the log
   // reads the retry sequence as one timeline even though an EventSource exposes no request id.
   it("carries the failure streak's id on every stream error of the streak and on its repair", async () => {

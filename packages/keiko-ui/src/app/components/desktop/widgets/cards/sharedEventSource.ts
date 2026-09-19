@@ -165,6 +165,14 @@ function repairSessionOnce(entry: SharedEventSourceEntry, streakCorrelationId: s
   );
 }
 
+// Forgets the failure streak and its repair. A stream resumed after a suspension starts a new
+// streak, which must never find an old streak's repair latched (#3557 review).
+function forgetFailureStreak(entry: SharedEventSourceEntry): void {
+  entry.sessionRepairAttempted = false;
+  entry.failureStreakCorrelationId = undefined;
+  entry.acknowledgedRepairCorrelationId = undefined;
+}
+
 // A successful open ends the failure streak; after an acknowledged repair it is the recovery.
 function endFailureStreak(entry: SharedEventSourceEntry): void {
   const streak = entry.failureStreakCorrelationId;
@@ -173,9 +181,14 @@ function endFailureStreak(entry: SharedEventSourceEntry): void {
     reportStreamSessionRecovered("shared-event-source", streak, repair);
   }
   entry.reconnectAttempts = 0;
-  entry.sessionRepairAttempted = false;
-  entry.failureStreakCorrelationId = undefined;
-  entry.acknowledgedRepairCorrelationId = undefined;
+  forgetFailureStreak(entry);
+}
+
+// A suspension (hidden document, reserved capacity) closes the stream on purpose; its streak ends.
+function suspendEntry(entry: SharedEventSourceEntry): void {
+  clearReconnectTimer(entry);
+  closeEntrySource(entry);
+  forgetFailureStreak(entry);
 }
 
 function openEntrySource(entry: SharedEventSourceEntry): void {
@@ -215,8 +228,7 @@ function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
     if (entry.essentialRefCount > 0) {
       openEntrySource(entry);
     } else if (backgroundStreamsSuspended) {
-      clearReconnectTimer(entry);
-      closeEntrySource(entry);
+      suspendEntry(entry);
     } else {
       openEntrySource(entry);
     }
@@ -225,10 +237,7 @@ function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
 
 function handleVisibilityChange(): void {
   if (documentHidden()) {
-    for (const entry of sourcesByUrl.values()) {
-      clearReconnectTimer(entry);
-      closeEntrySource(entry);
-    }
+    for (const entry of sourcesByUrl.values()) suspendEntry(entry);
     return;
   }
   for (const entry of sourcesByUrl.values()) {
@@ -317,8 +326,7 @@ export function subscribeSharedEventSource(
       entry.essentialRefCount === 0 &&
       backgroundBrowserStreamsSuspended()
     ) {
-      clearReconnectTimer(entry);
-      closeEntrySource(entry);
+      suspendEntry(entry);
     }
     if (entry.refCount > 0) return;
     clearReconnectTimer(entry);

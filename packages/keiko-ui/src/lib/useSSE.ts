@@ -144,6 +144,9 @@ function handleVisibilityChange(): void {
   if (documentHidden()) {
     clearReconnectTimer();
     closeSharedEventSource();
+    // A suspended stream's streak is over: the next open after it is shown again starts a new one,
+    // which may need its own repair (#3557 review).
+    forgetFailureStreak();
     return;
   }
   if (subscriberCount() > 0) {
@@ -221,8 +224,9 @@ function repairSessionOnce(streakCorrelationId: string): void {
   });
 }
 
-// Forgets the failure streak and its repair. A new subscriber after the last one left starts a
-// genuinely new session: it must never find an old streak's repair latched (#3557 review).
+// Forgets the failure streak and its repair. A new subscriber after the last one left, or a stream
+// resumed after a suspension, starts a genuinely new streak: it must never find an old streak's
+// repair latched (#3557 review).
 function forgetFailureStreak(): void {
   sessionRepairAttempted = false;
   failureStreakCorrelationId = undefined;

@@ -192,22 +192,27 @@ function reportStreamSessionRepair(
 
 /**
  * {@link repairLocalCodingAppSessionWithEvidence} for a stream whose reconnects a restarted BFF
- * denies (#3557 review). A failed repair is reported at once, with its closed failure class. An
- * acknowledged one is not yet a recovery: the endpoint acknowledges whether or not it issued a
- * cookie, so only the stream's next successful open reports it ({@link reportStreamSessionRecovered}).
+ * denies (#3557 review). Every attempt is reported at once: a failed repair with its closed failure
+ * class, an acknowledged one as `repair-acknowledged`. An acknowledgement is not yet a recovery (the
+ * endpoint acknowledges whether or not it issued a cookie), so only the stream's next successful
+ * open reports that ({@link reportStreamSessionRecovered}).
  */
 export async function repairLocalCodingAppSessionForStream(
   stream: ClientSessionRepairStream,
   streakCorrelationId: string,
 ): Promise<StreamSessionRepair> {
   const repair = await repairLocalCodingAppSessionWithEvidence();
-  if (!repair.repaired) {
-    reportStreamSessionRepair(stream, streakCorrelationId, {
-      outcome: "repair-failed",
-      repairCorrelationId: repair.correlationId,
-      errorKind: repair.errorKind,
-    });
-  }
+  reportStreamSessionRepair(
+    stream,
+    streakCorrelationId,
+    repair.repaired
+      ? { outcome: "repair-acknowledged", repairCorrelationId: repair.correlationId }
+      : {
+          outcome: "repair-failed",
+          repairCorrelationId: repair.correlationId,
+          errorKind: repair.errorKind,
+        },
+  );
   return { acknowledged: repair.repaired, repairCorrelationId: repair.correlationId };
 }
 
