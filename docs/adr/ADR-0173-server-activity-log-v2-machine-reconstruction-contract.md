@@ -891,16 +891,26 @@ request":
     bounded to the contract's ceiling;
   - a restored window's binding: `client.binding.resolved` at `info`, or
     `client.binding.target-missing` at `warn` with `errorKind: unavailable`. It carries the
-    persisted reference's closed shape (`uuid`, `opaque`, `redacted`) and whether the
+    persisted reference's closed shape (`uuid`, `opaque`, `redacted`, `fingerprint`,
+    `sole-candidate`) and whether the
     card-number heuristic flags the reference's hyphenated form (`heuristicFlagged`), never the
     reference itself. No reference is exempt from that heuristic, and no stored form works around
     it. The server issues every reference a window persists (chat, PR description proposal,
     Figma snapshot, QI run and agent run ids) through `newReferenceId`, which never draws an id
-    the heuristic flags; a re-draw is `reference-id.redrawn` and an exhausted draw
-    `reference-id.exhausted`, both under the requesting operation's correlation id. An older
-    chat can still carry a flagged id: its window persists the redaction marker plus a one-way
-    SHA-256 fingerprint of the id and, on restore, finds its chat again by comparing that
-    fingerprint with the chats the server lists (reference shape `fingerprint`). The window's own persisted id, which
+    the heuristic flags. Every issued id is `reference-id.issued` with the number of draws the
+    heuristic flagged first, zero included, so a clean first draw is told apart from a path that
+    never ran the check; an exhausted draw is `reference-id.exhausted`. Both sit under the
+    requesting operation's correlation id. An older chat can still carry a flagged id: its window
+    records a one-way SHA-256 fingerprint of the id, computed synchronously in the commit that
+    shows the id, so persistence never stores the redaction marker without it. On restore the
+    window finds its chat again by comparing that fingerprint with the chats the server lists
+    (reference shape `fingerprint`). A snapshot an older build wrote holds the redaction marker
+    without a fingerprint; a redacted reference can only have named a chat whose id persistence
+    redacts, so the window binds to the only such chat its lists hold (reference shape
+    `sole-candidate`), and with none or several it reports the chat missing. A list that cannot be
+    read decides nothing: the lookup runs again after a bounded backoff instead of reporting the
+    chat missing. A binding found again this way names the chat list loads of its own lookup,
+    never a later load of the active project. The window's own persisted id, which
     persistence holds to a closed safe shape, reaches the server whole and is logged only as its
     digest (`bindingDigest`), so two windows never share one. Its correlation id is that of the
     chat list load that decided the outcome; a missing legacy binding names every list its scan
@@ -918,7 +928,10 @@ request":
     reports `stream-repaired` only when it opens again after it. A streak that keeps failing after
     the acknowledgement shows a repair that did not restore the stream. A suspension (a hidden
     page, reserved capacity) ends the streak, so a resumed stream repairs again.
-    Both name the repair request's id, and a failed repair its closed failure class. The repair request itself (the local-session ensure) mints its id before it is sent, so
+    Every repair report names the repair request's id, and a failed repair its closed failure
+    class: the ingest contract refuses a report without that id, or with one outside the server's
+    correlation rule, as malformed, so no line claims a complete repair it cannot link. The
+    repair request itself (the local-session ensure) mints its id before it is sent, so
     a failure that never reached the server is still recorded under that id with its closed
     class, which a message report may now carry as `errorKind`.
   Routine evidence (a stage, a resolved binding, a recovered repair) spends its own rate-limit
