@@ -165,6 +165,9 @@ function clientBindingPostBody(
       ? {}
       : { decidingLoadCount: report.decidingLoadCount }),
     ...(report.candidateCount === undefined ? {} : { candidateCount: report.candidateCount }),
+    ...(report.disambiguatedCount === undefined
+      ? {}
+      : { disambiguatedCount: report.disambiguatedCount }),
     ...(report.targetFingerprint === undefined
       ? {}
       : { targetFingerprint: report.targetFingerprint }),

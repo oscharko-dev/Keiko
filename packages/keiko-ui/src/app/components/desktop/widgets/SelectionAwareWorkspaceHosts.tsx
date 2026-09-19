@@ -7,7 +7,7 @@ import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/
 import { updateChat } from "@/lib/api";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId } from "@/lib/http";
-import { useLocale, useTranslate } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
@@ -32,14 +32,17 @@ import {
   persistedReferenceEvidence,
 } from "../hooks/workspace-persistence";
 import {
+  type ChatChoiceDecision,
   type ChatReferenceRestoration,
   type RedactedChatChoice,
-  chatChoiceReferences,
   chatReferenceFingerprint,
+  useChatChoiceDecision,
   useChatReferenceFingerprint,
   useChatReferenceRebind,
   useRedactedChatChoice,
 } from "./chatReferenceFingerprint";
+import styles from "./ChatChoiceNotice.module.css";
+import { NATIVE_FIELDSET_RESET_STYLE } from "../native-element-styles";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
@@ -1234,15 +1237,13 @@ function useChatBindingEvidence({
   loads,
   restoration,
 }: ChatBindingEvidenceArgs): void {
-  const reportedRef = useRef(new Set<string>());
+  const reportedRef = useRef<ReportedBindings>({ keys: new Set(), restorations: new WeakSet() });
   const outcome = chatBindingOutcome(routing, chatId);
   const idsKey = loads.correlationIds.join("\u0000");
   const { count } = loads;
   useEffect((): void => {
     if (outcome === undefined || chatId === undefined) return;
-    const key = `${outcome}\u0000${chatId}`;
-    if (reportedRef.current.has(key)) return;
-    reportedRef.current.add(key);
+    if (!claimBindingReport(reportedRef.current, outcome, chatId, restoration)) return;
     const evidence = chatBindingReferenceEvidence(chatId, restoration);
     const [correlationId, ...related] = idsKey === "" ? [] : idsKey.split("\u0000");
     reportClientDiagnostic(chatBindingMessage(outcome, evidence), {
@@ -1262,45 +1263,74 @@ function useChatBindingEvidence({
   }, [chatId, count, idsKey, outcome, restoration, windowId]);
 }
 
+interface ReportedBindings {
+  readonly keys: Set<string>;
+  readonly restorations: WeakSet<ChatReferenceRestoration>;
+}
+
+// Each binding outcome is reported once per bound id. A binding found again after redaction is
+// reported once per restoration instead, so a chat the person chooses again after withdrawing it is
+// a new binding on the log (#3557 review).
+function claimBindingReport(
+  reported: ReportedBindings,
+  outcome: ChatBindingOutcome,
+  chatId: string,
+  restoration: ChatReferenceRestoration | undefined,
+): boolean {
+  if (outcome === "resolved" && restoration !== undefined) {
+    if (reported.restorations.has(restoration)) return false;
+    reported.restorations.add(restoration);
+    return true;
+  }
+  const key = `${outcome}\u0000${chatId}`;
+  if (reported.keys.has(key)) return false;
+  reported.keys.add(key);
+  return true;
+}
+
 // A window whose redacted chat id carries no fingerprint offers the chats it may have shown; only
-// the person's choice binds it (#3557 review). Each offer names when its chat was last active, to
-// the second, so two chats with one title (every chat starts as "New chat") stay apart; two that
-// would still read alike also show a reference from their fingerprints.
+// the person's choice binds it (#3557 review). The offers are labelled where they are reported, so
+// each reads as the evidence says: when its chat was last active, to the second, and a fingerprint
+// reference where two would still read alike.
 function ChatChoice({ choice }: { readonly choice: RedactedChatChoice }): ReactNode {
   const agentT = useEditorAgentTranslate();
-  const locale = useLocale();
-  const lastActive = useMemo(
-    () => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" }),
-    [locale],
-  );
-  const offers = choice.candidates.map((chat) => ({
-    chat,
-    label: agentT("chat.restoration.chooseOpen", {
-      title: chat.title,
-      updated: lastActive.format(new Date(chat.updatedAt)),
-    }),
-  }));
-  const references = chatChoiceReferences(offers);
   return (
-    <div role="group" aria-label={agentT("chat.restoration.chooseLabel")}>
+    <fieldset
+      aria-label={agentT("chat.restoration.chooseLabel")}
+      style={NATIVE_FIELDSET_RESET_STYLE}
+    >
       <p className="lk-empty-body">{agentT("chat.restoration.chooseBody")}</p>
-      {offers.map(({ chat, label }, index): ReactNode => {
-        const reference = references[index];
-        return (
-          <button
-            key={chat.id}
-            type="button"
-            className="lk-btn lk-btn-ghost"
-            onClick={(): void => {
-              choice.choose(chat);
-            }}
-          >
-            {reference === undefined
-              ? label
-              : agentT("chat.restoration.chooseOpenReference", { label, reference })}
-          </button>
-        );
-      })}
+      {choice.offers.map(({ chat, label }): ReactNode => (
+        <button
+          key={chat.id}
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          onClick={(): void => {
+            choice.choose(chat);
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </fieldset>
+  );
+}
+
+// The chat a person chose for a redacted snapshot stays a choice until they keep it: they can check
+// the conversation the window now shows, and withdraw it to choose again (#3557 review).
+function ChatChoiceNotice({ decision }: { readonly decision: ChatChoiceDecision }): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  return (
+    <div className={styles.cmpNotice} role="status">
+      <p className={styles.cmpNoticeText}>{agentT("chat.restoration.choiceNotice")}</p>
+      <div className={styles.cmpNoticeActions}>
+        <button type="button" className="lk-btn lk-btn-ghost" onClick={decision.keep}>
+          {agentT("chat.restoration.choiceKeep")}
+        </button>
+        <button type="button" className="lk-btn lk-btn-ghost" onClick={decision.chooseAnother}>
+          {agentT("chat.restoration.choiceAnother")}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1490,13 +1520,16 @@ export function ChatWindowSessionHost({
   // fingerprint, or, without one, only through the person's choice.
   const rebind = useChatReferenceRebind(cfg, session, ctx.updateCfg);
   const redacted = useRedactedChatChoice(cfg, session, ctx);
+  const restoration = rebind.restored ?? redacted.restored;
+  const decision = useChatChoiceDecision(cfg, restoration, ctx);
   if (rebind.pending) return <ChatBindPending />;
   return (
     <BoundChatWindowSessionHost
       cfg={cfg}
       choice={redacted.choice}
       ctx={ctx}
-      restoration={rebind.restored ?? redacted.restored}
+      decision={decision}
+      restoration={restoration}
       session={session}
     />
   );
@@ -1506,6 +1539,7 @@ interface BoundChatWindowSessionHostProps {
   readonly cfg: Record<string, unknown>;
   readonly choice?: RedactedChatChoice | undefined;
   readonly ctx: WindowRenderContext;
+  readonly decision?: ChatChoiceDecision | undefined;
   readonly restoration?: ChatReferenceRestoration | undefined;
   readonly session: ChatSessionApi;
 }
@@ -1637,6 +1671,7 @@ function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): Rea
         lookupFailed={targetLookupFailed}
         sessionError={session.error}
       />
+      {props.decision === undefined ? null : <ChatChoiceNotice decision={props.decision} />}
       <BoundChatBody
         activeProjectPath={session.activeProject?.path}
         choice={props.choice}

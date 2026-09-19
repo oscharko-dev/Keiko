@@ -23,11 +23,14 @@ import {
 
 type JsonScalar = string | number | boolean;
 
-const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
+export const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
 // A chat window's one-way fingerprint of a chat id the heuristic redacts (#3557 review): the window
 // finds its chat again by comparing it with the chats the server lists, and nothing expands it back
 // into the id (widgets/chatReferenceFingerprint.ts).
 export const CHAT_ID_FINGERPRINT_CFG_KEY = "chatIdFingerprint";
+// A chat window bound to the chat the person chose for a redacted snapshot, which they have not kept
+// yet (#3557 review): until they keep it, the window offers to withdraw it and choose again.
+export const CHAT_ID_CHOSEN_CFG_KEY = "chatIdChosen";
 // An RFC 9562 version-4 UUID, the shape of every server-issued id. Shape alone is never proof of
 // origin, so no value of this shape is exempted from the secret heuristic, and no stored form works
 // around it (#3557 review). The shared card-number rule reads the digits across a random UUID's
@@ -100,6 +103,7 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   chat: [
     "chatId",
     CHAT_ID_FINGERPRINT_CFG_KEY,
+    CHAT_ID_CHOSEN_CFG_KEY,
     "memoryEnabled",
     "projectPath",
     "projectPathPrivacy",
@@ -171,6 +175,11 @@ function sanitizeSha256Digest(value: unknown): AppWindow["cfg"][string] {
   return typeof value === "string" && SHA256_HEX_DIGEST.test(value) ? value : undefined;
 }
 
+// A marker that is either set or absent: only `true` persists.
+function sanitizeSetMarker(value: unknown): AppWindow["cfg"][string] {
+  return value === true ? true : undefined;
+}
+
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
   "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,
@@ -178,6 +187,7 @@ const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueS
   "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
   "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
   [`chat:${CHAT_ID_FINGERPRINT_CFG_KEY}`]: sanitizeSha256Digest,
+  [`chat:${CHAT_ID_CHOSEN_CFG_KEY}`]: sanitizeSetMarker,
 };
 
 function isFiniteNumber(value: unknown): value is number {

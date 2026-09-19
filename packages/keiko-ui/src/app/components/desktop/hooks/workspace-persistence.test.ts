@@ -827,6 +827,37 @@ describe("workspace-persistence", () => {
     expect(persisted[0]?.cfg).toEqual({ chatId: "[REDACTED]" });
   });
 
+  // #3557 review: a chat the person chose for a redacted snapshot stays a choice across a reload
+  // until they keep it. The marker is closed: only `true` persists, anything else is dropped.
+  it("persists the chosen-chat marker when it is set", () => {
+    const fingerprint = "a".repeat(64);
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "chat-1",
+        type: "chat",
+        cfg: { chatId: "[REDACTED]", chatIdFingerprint: fingerprint, chatIdChosen: true },
+      }),
+    ]);
+
+    expect(persisted[0]?.cfg).toEqual({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: fingerprint,
+      chatIdChosen: true,
+    });
+  });
+
+  it.each([
+    ["kept", false],
+    ["text", "true"],
+    ["a number", 1],
+  ])("drops a chosen-chat marker that is %s", (_label, chatIdChosen) => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { chatId: "[REDACTED]", chatIdChosen } }),
+    ]);
+
+    expect(persisted[0]?.cfg).toEqual({ chatId: "[REDACTED]" });
+  });
+
   // #3557 review (P1): a restored snapshot is untrusted, and shape is no proof of server issuance.
   // A hyphenated PAN-shaped v4 value in it is redacted like any other string, never kept verbatim,
   // and a compact 32-hex value is an opaque string that is never expanded into that shape.

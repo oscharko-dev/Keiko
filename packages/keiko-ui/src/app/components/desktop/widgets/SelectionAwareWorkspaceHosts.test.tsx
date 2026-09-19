@@ -2066,12 +2066,12 @@ describe("ChatWindowSessionHost target missing", () => {
       screen.getByRole("button", { name: /^Open Release notes, last active /u }),
     ).toBeInTheDocument();
     // Never on its own.
-    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: chatA });
-    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: chatB });
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: chatA }));
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: chatB }));
     // The offer itself is evidence: the load that decided it, and how many chats it holds.
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
-        "[keiko] chat window offered conversations to choose from (candidates=2)",
+        "[keiko] chat window offered conversations to choose from (candidates=2, disambiguated=0)",
         {
           correlationId: lookupLoadId(),
           bindingReport: {
@@ -2081,6 +2081,7 @@ describe("ChatWindowSessionHost target missing", () => {
             heuristicFlagged: false,
             windowRef: "window-1",
             candidateCount: 2,
+            disambiguatedCount: 0,
             decidingLoadCount: 1,
           },
         },
@@ -2089,7 +2090,9 @@ describe("ChatWindowSessionHost target missing", () => {
 
     await userEvent.click(reopenA);
 
-    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: chatA }));
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: chatA, chatIdChosen: true }),
+    );
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
         "[keiko] chat window binding resolved (reference=user-selected, heuristic-flagged)",
@@ -2116,6 +2119,117 @@ describe("ChatWindowSessionHost target missing", () => {
   // #3557 review: every chat starts as "New chat", so two offered chats can share a title. Each offer
   // names when its chat was last active, so the person can tell them apart, and the chat they choose
   // is the one the window binds to and the evidence names.
+  // #3557 review: a chat chosen without proof stays a choice until the person keeps it. The window
+  // shows the conversation, so the person can check it, and offers to keep it or choose another.
+  function offerChatsAandB(): { readonly chatA: string; readonly chatB: string } {
+    const chatA = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const chatB = "2404206d-9ab6-4bca-8853-813867352087";
+    const liveA = chatFixture(chatA, "Deploy status", 3_000);
+    const liveB = chatFixture(chatB, "Release notes", 2_000);
+    chatSessionState.chats = [liveA, liveB];
+    fetchChatsMock.mockResolvedValue({ chats: [liveA, liveB] });
+    return { chatA, chatB };
+  }
+
+  function decisionReports(outcome: string): readonly unknown[] {
+    return reportClientDiagnosticMock.mock.calls.flatMap(([, meta]) => {
+      const report = (meta as { bindingReport?: { outcome: string } } | undefined)?.bindingReport;
+      return report?.outcome === outcome ? [report] : [];
+    });
+  }
+
+  const CHOICE_NOTICE = /^You chose this conversation for this window\./u;
+
+  it("keeps a chosen chat open to change until the person keeps it", async (): Promise<void> => {
+    const { chatA } = offerChatsAandB();
+    const { ctx } = restoreChatWindow(flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    );
+
+    expect(await screen.findByText(CHOICE_NOTICE)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
+
+    await waitFor((): void => expect(screen.queryByText(CHOICE_NOTICE)).toBeNull());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ chatIdChosen: false });
+    expect(decisionReports("choice-kept")).toEqual([
+      {
+        surface: "chat-window",
+        outcome: "choice-kept",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+        windowRef: "window-1",
+        targetFingerprint: chatReferenceFingerprint(chatA),
+      },
+    ]);
+  });
+
+  it("returns the window to the offered chats when the person chooses another", async (): Promise<void> => {
+    const { chatA, chatB } = offerChatsAandB();
+    const { ctx } = restoreChatWindow(flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
+    );
+    await screen.findByText(CHOICE_NOTICE);
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose another" }));
+
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: undefined,
+      chatIdChosen: false,
+    });
+    expect(decisionReports("choice-withdrawn")).toEqual([
+      expect.objectContaining({ targetFingerprint: chatReferenceFingerprint(chatA) }),
+    ]);
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Open Release notes, last active /u }),
+    );
+    // The next choice binds the window again, and is again a choice.
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: chatB, chatIdChosen: true }),
+    );
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(chatA);
+  });
+
+  // A chat chosen again after the person withdrew it is a new binding on the log.
+  it("reports a chat the person chooses again after withdrawing it as a new binding", async (): Promise<void> => {
+    const { chatA } = offerChatsAandB();
+    restoreChatWindow(flaggedChatWindow({ chatId: chatA, projectPath: "/repo" }));
+    const openA = { name: /^Open Deploy status, last active /u };
+    await userEvent.click(await screen.findByRole("button", openA));
+    await screen.findByText(CHOICE_NOTICE);
+    await waitFor((): void => expect(decisionReports("resolved")).toHaveLength(1));
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose another" }));
+    await userEvent.click(await screen.findByRole("button", openA));
+
+    await waitFor((): void => expect(decisionReports("resolved")).toHaveLength(2));
+  });
+
+  // After a reload the chosen chat is found again through its fingerprint, and the choice is still
+  // open until the person keeps it.
+  it("keeps offering to change a chosen chat after a reload", async (): Promise<void> => {
+    const flaggedId = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
+    const { restoredCfg, ctx } = restoreChatWindow(
+      flaggedChatWindow({
+        chatId: flaggedId,
+        chatIdFingerprint: chatReferenceFingerprint(flaggedId),
+        chatIdChosen: true,
+        projectPath: "/repo",
+      }),
+    );
+
+    expect(restoredCfg).toMatchObject({ chatId: "[REDACTED]", chatIdChosen: true });
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: flaggedId }));
+    expect(await screen.findByText(CHOICE_NOTICE)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(decisionReports("choice-kept")).toEqual([
+      expect.objectContaining({ referenceShape: "fingerprint" }),
+    ]);
+  });
+
   // #3557 review: two "New chat" offers last active within one minute read apart by their seconds.
   it("tells two offered chats with one title apart within one minute by their seconds", async (): Promise<void> => {
     const first = listFlaggedChat("1404206d-9ab6-4bca-8853-813867352087");
@@ -2156,8 +2270,10 @@ describe("ChatWindowSessionHost target missing", () => {
     if (pick === undefined) throw new Error("the first chat's offer names no reference");
     await userEvent.click(pick);
 
-    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: first }));
-    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: second });
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: first, chatIdChosen: true }),
+    );
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: second }));
   });
 
   it("tells two offered chats with one title apart by when each was last active", async (): Promise<void> => {
@@ -2179,8 +2295,10 @@ describe("ChatWindowSessionHost target missing", () => {
       screen.getByRole("button", { name: /^Open New chat, last active .*2025/u }),
     );
 
-    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: older }));
-    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: newer });
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ chatId: older, chatIdChosen: true }),
+    );
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: newer }));
     await waitFor((): void =>
       expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
         "[keiko] chat window binding resolved (reference=user-selected, heuristic-flagged)",
@@ -2247,7 +2365,9 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(
       await screen.findByRole("button", { name: /^Open Deploy status, last active /u }),
     ).toBeInTheDocument();
-    expect(ctx.updateCfg).not.toHaveBeenCalledWith({ chatId: onlyFlagged });
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: onlyFlagged }),
+    );
     const resolved = reportClientDiagnosticMock.mock.calls.filter(([message]) =>
       String(message).startsWith("[keiko] chat window binding resolved"),
     );

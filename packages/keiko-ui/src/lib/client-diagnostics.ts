@@ -83,7 +83,10 @@ export interface ClientDiagnosticBindingReport {
   readonly decidingLoadCount?: number | undefined;
   // `candidates-offered` only: how many chats the window offered the person, zero included.
   readonly candidateCount?: number | undefined;
-  // A binding found again after redaction only: the fingerprint of the chat it bound to, never its id.
+  // `candidates-offered` only: how many of those offers read alike and show a fingerprint reference.
+  readonly disambiguatedCount?: number | undefined;
+  // A binding found again after redaction, or a person's decision about a chosen chat: that chat's
+  // fingerprint, never its id.
   readonly targetFingerprint?: string | undefined;
 }
 

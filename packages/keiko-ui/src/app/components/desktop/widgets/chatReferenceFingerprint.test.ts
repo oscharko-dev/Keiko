@@ -11,6 +11,7 @@ import {
   chatReferenceFingerprint,
   findChatByFingerprint,
   useChatReferenceFingerprint,
+  useChatChoiceDecision,
   useChatReferenceRebind,
   useRedactedChatChoice,
   type ChatReferenceRebind,
@@ -53,8 +54,9 @@ function chat(
   projectPath: string,
   status: Chat["status"] = "open",
   updatedAt = 1,
+  title = "Deploy status",
 ): Chat {
-  return { id, projectPath, status, title: "Deploy status", updatedAt } as unknown as Chat;
+  return { id, projectPath, status, title, updatedAt } as unknown as Chat;
 }
 
 function listed(chats: readonly Chat[], correlationId = "ui_list-0001"): ChatListLoad {
@@ -431,7 +433,7 @@ describe("useRedactedChatChoice", () => {
     const view = renderHook(() => useRedactedChatChoice(legacy, session, windowOf(updateCfg)));
 
     await waitFor(() =>
-      expect(view.result.current.choice?.candidates.map((candidate) => candidate.id)).toEqual([
+      expect(view.result.current.choice?.offers.map((offer) => offer.chat.id)).toEqual([
         FLAGGED_ID,
         OTHER_FLAGGED_ID,
       ]),
@@ -451,15 +453,16 @@ describe("useRedactedChatChoice", () => {
       { initialProps: { cfg: legacy as Record<string, unknown> } },
     );
     await waitFor(() => expect(view.result.current.choice).toBeDefined());
-    const target = view.result.current.choice?.candidates.find((c) => c.id === FLAGGED_ID);
+    const target = view.result.current.choice?.offers.find((o) => o.chat.id === FLAGGED_ID)?.chat;
     if (target === undefined) throw new Error("candidate missing");
 
     act(() => {
       view.result.current.choice?.choose(target);
     });
-    view.rerender({ cfg: { ...legacy, chatId: FLAGGED_ID } });
+    view.rerender({ cfg: { ...legacy, chatId: FLAGGED_ID, chatIdChosen: true } });
 
-    expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID });
+    // The binding stays a choice until the person keeps it.
+    expect(updateCfg).toHaveBeenCalledWith({ chatId: FLAGGED_ID, chatIdChosen: true });
     expect(view.result.current.restored).toEqual({
       shape: "user-selected",
       correlationId: "ui_list-choice-0001",
@@ -498,7 +501,7 @@ describe("useRedactedChatChoice", () => {
     const view = renderHook(() => useRedactedChatChoice(legacy, session, windowOf(vi.fn())));
 
     await waitFor(() =>
-      expect(view.result.current.choice?.candidates.map((candidate) => candidate.id)).toEqual([
+      expect(view.result.current.choice?.offers.map((offer) => offer.chat.id)).toEqual([
         OTHER_FLAGGED_ID,
         FLAGGED_ID,
       ]),
@@ -509,7 +512,13 @@ describe("useRedactedChatChoice", () => {
   // with its count and the window's own reference, and never a chat id.
   it("reports each offer once under the load that decided it, with its count", async () => {
     sharedFetchChatsWithEvidenceMock.mockResolvedValue(
-      listed([chat(FLAGGED_ID, "/repo"), chat(OTHER_FLAGGED_ID, "/repo")], "ui_list-offer-0001"),
+      listed(
+        [
+          chat(FLAGGED_ID, "/repo", "open", 10_000),
+          chat(OTHER_FLAGGED_ID, "/repo", "open", 20_000),
+        ],
+        "ui_list-offer-0001",
+      ),
     );
     const view = renderHook(() => useRedactedChatChoice(legacy, session, windowOf(vi.fn())));
     await waitFor(() => expect(view.result.current.choice).toBeDefined());
@@ -518,7 +527,7 @@ describe("useRedactedChatChoice", () => {
 
     expect(offerReports()).toEqual([
       [
-        "[keiko] chat window offered conversations to choose from (candidates=2)",
+        "[keiko] chat window offered conversations to choose from (candidates=2, disambiguated=0)",
         {
           correlationId: "ui_list-offer-0001",
           bindingReport: {
@@ -528,6 +537,7 @@ describe("useRedactedChatChoice", () => {
             heuristicFlagged: false,
             windowRef: "window-legacy",
             candidateCount: 2,
+            disambiguatedCount: 0,
             decidingLoadCount: 1,
           },
         },
@@ -551,6 +561,7 @@ describe("useRedactedChatChoice", () => {
       correlationId: "ui_list-repo-a",
       bindingReport: expect.objectContaining({
         candidateCount: 0,
+        disambiguatedCount: 0,
         relatedCorrelationIds: ["ui_list-repo-b"],
         decidingLoadCount: 2,
       }) as unknown,
@@ -581,7 +592,7 @@ describe("useRedactedChatChoice", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
-      expect(view.result.current.choice?.candidates.map((candidate) => candidate.id)).toEqual([
+      expect(view.result.current.choice?.offers.map((offer) => offer.chat.id)).toEqual([
         FLAGGED_ID,
       ]);
       expect(offerReports()).toHaveLength(1);
@@ -589,6 +600,38 @@ describe("useRedactedChatChoice", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // #3557 review: two offers that share a title and a last-active second read alike; each shows a
+  // fingerprint reference, and the offer says how many needed one, so the log states what was seen.
+  it("labels offers that read alike with a fingerprint reference, and counts them in the offer", async () => {
+    const SOLO_FLAGGED_ID = "a0001280-9ab6-4bca-8853-813867352087";
+    sharedFetchChatsWithEvidenceMock.mockResolvedValue(
+      listed([
+        chat(FLAGGED_ID, "/repo"),
+        chat(OTHER_FLAGGED_ID, "/repo"),
+        chat(SOLO_FLAGGED_ID, "/repo", "open", 1, "Release notes"),
+      ]),
+    );
+
+    const view = renderHook(() => useRedactedChatChoice(legacy, session, windowOf(vi.fn())));
+
+    await waitFor(() => expect(view.result.current.choice?.offers).toHaveLength(3));
+    const labels = new Map(
+      view.result.current.choice?.offers.map((offer) => [offer.chat.id, offer.label]),
+    );
+    for (const id of [FLAGGED_ID, OTHER_FLAGGED_ID]) {
+      expect(labels.get(id)).toMatch(
+        /^Open Deploy status, last active .+, reference [0-9a-f]{6,}$/u,
+      );
+      expect(labels.get(id)).toContain(`reference ${chatReferenceFingerprint(id).slice(0, 6)}`);
+    }
+    expect(labels.get(SOLO_FLAGGED_ID)).not.toContain("reference");
+    expect(new Set(labels.values()).size).toBe(3);
+    await waitFor(() => expect(offerReports()).toHaveLength(1));
+    expect(offerReports()[0]?.[1]).toMatchObject({
+      bindingReport: { candidateCount: 3, disambiguatedCount: 2 },
+    });
   });
 
   it("scans again at once when the listed projects change after a list could not be read", async () => {
@@ -607,5 +650,92 @@ describe("useRedactedChatChoice", () => {
     view.rerender({ current: { loading: false, projects: [project("/repo")] } });
 
     await waitFor(() => expect(view.result.current.choice).toBeDefined());
+  });
+});
+
+// #3557 review: a chat the person chose without proof stays a choice until they keep it. They can
+// keep it, or withdraw it and return the window to the chats it may have shown; each decision names
+// the chat by its fingerprint, on the timeline of the load that decided the binding.
+describe("useChatChoiceDecision", () => {
+  const chosen = { chatId: FLAGGED_ID, chatIdChosen: true, projectPath: "/repo" };
+  const restoration = { shape: "user-selected", correlationId: "ui_list-choice-0002" } as const;
+
+  function decisionReports(): readonly unknown[][] {
+    return reportClientDiagnosticMock.mock.calls.filter(([message]) =>
+      String(message).includes("the conversation the person chose"),
+    );
+  }
+
+  it("offers no decision for a binding the person already kept, or one not restored", () => {
+    const window = { updateCfg: vi.fn(), windowId: "window-legacy" };
+
+    const kept = renderHook(() =>
+      useChatChoiceDecision({ ...chosen, chatIdChosen: false }, restoration, window),
+    );
+    const unrestored = renderHook(() => useChatChoiceDecision(chosen, undefined, window));
+
+    expect(kept.result.current).toBeUndefined();
+    expect(unrestored.result.current).toBeUndefined();
+  });
+
+  it("keeps the chosen chat, and names it by its fingerprint", () => {
+    const updateCfg = vi.fn();
+    const view = renderHook(() =>
+      useChatChoiceDecision(chosen, restoration, { updateCfg, windowId: "window-legacy" }),
+    );
+
+    act(() => {
+      view.result.current?.keep();
+    });
+
+    expect(updateCfg).toHaveBeenCalledWith({ chatIdChosen: false });
+    expect(decisionReports()).toEqual([
+      [
+        "[keiko] chat window kept the conversation the person chose",
+        {
+          correlationId: "ui_list-choice-0002",
+          bindingReport: {
+            surface: "chat-window",
+            outcome: "choice-kept",
+            referenceShape: "user-selected",
+            heuristicFlagged: true,
+            windowRef: "window-legacy",
+            targetFingerprint: chatReferenceFingerprint(FLAGGED_ID),
+          },
+        },
+      ],
+    ]);
+  });
+
+  it("withdraws the chosen chat and returns the window to the chats it may have shown", () => {
+    const updateCfg = vi.fn();
+    const afterReload = { shape: "fingerprint", correlationId: "ui_list-rebind-0003" } as const;
+    const view = renderHook(() =>
+      useChatChoiceDecision(chosen, afterReload, { updateCfg, windowId: "window-legacy" }),
+    );
+
+    act(() => {
+      view.result.current?.chooseAnother();
+    });
+
+    expect(updateCfg).toHaveBeenCalledWith({
+      chatId: "[REDACTED]",
+      chatIdFingerprint: undefined,
+      chatIdChosen: false,
+    });
+    expect(decisionReports()).toEqual([
+      [
+        "[keiko] chat window withdrew the conversation the person chose",
+        {
+          correlationId: "ui_list-rebind-0003",
+          bindingReport: expect.objectContaining({
+            outcome: "choice-withdrawn",
+            referenceShape: "fingerprint",
+            targetFingerprint: chatReferenceFingerprint(FLAGGED_ID),
+          }) as unknown,
+        },
+      ],
+    ]);
+    expect(JSON.stringify(reportClientDiagnosticMock.mock.calls)).not.toContain(FLAGGED_ID);
   });
 });

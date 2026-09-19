@@ -578,6 +578,7 @@ describe("fanOutClientDiagnostic binding evidence", () => {
         referenceShape: "redacted",
         heuristicFlagged: false,
         candidateCount: 0,
+        disambiguatedCount: 0,
       },
     });
     expect(lastPostedBody(fetchMock)).toEqual({
@@ -588,6 +589,7 @@ describe("fanOutClientDiagnostic binding evidence", () => {
       heuristicFlagged: false,
       correlationId: "ui_chat-list-load-0005",
       candidateCount: 0,
+      disambiguatedCount: 0,
     });
 
     fanOutClientDiagnostic("[keiko] chat window binding resolved (reference=user-selected)", {

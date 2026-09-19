@@ -16,10 +16,11 @@
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary } from "@/lib/client-error-summary";
+import { useLocale } from "@/lib/i18n";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 
 import {
@@ -28,18 +29,21 @@ import {
   type ChatListLoad,
 } from "../hooks/useChatSession";
 import {
+  CHAT_ID_CHOSEN_CFG_KEY,
   CHAT_ID_FINGERPRINT_CFG_KEY,
+  REDACTED_WORKSPACE_CONFIG_VALUE,
   persistedReferenceEvidence,
   persistedReferenceShape,
 } from "../hooks/workspace-persistence";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import { useEditorAgentTranslate } from "./cards/editor-agent-i18n";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const SHA256_HEX_LENGTH = 64;
 const MIN_CHOICE_REFERENCE_LENGTH = 6;
 const MAX_REBIND_RETRY_DELAY_MS = 30_000;
 const FINGERPRINT_DOMAIN = "keiko-chat-reference-v1";
-const FINGERPRINT_SEPARATOR = String.fromCharCode(0);
+const FINGERPRINT_SEPARATOR = String.fromCodePoint(0);
 
 /**
  * The SHA-256 fingerprint of a chat id, domain-separated so it matches nothing else. Synchronous,
@@ -357,46 +361,6 @@ function useRedactedChatCandidateScan(
   return scan;
 }
 
-const CANDIDATES_OFFERED_DIAGNOSTIC = "[keiko] chat window offered conversations to choose from";
-
-// The offer is reported under the list loads that decided it, with how many chats it holds, zero
-// included, so the recovery state is reconstructable from the log (#3557 review). Only a redaction
-// marker offers, and the marker itself is never heuristic-flagged; no chat id is ever sent.
-function reportCandidatesOffered(scan: RedactedChatCandidateScan, windowId: string): void {
-  const [correlationId, ...related] = scan.correlationIds;
-  const loads = scan.correlationIds.length;
-  const candidateCount = scan.candidates.length;
-  reportClientDiagnostic(
-    `${CANDIDATES_OFFERED_DIAGNOSTIC} (candidates=${String(candidateCount)})`,
-    {
-      correlationId,
-      bindingReport: {
-        surface: "chat-window",
-        outcome: "candidates-offered",
-        referenceShape: "redacted",
-        heuristicFlagged: false,
-        windowRef: windowId,
-        candidateCount,
-        ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
-        ...(loads === 0 ? {} : { decidingLoadCount: loads }),
-      },
-    },
-  );
-}
-
-// Each scan is reported once, however often the window renders.
-function useCandidatesOfferedEvidence(
-  scan: RedactedChatCandidateScan | undefined,
-  windowId: string,
-): void {
-  const reportedRef = useRef(new WeakSet<RedactedChatCandidateScan>());
-  useEffect((): void => {
-    if (scan === undefined || reportedRef.current.has(scan)) return;
-    reportedRef.current.add(scan);
-    reportCandidatesOffered(scan, windowId);
-  }, [scan, windowId]);
-}
-
 /** An offered chat and the label its button shows. */
 export interface ChatChoiceOffer {
   readonly chat: Chat;
@@ -434,9 +398,92 @@ export function chatChoiceReferences(
   });
 }
 
+interface LabelledOffers {
+  readonly offers: readonly ChatChoiceOffer[];
+  // How many offers read alike and show a fingerprint reference.
+  readonly disambiguated: number;
+}
+
+const NO_CANDIDATES: readonly ListedChat[] = [];
+
+// The offers as the chooser shows them: each names when its chat was last active, to the second,
+// and offers that would still read alike (one title, one second) show a fingerprint reference too.
+// The evidence counts the references from these same labels, so it states what the person saw.
+function useLabelledOffers(candidates: readonly ListedChat[]): LabelledOffers {
+  const agentT = useEditorAgentTranslate();
+  const locale = useLocale();
+  return useMemo((): LabelledOffers => {
+    const format = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" });
+    const plain = candidates.map(({ chat }) => ({
+      chat,
+      label: agentT("chat.restoration.chooseOpen", {
+        title: chat.title,
+        updated: format.format(new Date(chat.updatedAt)),
+      }),
+    }));
+    const references = chatChoiceReferences(plain);
+    const offers = plain.map((offer, index): ChatChoiceOffer => {
+      const reference = references[index];
+      if (reference === undefined) return offer;
+      const label = agentT("chat.restoration.chooseOpenReference", {
+        label: offer.label,
+        reference,
+      });
+      return { chat: offer.chat, label };
+    });
+    const disambiguated = references.filter((reference) => reference !== undefined).length;
+    return { offers, disambiguated };
+  }, [agentT, candidates, locale]);
+}
+
+const CANDIDATES_OFFERED_DIAGNOSTIC = "[keiko] chat window offered conversations to choose from";
+
+// The offer is reported under the list loads that decided it, with how many chats it holds and how
+// many of those read alike and show a fingerprint reference, zero included, so the chooser the
+// person saw is reconstructable from the log (#3557 review). Only a redaction marker offers, and
+// the marker itself is never heuristic-flagged; no chat id is ever sent.
+function reportCandidatesOffered(
+  scan: RedactedChatCandidateScan,
+  disambiguatedCount: number,
+  windowId: string,
+): void {
+  const [correlationId, ...related] = scan.correlationIds;
+  const loads = scan.correlationIds.length;
+  const candidateCount = scan.candidates.length;
+  const counts = `candidates=${String(candidateCount)}, disambiguated=${String(disambiguatedCount)}`;
+  reportClientDiagnostic(`${CANDIDATES_OFFERED_DIAGNOSTIC} (${counts})`, {
+    correlationId,
+    bindingReport: {
+      surface: "chat-window",
+      outcome: "candidates-offered",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      windowRef: windowId,
+      candidateCount,
+      disambiguatedCount,
+      ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+      ...(loads === 0 ? {} : { decidingLoadCount: loads }),
+    },
+  });
+}
+
+// Each scan is reported once, however often the window renders.
+function useCandidatesOfferedEvidence(
+  scan: RedactedChatCandidateScan | undefined,
+  disambiguated: number,
+  windowId: string,
+): void {
+  const reportedRef = useRef(new WeakSet<RedactedChatCandidateScan>());
+  useEffect((): void => {
+    if (scan === undefined || reportedRef.current.has(scan)) return;
+    reportedRef.current.add(scan);
+    reportCandidatesOffered(scan, disambiguated, windowId);
+  }, [disambiguated, scan, windowId]);
+}
+
 /** The chats a window whose redacted id carries no fingerprint may have shown, to choose from. */
 export interface RedactedChatChoice {
-  readonly candidates: readonly Chat[];
+  readonly offers: readonly ChatChoiceOffer[];
   readonly choose: (chat: Chat) => void;
 }
 
@@ -450,6 +497,7 @@ export interface RedactedChatChoiceState {
  * Offers a window whose chat id persistence redacted without a fingerprint (a snapshot an older
  * build wrote) the listed chats it may have named, and binds it only to the one the person chooses
  * (#3557 review): nothing in such a snapshot proves which chat it was, so the window never guesses.
+ * The choice stays open until the person keeps it (`useChatChoiceDecision`).
  */
 export function useRedactedChatChoice(
   cfg: Record<string, unknown>,
@@ -459,25 +507,98 @@ export function useRedactedChatChoice(
   const unidentified = unidentifiedReference(cfg);
   const chatId = cfgString(cfg, "chatId");
   const scan = useRedactedChatCandidateScan(unidentified, cfgString(cfg, "projectPath"), session);
-  useCandidatesOfferedEvidence(unidentified ? scan : undefined, ctx.windowId);
+  const listed = unidentified ? (scan?.candidates ?? NO_CANDIDATES) : NO_CANDIDATES;
+  const { offers, disambiguated } = useLabelledOffers(listed);
+  useCandidatesOfferedEvidence(unidentified ? scan : undefined, disambiguated, ctx.windowId);
   const [chosen, setChosen] = useState<RestoredBinding | undefined>(undefined);
   const { updateCfg } = ctx;
   const choose = useCallback(
     (chat: Chat): void => {
-      const listed = scan?.candidates.find((candidate) => candidate.chat.id === chat.id);
-      if (listed === undefined) return;
-      const restoration = { shape: "user-selected", correlationId: listed.correlationId } as const;
+      const found = scan?.candidates.find((candidate) => candidate.chat.id === chat.id);
+      if (found === undefined) return;
+      const restoration = { shape: "user-selected", correlationId: found.correlationId } as const;
       setChosen({ chatId: chat.id, restoration });
-      updateCfg({ chatId: chat.id });
+      updateCfg({ chatId: chat.id, [CHAT_ID_CHOSEN_CFG_KEY]: true });
     },
     [scan, updateCfg],
   );
-  const candidates = unidentified ? (scan?.candidates ?? []) : [];
   return {
-    choice:
-      candidates.length > 0
-        ? { candidates: candidates.map((candidate) => candidate.chat), choose }
-        : undefined,
+    choice: offers.length > 0 ? { offers, choose } : undefined,
     restored: chosen !== undefined && chosen.chatId === chatId ? chosen.restoration : undefined,
   };
+}
+
+/** What the person can do while the window shows a chat they chose and have not kept yet. */
+export interface ChatChoiceDecision {
+  readonly keep: () => void;
+  readonly chooseAnother: () => void;
+}
+
+type ChatChoiceDecisionOutcome = "choice-kept" | "choice-withdrawn";
+
+const CHOICE_DECISION_DIAGNOSTICS: Readonly<Record<ChatChoiceDecisionOutcome, string>> = {
+  "choice-kept": "[keiko] chat window kept the conversation the person chose",
+  "choice-withdrawn": "[keiko] chat window withdrew the conversation the person chose",
+};
+
+// Withdrawing a choice returns the window to the state the redacted snapshot left it in: the
+// redaction marker without a fingerprint, which offers the chats it may have shown again.
+const WITHDRAWN_CHOICE_PATCH = {
+  chatId: REDACTED_WORKSPACE_CONFIG_VALUE,
+  [CHAT_ID_FINGERPRINT_CFG_KEY]: undefined,
+  [CHAT_ID_CHOSEN_CFG_KEY]: false,
+} as const;
+
+// A decision names the chat by its fingerprint, on the timeline of the list load that decided the
+// binding, so which conversation the window ended with is reconstructable (#3557 review).
+function reportChoiceDecision(
+  outcome: ChatChoiceDecisionOutcome,
+  chatId: string,
+  restoration: ChatReferenceRestoration,
+  windowId: string,
+): void {
+  reportClientDiagnostic(CHOICE_DECISION_DIAGNOSTICS[outcome], {
+    correlationId: restoration.correlationId,
+    bindingReport: {
+      surface: "chat-window",
+      outcome,
+      referenceShape: restoration.shape,
+      heuristicFlagged: persistedReferenceEvidence(chatId).heuristicFlagged,
+      windowRef: windowId,
+      targetFingerprint: chatReferenceFingerprint(chatId),
+    },
+  });
+}
+
+/**
+ * While the window shows a chat the person chose for a redacted snapshot and has not kept yet, the
+ * person can keep it, or withdraw it and return the window to the chats it may have shown (#3557
+ * review). A choice made without proof stays open, across reloads, until the person keeps it.
+ */
+export function useChatChoiceDecision(
+  cfg: Record<string, unknown>,
+  restoration: ChatReferenceRestoration | undefined,
+  ctx: Pick<WindowRenderContext, "updateCfg" | "windowId">,
+): ChatChoiceDecision | undefined {
+  const chatId = cfgString(cfg, "chatId");
+  const open = cfg[CHAT_ID_CHOSEN_CFG_KEY] === true;
+  const { updateCfg, windowId } = ctx;
+  return useMemo((): ChatChoiceDecision | undefined => {
+    if (!open || chatId === undefined || restoration === undefined) return undefined;
+    const decide = (
+      outcome: ChatChoiceDecisionOutcome,
+      patch: Parameters<WindowRenderContext["updateCfg"]>[0],
+    ): void => {
+      reportChoiceDecision(outcome, chatId, restoration, windowId);
+      updateCfg(patch);
+    };
+    return {
+      keep: (): void => {
+        decide("choice-kept", { [CHAT_ID_CHOSEN_CFG_KEY]: false });
+      },
+      chooseAnother: (): void => {
+        decide("choice-withdrawn", WITHDRAWN_CHOICE_PATCH);
+      },
+    };
+  }, [chatId, open, restoration, updateCfg, windowId]);
 }
