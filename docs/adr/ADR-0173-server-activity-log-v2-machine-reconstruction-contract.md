@@ -869,6 +869,13 @@ request":
   structured payload, prose and an unknown path each become their marker, and only a value none of
   those checks flags survives as sent (an empty note, or a short code-like one), so the browser can
   never widen what the log admits.
+  Shared on-demand readiness work retains each waiting request's causality. The first caller owns
+  the probe's start and completion; every concurrent caller emits `gateway.readiness.automatic.joined`
+  with its request correlation and the probe correlation as its parent (omitted for an identical
+  correlation). Model and configuration-generation fields identify the shared work without making
+  another provider call. Both successful and failed probes remain traceable from create, send and
+  regeneration requests. Assistant-response links accept only validated correlation identities;
+  malformed response bodies and invalid identities produce no fabricated link.
   Known browser prerequisite failures use closed structured fields: a Git-sync validator chunk
   failure records `moduleLoadFailure: git-sync` before any Git request, with a fresh correlation ID
   shared by the UI error and diagnostic. Markdown layout evidence may carry a separately validated,

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "2270f646122186d9ffa80b2711ec742efcb0211db6c3b14ab8e2fe8e4162e1ab" as const;
+  "05038467135c8934865ebbd8543bba327392c4ae7a5936d154c1d7ec9de0169f" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -10035,6 +10035,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["gateway-readiness"],
     proofIds: ["gateway.readiness.automatic.completed.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.readiness.automatic.joined",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-readiness.logAutomaticReadinessJoined",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 240,
+      },
+      generation: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-readiness"],
+    proofIds: ["gateway.readiness.automatic.joined.line"],
     releaseImpact: "patch",
   },
   {
@@ -39101,10 +39138,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "gateway-readiness",
       requirementContract: "gateway-readiness",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end", "start"],
+      lifecycleTransitions: ["end", "start", "state"],
       lifecycleOperations: {
         start: ["gateway.readiness.automatic.started"],
-        state: [],
+        state: ["gateway.readiness.automatic.joined"],
         end: ["gateway.readiness.automatic.completed"],
         failure: [],
         loss: [],
@@ -39115,6 +39152,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "gateway.readiness.automatic.joined",
+          mode: "correlation",
+        },
+        {
           op: "gateway.readiness.automatic.started",
           mode: "correlation",
         },
@@ -39122,6 +39163,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lossSignals: [],
       resourceSignals: [
         "gateway.readiness.automatic.completed",
+        "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
       ],
       replayReferences: [],
@@ -39165,6 +39207,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.readiness.automatic.completed.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.readiness.automatic.joined",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "generation",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.readiness.automatic.joined.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -57498,6 +57570,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.instance.unavailable": "model-gateway",
     "gateway.log.sink-failed": "model-gateway",
     "gateway.readiness.automatic.completed": "model-gateway",
+    "gateway.readiness.automatic.joined": "model-gateway",
     "gateway.readiness.automatic.started": "model-gateway",
     "gateway.retry.budget-exhausted": "model-gateway",
     "gateway.retry.exhausted": "model-gateway",

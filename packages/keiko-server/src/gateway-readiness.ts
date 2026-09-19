@@ -130,6 +130,27 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
+const GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.automatic.joined",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logAutomaticReadinessJoined",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    generation: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.automatic.joined.line"],
+  releaseImpact: "patch",
+});
+
 type ProbeStatus = GatewayReadinessProbeResult["status"];
 
 export type { GatewayToolCallingProbeStatus } from "./gateway-tool-calling-probe.js";
@@ -322,6 +343,32 @@ function logAutomaticReadinessCompleted(
     report.modelId,
     report.overallStatus,
     report.probes.length,
+  );
+}
+
+function logAutomaticReadinessJoined(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+  probeCorrelationId: string,
+  generation: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_AUTOMATIC_JOINED_OPERATION,
+      {
+        correlationId,
+        ...(correlationId === probeCorrelationId
+          ? {}
+          : { parentCorrelationId: probeCorrelationId }),
+      },
+      {
+        modelId: boundedReadinessModelId(modelId),
+        generation,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
   );
 }
 
@@ -1495,7 +1542,10 @@ export async function runGatewayReadiness(
 // When a conversation guard finds no CURRENT-GENERATION observation for the model, verify on
 // demand with the minimal chat probe. The admission stays honest — the probe must actually
 // pass. Concurrent callers share one in-flight probe per model.
-const onDemandReadinessProbes = new Map<string, Promise<void>>();
+const onDemandReadinessProbes = new Map<
+  string,
+  { readonly promise: Promise<void>; readonly correlationId: string }
+>();
 
 // A failed probe must not pin the model for the whole configuration generation: a transient
 // gateway outage would brick every chat surface until a manual re-probe or restart (the
@@ -1536,13 +1586,21 @@ export async function ensureOnDemandConversationReadiness(
   const key = `${String(holder.generation())}:${modelId}`;
   const inFlight = onDemandReadinessProbes.get(key);
   if (inFlight !== undefined) {
-    await inFlight;
+    logAutomaticReadinessJoined(
+      deps,
+      modelId,
+      correlationId ?? newCorrelationId(),
+      inFlight.correlationId,
+      holder.generation(),
+    );
+    await inFlight.promise;
     return;
   }
-  const probe = runOnDemandReadinessProbe(deps, holder, modelId, correlationId).finally(() => {
+  const probeCorrelationId = correlationId ?? newCorrelationId();
+  const probe = runOnDemandReadinessProbe(deps, holder, modelId, probeCorrelationId).finally(() => {
     onDemandReadinessProbes.delete(key);
   });
-  onDemandReadinessProbes.set(key, probe);
+  onDemandReadinessProbes.set(key, { promise: probe, correlationId: probeCorrelationId });
   await probe;
 }
 

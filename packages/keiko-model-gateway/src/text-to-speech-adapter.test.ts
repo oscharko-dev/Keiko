@@ -361,6 +361,29 @@ describe("requestTextToSpeech", () => {
     expect(events).toEqual([]);
   });
 
+  it.each([
+    ["reserved MPEG version", [0xff, 0xeb, 0x90, 0x64]],
+    ["reserved MPEG layer", [0xff, 0xf9, 0x90, 0x64]],
+    ["reserved bitrate", [0xff, 0xfb, 0xf0, 0x64]],
+    ["reserved sample rate", [0xff, 0xfb, 0x9c, 0x64]],
+    ["incomplete frame", [0xff, 0xfb, 0x90]],
+  ])("does not infer MP3 from %s", async (_label, bytes) => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeech({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      responseFormat: "pcm",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => audioResponse(new Uint8Array(bytes), "audio/pcm")),
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.value.mimeType).toBe("audio/pcm");
+    expect(events).toEqual([]);
+  });
+
   it("returns empty-audio when a 2xx response carries no audio bytes", async () => {
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,

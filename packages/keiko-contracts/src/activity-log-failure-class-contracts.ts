@@ -3225,23 +3225,26 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: ["gateway.readiness.automatic.started"],
-      state: [],
+      state: ["gateway.readiness.automatic.joined"],
       end: ["gateway.readiness.automatic.completed"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
       "gateway.readiness.automatic.completed",
+      "gateway.readiness.automatic.joined",
       "gateway.readiness.automatic.started",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "gateway.readiness.automatic.completed",
+      "gateway.readiness.automatic.joined",
       "gateway.readiness.automatic.started",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "gateway.readiness.automatic.completed",
+      "gateway.readiness.automatic.joined",
       "gateway.readiness.automatic.started",
     ],
     requiredEvidenceClasses: [

@@ -7817,7 +7817,12 @@ describe("handleGatewaySetup", () => {
       expect(seenUrls).not.toContain("https://llm-gateway.example.com/v1/models");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"modelId": "customer-whisper"');
-      expect(saved).not.toContain('"modelId": "customer-whisper", "kind": "chat"');
+      const config = JSON.parse(saved) as {
+        providers: { modelId: string; capability?: { kind?: string } }[];
+      };
+      expect(
+        config.providers.find((provider) => provider.modelId === "customer-whisper"),
+      ).toHaveProperty("capability.kind", "voice");
     } finally {
       globalThis.fetch = originalFetch;
       deps.store.close();

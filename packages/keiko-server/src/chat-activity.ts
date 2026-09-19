@@ -6,7 +6,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { RouteResult } from "./routes.js";
-import { correlationIdOrUnknown } from "./correlation.js";
+import { correlationIdOrUnknown, isValidCorrelationId } from "./correlation.js";
 import { getServerLogger, type ServerLogSink } from "./observability/index.js";
 
 type ObservedModelKind = ModelKind | "unknown";
@@ -323,6 +323,7 @@ export function logChatResponseMessage(
   assistantMessageId: string,
   correlationId: string | undefined,
 ): void {
+  if (!isValidCorrelationId(assistantMessageId)) return;
   getServerLogger().info(
     activityLogEvent(
       CHAT_RESPONSE_MESSAGE_OPERATION,

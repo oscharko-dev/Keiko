@@ -10,6 +10,8 @@ import {
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_DIAGNOSTIC_READY_STATES,
   CLIENT_VOICE_DIALOGUE_STAGES,
+  CLIENT_VOICE_CAPTURE_REASONS,
+  CLIENT_VOICE_CAPTURE_ERRORS,
   LINUX_GATEWAY_DIAGNOSTIC_KINDS,
   isActivityLogReadinessSnapshot,
   isClientDiagnosticIngestRequest,
@@ -334,6 +336,27 @@ describe("clientErrorClass", () => {
 });
 
 describe("capture diagnostic vocabulary", () => {
+  it.each([
+    ["voiceCaptureReason", CLIENT_VOICE_CAPTURE_REASONS],
+    ["voiceCaptureError", CLIENT_VOICE_CAPTURE_ERRORS],
+  ] as const)("accepts exactly the closed %s vocabulary", (field, vocabulary) => {
+    const request = {
+      ...validRequest(),
+      kind: "voice-dialogue",
+      voiceDialogueStage: "capture-renewal-failed",
+    };
+    for (const value of vocabulary) {
+      expect(isClientDiagnosticIngestRequest({ ...request, [field]: value })).toBe(true);
+      expect(isClientDiagnosticIngestRequest({ ...request, [field]: `${value}-extra` })).toBe(
+        false,
+      );
+      expect(isClientDiagnosticIngestRequest({ ...request, [field]: ` ${value}` })).toBe(false);
+    }
+    for (const value of ["", null, 0, {}, []]) {
+      expect(isClientDiagnosticIngestRequest({ ...request, [field]: value })).toBe(false);
+    }
+  });
+
   it.each(["voiceCaptureReason", "voiceCaptureError"])("rejects hostile %s", (field) => {
     expect(
       isClientDiagnosticIngestRequest({

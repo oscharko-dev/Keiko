@@ -163,6 +163,40 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
     expect(line).not.toContain("private");
   });
 
+  it.each([8, 128])("links valid assistant identities at the %i-character boundary", (length) => {
+    const sink = captureServerLog();
+    const id = "a".repeat(length);
+    const response = { status: 200, body: { messages: [{ role: "assistant", id }] } };
+    expect(logChatResponse(response, "chat-request")).toBe(response);
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      correlationId: id,
+      parentCorrelationId: "chat-request",
+    });
+  });
+
+  it.each([
+    null,
+    {},
+    { messages: null },
+    { messages: {} },
+    { messages: [] },
+    { messages: [null, false, 42, "private text", {}] },
+    { messages: [{ role: "user", id: "valid-user-id" }] },
+    { messages: [{ role: "assistant" }] },
+    { messages: [{ role: "assistant", id: 42 }] },
+    { messages: [{ role: "assistant", id: "" }] },
+    { messages: [{ role: "assistant", id: "a".repeat(7) }] },
+    { messages: [{ role: "assistant", id: "a".repeat(129) }] },
+    { messages: [{ role: "assistant", id: "private unsafe identity" }] },
+  ])("omits malformed response identities without changing the response: %j", (body) => {
+    const sink = captureServerLog();
+    const response = { status: 200, body };
+    expect(() => logChatResponse(response, "chat-request")).not.toThrow();
+    expect(logChatResponse(response, "chat-request")).toBe(response);
+    expect(sink.events).toHaveLength(0);
+  });
+
   it("pr-description.chat.turn.admitted — persists the relationship id on admission", () => {
     const sink = captureServerLog();
 

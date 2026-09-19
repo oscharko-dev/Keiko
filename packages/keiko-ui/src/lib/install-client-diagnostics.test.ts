@@ -268,6 +268,22 @@ describe("fanOutClientDiagnostic delivery-loss accounting", () => {
     expect(lastPostedBody(fetchMock)).not.toHaveProperty("parentCorrelationId");
   });
 
+  it.each([
+    ["", false],
+    ["a".repeat(7), false],
+    ["a".repeat(8), true],
+    ["a".repeat(128), true],
+    ["a".repeat(129), false],
+  ])("bounds parent correlation %s", (parentCorrelationId, accepted) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("voice lifecycle", { parentCorrelationId });
+    const posted = lastPostedBody(fetchMock);
+    if (accepted) expect(posted).toHaveProperty("parentCorrelationId", parentCorrelationId);
+    else expect(posted).not.toHaveProperty("parentCorrelationId");
+  });
+
   it("puts the caller's closed kind on the wire", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2270f646122186d9ffa80b2711ec742efcb0211db6c3b14ab8e2fe8e4162e1ab"
+    "catalogDigest": "05038467135c8934865ebbd8543bba327392c4ae7a5936d154c1d7ec9de0169f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 428,
-    "proofCount": 436,
-    "resolvedProofCount": 436,
+    "operationCount": 429,
+    "proofCount": 437,
+    "resolvedProofCount": 437,
     "failureClassCount": 311,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -157,6 +157,7 @@
         "gateway.instance.unavailable",
         "gateway.log.sink-failed",
         "gateway.readiness.automatic.completed",
+        "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
         "gateway.retry.budget-exhausted",
         "gateway.retry.exhausted",
@@ -1390,6 +1391,9 @@
     ],
     "gateway.readiness.automatic.completed.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"
+    ],
+    "gateway.readiness.automatic.joined.line": [
+      "packages/keiko-server/src/gateway-readiness.on-demand.test.ts"
     ],
     "gateway.readiness.automatic.started.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"

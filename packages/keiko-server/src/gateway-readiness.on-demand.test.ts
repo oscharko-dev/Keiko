@@ -8,6 +8,10 @@ import {
 } from "./gateway-readiness.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
 import type { UiHandlerDeps } from "./deps.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // The cooldown maths compare an observation's checkedAt against the real clock inside the
 // production module, so these tests freeze Date.now to a fixed epoch instead of deriving
@@ -252,6 +256,51 @@ describe("ensureAnyConversationReadyChatModel budget", () => {
 });
 
 describe("on-demand readiness correlation", () => {
+  it.each(["ready", "failed"] as const)(
+    "links every concurrent waiter to the single shared %s probe",
+    async (status) => {
+      const { deps } = probeableDeps("invalid");
+      const events: ServerLogEvent[] = [];
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      const fetch = vi.fn(() => pending);
+      const shared = {
+        ...deps,
+        activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+        gatewayReadinessFetch: fetch,
+      };
+      const calls = ["create-request", "send-request", "regenerate-request"].map((correlationId) =>
+        ensureOnDemandConversationReadiness(shared, "chat-model", correlationId),
+      );
+      release(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: status === "ready" ? "OK" : "" } }] }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      );
+      await Promise.all(calls);
+      expect(fetch).toHaveBeenCalledOnce();
+      const joined = events.filter((event) => event.op === "gateway.readiness.automatic.joined");
+      expect(joined.map((event) => event.correlationId)).toEqual([
+        "send-request",
+        "regenerate-request",
+      ]);
+      for (const event of joined) {
+        expect(
+          expectActivityLogProof(
+            "gateway.readiness.automatic.joined.line",
+            formatActivityLogProofLine(event),
+          ),
+        ).toMatchObject({ parentCorrelationId: "create-request", modelId: "chat-model" });
+      }
+      expect(
+        events.find((event) => event.op === "gateway.readiness.automatic.completed"),
+      ).toMatchObject({ correlationId: "create-request", extra: { overallStatus: status } });
+    },
+  );
+
   it("keeps the request identity through a default-model walk", async () => {
     const { deps } = probeableDeps("invalid");
     const events: ServerLogEvent[] = [];
