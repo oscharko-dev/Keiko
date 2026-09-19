@@ -298,7 +298,12 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
 // Literal here, as the registry generator requires; the assignment in `clientBindingFields` fails
 // typecheck if the contracts leaf ever adds a surface or shape these do not list.
 const CLIENT_BINDING_ACTIVITY_LOG_SURFACES = ["chat-window"] as const;
-const CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES = ["uuid", "opaque", "redacted"] as const;
+const CLIENT_BINDING_ACTIVITY_LOG_REFERENCE_SHAPES = [
+  "uuid",
+  "opaque",
+  "redacted",
+  "fingerprint",
+] as const;
 
 const CLIENT_BINDING_FIELDS = {
   surface: {
@@ -408,6 +413,41 @@ const CLIENT_SESSION_REPAIR_RECOVERED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["client-session-repair"],
   proofIds: ["client.session-repair.recovered.line"],
+  releaseImpact: "patch",
+});
+
+// #3557 review: a stream's repair request was acknowledged. The endpoint acknowledges whether or
+// not it issued a cookie, so this is a state, not the recovery: the stream reports
+// `stream-repaired` once it opens again, and a streak that keeps failing after this line shows a
+// repair that did not restore it.
+const CLIENT_SESSION_REPAIR_ACKNOWLEDGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.session-repair.acknowledged",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSessionRepairAcknowledged",
+  fields: {
+    stream: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_SESSION_REPAIR_ACTIVITY_LOG_STREAMS,
+    },
+    repairCorrelationId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-session-repair"],
+  proofIds: ["client.session-repair.acknowledged.line"],
   releaseImpact: "patch",
 });
 
@@ -890,6 +930,26 @@ function logClientSessionRepairRecovered(
   );
 }
 
+function logClientSessionRepairAcknowledged(
+  request: ClientSessionRepairIngestRequest & {
+    readonly stream: NonNullable<ClientSessionRepairIngestRequest["stream"]>;
+  },
+  correlationId: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SESSION_REPAIR_ACKNOWLEDGED_OPERATION,
+      { correlationId },
+      {
+        ...sessionRepairCorrelation(request),
+        stream: request.stream,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
 // The class of the step that actually failed, as the browser classified it. A skipped replay
 // leaves the original refusal in place, an authority denial; any other outcome without a class is
 // unknown rather than guessed (#3557 review).
@@ -925,9 +985,15 @@ function logClientSessionRepair(
   ingestCorrelationId: string | undefined,
 ): void {
   const correlationId = reportCorrelationId(request.correlationId, ingestCorrelationId);
-  const { outcome } = request;
+  const { outcome, stream } = request;
   if (outcome === "replayed" || outcome === "stream-repaired") {
     logClientSessionRepairRecovered({ ...request, outcome }, correlationId);
+    return;
+  }
+  if (outcome === "repair-acknowledged") {
+    // The contract guard refuses an acknowledged repair that names no stream.
+    if (stream !== undefined)
+      logClientSessionRepairAcknowledged({ ...request, stream }, correlationId);
     return;
   }
   logClientSessionRepairFailed({ ...request, outcome }, correlationId);
@@ -952,6 +1018,10 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
   return undefined;
 }
 
+// A replayed read, a reopened stream and an acknowledged repair are routine evidence.
+const ROUTINE_SESSION_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairIngestRequest["outcome"]> =
+  new Set(["replayed", "stream-repaired", "repair-acknowledged"]);
+
 function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
   switch (classified.shape) {
     case "stage":
@@ -959,10 +1029,7 @@ function reportBudget(classified: ClassifiedClientReport): ClientReportBudget {
     case "binding":
       return classified.report.outcome === "resolved" ? "routine" : "failure";
     case "session-repair":
-      return classified.report.outcome === "replayed" ||
-        classified.report.outcome === "stream-repaired"
-        ? "routine"
-        : "failure";
+      return ROUTINE_SESSION_REPAIR_OUTCOMES.has(classified.report.outcome) ? "routine" : "failure";
     case "message":
       return "failure";
   }

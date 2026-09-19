@@ -502,8 +502,14 @@ export const CLIENT_BINDING_OUTCOMES = ["resolved", "target-missing"] as const;
 export type ClientBindingOutcome = (typeof CLIENT_BINDING_OUTCOMES)[number];
 
 // `redacted`: persisted as the redaction marker; `uuid`: a server-issued version-4 UUID;
-// `opaque`: any other opaque reference.
-export const CLIENT_BINDING_REFERENCE_SHAPES = ["uuid", "opaque", "redacted"] as const;
+// `opaque`: any other opaque reference; `fingerprint`: persisted as the redaction marker plus the
+// id's one-way fingerprint, through which the window found its chat again.
+export const CLIENT_BINDING_REFERENCE_SHAPES = [
+  "uuid",
+  "opaque",
+  "redacted",
+  "fingerprint",
+] as const;
 export type ClientBindingReferenceShape = (typeof CLIENT_BINDING_REFERENCE_SHAPES)[number];
 
 // A legacy binding (no persisted project) is decided by a scan over every project's list; the report
@@ -550,14 +556,19 @@ function isOneOf<T extends string>(value: unknown, values: readonly T[]): value 
   return typeof value === "string" && (values as readonly string[]).includes(value);
 }
 
-// Only a server-issued UUID can be flagged by the heuristic, and a redaction marker can never
-// have resolved to a live target; every other impossible combination is refused as well.
+// Only a server-issued UUID (raw or through its fingerprint) can be flagged by the heuristic, and a
+// redaction marker can never have resolved to a live target; every other impossible combination is
+// refused as well.
 function hasConsistentBindingReference(value: Record<string, unknown>): boolean {
   if (!isOneOf(value.outcome, CLIENT_BINDING_OUTCOMES)) return false;
   if (!isOneOf(value.referenceShape, CLIENT_BINDING_REFERENCE_SHAPES)) return false;
   if (typeof value.heuristicFlagged !== "boolean") return false;
   if (value.outcome === "resolved" && value.referenceShape === "redacted") return false;
-  return !value.heuristicFlagged || value.referenceShape === "uuid";
+  return (
+    !value.heuristicFlagged ||
+    value.referenceShape === "uuid" ||
+    value.referenceShape === "fingerprint"
+  );
 }
 
 function isDecidingLoadCount(value: unknown): boolean {
@@ -602,11 +613,14 @@ export function isClientBindingIngestRequest(value: unknown): value is ClientBin
 // links them under the denied request's correlation id, which the replay reuses, and names the
 // outcome, so a self-healed refusal and one that stayed denied are both reconstructable. A stream
 // (EventSource) repair reports under its failure streak's id instead, with the closed stream name:
-// an EventSource carries no request correlation the page can read.
+// an EventSource carries no request correlation the page can read. The local-session endpoint
+// acknowledges whether or not it issued a cookie, so a stream reports an acknowledged repair
+// (`repair-acknowledged`) at once and its recovery (`stream-repaired`) only when it opens again.
 
 export const CLIENT_SESSION_REPAIR_OUTCOMES = [
   "replayed",
   "stream-repaired",
+  "repair-acknowledged",
   "replay-failed",
   "replay-skipped",
   "repair-failed",
@@ -638,15 +652,20 @@ const CLIENT_SESSION_REPAIR_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "stream",
 ]);
 
-// Only a repair's own outcome can name a stream (a stream is never replayed), and a stream repair
-// always names one.
+// Only a repair's own outcome can name a stream (a stream is never replayed), and a stream-only
+// outcome always names one.
 const STREAM_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> = new Set([
   "stream-repaired",
+  "repair-acknowledged",
   "repair-failed",
+]);
+const STREAM_ONLY_REPAIR_OUTCOMES: ReadonlySet<ClientSessionRepairOutcome> = new Set([
+  "stream-repaired",
+  "repair-acknowledged",
 ]);
 
 function hasConsistentRepairStream(outcome: ClientSessionRepairOutcome, stream: unknown): boolean {
-  if (stream === undefined) return outcome !== "stream-repaired";
+  if (stream === undefined) return !STREAM_ONLY_REPAIR_OUTCOMES.has(outcome);
   return isOneOf(stream, CLIENT_SESSION_REPAIR_STREAMS) && STREAM_REPAIR_OUTCOMES.has(outcome);
 }
 

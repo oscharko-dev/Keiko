@@ -770,6 +770,39 @@ describe("POST /api/diagnostics/client", () => {
       expect(clientDiagnosticEvents(sink)).toEqual([]);
     });
 
+    // #3557 review: an acknowledged stream repair is a state on the streak's timeline, never the
+    // recovery, and a routine report.
+    it("logs an acknowledged stream repair as client.session-repair.acknowledged at info", async () => {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        kind: "session-repair",
+        outcome: "repair-acknowledged",
+        stream: "shared-event-source",
+        correlationId: "ui_stream-streak-0003",
+        repairCorrelationId: "ui_session-repair-0003",
+      });
+
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+      const events = sink.events.filter(
+        (event) => event.op === "client.session-repair.acknowledged",
+      );
+      expect(events).toEqual([
+        expect.objectContaining({
+          level: "info",
+          correlationId: "ui_stream-streak-0003",
+          extra: expect.objectContaining({
+            stream: "shared-event-source",
+            repairCorrelationId: "ui_session-repair-0003",
+          }) as unknown,
+        }),
+      ]);
+      expect(events[0]?.errorKind).toBeUndefined();
+      expect(
+        sink.events.some((event) => event.op.startsWith("client.session-repair.recovered")),
+      ).toBe(false);
+    });
+
     // #3557 review: a stream repair is routine evidence, like a replayed read.
     it("keeps a failure report admitted after a burst of stream repairs", async () => {
       const sink = captureServerLog();

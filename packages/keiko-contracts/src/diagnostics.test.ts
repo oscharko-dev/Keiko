@@ -449,6 +449,18 @@ describe("isClientBindingIngestRequest", () => {
     ).toBe(false);
   });
 
+  // #3557 review: a chat restored through its id's fingerprint resolved, and its id was flagged.
+  it("accepts a resolved, flagged binding restored through a fingerprint", () => {
+    expect(
+      isClientBindingIngestRequest({
+        ...bindingRequest(),
+        outcome: "resolved",
+        referenceShape: "fingerprint",
+        heuristicFlagged: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a heuristic flag only for a server-issued UUID", () => {
     expect(
       isClientBindingIngestRequest({
@@ -549,7 +561,8 @@ describe("isClientSessionRepairIngestRequest", () => {
 
   it("accepts every closed outcome, with and without the repair's correlation id", () => {
     for (const outcome of CLIENT_SESSION_REPAIR_OUTCOMES) {
-      const stream = outcome === "stream-repaired" ? { stream: "run-events" } : {};
+      const streamOnly = outcome === "stream-repaired" || outcome === "repair-acknowledged";
+      const stream = streamOnly ? { stream: "run-events" } : {};
       expect(isClientSessionRepairIngestRequest({ ...repairRequest(), outcome, ...stream })).toBe(
         true,
       );
@@ -576,6 +589,7 @@ describe("isClientSessionRepairIngestRequest", () => {
     ["an undeclared field", { path: "/api/files" }],
     ["an unknown stream", { stream: "chat-tokens" }],
     ["a stream repair that names no stream", { outcome: "stream-repaired" }],
+    ["an acknowledged repair that names no stream", { outcome: "repair-acknowledged" }],
     ["a stream on a replayed request", { stream: "run-events" }],
     ["a stream on a failed replay", { outcome: "replay-failed", stream: "run-events" }],
   ])("refuses %s", (_label, patch) => {

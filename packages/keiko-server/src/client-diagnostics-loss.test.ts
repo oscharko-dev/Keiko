@@ -268,6 +268,48 @@ describe("client diagnostics loss evidence", () => {
     });
   });
 
+  // #3557 review: an acknowledged stream repair persists as its own state line.
+  it("persists an acknowledged stream repair as client.session-repair.acknowledged", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "repair-acknowledged",
+      stream: "run-events",
+      correlationId: "ui_stream-streak-0005",
+      repairCorrelationId: "ui_session-repair-0005",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.acknowledged");
+    const record = expectActivityLogProof("client.session-repair.acknowledged.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_stream-streak-0005",
+      stream: "run-events",
+      repairCorrelationId: "ui_session-repair-0005",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: a chat restored through its id's fingerprint reports that shape.
+  it("persists a binding restored through a fingerprint as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-3",
+      outcome: "resolved",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    expect(expectActivityLogProof("client.binding.resolved.line", line ?? "")).toMatchObject({
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+    });
+  });
+
   it("persists a failed session repair as client.session-repair.failed", async () => {
     const body = JSON.stringify({
       kind: "session-repair",
