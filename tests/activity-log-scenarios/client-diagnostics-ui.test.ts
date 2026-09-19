@@ -51,11 +51,17 @@ import {
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../support/activity-log-proof.js";
-import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
+import {
+  expectActivityLogScenario,
+  type ScenarioIncidentRecorders,
+} from "../support/activity-log-scenario.js";
 
 // The ui scenarios write through the built package, so their incidents come from it too: one
 // Activity Log writer instance per process (activity-log-scenario.ts).
-const PACKAGED_INCIDENTS = { recordRegisteredFailureIncident, recordUserReportedIncident };
+const PACKAGED_INCIDENTS: ScenarioIncidentRecorders = {
+  recordRegisteredFailureIncident,
+  recordUserReportedIncident,
+};
 
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
