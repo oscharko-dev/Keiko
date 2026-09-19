@@ -663,7 +663,10 @@ describe("useDictation — capture bounds", () => {
     "settles renewal failure safely while finalizing=%s",
     async (finalizing) => {
       vi.useFakeTimers();
-      const renewal = Promise.withResolvers<number | undefined>();
+      let rejectRenewal: (reason: Error) => void = vi.fn();
+      const renewal = new Promise<number | undefined>((_resolve, reject) => {
+        rejectRenewal = reject;
+      });
       const base = makeStreamingRecorder();
       const failed = vi.fn();
       const cancel = vi.fn();
@@ -674,7 +677,7 @@ describe("useDictation — capture bounds", () => {
             start: async (options): Promise<DictationSession> => ({
               ...(await base.recorder.start(options)),
               cancel,
-              renewSilence: (): Promise<number | undefined> => renewal.promise,
+              renewSilence: (): Promise<number | undefined> => renewal,
             }),
           }),
           transcribe: async () => ({ transcript: "retained speech" }),
@@ -689,7 +692,7 @@ describe("useDictation — capture bounds", () => {
       });
       if (finalizing) act(() => result.current.stop());
       await act(async () => {
-        renewal.reject(new Error("recorder renewal failed"));
+        rejectRenewal(new Error("recorder renewal failed"));
         await vi.advanceTimersByTimeAsync(400);
       });
       if (finalizing) {
