@@ -618,12 +618,10 @@ export async function handleCreateChat(
     const title = requireString(body, "title");
     const selectedModel = requireChatModelId(deps, body, "selectedModel");
     const branchLabel = optionalString(body, "branchLabel");
-    const chat = deps.store.createChat(
-      projectPath,
-      title,
-      selectedModel,
-      branchLabel === undefined ? undefined : { branchLabel },
-    );
+    const chat = deps.store.createChat(projectPath, title, selectedModel, {
+      ...(branchLabel === undefined ? {} : { branchLabel }),
+      correlationId: ctx.correlationId,
+    });
     return { status: 201, body: { chat } };
   });
 }

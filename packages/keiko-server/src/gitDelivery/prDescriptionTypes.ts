@@ -106,6 +106,7 @@ export interface PrDescriptionApplicationService {
   holdDraftArtifact(
     artifact: PrDescriptionArtifact,
     now: number,
+    correlationId?: string,
   ): PrDescriptionDraftPreview | undefined;
   reviewDraft(proposalId: string): PrDescriptionDraftPreview | undefined;
   review(proposalId: string): PrDescriptionPreview | undefined;

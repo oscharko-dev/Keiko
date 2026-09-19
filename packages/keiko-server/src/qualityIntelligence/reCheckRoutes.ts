@@ -15,7 +15,6 @@
 //
 // Both routes go through the central CSRF guard in server.ts (all POSTs do).
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { isAbsolute } from "node:path";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
@@ -62,6 +61,7 @@ import { resolveQiTestDesignSelection } from "./modelSelection.js";
 import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
 import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 import { migrateReviewStateForRegeneration } from "./reviewStore.js";
+import { newReferenceId } from "../reference-id.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
@@ -1772,7 +1772,12 @@ export async function handleQiRegenerateStale(
   if (evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
-  const newRunId = `qi-run-${randomUUID()}`;
+  // A QI run window persists it as a reference (#3557 review).
+  const newRunId = newReferenceId({
+    kind: "qi-run",
+    prefix: "qi-run-",
+    correlationId: ctx.correlationId,
+  });
   const requestedAt = new Date().toISOString();
   const abortScope = requestAbortSignal(ctx);
   try {

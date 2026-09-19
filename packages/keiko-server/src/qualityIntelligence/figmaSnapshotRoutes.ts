@@ -947,7 +947,7 @@ function startCoalescedBuild(
     }
 
     // A Figma window persists it as a reference (#3557 review).
-    const runId = newReferenceId("fs-");
+    const runId = newReferenceId({ kind: "figma-snapshot-run", prefix: "fs-", correlationId });
     const stored = persistSnapshot(evidenceDir, runId, result, deps);
     if ("status" in stored) {
       appendSnapshotRouteFailureAudit(evidenceDir, result, body.isResnapshot, "FIGMA_INTERNAL");

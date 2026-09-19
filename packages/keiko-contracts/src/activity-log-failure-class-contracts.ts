@@ -6384,6 +6384,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "reference-id",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["reference-id.redrawn"],
+      end: [],
+      failure: ["reference-id.exhausted"],
+      loss: [],
+    },
+    requiredCausalOperations: ["reference-id.exhausted", "reference-id.redrawn"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["reference-id.exhausted", "reference-id.redrawn"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["reference-id.redrawn"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "repository-fingerprint-diff",
     requiredProductSurfaces: ["keiko-local-knowledge"],
     requiredLifecycleOperations: {

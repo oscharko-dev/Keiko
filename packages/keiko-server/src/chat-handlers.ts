@@ -2589,7 +2589,9 @@ export async function handleCreateDesktopChat(
       typeof body.title === "string" && body.title.trim().length > 0
         ? body.title.trim()
         : DEFAULT_CHAT_TITLE;
-    const chat = deps.store.createChat(project.path, title, modelId);
+    const chat = deps.store.createChat(project.path, title, modelId, {
+      correlationId: ctx.correlationId,
+    });
     return { status: 201, body: chatEnvelope(deps, project, chat) };
   } catch (error) {
     if (error instanceof UiStoreError) {

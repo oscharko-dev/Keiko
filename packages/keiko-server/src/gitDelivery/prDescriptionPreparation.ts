@@ -365,7 +365,10 @@ function finishPreparation({
   const region = preparedRegion(options, previous, artifact);
   const binding = bindingFor(context, previous, artifact, region);
   // A governed pull request window persists it as a reference (#3557 review).
-  const proposalId = newReferenceId();
+  const proposalId = newReferenceId({
+    kind: "pr-description-proposal",
+    correlationId: context.correlationId,
+  });
   const completeness = artifact.outcome === "complete" ? "complete" : artifact.outcome;
   const status = applicationStatus(
     binding,

@@ -139,6 +139,7 @@ class DescriptionService implements PrDescriptionApplicationService {
   public holdDraftArtifact(
     artifact: PreparedPrDescription["artifact"],
     now: number,
+    correlationId?: string,
   ): PrDescriptionDraftPreview | undefined {
     if (!Number.isSafeInteger(now) || now < this.lastNow || artifact.outcome === "failed") {
       return undefined;
@@ -147,7 +148,7 @@ class DescriptionService implements PrDescriptionApplicationService {
     const preview = {
       schemaVersion: "1" as const,
       // A governed pull request window persists it as a reference (#3557 review).
-      proposalId: newReferenceId(),
+      proposalId: newReferenceId({ kind: "pr-description-proposal", correlationId }),
       expiresAt: new Date(now + PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS).toISOString(),
       artifact: structuredClone(artifact),
     };
