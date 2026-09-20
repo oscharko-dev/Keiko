@@ -339,3 +339,26 @@ and real local Sonar passed. Combined incremental coverage is 86.7% across 2,830
 The initial native series exceeded the throughput p95 ceiling (125.884 ms); a complete repeat passed
 the unchanged budgets and freshness checks. The first result remains a failed qualification, not a
 passing sample set. No calibration, threshold or individual sample was changed.
+
+## Merge review: history scope and passive capability evidence
+
+Pending history selections now compare a synchronously captured scope before switching workspaces.
+A regression that delays passive effects reproduced the stale-selection switch before the fix.
+The initiating history GET correlation survives cancellation, supersession and completed-task
+clearing without a live snapshot. Closed reasons and opaque task/scope identities travel through
+the existing diagnostic transport; file-sink proofs distinguish repository and workspace mismatch
+without recording paths or conversation content.
+
+Equal issue numbers no longer identify equal issues across repositories. An ambiguous bare/qualified
+pair resolves the bare reference against the server-owned checkout identity before deduplication.
+The cross-repository regression failed before the fix. Empty terminal feeds have independent
+truncation and dropped-update proofs; removing the corresponding guard clauses fails both tests.
+Passive unavailable provider profiles now record their closed tool-capability reason and request
+correlation without starting a probe.
+
+Validation: the full UI coverage run passed 8,588 tests with one existing skip (93.11% lines).
+Server/contracts coverage passed 346 tests; the final focused history/transport run passed 77.
+Root/UI typecheck, strict lint, formatting, all seven Activity Log checks and the production editor
+bundle evidence gate passed. Real Sonar found one collection-membership idiom; its correction and
+the repeat analysis pass. Incremental coverage is 87.0% across 2,926 new lines/conditions. The fresh
+32-run native measurement and unchanged performance/freshness gate pass.
