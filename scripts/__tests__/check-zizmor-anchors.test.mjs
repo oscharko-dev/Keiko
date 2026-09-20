@@ -3,7 +3,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { anchorFailures, main, parseAnchors } from "../check-zizmor-anchors.mjs";
+import {
+  anchorFailures,
+  applyCorrections,
+  correctedAnchors,
+  main,
+  parseAnchors,
+} from "../check-zizmor-anchors.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -154,6 +160,79 @@ describe("zizmor ignore anchors", () => {
 
 // The verdict half of the gate: which exit code it reaches and what it says. A gate that analyses
 // correctly but reports silently is indistinguishable from a passing one.
+// An inserted line shifts every anchor below it, which is why this gate goes red on diffs that have
+// nothing to do with the accepted risk. Re-pinning is mechanical for a pure shift — but only if the
+// anchors are matched to their steps BY ORDER. "Nearest line" collides once several anchors shift
+// together: two anchors can resolve to the same step, which moves a reviewed acceptance onto a step
+// nobody reviewed. That is the failure this suite exists to prevent.
+describe("re-pinning shifted anchors", () => {
+  // Two anchors, two cache steps, arranged so that nearest-line gives BOTH anchors the same step.
+  const SHIFTED_WORKFLOW = [
+    "name: W", // 1
+    "jobs:", // 2
+    "  a:", // 3
+    "    steps:", // 4
+    "      - uses: actions/cache@abc # first", // 5
+    "      - run: one", // 6
+    "      - run: two", // 7
+    "      - run: three", // 8
+    "  b:", // 9
+    "    steps:", // 10
+    "      - run: four", // 11
+    "      - run: five", // 12
+    "      - run: six", // 13
+    "      - run: seven", // 14
+    "      - uses: actions/cache@def # second", // 15
+  ].join("\n");
+
+  const SHIFTED_CONFIG = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:10
+      - w.yml:20
+`;
+
+  const anchorsOf = (config) => parseAnchors(config);
+  const readShifted = () => SHIFTED_WORKFLOW;
+
+  it("pairs anchors with steps by order, not by nearest line", () => {
+    const corrections = correctedAnchors(anchorsOf(SHIFTED_CONFIG), readShifted);
+    expect([...corrections.values()]).toEqual([5, 15]);
+  });
+
+  it("writes each anchor back to its own step", () => {
+    const anchors = anchorsOf(SHIFTED_CONFIG);
+    const rewritten = applyCorrections(SHIFTED_CONFIG, correctedAnchors(anchors, readShifted));
+    expect(rewritten).toContain("- w.yml:5");
+    expect(rewritten).toContain("- w.yml:15");
+    expect(rewritten).not.toContain("- w.yml:10");
+    expect(rewritten).not.toContain("- w.yml:20");
+  });
+
+  it("refuses to re-pin when a step was added or removed, which is not a shift", () => {
+    const oneStepOnly = [
+      "name: W",
+      "jobs:",
+      "  a:",
+      "    steps:",
+      "      - uses: actions/cache@abc",
+    ].join("\n");
+    const corrections = correctedAnchors(anchorsOf(SHIFTED_CONFIG), () => oneStepOnly);
+    expect(corrections.size).toBe(0);
+  });
+
+  it("leaves an already-correct anchor untouched", () => {
+    const correct = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:5
+      - w.yml:15
+`;
+    expect(correctedAnchors(anchorsOf(correct), readShifted).size).toBe(0);
+    expect(applyCorrections(correct, new Map())).toBe(correct);
+  });
+});
+
 describe("main", () => {
   let out;
   let err;
@@ -187,6 +266,32 @@ describe("main", () => {
     expect(process.exitCode).toBeUndefined();
     expect(out.join("\n")).toContain("zizmor-anchors: PASS");
     expect(err).toEqual([]);
+  });
+
+  it("re-pins shifted anchors through --fix and writes them back once", () => {
+    capture();
+    let written;
+    main({
+      fix: true,
+      readConfig: () => CONFIG,
+      readWorkflow: read,
+      writeConfig: (text) => {
+        written = text;
+      },
+    });
+
+    // The repository's own anchors are correct, so --fix must write nothing and stay green.
+    expect(written).toBeUndefined();
+    expect(process.exitCode).toBeUndefined();
+    expect(out.join("\n")).toContain("nothing to re-pin");
+  });
+
+  it("points at --fix when anchors only drifted, so the repair is one command", () => {
+    capture();
+    main({ readConfig: () => CONFIG, readWorkflow: () => "      run: echo not-a-cache" });
+
+    expect(process.exitCode).toBe(1);
+    expect(err.join("\n")).toContain("--fix");
   });
 
   it("fails closed when the configuration is missing rather than reporting nothing to check", () => {
