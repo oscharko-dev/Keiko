@@ -318,3 +318,24 @@ ADR index and real local Sonar passed. Incremental coverage is 86.2% across 2,71
 The first 32-run native measurement exceeded the cold-start p95 budget while the local analyzer
 was running. With the analyzer and test gates finished, a complete fresh 32-run series passed the
 same budget and source-freshness checks. No samples were removed and no budget/calibration changed.
+
+## Merge review: durable native history and complete initialization
+
+Native V2 history now persists visible conversation messages before the display projection applies
+its TTL, turn and byte limits. Streaming updates are idempotent and append-only; large messages
+are chunked in the existing local conversation store. A composed native HTTP-history proof and a
+real SQLite test retain all 40 turns after display expiry. Failed captures retain classified,
+correlated evidence and are retried on the next history read. Hidden context, tool arguments and
+reasoning are not conversation messages.
+
+Task initialization now atomically includes project/task creation, run binding and the initial
+intent. SQLite abort triggers prove rollback at both later writes and on continuation; removing the
+outer transaction makes all three tests fail. Native question transitions now emit correlated state
+and call-digest evidence. Readiness records the text planning mode and materialized config digest.
+
+Validation: 3,370 affected tests passed, with eight existing skips. Typecheck, strict scoped lint,
+formatting, all seven Activity Log checks (including architecture and negative fixtures), ADR index
+and real local Sonar passed. Combined incremental coverage is 86.7% across 2,830 new lines/conditions.
+The initial native series exceeded the throughput p95 ceiling (125.884 ms); a complete repeat passed
+the unchanged budgets and freshness checks. The first result remains a failed qualification, not a
+passing sample set. No calibration, threshold or individual sample was changed.
