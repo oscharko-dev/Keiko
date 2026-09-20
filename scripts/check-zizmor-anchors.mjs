@@ -263,17 +263,27 @@ function sameJobMoves(group, found, previous, source) {
 
 /** Rewrite the config with each corrected anchor moved to its resolved line. */
 export function applyCorrections(config, corrections) {
-  const byOld = new Map();
+  // Keyed by RULE as well as file:line. Two rules may legitimately document the same step, and a
+  // key without the rule would let one rule's correction rewrite the other rule's anchor — moving
+  // a risk acceptance that was never re-resolved. The rule is tracked while scanning, exactly as
+  // `parseAnchors` does when reading them.
+  const byRuleAndOld = new Map();
   for (const [anchor, line] of corrections) {
-    const key = `${anchor.file}:${String(anchor.line)}`;
-    byOld.set(key, `${anchor.file}:${String(line)}`);
+    byRuleAndOld.set(
+      `${anchor.rule}\u0000${anchor.file}:${String(anchor.line)}`,
+      `${anchor.file}:${String(line)}`,
+    );
   }
-  if (byOld.size === 0) return config;
+  if (byRuleAndOld.size === 0) return config;
+  let rule;
   return config
     .split(/\r?\n/u)
     .map((raw) => {
+      const ruleMatch = /^ {2}([a-z0-9-]+):\s*$/u.exec(raw);
+      if (ruleMatch?.[1] !== undefined) rule = ruleMatch[1];
       const match = /^(\s*-\s+)([\w.-]+\.ya?ml:\d+)(\s*)$/u.exec(raw);
-      const replacement = match === null ? undefined : byOld.get(match[2]);
+      if (match === null || rule === undefined) return raw;
+      const replacement = byRuleAndOld.get(`${rule}\u0000${match[2]}`);
       return replacement === undefined ? raw : `${match[1]}${replacement}${match[3]}`;
     })
     .join("\n");

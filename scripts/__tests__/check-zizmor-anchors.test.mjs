@@ -468,6 +468,25 @@ describe("re-pinning shifted anchors", () => {
     expect(corrections.size).toBe(0);
   });
 
+  it("rewrites only the rule whose anchor moved when two rules share a line", () => {
+    // Two rules may legitimately document the same step. A correction resolved for one of them
+    // must not rewrite the other's anchor, which was never re-resolved.
+    const config = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:10
+  dangerous-triggers:
+    ignore:
+      - w.yml:10
+`;
+    const anchors = parseAnchors(config);
+    const cacheAnchor = anchors.find((anchor) => anchor.rule === "cache-poisoning");
+    const rewritten = applyCorrections(config, new Map([[cacheAnchor, 5]]));
+
+    expect(rewritten).toContain("  cache-poisoning:\n    ignore:\n      - w.yml:5");
+    expect(rewritten).toContain("  dangerous-triggers:\n    ignore:\n      - w.yml:10");
+  });
+
   it("leaves an already-correct anchor untouched", () => {
     const correct = `rules:
   cache-poisoning:
