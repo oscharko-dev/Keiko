@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -38,7 +39,7 @@ afterEach(() => {
 });
 
 function tempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-deps-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-deps-")));
   roots.push(root);
   return root;
 }
@@ -879,19 +880,23 @@ describe("runDependencyBootstrap — registry egress", () => {
     expect(existsSync(join(root, "node_modules", ".keiko-install-complete"))).toBe(false);
   }
 
-  it.each(["stat", "read-directory", "identity", "timestamp", "limit"])(
+  it.each(["stat", "marker-stat", "read-directory", "identity", "timestamp", "limit"])(
     "refuses inconclusive %s inspection without reinstalling",
     async (fault) => {
       const root = tempRoot();
       await completedFixture(root);
       const onFailure = vi.fn();
-      const target = join(root, "node_modules", "left-pad", "index.js");
+      const target =
+        fault === "marker-stat"
+          ? join(root, "node_modules", ".package-lock.json")
+          : join(root, "node_modules", "left-pad", "index.js");
       const fs = {
         ...nodeWorkspaceFs,
         stat: (path: string): ReturnType<typeof nodeWorkspaceFs.stat> => {
           const value = nodeWorkspaceFs.stat(path);
           if (path !== target) return value;
-          if (fault === "stat") throw Object.assign(new Error("PRIVATE_ENTRY"), { code: "EACCES" });
+          if (fault === "stat" || fault === "marker-stat")
+            throw Object.assign(new Error("PRIVATE_ENTRY"), { code: "EACCES" });
           if (fault === "identity") {
             const { fileIdentity: _identity, ...rest } = value;
             return rest;
@@ -952,6 +957,63 @@ describe("runDependencyBootstrap — registry egress", () => {
     },
   );
 
+  it.each(["directory", "file"])("rejects a post-install outside %s link", async (kind) => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    mkdirSync(join(root, "node_modules", "left-pad"));
+    writeFileSync(join(outside, "index.js"), "PRIVATE_EXTERNAL_CODE");
+    const rec = recordingSpawn();
+    const onFailure = vi.fn();
+    const result = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, (...args) => {
+        const pkg = join(root, "node_modules", "left-pad");
+        if (kind === "directory") rmSync(pkg, { recursive: true });
+        symlinkSync(
+          kind === "directory" ? outside : join(outside, "index.js"),
+          kind === "directory" ? pkg : join(pkg, "index.js"),
+          kind === "directory" ? "junction" : "file",
+        );
+        scriptChildClose(rec.child, { exitCode: 0 });
+        return rec.fn(...args);
+      }),
+      onFailure,
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(result.summary).toMatchObject({ state: "failed", completionRecorded: false });
+    expect(onFailure).toHaveBeenCalledWith({
+      stage: "post-proxy",
+      error: expect.objectContaining({ code: "DEPENDENCY_TREE_DIRECTORY_UNSAFE" }) as unknown,
+    });
+  });
+
+  it("fingerprints contained workspace and executable links, including their target changes", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    const member = join(root, "packages", "member");
+    mkdirSync(member, { recursive: true });
+    writeFileSync(join(member, "index.js"), "original");
+    symlinkSync(member, join(root, "node_modules", "left-pad"), "junction");
+    mkdirSync(join(root, "node_modules", ".bin"));
+    symlinkSync(join(member, "index.js"), join(root, "node_modules", ".bin", "tool"), "file");
+    symlinkSync(join(root, "node_modules"), join(member, "cycle"), "junction");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const result = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(result.summary.completionRecorded).toBe(true);
+    expect(planFor(root).kind).toBe("current");
+    const target = join(member, "index.js");
+    const prior = statSync(target);
+    writeFileSync(target, "modified");
+    utimesSync(target, prior.atime, prior.mtime);
+    expect(planFor(root).kind).toBe("install");
+  });
+
   it("rechecks a previously current plan before consumption and records why it reinstalls", async () => {
     const root = tempRoot();
     await completedFixture(root);
@@ -972,7 +1034,7 @@ describe("runDependencyBootstrap — registry egress", () => {
     expect(planFor(root).kind).toBe("install");
   });
 
-  it("cannot write or unlink a host completion marker after a directory symlink swap", async () => {
+  it("prevents an actual outside write after a pre-spawn directory symlink swap", async () => {
     const root = tempRoot();
     const outside = tempRoot();
     const plan = installPlan(root);
@@ -984,7 +1046,10 @@ describe("runDependencyBootstrap — registry egress", () => {
     scriptChildClose(rec.child, { exitCode: 0 });
     let swapped = false;
     const outcome = await runDependencyBootstrap(plan, {
-      ...bootstrapDepsFor(root, rec.fn),
+      ...bootstrapDepsFor(root, (...args) => {
+        writeFileSync(join(root, "node_modules", ".keiko-install-complete"), "escaped write");
+        return rec.fn(...args);
+      }),
       fs: {
         ...nodeWorkspaceFs,
         stat: (path) => {
@@ -1000,6 +1065,7 @@ describe("runDependencyBootstrap — registry egress", () => {
       startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
     });
     expect(swapped).toBe(true);
+    expect(rec.calls()).toHaveLength(0);
     expect(readFileSync(external, "utf8")).toBe("untouched");
     expect(outcome.summary.state).toBe("failed");
     expect(outcome.summary.completionRecorded).toBe(false);

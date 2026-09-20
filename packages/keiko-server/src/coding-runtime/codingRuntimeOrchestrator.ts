@@ -2847,6 +2847,7 @@ export class CodingRuntimeOrchestrator {
     const snapshot = selection.snapshot;
     this.deps.snapshots.create(snapshot);
     this.activateStartedRun(runId, launch, selection);
+    this.recordIssueAdmission(request, runId, issue.attachment);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
     if (!this.beginHistory(request, active, runId))
@@ -3011,6 +3012,29 @@ export class CodingRuntimeOrchestrator {
     });
   }
 
+  private recordIssueAdmission(
+    request: CodingWorkbenchRuntimeStartRequest,
+    runId: string,
+    attachment: CodingRuntimeIssueAttachment | undefined,
+  ): void {
+    if (attachment !== undefined) {
+      this.deps.activityLog?.write(
+        activityLogEvent(
+          CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION,
+          { correlationId: runId },
+          {
+            runId,
+            issueNumber: attachment.issueNumber,
+            itemCount: attachment.itemCount,
+            linkedIssueCount: attachment.linkedIssueCount,
+            byteCount: attachment.byteCount,
+            issuePurpose: issuePurposeOf(request),
+          },
+        ),
+      );
+    }
+  }
+
   private async runInitialTurn(
     request: CodingWorkbenchRuntimeStartRequest,
     active: ActiveWorkspaceView,
@@ -3048,22 +3072,6 @@ export class CodingRuntimeOrchestrator {
       taskIntent: request.taskIntent,
       ...(initialContext === undefined ? {} : { initialContext }),
     });
-    if (initialTurn === "accepted" && attachment !== undefined) {
-      this.deps.activityLog?.write(
-        activityLogEvent(
-          CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION,
-          { correlationId: runId },
-          {
-            runId,
-            issueNumber: attachment.issueNumber,
-            itemCount: attachment.itemCount,
-            linkedIssueCount: attachment.linkedIssueCount,
-            byteCount: attachment.byteCount,
-            issuePurpose: issuePurposeOf(request),
-          },
-        ),
-      );
-    }
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
     // revision in the SAME call that commits its production-guard reservation
     // (codingRuntimeOperationCoordinator.ts's submitFollowUp/applyAnswer via advanceRevision) --

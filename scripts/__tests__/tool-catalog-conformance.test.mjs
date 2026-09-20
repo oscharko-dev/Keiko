@@ -346,6 +346,11 @@ describe("compiler measurements reuse the existing sample and percentile convent
       recalibrate: false,
       rebindCaseIdentity: true,
     });
+    expect(regenerationOptions(["--extend-managed-runtime"])).toEqual({
+      recalibrate: false,
+      rebindCaseIdentity: false,
+      extendManagedRuntime: true,
+    });
     expect(() => regenerationOptions(["--unknown", "--another"])).toThrow(
       "unknown argument: --unknown, --another",
     );

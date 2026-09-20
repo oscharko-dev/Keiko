@@ -4144,6 +4144,50 @@ describe("issue-bound runs (#3385)", () => {
     expect(JSON.stringify(captured.records)).not.toContain(ISSUE_REF);
   });
 
+  it.each(["throw", "refuse"])(
+    "records durable issue admission before a runtime can %s",
+    async (failure) => {
+      const captured = captureActivityLog();
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        captured.activityLog,
+        issueIntake(),
+        undefined,
+        undefined,
+        () => "early-context-run",
+      );
+      if (failure === "throw") f.manager.start.mockRejectedValueOnce(new Error("PRIVATE_RUNTIME"));
+      else
+        f.manager.start.mockResolvedValueOnce({
+          ok: false,
+          retryable: false,
+          failureCode: "runtime-state-unavailable",
+        });
+      await f.orchestrator.start({ ...start, issueRef: ISSUE_REF, issuePurpose: "context" });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(f.rows.get("early-context-run")?.issueContextBinding).toEqual(ISSUE_BINDING);
+      const attached = captured.records.filter(
+        (event) => event.op === "coding-runtime.run.issue-context-attached",
+      );
+      expect(attached).toHaveLength(1);
+      if (attached[0] === undefined) throw new Error("Missing admitted context evidence");
+      const line = formatActivityLogProofLine(attached[0]);
+      expect(
+        expectActivityLogProof("coding-runtime.run.issue-context-attached.emitted-line", line),
+      ).toMatchObject({
+        correlationId: "early-context-run",
+        runId: "early-context-run",
+        issuePurpose: "context",
+        issueNumber: 3385,
+      });
+      for (const body of [ISSUE_REF, ISSUE_TITLE, ISSUE_BODY, "PRIVATE_RUNTIME"])
+        expect(line).not.toContain(body);
+    },
+  );
+
   it("records context-only issue purpose on the emitted attachment line", async () => {
     const captured = captureActivityLog();
     const f = fixture(

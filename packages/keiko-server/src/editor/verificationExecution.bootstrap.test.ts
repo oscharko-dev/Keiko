@@ -21,11 +21,14 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 
 const proxyStart = vi.hoisted(() => vi.fn<() => Promise<RegistryEgressProxy>>());
+const spawnBoundary = vi.hoisted(() => ({ run: undefined as RunCommandDeps["spawn"] | undefined }));
 const executableBoundary = vi.hoisted(() => ({ error: undefined as Error | undefined }));
 vi.mock("../../../keiko-tools/dist/exec.js", async (original) => {
   const actual = await original<typeof import("../../../keiko-tools/dist/exec.js")>();
   return {
     ...actual,
+    nodeSpawnFn: (...args: Parameters<RunCommandDeps["spawn"]>): ChildProcess =>
+      (spawnBoundary.run ?? actual.nodeSpawnFn)(...args),
     runCommand: (input: RunCommandInput, deps: RunCommandDeps): Promise<CommandResult> =>
       actual.runCommand(
         input,
@@ -67,6 +70,7 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => undefined);
   proxyStart.mockReset();
   executableBoundary.error = undefined;
+  spawnBoundary.run = undefined;
 });
 afterEach(() => {
   store.close();
@@ -101,7 +105,7 @@ function proxy(): RegistryEgressProxy {
     close: () => Promise.resolve(),
   };
 }
-async function completedInstall(): Promise<void> {
+function installedTree(): void {
   mkdirSync(join(root, "node_modules", "typescript"), { recursive: true });
   writeFileSync(join(root, "node_modules", "typescript", "index.js"), "original");
   writeFileSync(
@@ -117,6 +121,9 @@ async function completedInstall(): Promise<void> {
       },
     }),
   );
+}
+async function completedInstall(): Promise<void> {
+  installedTree();
   const spawn = (): ChildProcess => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
@@ -234,6 +241,58 @@ describe("composed verification dependency bootstrap", () => {
     });
     expect(raw).not.toContain("PRIVATE_");
     expect(raw).not.toContain(root);
+  });
+
+  it("persists a correlated redacted post-install inspection failure through the real composition", async () => {
+    proxyStart.mockResolvedValue(proxy());
+    const originalStat = nodeWorkspaceFs.stat;
+    const cause = Object.assign(failure(), { code: "EACCES" });
+    let exited = false;
+    vi.spyOn(nodeWorkspaceFs, "stat").mockImplementation((path) => {
+      if (exited && path === join(root, "node_modules", "typescript", "index.js")) throw cause;
+      return originalStat(path);
+    });
+    spawnBoundary.run = (): ChildProcess => {
+      installedTree();
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: (): boolean => true,
+      });
+      queueMicrotask(() => {
+        exited = true;
+        child.emit("close", 0, null);
+      });
+      return child as unknown as ChildProcess;
+    };
+    const result = await manager().runToReport(
+      { projectId: root, kinds: ["typecheck"], correlationId: "bootstrap-post-proxy-request" },
+      new AbortController().signal,
+    );
+    expect(result.report.overallStatus).toBe("failed");
+    expect(exited).toBe(true);
+    const raw = readPersistedActivityLog(stateDir);
+    const line = persistedActivityLogLines(raw, "server.diagnostic.failure").at(-1);
+    expect(
+      expectActivityLogProof("server.diagnostic.failure.activity-log-line", line ?? ""),
+    ).toMatchObject({
+      correlationId: "bootstrap-post-proxy-request",
+      errorKind: "internal",
+      source: "verification.dependency-bootstrap.post-proxy",
+      diagnosticOperation: "verification.dependency-bootstrap",
+      code: "DEPENDENCY_TREE_UNREADABLE",
+      causeChain: ["TypeError", "RangeError"],
+    });
+    expect(raw).not.toContain("PRIVATE_");
+    expect(raw).not.toContain(root);
+    const dependency = persistedActivityLogLines(raw, "editor.verification.dependencies").at(-1);
+    expect(
+      expectActivityLogProof("editor.verification.dependencies.emitted-line", dependency ?? ""),
+    ).toMatchObject({
+      correlationId: "bootstrap-post-proxy-request",
+      state: "failed",
+      completionRecorded: false,
+    });
   });
 
   it("holds the workspace until verification settles and then admits the queued run", async () => {

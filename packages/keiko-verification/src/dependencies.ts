@@ -36,7 +36,12 @@ import {
   type RunCommandDeps,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
-import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import {
+  isWithinWorkspace,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+  type WorkspaceStat,
+} from "@oscharko-dev/keiko-workspace";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   DEPENDENCY_INSTALL_LIMITS,
@@ -401,6 +406,27 @@ class InstallInspectionError extends Error {
   }
 }
 
+function optionalInspectionStat(fs: WorkspaceFs, path: string): WorkspaceStat | undefined {
+  try {
+    return fs.stat(path);
+  } catch (cause) {
+    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return undefined;
+    throw new InstallInspectionError("DEPENDENCY_TREE_UNREADABLE", cause);
+  }
+}
+
+function inspectionPath(root: string, fs: WorkspaceFs, path: string): string {
+  let canonical: string;
+  try {
+    canonical = fs.realPath(path);
+  } catch (cause) {
+    throw new InstallInspectionError("DEPENDENCY_TREE_UNREADABLE", cause);
+  }
+  if (!isWithinWorkspace(root, canonical))
+    throw new InstallInspectionError("DEPENDENCY_TREE_DIRECTORY_UNSAFE");
+  return canonical;
+}
+
 function inspectionStat(fs: WorkspaceFs, path: string): WorkspaceStat {
   try {
     return fs.stat(path);
@@ -412,11 +438,15 @@ function inspectionStat(fs: WorkspaceFs, path: string): WorkspaceStat {
 // A receipt is usable only when every contained entry has current identity evidence.
 function installationFingerprint(root: string, fs: WorkspaceFs): string {
   const hash = createHash("sha256");
-  const pending = [join(root, "node_modules")];
+  const canonicalRoot = fs.realPath(root);
+  const pending = [join(canonicalRoot, "node_modules")];
+  const visited = new Set<string>();
   let entries = 0;
   while (pending.length > 0) {
     const directory = pending.pop();
     if (directory === undefined) break;
+    if (visited.has(directory)) continue;
+    visited.add(directory);
     const stat = inspectionStat(fs, directory);
     if (!stat.isDirectory || stat.isSymbolicLink)
       throw new InstallInspectionError("DEPENDENCY_TREE_DIRECTORY_UNSAFE");
@@ -424,7 +454,7 @@ function installationFingerprint(root: string, fs: WorkspaceFs): string {
     const children = inspectionChildren(fs, directory, MAX_INSTALL_ENTRIES - entries);
     entries += children.length;
     if (entries >= MAX_INSTALL_ENTRIES) throw new InstallInspectionError("DEPENDENCY_TREE_LIMIT");
-    fingerprintChildren(directory, children, fs, hash, pending);
+    fingerprintChildren(canonicalRoot, directory, children, fs, hash, pending);
   }
   fingerprintInputs(root, fs, hash);
   return hash.digest("hex");
@@ -443,6 +473,7 @@ function inspectionChildren(
 }
 
 function fingerprintChildren(
+  root: string,
   directory: string,
   children: ReturnType<WorkspaceFs["readDir"]>,
   fs: WorkspaceFs,
@@ -453,7 +484,10 @@ function fingerprintChildren(
     const path = join(directory, child.name);
     const stat = inspectionStat(fs, path);
     fingerprintStat(hash, path, stat);
-    if (stat.isDirectory && !stat.isSymbolicLink) pending.push(path);
+    const target = inspectionPath(root, fs, path);
+    const targetStat = stat.isSymbolicLink ? inspectionStat(fs, target) : stat;
+    if (stat.isSymbolicLink) fingerprintStat(hash, target, targetStat);
+    if (targetStat.isDirectory) pending.push(target);
   }
 }
 
@@ -484,10 +518,10 @@ function fingerprintStat(
 // npm may write its hidden lockfile before an install fails, leaving packages only partly unpacked.
 // Trust its currency heuristic only after this bootstrap has observed a successful, confined install.
 function installedTreeCurrent(root: string, fs: WorkspaceFs): boolean {
-  const installed = statOrUndefined(fs, join(root, INSTALLED_TREE_MARKER))?.mtimeMs;
+  const installed = optionalInspectionStat(fs, join(root, INSTALLED_TREE_MARKER))?.mtimeMs;
   if (installed === undefined || !completedInstallCurrent(root, fs)) return false;
   const inputs = [MANIFEST, ...LOCKFILES]
-    .map((name) => statOrUndefined(fs, join(root, name))?.mtimeMs)
+    .map((name) => optionalInspectionStat(fs, join(root, name))?.mtimeMs)
     .filter((mtime): mtime is number => mtime !== undefined);
   return inputs.every((mtime) => mtime <= installed);
 }
@@ -503,9 +537,9 @@ function recordCompletedInstall(root: string, fs: WorkspaceFs): void {
 }
 
 function assertInstallDirectory(root: string, fs: WorkspaceFs): void {
-  const stat = statOrUndefined(fs, join(root, "node_modules"));
+  const stat = optionalInspectionStat(fs, join(root, "node_modules"));
   if (stat !== undefined && (!stat.isDirectory || stat.isSymbolicLink))
-    throw new TypeError("dependency install directory unavailable");
+    throw new InstallInspectionError("DEPENDENCY_TREE_DIRECTORY_UNSAFE");
 }
 
 export function planDependencyBootstrap(
@@ -613,7 +647,13 @@ function installDeps(deps: DependencyBootstrapDeps, egressProxyUrl: string): Run
       },
     },
     commandRules: DEPENDENCY_INSTALL_COMMAND_RULES,
-    spawn: deps.spawn,
+    spawn: (command, args, options): ReturnType<SpawnFn> => {
+      // Recheck after executable/cwd resolution, immediately before handing paths to npm.
+      assertInstallDirectory(deps.workspace.root, deps.fs);
+      if (optionalInspectionStat(deps.fs, join(deps.workspace.root, "node_modules")) !== undefined)
+        installationFingerprint(deps.workspace.root, deps.fs);
+      return deps.spawn(command, args, options);
+    },
     processEnv: deps.processEnv,
     now: deps.now,
     fs: deps.fs,
