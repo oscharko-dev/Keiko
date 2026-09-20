@@ -175,12 +175,59 @@ jobs:
             } >> "${GITHUB_OUTPUT}"
           fi
 
+  # Reuse proven evidence; never re-measure identical bytes.
+  #
+  # `dev` is protected with linear history and signed squash merges, and branch protection only
+  # integrates a head that is up to date with its base. The squash commit that lands therefore
+  # carries a new commit sha but the IDENTICAL tree sha as the pull-request head the required
+  # matrix already measured — and a tree sha is the recursive content hash of the entire worktree,
+  # workflow files included. Re-running the matrix on that tree cannot discover anything the
+  # pull-request run did not already see. It can only re-roll flaky infrastructure and paint an
+  # already-verified tree red: 15 of the last 100 `dev` runs failed exactly that way, each after
+  # ~48 minutes, while 100 of 100 carried a tree a green pull-request run had already proven.
+  #
+  # Every uncertainty resolves to `false` and runs the full matrix — see
+  # scripts/resolve-verified-tree-evidence.mjs for the closed list, and ADR-0178 for the decision.
+  verified-tree:
+    name: Verified tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      tree-verified: ${{ steps.resolve.outputs.tree-verified }}
+      evidence-run-id: ${{ steps.resolve.outputs.evidence-run-id }}
+      evidence-head-sha: ${{ steps.resolve.outputs.evidence-head-sha }}
+      evidence-tree-sha: ${{ steps.resolve.outputs.evidence-tree-sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - id: resolve
+        env:
+          KEIKO_EVENT_NAME: ${{ github.event_name }}
+          KEIKO_HEAD_SHA: ${{ github.sha }}
+          KEIKO_REPOSITORY: ${{ github.repository }}
+          KEIKO_TOKEN: ${{ github.token }}
+          KEIKO_WORKFLOW_FILE: ci.yml
+        run: node scripts/resolve-verified-tree-evidence.mjs
+
   # Zero-tolerance semantic-clone gate. Fallow compares only files changed since the immutable
   # event base, so this closes the renamed-variable clone class without charging every pull request
   # for a whole-repository legacy scan. It is deterministic, offline after the locked install, and
   # runs in parallel with the much larger core/coverage jobs.
   semantic-duplication:
     name: Semantic duplication
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -304,6 +351,8 @@ jobs:
 
   core-quality:
     name: Core quality
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     # Bounded per .coderabbit.yaml's workflow policy. The job has run 11m50s-12m10s across recent
     # dev runs, so 30 minutes is ~2.5x headroom: generous against runner variance, still a bound
@@ -498,6 +547,8 @@ jobs:
   # compare a third of the suite against the whole suite's floors.
   coverage-packages:
     name: Coverage shard (packages ${{ matrix.shard }}/3)
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -612,6 +663,8 @@ jobs:
 
   coverage-ui:
     name: Coverage suite (keiko-ui)
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -680,6 +733,8 @@ jobs:
 
   coverage-scripts:
     name: Coverage suite (scripts)
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -750,8 +805,9 @@ jobs:
     # The first step below turns every non-success shard result — failure, cancelled AND skipped —
     # into a red context. ADR-0135 D3 is unaffected: this job is not itself a required check; it is
     # the dependency the required `ci` aggregate already observes (Issue #2704).
-    if: ${{ always() }}
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     needs:
+      - verified-tree
       - coverage-packages
       - coverage-scripts
       - coverage-ui
@@ -996,6 +1052,7 @@ jobs:
     needs:
       - change-scope
       - protected-branch-gate
+      - verified-tree
       - build-scan-sbom-smoke
       - core-quality
       - coverage-sonar
@@ -1021,7 +1078,46 @@ jobs:
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
           UI_RESULT: ${{ needs.ui.result }}
+          TREE_VERIFIED: ${{ needs.verified-tree.outputs.tree-verified }}
+          TREE_EVIDENCE_RUN_ID: ${{ needs.verified-tree.outputs.evidence-run-id }}
+          TREE_EVIDENCE_HEAD_SHA: ${{ needs.verified-tree.outputs.evidence-head-sha }}
+          TREE_EVIDENCE_TREE_SHA: ${{ needs.verified-tree.outputs.evidence-tree-sha }}
+          VERIFIED_TREE_RESULT: ${{ needs.verified-tree.result }}
         run: |
+          # One sanctioned reuse: this commit's tree is byte-identical to a pull-request head whose
+          # own required matrix concluded success, with no job of that matrix skipped. The resolver
+          # proved that before any gate was skipped here, and answers `false` on every uncertainty
+          # (ADR-0178). Re-measuring an identical tree cannot add evidence — it can only re-roll
+          # infrastructure flake against a tree that is already proven.
+          if [ "${TREE_VERIFIED:-}" = "true" ]; then
+            # A job can publish an output and fail afterwards, so the claim is only as good as the
+            # job that made it. Checked here as well as after the loop: the reuse branch exits 0.
+            if [ "${VERIFIED_TREE_RESULT:-}" != "success" ]; then
+              echo "Tree reuse claimed by a resolver that did not succeed (${VERIFIED_TREE_RESULT:-unset})."
+              exit 1
+            fi
+            if [ -z "${TREE_EVIDENCE_RUN_ID:-}" ] || [ -z "${TREE_EVIDENCE_TREE_SHA:-}" ]; then
+              echo "Tree reuse claimed without complete evidence identity."
+              exit 1
+            fi
+            # Reuse never stands in for a gate that did not cleanly skip or pass HERE. `skipped` is
+            # the state the guard produces; `success` is an always-on gate that ran anyway. Anything
+            # else — failure, cancelled, an empty result, an unknown state — fails closed.
+            for named in "CHANGE_SCOPE:${CHANGE_SCOPE_RESULT:-}" "PROTECTED_BRANCH:${PROTECTED_BRANCH_RESULT:-}" \
+                         "CORE_QUALITY:${CORE_QUALITY_RESULT:-}" "COVERAGE_SONAR:${COVERAGE_SONAR_RESULT:-}" \
+                         "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
+                         "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
+                         "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}"; do
+              state="${named#*:}"
+              if [ "$state" != "skipped" ] && [ "$state" != "success" ]; then
+                echo "Gate did not skip or pass despite reusable tree evidence: ${named%%:*} ($state)"
+                exit 1
+              fi
+            done
+            echo "Tree ${TREE_EVIDENCE_TREE_SHA:-} already proven by run ${TREE_EVIDENCE_RUN_ID:-} on head ${TREE_EVIDENCE_HEAD_SHA:-}."
+            echo "All required CI dependencies satisfied by that run's evidence."
+            exit 0
+          fi
           for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
@@ -1063,13 +1159,20 @@ jobs:
             echo "Required CI dependency did not succeed: $NODE_26_COMPATIBILITY_RESULT"
             exit 1
           fi
+          # The resolver is never reusable evidence, so it is aggregated on every run. It is checked
+          # after the loop above so that loop keeps emitting the exact message its pins bind.
+          if [ "${VERIFIED_TREE_RESULT:-}" != "success" ]; then
+            echo "Required CI dependency did not succeed: verified-tree (${VERIFIED_TREE_RESULT:-unset})"
+            exit 1
+          fi
           echo "All required CI dependencies succeeded."
 
   build-scan-sbom-smoke:
     name: Build, scan, SBOM, smoke
     # Keep early feature-branch PRs fast. These release/package gates still run on merges to
     # feat/keiko-editor, on dev/release PRs, and on manual workflow_dispatch runs.
-    if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+    if: ${{ always() && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
+    needs: verified-tree
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -1178,11 +1281,11 @@ jobs:
     # Roughly half of a run's weighted runner minutes (macOS bills 10x, Windows 2x). A change that
     # touches no code, manifest, lockfile, workflow or test cannot alter how the product builds and
     # installs on another operating system.
-    needs: change-scope
+    needs: [change-scope, verified-tree]
     # `always()` is load-bearing: without it a change-scope job that fails for its own reasons would
     # skip this matrix. The aggregate still fails closed on the classifier failure; running the matrix
     # preserves diagnostic evidence instead of hiding a second defect behind the first one.
-    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
+    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1297,8 +1400,8 @@ jobs:
 
   node-26-compatibility:
     name: Node 26 compatibility
-    needs: change-scope
-    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
+    needs: [change-scope, verified-tree]
+    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -1350,6 +1453,8 @@ jobs:
 
   ui:
     name: ui
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:

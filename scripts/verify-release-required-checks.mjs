@@ -169,6 +169,45 @@ function recordRequiredCheck(name, context) {
   missing.push(name);
 }
 
+// ADR-0178. An integration run reuses the required matrix's verdict when this commit's tree is
+// byte-identical to a pull-request head that matrix already proved green, so the gate it reused
+// reports `skipped` on THIS commit while its evidence binds the tree-identical head. The release
+// binds a tree, not a sha: the tagged commit and that head cannot differ in one byte a gate could
+// read. This step therefore resolves a `skipped` required check — and ONLY `skipped` — against a
+// commit that carries the identical tree.
+//
+// It never rescues a check that ran and FAILED here, never accepts evidence from a commit whose
+// tree was not confirmed equal, and returns the verdict untouched when no such evidence exists.
+
+/**
+ * Re-classify `skipped` required checks that an identical tree already proved green.
+ * @param {{failed: Array<{name: string, state: string}>, missing: string[], ok: boolean, passed: string[], pending: unknown[]}} result
+ * @param {Array<{name?: unknown, status?: unknown, conclusion?: unknown}>} treeCheckRuns
+ * @returns {typeof result}
+ */
+export function resolveSkippedWithTreeEvidence(result, treeCheckRuns) {
+  const provenByTree = new Set(
+    (Array.isArray(treeCheckRuns) ? treeCheckRuns : [])
+      .filter((run) => run?.status === "completed" && run?.conclusion === "success")
+      .map((run) => String(run.name ?? "")),
+  );
+  if (provenByTree.size === 0) return result;
+
+  const rescued = result.failed.filter(
+    (entry) => entry.state === "skipped" && provenByTree.has(entry.name),
+  );
+  if (rescued.length === 0) return result;
+
+  const stillFailed = result.failed.filter((entry) => !rescued.includes(entry));
+  const passed = [...result.passed, ...rescued.map((entry) => entry.name)];
+  return {
+    ...result,
+    failed: stillFailed,
+    ok: stillFailed.length === 0 && result.missing.length === 0 && result.pending.length === 0,
+    passed,
+  };
+}
+
 function recordCheckRun(name, checkRun, result) {
   if (checkRun.status === "completed" && checkRun.conclusion === "success") {
     result.passed.push(name);
@@ -296,6 +335,71 @@ async function fetchCommitEvidence({ owner, repo, sha, token }) {
   };
 }
 
+/**
+ * Read the tree sha a commit points at, or undefined when it cannot be read.
+ * @returns {Promise<string | undefined>}
+ */
+async function fetchTreeSha({ owner, repo, sha, token }) {
+  try {
+    const commit = await githubJson(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`,
+      token,
+    );
+    const treeSha = commit?.commit?.tree?.sha;
+    return typeof treeSha === "string" && /^[0-9a-f]{40}$/.test(treeSha) ? treeSha : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Collect check runs from commits that carry the IDENTICAL tree to this one. Only the heads of
+ * pull requests this commit merged are considered, and each candidate's tree is confirmed equal
+ * before any of its evidence is used. Any error yields no evidence, so the caller fails closed.
+ * @returns {Promise<Array<{name?: unknown, status?: unknown, conclusion?: unknown}>>}
+ */
+async function fetchTreeIdenticalCheckRuns({ owner, repo, sha, token }) {
+  const treeSha = await fetchTreeSha({ owner, repo, sha, token });
+  if (treeSha === undefined) return [];
+  let pulls;
+  try {
+    pulls = await githubJson(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/pulls?per_page=100`,
+      token,
+    );
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(pulls)) return [];
+
+  const collected = [];
+  for (const pull of pulls) {
+    const headSha = pull?.head?.sha;
+    if (typeof headSha !== "string" || headSha === sha) continue;
+    collected.push(...(await checkRunsForIdenticalTree({ headSha, owner, repo, token, treeSha })));
+  }
+  return collected;
+}
+
+/**
+ * Read one candidate head's check runs, but only after confirming it carries the identical tree.
+ * A tree that cannot be read, or that differs, yields nothing.
+ * @returns {Promise<Array<{name?: unknown, status?: unknown, conclusion?: unknown}>>}
+ */
+async function checkRunsForIdenticalTree({ headSha, owner, repo, token, treeSha }) {
+  const headTree = await fetchTreeSha({ owner, repo, sha: headSha, token });
+  if (headTree === undefined || headTree !== treeSha) return [];
+  try {
+    const payload = await githubJson(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100&filter=latest`,
+      token,
+    );
+    return Array.isArray(payload.check_runs) ? payload.check_runs : [];
+  } catch {
+    return [];
+  }
+}
+
 function formatNamedStates(entries) {
   return entries.map((entry) => `${entry.name} (${entry.state})`).join(", ");
 }
@@ -355,7 +459,20 @@ async function verifyRequiredChecks() {
 async function waitForRequiredChecks(config, requiredChecks, timeoutAt) {
   for (;;) {
     const evidence = await fetchCommitEvidence(config);
-    const result = evaluateRequiredChecks(requiredChecks, evidence.checkRuns, evidence.statuses);
+    let result = evaluateRequiredChecks(requiredChecks, evidence.checkRuns, evidence.statuses);
+
+    // A required check that a tree-identical commit already proved green is evidence, not absence
+    // (ADR-0178). Only `skipped` is resolved this way, and only after the trees are confirmed equal.
+    if (result.failed.some((entry) => entry.state === "skipped")) {
+      const treeCheckRuns = await fetchTreeIdenticalCheckRuns(config);
+      const resolved = resolveSkippedWithTreeEvidence(result, treeCheckRuns);
+      for (const name of resolved.passed.filter((entry) => !result.passed.includes(entry))) {
+        console.log(
+          `release-required-checks: ${name} reused proven evidence from an identical tree.`,
+        );
+      }
+      result = resolved;
+    }
 
     if (result.ok) {
       console.log(

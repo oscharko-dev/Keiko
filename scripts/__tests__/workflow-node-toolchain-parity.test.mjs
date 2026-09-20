@@ -209,7 +209,7 @@ describe("workflow Node toolchain parity", () => {
     // request and authorize lanes and release-advance.yml's event-driven start lane: the owner's
     // release-button run authorizes the commit, so the automation's github-actions[bot] dispatch
     // carries out an existing human decision instead of making one. Total: 30 lanes.
-    expect(withSetupNode).toHaveLength(30);
+    expect(withSetupNode).toHaveLength(31);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

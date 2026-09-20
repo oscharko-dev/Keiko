@@ -481,9 +481,12 @@ describe("CI test/gate wiring guard", () => {
     // and release-advance.yml's event-driven start lane.
     // The load-bearing pairing below proves every lane verifies the governed toolchain, while the
     // exact counts make a removed or unreviewed new lane fail.
-    expect(node24SetupCount).toBe(29);
+    // ADR-0178 adds one Node lane: `verified-tree`, the resolver that answers whether this exact
+    // tree was already proven green. It sets up Node 24 and verifies the governed toolchain like
+    // every other lane, so `verificationCount === nodeSetupCount` below still holds.
+    expect(node24SetupCount).toBe(30);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(30);
+    expect(nodeSetupCount).toBe(31);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");

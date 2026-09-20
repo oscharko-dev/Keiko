@@ -50,6 +50,9 @@ const read = (path) => readFileSync(join(repoRoot, path), "utf8");
 // Harness deadline for the one fixture registry program this suite compiles, not a product budget.
 const FIXTURE_PROGRAM_TIMEOUT_MS = 2 * 60_000;
 const GATE_COMMAND = "npm run check:activity-log";
+// ADR-0178: the one condition the gate's host job may carry (matched exactly, see ciFindings).
+const ACTIVITY_LOG_REUSE_GUARD =
+  "${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}";
 const STEP_COUNT = ACTIVITY_LOG_GATE_STEPS.length;
 const REQUIRED_CONSTITUENTS = [
   "check:op-catalog",
@@ -272,7 +275,16 @@ function ciFindings(workflowText) {
   const [{ name, job, step }] = hosts;
   const findings = [];
   if (!(workflow.jobs.ci?.needs ?? []).includes(name)) findings.push("ci-job-not-required");
-  if (job.if !== undefined) findings.push("ci-job-conditional");
+  // The gate must never be narrowed by a condition — least of all a changed-file one, since it
+  // exists precisely so an UNCHANGED emitter is proven again. ADR-0178's reuse guard is the single
+  // permitted condition, and it is matched exactly rather than by pattern: it fires only when this
+  // commit's tree is byte-identical to a pull-request head whose own run executed this very gate
+  // over the complete inventory. That is strictly stronger than "the diff did not touch it" — the
+  // whole worktree is proven, not a subset — so the invariant this pin protects is preserved. Any
+  // other condition, including a broadened version of this one, still fails here.
+  if (job.if !== undefined && job.if !== ACTIVITY_LOG_REUSE_GUARD) {
+    findings.push("ci-job-conditional");
+  }
   if (step.if !== undefined || step["continue-on-error"] !== undefined) {
     findings.push("ci-step-conditional");
   }

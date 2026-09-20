@@ -488,7 +488,11 @@ system that exists, never beside it:
   scenario resolution), `test:activity-log-scenarios` (executes every curated end-to-end scenario
   the inventory resolves, each of which must reach a complete support-analyze report),
   `check:error-observability`, `arch:check` with `arch:check:negative`, and `check:release-impact`.
-  It takes no changed-file input, so an unchanged emitter is proven again on every run. Each failure
+  It takes no changed-file input, so an unchanged emitter is proven again over the complete
+  inventory rather than over a diff. On an integration commit whose tree is byte-identical to a
+  pull-request head that already ran this exact gate, ADR-0178 reuses that verdict — which proves
+  the same complete inventory on the same bytes, and is strictly stronger than a changed-file
+  scope. Any other narrowing of the gate remains rejected. Each failure
   names its check, rule, site, and remediation. Run it before every pull request that changes
   product runtime behaviour.
 
@@ -613,6 +617,14 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   are green on the exact current head and every review conversation is resolved (ADR-0135). Green
   gates plus settled review threads ARE the merge decision; there is no human review step and no
   waiting for a person.
+- **The integration run reuses the pull request's evidence, it does not repeat it.** `dev` takes
+  signed squash merges of up-to-date heads, so the commit that lands carries the identical tree sha
+  as the head the required matrix already proved. The `dev` run resolves that first and skips the
+  gates that evidence already carries, completing in about two minutes instead of ~48
+  ([ADR-0178](docs/adr/ADR-0178-reuse-proven-tree-evidence-on-integration-runs.md)). It fails closed
+  on every uncertainty, so one differing byte — including an edit to CI itself — runs the full
+  matrix. The pull-request run is unchanged and remains the complete arbiter: never treat a fast
+  `dev` run as permission to let a pull request go unmeasured.
 - **Agent reaction SLO.** When a review finding is published on the current head, the delivering
   agent pushes one repair within 10 minutes of its appearance. In that window, harvest every
   already-published finding from every producer into one head. Do not wait for CI to turn green or
