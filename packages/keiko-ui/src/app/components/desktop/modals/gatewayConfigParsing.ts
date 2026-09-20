@@ -1184,15 +1184,17 @@ function exceedsByteCeiling(serialized: string): boolean {
   return new TextEncoder().encode(serialized).length > MAX_GATEWAY_CONFIG_BYTES;
 }
 
+// Test & Save writes schemaVersion: 2. It is metadata, not a setup field, and must survive a
+// round trip through this parser. Refuse unknown versions rather than misreading their shape.
+function unsupportedSchemaVersion(schemaVersion: unknown): boolean {
+  return schemaVersion !== undefined && schemaVersion !== 2;
+}
+
 export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploadResult {
   if (exceedsByteCeiling(serialized)) return { outcome: "invalid" };
   const root = uploadRoot(serialized);
   if (root === undefined) return { outcome: "invalid" };
-  // Test & Save writes schemaVersion: 2. It is metadata, not a setup field, and must survive
-  // a round trip through this parser. Refuse unknown versions rather than misreading their shape.
-  if (root.schemaVersion !== undefined && root.schemaVersion !== 2) {
-    return { outcome: "invalid" };
-  }
+  if (unsupportedSchemaVersion(root.schemaVersion)) return { outcome: "invalid" };
   if (!Object.keys(root).every((key) => REPRESENTABLE_ROOT_KEYS.has(key))) {
     return { outcome: "unsupportedSetting" };
   }

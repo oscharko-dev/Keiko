@@ -286,10 +286,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Run authority could not be loaded. Ask for approval remains selected.",
   "codingWorkbench.composer.authority.error.persist":
     "Run authority could not be saved. The previous authority remains active.",
-  "codingWorkbench.composer.context.label": "Coding context",
-  "codingWorkbench.composer.repository.open": "Manage repository {repository}",
-  "codingWorkbench.composer.repository.select": "Choose repository",
-  "codingWorkbench.composer.branch.open": "Manage branch {branch}",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva uses only the active project memory in Coding Workbench.",
@@ -354,6 +350,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Bind an existing local Git checkout so the coding run starts inside a governed task workspace.",
   "codingWorkbench.setup.repositoryPath": "Repository path",
   "codingWorkbench.setup.repositoryPathPlaceholder": "/absolute/path/to/repository",
+  "codingWorkbench.setup.browse": "Browse…",
+  "codingWorkbench.setup.browseError": "The folder picker could not open. Enter the path manually.",
   "codingWorkbench.setup.branchesLoading": "Loading branches…",
   "codingWorkbench.setup.branchesUnavailable": "Branches unavailable",
   "codingWorkbench.setup.branchSelect": "Select a branch",

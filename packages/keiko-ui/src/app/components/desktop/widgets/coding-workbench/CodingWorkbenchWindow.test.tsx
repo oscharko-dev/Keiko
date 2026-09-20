@@ -594,11 +594,11 @@ describe("CodingWorkbenchWindow", () => {
   // The crash-recovery Retry consumes the draft exactly like Start; a successful retry that left
   // the recovery text in the re-enabled composer made it resubmittable as a brand-new follow-up
   // (review of ec04288dc).
-  // The composer acts on the bound task workspace: before a run its chip names the repository the
-  // workspace was bound from, not the folder selected elsewhere in the Workbench (end-to-end run,
-  // 2026-09-03: the chip read "pr-3355-code-review-fdaabd · main" over a workspace bound from
-  // "e2e-project").
-  it("names the bound repository in the composer before a run starts", () => {
+  // #3563: the composer no longer prints the repository/branch chip. The bound workspace identity
+  // still surfaces through the information panel (see the pins that open it via
+  // `openWorkbenchInformation`); this pin only proves the composer does NOT resurrect the chip and
+  // does NOT surface the internal task worktree name to the operator either.
+  it("keeps the internal task worktree name out of the composer", () => {
     renderWorkbench(
       liveState(),
       actions(),
@@ -606,8 +606,8 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/e2e-project", "/wt/e2e-project-task"),
     );
 
-    expect(screen.getByText("e2e-project")).toBeInTheDocument();
     expect(screen.queryByText("e2e-project-task")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
   });
 
   it("clears the composer draft once a crash-recovery retry succeeds", async () => {
@@ -687,30 +687,25 @@ describe("CodingWorkbenchWindow", () => {
     expect(taskInput).toHaveValue("");
   });
 
-  it("offers the selected repository in the composer chooser", async (): Promise<void> => {
-    const user = userEvent.setup();
-    const selectedProject: ProjectWithAvailability = {
-      path: "/repos/keiko",
-      name: "Keiko",
-      favorite: false,
-      createdAt: 1,
-      lastOpenedAt: 1,
-      available: true,
-      workspaceAvailable: false,
-    };
+  // #3563 owner directive: the composer no longer carries its own repository chooser or branch
+  // chip. The header-wide RepositoryFolderSwitcher (mounted outside this window) is the single
+  // source of workspace-context truth. This pin makes sure the composer never renders those chips.
+  it("does not render its own repository chooser or branch chip in the composer", () => {
     const onOpenGit = vi.fn();
-    chatCatalogMock.activeProject = selectedProject;
-    chatCatalogMock.projects = [selectedProject];
+    renderWorkbench(
+      liveState(),
+      actions(),
+      onOpenGit,
+      activeWorkspaceWithBinding("/repos/keiko", "/worktrees/keiko-task"),
+    );
 
-    renderWorkbench(liveState(), actions(), onOpenGit);
-
-    await user.click(screen.getByRole("combobox", { name: "Choose repository" }));
-    expect(screen.getByRole("option", { name: "Keiko" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(screen.queryByText("MemoriaViva")).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  it("uses the selected repository outside an active run despite a prior task worktree", async () => {
-    const user = userEvent.setup();
+  it("uses the bound repository for the composer without exposing its own chip", () => {
     const selectedProject: ProjectWithAvailability = {
       path: "/repos/keiko",
       name: "Keiko",
@@ -730,12 +725,12 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/prior-task"),
     );
 
-    expect(screen.getByRole("combobox", { name: "Choose repository" })).toHaveTextContent("keiko");
+    expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  it("opens Git on the repository root while a coding run is in progress", async (): Promise<void> => {
-    const user = userEvent.setup();
+  it("keeps the composer active during a run without exposing chips or a Git deeplink", () => {
     const onOpenGit = vi.fn();
     chatCatalogMock.activeProject = {
       path: "/repos/keiko",
@@ -760,17 +755,18 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
     );
 
-    expect(screen.getByRole("button", { name: "Manage branch task-1" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Manage branch dev" })).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Choose repository" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Manage branch task-1" }));
-    expect(onOpenGit).toHaveBeenCalledWith({
-      root: "/repos/keiko",
-      binding: "repository",
-    });
+    // #3563 owner directive: no Choose-repository combobox and no Manage-branch button in the
+    // composer; the header-wide switcher (mounted outside this window) is the only workspace
+    // selector, and Git navigation happens through its own window pane.
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(onOpenGit).not.toHaveBeenCalled();
   });
 
-  it("offers setup for a newly selected repository instead of starting in the old binding", () => {
+  // #3563 — a global-selection change alone MUST NOT throw the operator into the setup card while an
+  // active binding exists. The composer stays where it is with the bound workspace; every workspace
+  // change flows through the header-wide RepositoryFolderSwitcher, not through a per-window chip.
+  it("keeps the composer on the bound workspace when the parent selection changes", () => {
     chatCatalogMock.activeProject = {
       path: "/repos/selected-elsewhere",
       name: "Selected elsewhere",
@@ -787,9 +783,9 @@ describe("CodingWorkbenchWindow", () => {
       undefined,
       activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
     );
-    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/selected-elsewhere");
-    expect(repositoryBranchHookMock).toHaveBeenCalledWith("/repos/selected-elsewhere");
-    expect(screen.queryByRole("button", { name: "Start coding run" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Repository path")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
   });
 
   // Epic #3384 live-flow defect (#3401 "Review description"): after a settled run the Workbench
@@ -3022,28 +3018,21 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     );
   }
 
-  it("keeps the composer and context bar on the run while Git opens the repository", async () => {
+  it("keeps the context bar on the run's workspace after a live pointer switch", async () => {
     const onOpenGit = vi.fn();
     await startInAThenSwitchToB(actions(), onOpenGit);
 
-    expect(screen.getByRole("combobox", { name: "Choose repository" })).toHaveTextContent("a");
-    expect(
-      screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }),
-    ).toBeInTheDocument();
+    // #3563: no composer-owned chip anymore, so the run's workspace identity is proven through the
+    // information panel (session context bar) that stays keyed to the run, not the live pointer.
     const dialog = openWorkbenchInformation();
     expect(screen.getByText(`workspace-a · ${WORKSPACE_A.branch} · healthy`)).toBeInTheDocument();
     const facts = dialog.querySelector(`.${styles.cmpInfoGrid ?? "missing-info-grid"}`);
     expect(facts).not.toBeNull();
     expect(facts).not.toHaveTextContent(WORKSPACE_B.branch);
 
-    expect(screen.getByRole("combobox", { name: "Choose repository" })).toBeDisabled();
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }));
-    expect(onOpenGit).toHaveBeenCalledWith({
-      root: WORKSPACE_A.repositoryRoot,
-      binding: "repository",
-    });
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Manage branch/u })).not.toBeInTheDocument();
+    expect(onOpenGit).not.toHaveBeenCalled();
   });
 
   it("never redirects the run's repository trust grant after a cross-repository switch", async () => {
@@ -3130,7 +3119,8 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(
       screen.queryByText(/This run keeps the authority of the workspace it started in/u),
     ).toBeNull();
-    expect(screen.getByRole("combobox", { name: "Choose repository" })).toBeDisabled();
+    // #3563: no composer chip, no header-mirror inside the window.
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).not.toBeInTheDocument();
   });
 
   it("binds the editor bridge to the root the run was submitted against", async () => {

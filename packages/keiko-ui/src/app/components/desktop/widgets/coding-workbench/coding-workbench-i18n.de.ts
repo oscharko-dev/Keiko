@@ -305,10 +305,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Rechte konnten nicht geladen werden. „Um Genehmigung bitten“ bleibt ausgewählt.",
   "codingWorkbench.composer.authority.error.persist":
     "Die Rechte konnten nicht gespeichert werden. Die vorherige Auswahl bleibt aktiv.",
-  "codingWorkbench.composer.context.label": "Coding-Kontext",
-  "codingWorkbench.composer.repository.open": "Repository {repository} in Git verwalten",
-  "codingWorkbench.composer.repository.select": "Repository auswählen",
-  "codingWorkbench.composer.branch.open": "Branch {branch} in Git verwalten",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva verwendet in der Coding Workbench ausschließlich das aktive Projekt-Memory.",
@@ -374,6 +370,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Binde einen vorhandenen lokalen Git-Checkout, damit der Coding-Lauf in einem gesteuerten Aufgabenarbeitsbereich startet.",
   "codingWorkbench.setup.repositoryPath": "Repository-Pfad",
   "codingWorkbench.setup.repositoryPathPlaceholder": "/absoluter/pfad/zum/repository",
+  "codingWorkbench.setup.browse": "Durchsuchen…",
+  "codingWorkbench.setup.browseError":
+    "Der Ordner-Dialog konnte nicht geöffnet werden. Gib den Pfad manuell ein.",
   "codingWorkbench.setup.branchesLoading": "Branches werden geladen…",
   "codingWorkbench.setup.branchesUnavailable": "Branches nicht verfügbar",
   "codingWorkbench.setup.branchSelect": "Branch auswählen",

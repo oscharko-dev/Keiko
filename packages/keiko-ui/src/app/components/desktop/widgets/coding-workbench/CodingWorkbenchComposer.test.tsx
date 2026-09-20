@@ -1,16 +1,11 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  I18N_STORAGE_KEY,
-  I18nProvider,
-  loadLocaleMessages,
-  resetLoadedMessageCatalogs,
-} from "@/lib/i18n";
+import { I18N_STORAGE_KEY, resetLoadedMessageCatalogs } from "@/lib/i18n";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
@@ -57,7 +52,6 @@ function composerProps(
   actions: TaskComposerActions,
   taskIntent = "Investigate the failing test",
   onReasoningEffortChange = vi.fn(),
-  onOpenGit = vi.fn(),
 ): ComposerProps {
   return {
     taskIntent,
@@ -69,16 +63,6 @@ function composerProps(
     mutationPending: false,
     startBusy: false,
     startBlockedReason: null,
-    repositoryLabel: "Keiko",
-    repositoryRoot: "/repos/keiko",
-    repositories: [
-      { root: "/repos/keiko", label: "Keiko" },
-      { root: "/repos/another", label: "Another" },
-    ],
-    onSelectRepository: vi.fn(),
-    branchLabel: "dev",
-    branchContext: "repository",
-    onOpenGit,
     projectMemoryEnabled: true,
     onProjectMemoryEnabledChange: vi.fn(),
     autonomyMode: "supervised-coding",
@@ -101,11 +85,10 @@ function renderComposer(
   actions: TaskComposerActions,
   taskIntent = "Investigate the failing test",
   onReasoningEffortChange = vi.fn(),
-  onOpenGit = vi.fn(),
 ): void {
   render(
     <TaskStartSection
-      {...composerProps(runState, actions, taskIntent, onReasoningEffortChange, onOpenGit)}
+      {...composerProps(runState, actions, taskIntent, onReasoningEffortChange)}
     />,
   );
 }
@@ -130,69 +113,17 @@ describe("Coding Workbench composer", () => {
     expect(authority.querySelector('path[d*="M13.5 5.5"]')).not.toBeInTheDocument();
   });
 
-  it("selects a repository in the Workbench while keeping branch management in Git", async () => {
-    const user = userEvent.setup();
-    const onOpenGit = vi.fn();
-    const onSelectRepository = vi.fn();
-    renderComposerWithOverrides({ onOpenGit, onSelectRepository });
-
-    const context = screen.getByLabelText("Coding context");
-    await user.click(within(context).getByRole("combobox", { name: "Choose repository" }));
-    await user.click(screen.getByRole("option", { name: "Another" }));
-    await user.click(within(context).getByRole("button", { name: "Manage branch dev" }));
-
-    expect(onSelectRepository).toHaveBeenCalledWith("/repos/another");
-    expect(onOpenGit).toHaveBeenCalledTimes(1);
-    expect(within(context).queryByText("Repository branch")).toBeNull();
-    expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
-  });
-
-  it("keeps project memory active by default and lets the operator toggle it per run", async () => {
-    const user = userEvent.setup();
-    const onProjectMemoryEnabledChange = vi.fn();
-    renderComposerWithOverrides({ onProjectMemoryEnabledChange });
-
-    const context = screen.getByLabelText("Coding context");
-    const toggle = within(context).getByRole("button", {
-      name: "Disable project memory for this run",
-    });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    expect(within(toggle).queryByText("On")).toBeNull();
-    expect(within(toggle).queryByText("Off")).toBeNull();
-
-    await user.click(toggle);
-
-    expect(onProjectMemoryEnabledChange).toHaveBeenCalledExactlyOnceWith(false);
-  });
-
-  it("shows the disabled project memory state as a real toggle state", () => {
-    renderComposerWithOverrides({ projectMemoryEnabled: false });
-
-    const toggle = screen.getByRole("button", {
-      name: "Enable project memory for this run",
-    });
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(within(toggle).getByText("MemoriaViva")).toBeInTheDocument();
-    expect(within(toggle).queryByText("On")).toBeNull();
-    expect(within(toggle).queryByText("Off")).toBeNull();
-  });
-
-  it("localizes the repository branch context in German", async () => {
-    await loadLocaleMessages("de");
-    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
-
-    render(
-      <I18nProvider>
-        <TaskStartSection {...composerProps("idle", composerActions())} />
-      </I18nProvider>,
-    );
-
-    expect(
-      await screen.findByRole("button", {
-        name: "Branch dev in Git verwalten",
-      }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Repository branch")).not.toBeInTheDocument();
+  // #3563 owner directive: the composer no longer renders its own repository chooser, branch chip
+  // or MemoriaViva toggle. The header-wide RepositoryFolderSwitcher is the single source of
+  // workspace-context truth. This pin makes sure the context row does NOT reappear: no combobox
+  // labelled "Choose repository", no "Manage branch" button, no MemoriaViva toggle, no aria-label
+  // "Coding context" region. When MemoriaViva returns, replace this pin with the toggle's own tests.
+  it("does not render the repository, branch or MemoriaViva chips in the composer", () => {
+    renderComposer("idle", composerActions());
+    expect(screen.queryByLabelText("Coding context")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Manage branch/u })).toBeNull();
+    expect(screen.queryByText("MemoriaViva")).toBeNull();
   });
 
   it("shows Start while idle and calls the start handler", async () => {
@@ -325,10 +256,6 @@ describe("Coding Workbench composer", () => {
       actions,
       taskIntent: "",
       canStart: false,
-      repositoryLabel: null,
-      repositoryRoot: null,
-      repositories: [],
-      branchLabel: null,
       autonomyMode: null,
       onTaskIntentChange,
     });

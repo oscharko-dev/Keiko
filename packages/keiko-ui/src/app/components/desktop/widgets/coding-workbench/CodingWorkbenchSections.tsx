@@ -30,6 +30,9 @@ import {
 import KeikoSelect from "../../KeikoSelect";
 import { VoiceDictationButton, VoiceDictationPreviewFromController } from "../../VoiceDictation";
 import { OrganicWorkspaceBubble } from "../../EmptyWorkspaceBlob";
+// KeikoSelect is retained above for the model/source/authority controls; the composer's own
+// repository chooser was removed with #3563 (single source of truth is the header-wide workspace
+// switcher).
 import { useDictation } from "../../hooks/useDictation";
 import { supportsDictation, useVoiceCapability } from "../../hooks/useVoiceCapability";
 import { dictationCaptureSupported } from "../../hooks/dictation-recorder";
@@ -41,8 +44,6 @@ const CodingWorkbenchIcon = Icons.codingWorkbench;
 const MinimizeIcon = Icons.minimize;
 const FwdIcon = Icons.fwd;
 const ArrowUpIcon = Icons.arrowUp;
-const FolderIcon = Icons.folder;
-const BranchIcon = Icons.branch;
 const CubeIcon = Icons.cube;
 const BrainIcon = Icons.brain;
 
@@ -104,13 +105,8 @@ interface TaskStartSectionProps {
   readonly mutationPending: boolean;
   readonly startBusy: boolean;
   readonly startBlockedReason: string | null;
-  readonly repositoryLabel: string | null;
-  readonly repositoryRoot: string | null;
-  readonly repositories: readonly { readonly root: string; readonly label: string }[];
-  readonly onSelectRepository: (root: string) => void;
-  readonly branchLabel: string | null;
-  readonly branchContext: "repository" | "task";
-  readonly onOpenGit: () => void;
+  /** Retained so `ProjectMemoryToggle` can be re-mounted (currently hidden per owner directive)
+   * without a signature change; the composer's context row is not rendered at all right now. */
   readonly projectMemoryEnabled: boolean;
   readonly onProjectMemoryEnabledChange: (enabled: boolean) => void;
   readonly autonomyMode: CodingWorkbenchMode | null;
@@ -239,77 +235,17 @@ export function TaskStartSection(input: TaskStartSectionProps): ReactNode {
       <label className="sr-only" htmlFor="coding-workbench-task-intent">
         {t("codingWorkbench.task.instructions")}
       </label>
-      <ComposerContext input={input} t={t} />
       <TaskComposerBox input={input} controller={controller} t={t} />
     </form>
   );
 }
 
-function branchContextLabel(input: TaskStartSectionProps, t: CodingWorkbenchTranslate): string {
-  return t(
-    input.branchContext === "task"
-      ? "codingWorkbench.info.taskBranch"
-      : "codingWorkbench.info.repositoryBranch",
-  );
-}
-
-function ComposerContext({ input, t }: ControlProps): ReactNode {
-  if (
-    input.repositoryLabel === null &&
-    input.branchLabel === null &&
-    input.repositories.length === 0
-  )
-    return null;
-  const branchLabel = branchContextLabel(input, t);
-  const repositories = input.repositories.map(({ root, label }) => ({ value: root, label }));
-  if (
-    input.repositoryRoot !== null &&
-    !repositories.some(({ value }) => value === input.repositoryRoot)
-  )
-    repositories.unshift({
-      value: input.repositoryRoot,
-      label: input.repositoryLabel ?? input.repositoryRoot,
-    });
-  return (
-    <div
-      className={styles.composerContext}
-      aria-label={t("codingWorkbench.composer.context.label")}
-    >
-      {repositories.length === 0 ? null : (
-        <KeikoSelect
-          triggerClassName={`${styles.composerContextChip} ${styles.composerContextButton}`}
-          value={input.repositoryRoot ?? ""}
-          placeholder={t("codingWorkbench.composer.repository.select")}
-          ariaLabel={t("codingWorkbench.composer.repository.select")}
-          menuTitle={t("codingWorkbench.composer.repository.select")}
-          menuMinWidth={220}
-          disabled={input.configurationLocked}
-          leadingVisual={<FolderIcon size={14} />}
-          sections={[{ options: repositories }]}
-          onValueChange={(root): void => {
-            if (repositories.some(({ value }) => value === root)) input.onSelectRepository(root);
-          }}
-        />
-      )}
-      {input.branchLabel === null ? null : (
-        <button
-          className={`${styles.composerContextChip} ${styles.composerContextButton}`}
-          type="button"
-          title={`${branchLabel}: ${input.branchLabel}`}
-          aria-label={t("codingWorkbench.composer.branch.open", {
-            branch: input.branchLabel,
-          })}
-          onClick={input.onOpenGit}
-        >
-          <BranchIcon size={14} />
-          <span>{input.branchLabel}</span>
-        </button>
-      )}
-      <ProjectMemoryToggle input={input} t={t} />
-    </div>
-  );
-}
-
+// #3563 owner directive: the composer no longer renders its own repository chip, branch chip, or
+// MemoriaViva toggle. The header-wide RepositoryFolderSwitcher is the single source of
+// workspace-context truth, exactly like every other window (Editor, Git, Local Knowledge).
+// `ProjectMemoryToggle` is kept below (unused) so re-enabling MemoriaViva is a one-line change: add
+// a wrapper that renders `<ProjectMemoryToggle input={input} t={t} />` above `TaskComposerBox`.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained for MemoriaViva re-enable
 function ProjectMemoryToggle({ input, t }: ControlProps): ReactNode {
   const enabled = input.projectMemoryEnabled;
   return (

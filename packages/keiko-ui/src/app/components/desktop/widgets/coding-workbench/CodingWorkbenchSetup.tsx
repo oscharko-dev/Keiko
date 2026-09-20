@@ -50,7 +50,10 @@ import {
 import { fetchRepositoryBaseBranch } from "@/lib/task-workspace-api";
 import { TASK_WORKSPACE_MARKER_MESSAGE_KEYS } from "@/lib/task-workspace-marker-labels";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { pickWithNativeDialog } from "@/lib/native-file-dialog";
+import {
+  pickWithNativeDialog,
+  type NativeDialogPickOutcome,
+} from "@/lib/native-file-dialog";
 import { useNativeFileDialogCapability } from "../../hooks/useNativeFileDialogCapability";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { secureRandomId } from "@/lib/secure-random";
@@ -964,37 +967,149 @@ function SetupFields({
   );
 }
 
-function RepositoryPathField({
-  value,
-  pending,
-  onChange,
-  onSettled,
-}: {
+interface NativeFolderBrowse {
+  readonly supported: boolean;
+  readonly busy: boolean;
+  readonly notice: string | null;
+  readonly browse: () => void;
+}
+
+// The Browse button reuses the same native-dialog port every other Browse surface in this app
+// goes through (RepositoryFolderSwitcher, EditorEmptyState, capsule-actions, NewWindowDialog). It
+// is offered only when the BFF's capability probe confirms it — an unsupported platform keeps the
+// text input as the sole input, exactly like the manual-path fallback those surfaces use. The
+// dialog result is folded into the input's own change/settled path so the branch lookup arms the
+// same way a keystroke does (#3452 F52), and a busy/unsupported/failed outcome renders one
+// bounded, redacted notice — never a stale value silently applied.
+function useNativeFolderBrowse(onPicked: (path: string) => void): NativeFolderBrowse {
+  const t = useCodingWorkbenchTranslate();
+  const tGlobal = useTranslate();
+  const supported = useNativeFileDialogCapability();
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const browse = useCallback((): void => {
+    if (!supported || busy) return;
+    setBusy(true);
+    setNotice(null);
+    void pickWithNativeDialog({
+      mode: "open-directory",
+      title: tGlobal("workspaceContext.chooseDialogTitle"),
+    })
+      .then((outcome) => {
+        applyBrowseOutcome(outcome, onPicked, setNotice, t, tGlobal);
+      })
+      .catch(() => {
+        setNotice(t("codingWorkbench.setup.browseError"));
+      })
+      .finally(() => {
+        setBusy(false);
+      });
+  }, [busy, onPicked, supported, t, tGlobal]);
+  return { supported, busy, notice, browse };
+}
+
+function applyBrowseOutcome(
+  outcome: NativeDialogPickOutcome,
+  onPicked: (path: string) => void,
+  setNotice: (notice: string | null) => void,
+  t: CodingWorkbenchTranslate,
+  tGlobal: I18nTranslate,
+): void {
+  if (outcome.kind === "picked") {
+    const first = outcome.paths[0];
+    if (first !== undefined) onPicked(first);
+    return;
+  }
+  if (outcome.kind === "cancelled") return;
+  if (outcome.kind === "busy") {
+    setNotice(tGlobal("workspaceContext.dialogBusy"));
+    return;
+  }
+  if (outcome.kind === "unsupported") {
+    setNotice(tGlobal("workspaceContext.dialogUnsupported"));
+    return;
+  }
+  setNotice(t("codingWorkbench.setup.browseError"));
+}
+
+interface RepositoryPathFieldProps {
   readonly value: string;
   readonly pending: boolean;
   readonly onChange: (value: string) => void;
   readonly onSettled: (value: string) => void;
-}): ReactNode {
+}
+
+function RepositoryPathField(props: RepositoryPathFieldProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const { onChange, onSettled } = props;
+  const onPicked = useCallback(
+    (path: string): void => {
+      onChange(path);
+      onSettled(path);
+    },
+    [onChange, onSettled],
+  );
+  const browse = useNativeFolderBrowse(onPicked);
+  return <RepositoryPathFieldView props={props} browse={browse} t={t} />;
+}
+
+function RepositoryPathFieldView({
+  props,
+  browse,
+  t,
+}: {
+  readonly props: RepositoryPathFieldProps;
+  readonly browse: NativeFolderBrowse;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
   return (
     <>
       <label className={styles.fieldLabel} htmlFor="coding-workbench-setup-path">
         {t("codingWorkbench.setup.repositoryPath")}
       </label>
-      <input
-        id="coding-workbench-setup-path"
-        className={styles.setupInput}
-        type="text"
-        value={value}
-        disabled={pending}
-        placeholder={t("codingWorkbench.setup.repositoryPathPlaceholder")}
-        onChange={(event) => {
-          onChange(event.target.value);
-        }}
-        onBlur={(event) => {
-          onSettled(event.target.value);
-        }}
-      />
+      <div className={styles.pathFieldRow}>
+        <RepositoryPathInput {...props} t={t} />
+        {browse.supported ? (
+          <button
+            type="button"
+            className={styles.button}
+            disabled={props.pending || browse.busy}
+            onClick={browse.browse}
+          >
+            {t("codingWorkbench.setup.browse")}
+          </button>
+        ) : null}
+      </div>
+      {browse.notice === null ? null : (
+        <p className={styles.helpText} role="status">
+          {browse.notice}
+        </p>
+      )}
     </>
+  );
+}
+
+function RepositoryPathInput({
+  value,
+  pending,
+  onChange,
+  onSettled,
+  t,
+}: RepositoryPathFieldProps & { readonly t: CodingWorkbenchTranslate }): ReactNode {
+  return (
+    <input
+      id="coding-workbench-setup-path"
+      className={styles.setupInput}
+      type="text"
+      value={value}
+      disabled={pending}
+      placeholder={t("codingWorkbench.setup.repositoryPathPlaceholder")}
+      onChange={(event) => {
+        onChange(event.target.value);
+      }}
+      onBlur={(event) => {
+        onSettled(event.target.value);
+      }}
+    />
   );
 }
