@@ -20,7 +20,7 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { compareStrings } from "./lib/compare-strings.mjs";
 
@@ -66,7 +66,7 @@ const WORKFLOW_GATES = Object.freeze([
 ]);
 
 /** A path that is simply absent, which is the one filesystem error this scan may ignore. */
-function isMissing(error) {
+export function isMissing(error) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
@@ -75,7 +75,7 @@ function isMissing(error) {
  * shorten the consumer list silently, which is the opposite of what this tool is for: an
  * incomplete list that looks complete is worse than no list.
  */
-function reportScanFailure(path, error) {
+export function reportScanFailure(path, error) {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : "?";
   console.error(
     `list-workflow-consumers: cannot scan ${relative(REPO_ROOT, path)} (${String(code)})`,
@@ -87,7 +87,7 @@ function reportScanFailure(path, error) {
  * Every source file under the search roots, skipping build output and dependencies.
  * @returns {string[]} absolute paths
  */
-function sourceFiles() {
+export function sourceFiles() {
   const found = [];
   const walk = (dir) => {
     let entries;
@@ -131,7 +131,7 @@ const DIGITS = String.raw`\d+`;
  * injectable (CodeQL js/regex-injection) and would also make a name like `a+b.yml` silently match
  * the wrong files.
  */
-function asPattern(workflow) {
+export function asPattern(workflow) {
   return workflow.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 }
 
@@ -139,7 +139,7 @@ function asPattern(workflow) {
  * How a file refers to the workflow, so a reader can tell a parse from a line-number anchor.
  * @returns {string[]} short labels, strongest coupling first
  */
-function couplingKinds(text, workflow) {
+export function couplingKinds(text, workflow) {
   const kinds = [];
   if (new RegExp(String.raw`${asPattern(workflow)}:\d+`, "u").test(text)) {
     kinds.push("LINE NUMBERS — shifts on any inserted line");
@@ -156,7 +156,7 @@ function couplingKinds(text, workflow) {
  * Report every consumer of one workflow.
  * @returns {number} consumer count
  */
-function reportWorkflow(workflow, files) {
+export function reportWorkflow(workflow, files) {
   // A bare filename also appears in prose, fixtures and unrelated strings. Require a reference
   // that actually addresses the workflow: a path, or the `<name>:<line>` anchor form.
   const escaped = asPattern(workflow);
@@ -193,11 +193,8 @@ function reportWorkflow(workflow, files) {
   return ordered.length;
 }
 
-const args = process.argv.slice(2);
-const all = args.includes("--all");
-const requested = args.filter((arg) => !arg.startsWith("--"));
 /** The workflow files that exist, which is the only set this tool ever reports on. */
-function availableWorkflows() {
+export function availableWorkflows() {
   return readdirSync(WORKFLOW_DIR).filter(
     (name) => name.endsWith(".yml") || name.endsWith(".yaml"),
   );
@@ -210,7 +207,7 @@ function availableWorkflows() {
  * not exist is a typo the caller should see, not a scan that quietly finds nothing — and resolving
  * it means no command-line string ever reaches the pattern builder.
  */
-function selectWorkflows(everyWorkflow, named) {
+export function selectWorkflows(everyWorkflow, named) {
   const available = availableWorkflows();
   if (everyWorkflow) return available;
   if (named.length === 0) return available.filter((name) => name === "ci.yml");
@@ -228,14 +225,27 @@ function selectWorkflows(everyWorkflow, named) {
   return selected;
 }
 
-const workflows = selectWorkflows(all, requested);
+/** The command-line entry point, so importing this module runs nothing. */
+export function main() {
+  // Read at call time, not at import time: the module must behave identically
+  // whether it is run or imported.
+  const args = process.argv.slice(2);
+  const all = args.includes("--all");
+  const requested = args.filter((arg) => !arg.startsWith("--"));
 
-const files = sourceFiles();
-for (const workflow of workflows.toSorted(compareStrings)) reportWorkflow(workflow, files);
+  const workflows = selectWorkflows(all, requested);
 
-console.log("\nGates to run after changing any workflow:\n");
-for (const { command, why, repair } of WORKFLOW_GATES) {
-  console.log(`  ${command}`);
-  console.log(`      ${why}`);
-  if (repair !== undefined) console.log(`      repair: ${repair}`);
+  const files = sourceFiles();
+  for (const workflow of workflows.toSorted(compareStrings)) reportWorkflow(workflow, files);
+
+  console.log("\nGates to run after changing any workflow:\n");
+  for (const { command, why, repair } of WORKFLOW_GATES) {
+    console.log(`  ${command}`);
+    console.log(`      ${why}`);
+    if (repair !== undefined) console.log(`      repair: ${repair}`);
+  }
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
 }

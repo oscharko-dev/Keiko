@@ -26,7 +26,7 @@ import { appendFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 /** Jobs whose verdict this run reuses. A candidate that skipped one of them is not evidence. */
-const REUSED_JOB_NAMES = Object.freeze([
+export const REUSED_JOB_NAMES = Object.freeze([
   "Semantic duplication",
   "Core quality",
   "Coverage suite (keiko-ui)",
@@ -38,7 +38,10 @@ const REUSED_JOB_NAMES = Object.freeze([
 ]);
 
 /** Job-name prefixes whose verdict this run reuses (matrix legs carry a suffix). */
-const REUSED_JOB_PREFIXES = Object.freeze(["Cross-platform smoke", "Coverage shard (packages"]);
+export const REUSED_JOB_PREFIXES = Object.freeze([
+  "Cross-platform smoke",
+  "Coverage shard (packages",
+]);
 
 const API_ROOT = "https://api.github.com";
 
@@ -50,7 +53,7 @@ const API_ROOT = "https://api.github.com";
  * @param {string} name
  * @returns {string}
  */
-function requireEnv(name) {
+export function requireEnv(name) {
   const value = process.env[name];
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`missing required environment variable: ${name}`);
@@ -64,7 +67,7 @@ function requireEnv(name) {
  * @param {string} token
  * @returns {Promise<unknown>}
  */
-async function api(path, token) {
+export async function api(path, token) {
   const response = await globalThis.fetch(`${API_ROOT}${path}`, {
     headers: {
       accept: "application/vnd.github+json",
@@ -85,7 +88,7 @@ async function api(path, token) {
  * @param {string} token
  * @returns {Promise<string>}
  */
-async function resolveTreeSha(repo, sha, token) {
+export async function resolveTreeSha(repo, sha, token) {
   const commit = await api(`/repos/${repo}/commits/${sha}`, token);
   const treeSha = /** @type {{ commit?: { tree?: { sha?: unknown } } }} */ (commit).commit?.tree
     ?.sha;
@@ -102,7 +105,7 @@ async function resolveTreeSha(repo, sha, token) {
  * @param {string} token
  * @returns {Promise<{ number: number, headSha: string } | null>}
  */
-async function resolveMergedPullRequest(repo, sha, token) {
+export async function resolveMergedPullRequest(repo, sha, token) {
   const pulls = await api(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, token);
   if (!Array.isArray(pulls)) {
     return null;
@@ -158,7 +161,7 @@ export function acceptMergedPullCandidate(pull, sha) {
  * @param {string} token
  * @returns {Promise<{ runId: number } | null>}
  */
-async function resolveGreenPullRequestRun(repo, headSha, workflowFile, token) {
+export async function resolveGreenPullRequestRun(repo, headSha, workflowFile, token) {
   const runs = await api(
     `/repos/${repo}/actions/workflows/${workflowFile}/runs?head_sha=${headSha}&event=pull_request&status=success&per_page=20`,
     token,
@@ -188,7 +191,7 @@ async function resolveGreenPullRequestRun(repo, headSha, workflowFile, token) {
  * @param {string} token
  * @returns {Promise<boolean>}
  */
-async function candidateProvedEveryReusedJob(repo, runId, token) {
+export async function candidateProvedEveryReusedJob(repo, runId, token) {
   const payload = await api(`/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`, token);
   const jobs = /** @type {{ jobs?: unknown }} */ (payload).jobs;
   if (!Array.isArray(jobs)) {
@@ -211,7 +214,7 @@ async function candidateProvedEveryReusedJob(repo, runId, token) {
  * Decide whether this run may reuse pull-request evidence for its exact tree.
  * @returns {Promise<Verified | NotVerified>}
  */
-async function resolveEvidence() {
+export async function resolveEvidence() {
   const eventName = requireEnv("KEIKO_EVENT_NAME");
   if (eventName !== "push" && eventName !== "merge_group") {
     return { verified: false, reason: `event ${eventName} always runs the full matrix` };
@@ -250,7 +253,7 @@ async function resolveEvidence() {
  * @param {Verified | NotVerified} evidence
  * @returns {Promise<void>}
  */
-async function publish(evidence) {
+export async function publish(evidence) {
   const outputPath = process.env.GITHUB_OUTPUT;
   const lines = evidence.verified
     ? [
