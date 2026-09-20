@@ -6,7 +6,7 @@ live coding exercises target the owner's disposable `oscharko/Wegwerf-Repo-Final
 
 ## Runtime and upstream boundary
 
-The current PR analysis reports 86.16% new-code coverage and zero new SonarCloud violations
+The earlier hosted analysis reports 86.16% new-code coverage and zero new SonarCloud violations
 at commit `ebc23d7d1`. This clears the requested 85% floor, but does not imply that the other
 required CI checks or the open review findings are complete.
 
@@ -16,18 +16,18 @@ still described OpenCode V1. The bundle mismatch reproduces on the same static e
 Node 24.18.0. Runtime migration measurement now has an explicit path that retains the previous
 performance ceilings and rejects a simultaneous reference-machine or toolchain change.
 
-Both native V2 measurement series completed on the pinned macOS reference with Node 24.18.0
-and npm 11.16.0: two warmups plus 30 retained samples per series. The independent candidate's
-p95 values are 1,654.962 ms cold start, 2.002 ms readiness, 2.866 ms SSE first byte, and
-108.564 ms bounded throughput. The source-freshness gate passes. No ceiling was raised;
-the existing ratchet lowered the cold-start ceiling. Each native sample also emitted a
-`safe-activity-dropped-validation-rejected` diagnostic; performance passing does not qualify
-that remaining activity-projection loss as correct behavior.
+The native V2 measurement series were repeated after repairing placeholder and cumulative-text
+projection. Each series used two warmups plus 30 retained samples on the pinned macOS reference,
+Node 24.18.0 and npm 11.16.0. Every sample now requires the exact assistant answer and zero dropped
+activity events. The independent candidate's p95 values are 1,735.901 ms cold start, 1.946 ms
+readiness, 3.101 ms SSE first byte, and 99.416 ms bounded throughput. Source freshness and the
+existing performance ceilings pass. No ceiling was raised. The earlier validation-rejection
+warnings were reproduced as empty text placeholders and are absent from both new series.
 
 The CI Node 26 warmup timeout was not reproduced locally: with the normal development server
 stopped, both real runner-readiness tests passed in 25 seconds. No timeout or assertion was
 weakened. The full refreshed scripts coverage run passed 6,406 tests with 27 existing skips;
-the combined local new-code report is 85.2% over 2,481 lines/conditions. Hosted checks must still
+that checkpoint's combined local new-code report was 85.2% over 2,481 lines/conditions. Hosted checks must still
 run on the new head. One earlier SonarCloud processing task failed independently of the other
 successful current-head analysis; it is not treated as a coverage failure or a green CI result.
 
@@ -172,6 +172,13 @@ example's reviewed sidecar binding retained a placeholder SBOM digest while its 
 V2 digest. Both now match. The UI smoke failure was also reproduced: its workspace-health assertion
 read the collapsed Details section. The journey now opens that actual control and retains the
 health and effective-mode assertions before starting the run. The targeted two-test suite passes.
+
+The updated runtime suite passes 2,717 tests with eight existing skips. All 82 Chromium smoke
+checks pass, as do root typecheck/lint, formatting, architecture/negative checks, the Activity Log
+gate, and the real local Sonar analyzer. New-code coverage is 85.5% over 2,525 lines/conditions:
+the changed runtime files use fresh runtime-suite LCOV and unchanged sources retain their preceding
+full-suite package/UI/scripts reports. This is not a new complete package-coverage run or a hosted
+verdict for the new head.
 
 ## Remaining qualification
 
