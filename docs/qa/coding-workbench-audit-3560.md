@@ -269,3 +269,31 @@ and the complete rerun without changing that test. Combined incremental coverage
 2,587 new lines/conditions. Typecheck, strict UI lint, formatting, real local Sonar, and the Node
 24.18.0 editor bundle gate pass. The initial Node 26 bundle check differed by compression
 fingerprint; remeasuring the same export with the pinned Node version matches committed evidence.
+
+## Merge review: atomic history and startup evidence
+
+Automatic project registration, its workspace manifest, and first-task creation now share the
+existing SQLite write transaction. Nested store operations use savepoints; failed inner writes
+roll back independently and an outer failure rolls back successful nested writes. Empty and
+whitespace-only titles reproduced orphan registration before this fix.
+
+History restoration records selected/source counts, byte count, digest, and truncation. Creation
+records whether the project was registered, updates record old/new status and title-change state,
+and persistence failures retain classified, body-free frames and causes. History initialization
+has its own diagnostic reason instead of being mislabelled as initial-turn dispatch. Composed tests
+also assert emitted issue-context and native initial-context lines. The optional commit-proof
+failure proof now explicitly requires `errorKind: unavailable`.
+
+The CI-repair snapshot store now admits `starting` under the same live authority and binding checks
+as the production prompt path. Its new test failed against real SQLite state before the fix.
+Prompt admission emits the requested token count and accepted/blocked result without prompt text.
+ADR-0173 now distinguishes passive Workbench catalog reads from chat entry-point readiness probes.
+
+Validation: typecheck, architecture including negative fixtures, all seven Activity Log checks,
+real local Sonar, and formatting passed. The broad targeted coverage run had 4,470 passing tests,
+eight existing skips, and one new assertion expecting the obsolete text log format. That assertion
+now reads the actual V2 JSON line; all 20 tests in its affected suite pass. The separate proof/store
+run passes 105 tests. Root lint found one void callback style error; its corrected file passes the
+same strict lint rule. Combined incremental coverage is 86.1% across 2,632 new lines/conditions.
+The fresh 32-run native OpenCode series and the unchanged performance-budget/source-freshness
+gate pass with the pinned Node 24.18.0 toolchain. No calibration or budget was relaxed.
