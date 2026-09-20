@@ -749,12 +749,8 @@ export async function runDependencyBootstrap(
 ): Promise<DependencyBootstrapOutcome> {
   const admitted =
     plan.kind === "current" ? planDependencyBootstrap(deps.workspace, deps.fs) : plan;
-  const receipt =
-    admitted.kind === "current"
-      ? "current"
-      : completedInstalls.has(deps.workspace.root)
-        ? "changed"
-        : "missing";
+  const priorReceipt = completedInstalls.has(deps.workspace.root) ? "changed" : "missing";
+  const receipt = admitted.kind === "current" ? "current" : priorReceipt;
   const outcome = await executeDependencyBootstrap(admitted, deps);
   if (admitted.kind === "none" || admitted.kind === "refused") return outcome;
   return {
