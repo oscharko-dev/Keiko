@@ -251,6 +251,52 @@ describe("e2e suite wiring gate (#2629)", () => {
     ]);
   });
 
+  // ADR-0178 put a reuse guard on the job that hosts most e2e lanes. The guard's job name carries a
+  // hyphen and compares against a quoted string, neither of which the condition reducer can fold,
+  // so an unparsable condition would have downgraded every suite in that job to `unwired` — the
+  // whole PR-blocking e2e surface reported as unprotected while it in fact still runs. The guard is
+  // therefore reduced to the value it actually takes, and pinned here in BOTH directions so the
+  // allowance stays a fact about this one expression rather than a hole for any condition.
+  describe("the ADR-0178 tree-reuse guard", () => {
+    const guardedLane = (condition) => [
+      {
+        name: "guarded.yml",
+        text: `name: Guarded
+on:
+  pull_request:
+    branches: [dev]
+jobs:
+  ui:
+    if: \${{ ${condition} }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm run test:e2e:guarded
+`,
+      },
+    ];
+
+    it("keeps a suite PR-blocking under the real guard, which never fires on a pull request", () => {
+      const guard = "always() && needs.verified-tree.outputs.tree-verified != 'true'";
+      expect(suiteProtectionClass("test:e2e:guarded", guardedLane(guard))).toBe("runs-per-pr");
+    });
+
+    it("does not accept the inverted comparison, which would genuinely skip the job", () => {
+      const inverted = "always() && needs.verified-tree.outputs.tree-verified == 'true'";
+      expect(suiteProtectionClass("test:e2e:guarded", guardedLane(inverted))).toBe("unwired");
+    });
+
+    it("does not accept an unrelated output as if it were the guard", () => {
+      const other = "always() && needs.verified-tree.outputs.something-else != 'true'";
+      expect(suiteProtectionClass("test:e2e:guarded", guardedLane(other))).toBe("unwired");
+    });
+
+    it("keeps a suite PR-blocking when the guard is one true disjunct of a wider condition", () => {
+      const widened =
+        "always() && (needs.verified-tree.outputs.tree-verified != 'true' || github.event_name == 'schedule')";
+      expect(suiteProtectionClass("test:e2e:guarded", guardedLane(widened))).toBe("runs-per-pr");
+    });
+  });
+
   // KEIKO-0151: suiteProtection is an audited snapshot of the concrete execution surface, not a
   // lower-bound. A stronger class changes CI cost and merge semantics, so it needs the same
   // explicit, reviewed baseline update as a downgrade.
