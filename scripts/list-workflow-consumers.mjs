@@ -195,9 +195,11 @@ export function reportWorkflow(workflow, files) {
 
 /** The workflow files that exist, which is the only set this tool ever reports on. */
 export function availableWorkflows() {
-  return readdirSync(WORKFLOW_DIR).filter(
-    (name) => name.endsWith(".yml") || name.endsWith(".yaml"),
-  );
+  // readdirSync order is filesystem-dependent; this catalog is printed in diagnostics and drives
+  // --all, so it is sorted at the source to keep the tool deterministic.
+  return readdirSync(WORKFLOW_DIR)
+    .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+    .toSorted(compareStrings);
 }
 
 /**

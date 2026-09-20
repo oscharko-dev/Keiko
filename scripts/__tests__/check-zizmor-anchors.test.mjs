@@ -241,6 +241,97 @@ describe("re-pinning shifted anchors", () => {
     expect(rewritten).not.toContain("- w.yml:20");
   });
 
+  it("refuses a replacement step inside the SAME job, where count and job both still agree", () => {
+    // The hardest case: `a` keeps exactly one cache step, so the count matches AND the owning job
+    // matches — but it is a DIFFERENT step. Only the step body distinguishes them, and carrying the
+    // suppression across would attach a reviewed risk acceptance to a step nobody reviewed.
+    const sameJobReplacement = [
+      "name: W", // 1
+      "jobs:", // 2
+      "  a:", // 3
+      "    steps:", // 4
+      "      - uses: actions/cache@abc", // 5
+      "        with:", // 6
+      "          key: REPLACED-KEY", // 7
+      "  b:", // 8
+      "    steps:", // 9
+      "      - run: six", // 10
+      "      - run: seven", // 11
+      "      - run: eight", // 12
+      "      - run: nine", // 13
+      "      - run: ten", // 14
+      "      - uses: actions/cache@def", // 15
+    ].join("\n");
+    const committed = [
+      "name: W",
+      "jobs:",
+      "  a:",
+      "    steps:",
+      "      - uses: actions/cache@abc",
+      "        with:",
+      "          key: ORIGINAL-KEY",
+      "  b:",
+      "    steps:",
+      "      - run: six",
+      "      - run: seven",
+      "      - run: eight",
+      "      - run: nine",
+      "      - run: ten",
+      "      - uses: actions/cache@def",
+    ].join("\n");
+    const config = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:5
+      - w.yml:15
+`;
+    // Nothing moved, so there is nothing to correct either way; the guard matters when a shift
+    // coincides with a replacement, which the shifted variant below exercises.
+    const shiftedWithReplacement = ["name: W", "jobs:", "  a:", "    steps:"]
+      .concat([
+        "      - uses: actions/cache@abc",
+        "        with:",
+        "          key: REPLACED-KEY",
+        "  b:",
+        "    steps:",
+        "      - uses: actions/cache@def",
+      ])
+      .join("\n");
+    const committedShifted = [
+      "name: W",
+      "jobs:",
+      "  a:",
+      "    steps:",
+      "      - run: filler",
+      "      - uses: actions/cache@abc",
+      "        with:",
+      "          key: ORIGINAL-KEY",
+      "  b:",
+      "    steps:",
+      "      - uses: actions/cache@def",
+    ].join("\n");
+    const shiftedConfig = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:6
+      - w.yml:11
+`;
+    const corrections = correctedAnchors(
+      parseAnchors(shiftedConfig),
+      () => shiftedWithReplacement,
+      () => committedShifted,
+    );
+    // The anchor in job `a` must NOT be re-pinned: its step body changed.
+    expect([...corrections.values()]).not.toContain(5);
+    expect(
+      correctedAnchors(
+        parseAnchors(config),
+        () => sameJobReplacement,
+        () => committed,
+      ).size,
+    ).toBe(0);
+  });
+
   it("refuses a step that moved to a different job, even when the count is unchanged", () => {
     // `a` loses its cache step and `b` gains a second one: two before, two after.
     const replaced = [

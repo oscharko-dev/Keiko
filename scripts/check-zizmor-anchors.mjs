@@ -199,6 +199,45 @@ export function correctedAnchors(anchors, readWorkflow, readPrevious = readCommi
 }
 
 /**
+ * The whole step a line belongs to: from its `- ` item marker down to the next item at the same
+ * indentation. This is the step's IDENTITY.
+ *
+ * Neither the count, the owning job, nor the matched line alone is enough. Every
+ * `uses: actions/cache@<sha>` line here is byte-identical, and a replacement step can appear in
+ * the SAME job — so all three can agree while the reviewed step is gone. The step body cannot:
+ * a different cache step carries a different `key`, `path` or `name`.
+ * @returns {string | undefined}
+ */
+function stepBlockAt(source, line) {
+  const lines = source.split(/\r?\n/u);
+  if (line < 1 || line > lines.length) return undefined;
+  const start = itemStartAt(lines, line - 1);
+  if (start === undefined) return undefined;
+  const indent = indentOf(lines[start] ?? "");
+  const block = [lines[start]];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const text = lines[index] ?? "";
+    if (text.trim() === "") continue;
+    if (indentOf(text) <= indent) break;
+    block.push(text);
+  }
+  return block.join("\n");
+}
+
+/** The index of the `- ` item that owns a line, searching upwards. */
+function itemStartAt(lines, from) {
+  for (let index = from; index >= 0; index -= 1) {
+    if (/^\s*-\s/u.test(lines[index] ?? "")) return index;
+  }
+  return undefined;
+}
+
+/** Leading-whitespace width of a line. */
+function indentOf(text) {
+  return (/^(\s*)/u.exec(text)?.[1] ?? "").length;
+}
+
+/**
  * The anchors that merely MOVED within their own job, paired with their new line.
  *
  * The line CONTENT does not identify a step — every `actions/cache@<sha>` line in this repository
@@ -213,6 +252,10 @@ function sameJobMoves(group, found, previous, source) {
     const target = found[index];
     if (target === undefined || anchor.line === target) continue;
     if (jobAtLine(previous, anchor.line) !== jobAtLine(source, target)) continue;
+    // Same job is still not the same STEP: a replacement can appear inside that job. Only an
+    // unchanged step body proves the reviewed step survived.
+    const before = stepBlockAt(previous, anchor.line);
+    if (before === undefined || before !== stepBlockAt(source, target)) continue;
     moves.push([anchor, target]);
   }
   return moves;
