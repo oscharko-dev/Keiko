@@ -50,6 +50,8 @@ import {
 import { fetchRepositoryBaseBranch } from "@/lib/task-workspace-api";
 import { TASK_WORKSPACE_MARKER_MESSAGE_KEYS } from "@/lib/task-workspace-marker-labels";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { pickWithNativeDialog, type NativeDialogPickOutcome } from "@/lib/native-file-dialog";
+import { useNativeFileDialogCapability } from "../../hooks/useNativeFileDialogCapability";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { secureRandomId } from "@/lib/secure-random";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -104,6 +106,7 @@ export interface CodingWorkbenchSetupProps {
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
   readonly refreshWorkspace: () => Promise<boolean>;
+  readonly onBoundRepository?: ((root: string) => void) | undefined;
   // The honest pre-activation posture. "unavailable" only once readiness has RESOLVED as
   // unavailable, "evaluation" once it has resolved as available over an unverified evaluation
   // runtime, "verified" once it has resolved as a platform-qualified runtime, and "pending" while
@@ -206,9 +209,14 @@ function failureStatus(failure: VerifiedTaskWorkspaceBindFailure): SetupError {
 // (#3381 review). A rapid folder switch or an overlapping bind is how an operator reaches it.
 async function settleBoundWorkspace(
   refreshWorkspace: () => Promise<boolean>,
+  root: string,
+  onBoundRepository?: (root: string) => void,
 ): Promise<SetupStatus> {
   try {
-    if (await refreshWorkspace()) return { kind: "idle" };
+    if (await refreshWorkspace()) {
+      onBoundRepository?.(root);
+      return { kind: "idle" };
+    }
     reportClientDiagnostic("[keiko] coding workbench workspace refresh did not settle");
   } catch (error) {
     reportClientDiagnostic(
@@ -223,6 +231,7 @@ interface BindInput {
   readonly root: string;
   readonly baseBranch: string;
   readonly refreshWorkspace: () => Promise<boolean>;
+  readonly onBoundRepository?: ((root: string) => void) | undefined;
   readonly onPhase: (phase: SetupPhase) => void;
   readonly collisionSuffix: string;
 }
@@ -242,7 +251,7 @@ async function executeBind(input: BindInput): Promise<SetupStatus> {
     });
   }
   if (!result.ok) return failureStatus(result);
-  return settleBoundWorkspace(input.refreshWorkspace);
+  return settleBoundWorkspace(input.refreshWorkspace, input.root, input.onBoundRepository);
 }
 
 function setupBindRequest(input: BindInput): VerifiedTaskWorkspaceBindInput {
@@ -275,7 +284,7 @@ async function executeRepairAndBind(input: RepairInput): Promise<SetupStatus> {
     },
   });
   if (!result.ok) return failureStatus(result);
-  return settleBoundWorkspace(input.refreshWorkspace);
+  return settleBoundWorkspace(input.refreshWorkspace, input.root, input.onBoundRepository);
 }
 
 // A sequence that rejects outside its own bounded outcomes is a defect, not an operator state; it
@@ -354,13 +363,14 @@ interface SetupActionsInput {
   readonly repositoryPath: string;
   readonly branch: TargetBranchState;
   readonly refreshWorkspace: () => Promise<boolean>;
+  readonly onBoundRepository?: ((root: string) => void) | undefined;
   readonly status: SetupStatus;
   readonly setStatus: Dispatch<SetStateAction<SetupStatus>>;
   readonly branchAvailable: boolean;
 }
 
 function useSetupActions(params: SetupActionsInput): SetupActions {
-  const { repositoryPath, branch, refreshWorkspace, status, setStatus } = params;
+  const { repositoryPath, branch, refreshWorkspace, onBoundRepository, status, setStatus } = params;
   const targetBranch = branch.targetBranch;
   const root = repositoryPath.trim();
   const pending = status.kind === "pending";
@@ -379,6 +389,7 @@ function useSetupActions(params: SetupActionsInput): SetupActions {
         workspaceId: offer.workspaceId,
         strategy,
         refreshWorkspace,
+        onBoundRepository,
         onPhase: phaseReporter(publish),
       }),
       publish,
@@ -392,7 +403,7 @@ function setupSubmitAction(
   start: () => SetupPublish,
   collisionSuffix: string,
 ): SetupActions["onSubmit"] {
-  const { repositoryPath, branch, refreshWorkspace, status } = params;
+  const { repositoryPath, branch, refreshWorkspace, onBoundRepository, status } = params;
   const root = repositoryPath.trim();
   const baseBranch = branch.targetBranch.trim();
   const pending = status.kind === "pending";
@@ -413,6 +424,7 @@ function setupSubmitAction(
         root,
         baseBranch,
         refreshWorkspace,
+        onBoundRepository,
         collisionSuffix,
         onPhase: phaseReporter(publish),
       }),
@@ -822,6 +834,7 @@ export function CodingWorkbenchSetup({
   selectedRoot,
   selectedBaseBranch,
   refreshWorkspace,
+  onBoundRepository,
   runtimePosture,
   repositoryPathDraft,
   onRepositoryPathDraftChange,
@@ -842,6 +855,7 @@ export function CodingWorkbenchSetup({
     repositoryPath,
     branch,
     refreshWorkspace,
+    onBoundRepository,
     status,
     setStatus,
     branchAvailable,
@@ -950,37 +964,151 @@ function SetupFields({
   );
 }
 
-function RepositoryPathField({
-  value,
-  pending,
-  onChange,
-  onSettled,
-}: {
+interface NativeFolderBrowse {
+  readonly supported: boolean;
+  readonly busy: boolean;
+  readonly notice: string | null;
+  readonly browse: () => void;
+}
+
+// The Browse button reuses the same native-dialog port every other Browse surface in this app
+// goes through (RepositoryFolderSwitcher, EditorEmptyState, capsule-actions, NewWindowDialog). It
+// is offered only when the BFF's capability probe confirms it — an unsupported platform keeps the
+// text input as the sole input, exactly like the manual-path fallback those surfaces use. The
+// dialog result is folded into the input's own change/settled path so the branch lookup arms the
+// same way a keystroke does (#3452 F52), and a busy/unsupported/failed outcome renders one
+// bounded, redacted notice — never a stale value silently applied.
+function useNativeFolderBrowse(onPicked: (path: string) => void): NativeFolderBrowse {
+  const t = useCodingWorkbenchTranslate();
+  const tGlobal = useTranslate();
+  const supported = useNativeFileDialogCapability();
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const browse = useCallback((): void => {
+    if (!supported || busy) return;
+    setBusy(true);
+    setNotice(null);
+    void pickWithNativeDialog({
+      mode: "open-directory",
+      title: tGlobal("workspaceContext.chooseDialogTitle"),
+    })
+      .then((outcome) => {
+        applyBrowseOutcome(outcome, onPicked, setNotice, t, tGlobal);
+      })
+      .catch(() => {
+        setNotice(t("codingWorkbench.setup.browseError"));
+      })
+      .finally(() => {
+        setBusy(false);
+      });
+  }, [busy, onPicked, supported, t, tGlobal]);
+  return { supported, busy, notice, browse };
+}
+
+function applyBrowseOutcome(
+  outcome: NativeDialogPickOutcome,
+  onPicked: (path: string) => void,
+  setNotice: (notice: string | null) => void,
+  t: CodingWorkbenchTranslate,
+  tGlobal: I18nTranslate,
+): void {
+  if (outcome.kind === "picked") {
+    const first = outcome.paths[0];
+    if (first !== undefined) onPicked(first);
+    return;
+  }
+  if (outcome.kind === "cancelled") return;
+  if (outcome.kind === "busy") {
+    setNotice(tGlobal("workspaceContext.dialogBusy"));
+    return;
+  }
+  if (outcome.kind === "unsupported") {
+    setNotice(tGlobal("workspaceContext.dialogUnsupported"));
+    return;
+  }
+  setNotice(t("codingWorkbench.setup.browseError"));
+}
+
+interface RepositoryPathFieldProps {
   readonly value: string;
   readonly pending: boolean;
   readonly onChange: (value: string) => void;
   readonly onSettled: (value: string) => void;
-}): ReactNode {
+}
+
+function RepositoryPathField(props: RepositoryPathFieldProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const { onChange, onSettled, pending } = props;
+  const onPicked = useCallback(
+    (path: string): void => {
+      onChange(path);
+      onSettled(path);
+    },
+    [onChange, onSettled],
+  );
+  const browse = useNativeFolderBrowse(onPicked);
+  return (
+    <RepositoryPathFieldView pending={pending} browse={browse} t={t}>
+      <RepositoryPathInput {...props} t={t} />
+    </RepositoryPathFieldView>
+  );
+}
+
+function RepositoryPathFieldView({
+  pending,
+  browse,
+  t,
+  children,
+}: {
+  readonly pending: boolean;
+  readonly browse: NativeFolderBrowse;
+  readonly t: CodingWorkbenchTranslate;
+  readonly children: ReactNode;
+}): ReactNode {
   return (
     <>
       <label className={styles.fieldLabel} htmlFor="coding-workbench-setup-path">
         {t("codingWorkbench.setup.repositoryPath")}
       </label>
-      <input
-        id="coding-workbench-setup-path"
-        className={styles.setupInput}
-        type="text"
-        value={value}
-        disabled={pending}
-        placeholder={t("codingWorkbench.setup.repositoryPathPlaceholder")}
-        onChange={(event) => {
-          onChange(event.target.value);
-        }}
-        onBlur={(event) => {
-          onSettled(event.target.value);
-        }}
-      />
+      <div className={styles.cmpPathFieldRow}>
+        {children}
+        {browse.supported ? (
+          <button
+            type="button"
+            className={styles.button}
+            disabled={pending || browse.busy}
+            onClick={browse.browse}
+          >
+            {t("codingWorkbench.setup.browse")}
+          </button>
+        ) : null}
+      </div>
+      {browse.notice === null ? null : <output className={styles.helpText}>{browse.notice}</output>}
     </>
+  );
+}
+
+function RepositoryPathInput({
+  value,
+  pending,
+  onChange,
+  onSettled,
+  t,
+}: RepositoryPathFieldProps & { readonly t: CodingWorkbenchTranslate }): ReactNode {
+  return (
+    <input
+      id="coding-workbench-setup-path"
+      className={styles.setupInput}
+      type="text"
+      value={value}
+      disabled={pending}
+      placeholder={t("codingWorkbench.setup.repositoryPathPlaceholder")}
+      onChange={(event) => {
+        onChange(event.target.value);
+      }}
+      onBlur={(event) => {
+        onSettled(event.target.value);
+      }}
+    />
   );
 }

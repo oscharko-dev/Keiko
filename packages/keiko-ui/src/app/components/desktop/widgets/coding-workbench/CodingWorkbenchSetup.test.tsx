@@ -34,6 +34,12 @@ const listMock = vi.hoisted(() => vi.fn());
 const repairMock = vi.hoisted(() => vi.fn());
 const baseBranchMock = vi.hoisted(() => vi.fn());
 const branchRead = vi.hoisted(() => ({ loading: false, error: null as string | null }));
+// The native folder picker is off by default so the existing tests keep asserting the plain text
+// input; the picker-focused describe below flips `supported` on and drives the outcome.
+const nativeDialogState = vi.hoisted(() => ({
+  supported: false,
+  pick: vi.fn(),
+}));
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
@@ -66,6 +72,18 @@ vi.mock("@/lib/task-workspace-api", () => ({
   repairTaskWorkspace: repairMock,
   fetchRepositoryBaseBranch: baseBranchMock,
 }));
+
+vi.mock("../../hooks/useNativeFileDialogCapability", () => ({
+  useNativeFileDialogCapability: (): boolean => nativeDialogState.supported,
+}));
+
+vi.mock("@/lib/native-file-dialog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/native-file-dialog")>();
+  return {
+    ...actual,
+    pickWithNativeDialog: nativeDialogState.pick,
+  };
+});
 
 // The persisted row provisioning refused for the (repository, task) pair the setup card derives
 // from the target branch, carrying the classified finding and the server's recovery hint.
@@ -619,6 +637,13 @@ describe("CodingWorkbenchSetup", () => {
   // paint and gone once the binding and the run workspace arrive). The card owns the typed path in
   // its own state, so the unmount discards it and the remount re-seeds from `selectedRoot` --
   // silently replacing what the operator was typing.
+  //
+  // #3563: `bootstrapSetupVisible` now stays on when `selectedRoot !== boundRepositoryRoot` so an
+  // operator switching to a different repository sees the setup card back. The unmount that this
+  // F52 pin exercises therefore requires `selectedRoot === boundRepositoryRoot` (as the real bind
+  // flow guarantees through `onBoundRepository → onSelectRepository`), and the remount re-appears
+  // when the workspace is unbound with the operator's own selection restored. The draft the parent
+  // still holds must survive that flip.
   it("keeps a typed repository path across a binding that unmounts and remounts the card", async () => {
     const user = userEvent.setup();
     const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
@@ -627,7 +652,7 @@ describe("CodingWorkbenchSetup", () => {
 
     view.rerender(
       <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "master")}>
-        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+        <CodingWorkbenchWindow selectedRoot="/repos/target" />
       </ActiveWorkspaceProvider>,
     );
     await waitFor(() => {
@@ -663,7 +688,7 @@ describe("CodingWorkbenchSetup", () => {
 
     view.rerender(
       <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "master")}>
-        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+        <CodingWorkbenchWindow selectedRoot="/repos/target" />
       </ActiveWorkspaceProvider>,
     );
     await waitFor(() => {
@@ -1305,5 +1330,87 @@ describe("CodingWorkbenchSetup", () => {
     const result = stripLeadingAndTrailingDashes("-".repeat(20_000));
     expect(Date.now() - start).toBeLessThan(1000);
     expect(result).toBe("");
+  });
+
+  // #3563 handoff: the bootstrap card's onBoundRepository callback is what tells the parent window
+  // to switch its repository selection onto the workspace the operator just bound. Without it, a
+  // successful bind flipped the setup card away but the composer chip stayed on the old repo, so
+  // the operator saw the setup vanish with no visible confirmation the new binding was in effect.
+  it("reports the bound repository to the parent once the shared context refresh settles", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    const onBoundRepository = vi.fn();
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    render(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchSetup
+          selectedRoot="/repos/keiko-checkout"
+          refreshWorkspace={api.refresh}
+          runtimePosture="verified"
+          repositoryPathDraft={null}
+          onRepositoryPathDraftChange={() => undefined}
+          onBoundRepository={onBoundRepository}
+        />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await user.click(await bindable());
+
+    await waitFor(() => {
+      expect(onBoundRepository).toHaveBeenCalledWith("/repos/keiko-checkout");
+    });
+  });
+
+  // #3563 handoff: the setup card imported the native-dialog helpers but never rendered a Browse
+  // button, so the operator was forced to type an absolute path even on platforms whose native
+  // dialog every other Browse surface in this app uses. The button appears only when the BFF's
+  // capability probe confirms support; an unsupported platform keeps the plain text input intact.
+  describe("native folder picker", () => {
+    beforeEach(() => {
+      nativeDialogState.supported = false;
+      nativeDialogState.pick.mockReset();
+    });
+
+    it("hides the Browse button on a platform without native dialog support", () => {
+      renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+      expect(screen.queryByRole("button", { name: "Browse…" })).not.toBeInTheDocument();
+    });
+
+    it("fills the path field with a picked folder and arms its branch lookup", async () => {
+      const user = userEvent.setup();
+      nativeDialogState.supported = true;
+      nativeDialogState.pick.mockResolvedValue({
+        kind: "picked",
+        paths: ["/repos/picked-folder"],
+      });
+      baseBranchMock.mockResolvedValue("trunk");
+      renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+      await user.click(screen.getByRole("button", { name: "Browse…" }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/picked-folder");
+      });
+      await waitFor(() => {
+        expect(baseBranchMock).toHaveBeenCalledWith("/repos/picked-folder");
+      });
+      await waitFor(() => {
+        expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+      });
+    });
+
+    it("reports a busy native dialog without changing the entered path", async () => {
+      const user = userEvent.setup();
+      nativeDialogState.supported = true;
+      nativeDialogState.pick.mockResolvedValue({ kind: "busy" });
+      renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+      await user.click(screen.getByRole("button", { name: "Browse…" }));
+
+      expect(await screen.findByText(/Another file dialog is already open/u)).toBeInTheDocument();
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/selected");
+    });
   });
 });

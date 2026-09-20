@@ -835,6 +835,18 @@
   font: inherit;
 }
 
+.cmpPathFieldRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.cmpPathFieldRow > .setupInput {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .setupInput:hover:not(:disabled),
 .questionInput:hover:not(:disabled) {
   border-color: var(--input-border-hover);

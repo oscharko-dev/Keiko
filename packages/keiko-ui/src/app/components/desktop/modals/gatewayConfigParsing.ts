@@ -84,7 +84,13 @@ function unknownGenericEndpointStyle(value: unknown): boolean {
  * saving must never silently change retrieval, reranking, or egress behavior (review finding on
  * #3031).
  */
-const REPRESENTABLE_ROOT_KEYS = new Set(["providers", "capabilities", "circuitBreaker", "figma"]);
+const REPRESENTABLE_ROOT_KEYS = new Set([
+  "schemaVersion",
+  "providers",
+  "capabilities",
+  "circuitBreaker",
+  "figma",
+]);
 const KNOWN_KINDS = new Set(["chat", "embedding", "ocr-vision", "voice"]);
 const VOICE_PERSONAS = new Set(["male", "female", "neutral"]);
 /** The provider kinds SOME setup field can represent; `ocr-vision` has none. */
@@ -1178,10 +1184,25 @@ function exceedsByteCeiling(serialized: string): boolean {
   return new TextEncoder().encode(serialized).length > MAX_GATEWAY_CONFIG_BYTES;
 }
 
+// The schema version Test & Save writes today (mirrors keiko-model-gateway's
+// GATEWAY_CONFIG_SCHEMA_VERSION). Cannot be imported across the ADR-0019 trust boundary — provider
+// SDKs may only be pulled in by keiko-model-gateway — so this literal is checked against the
+// canonical value by a repo-wide gate (`check:package-surface:assembled`) that fails whenever the
+// two drift apart. Bumping the gateway to schemaVersion: 3 requires flipping this constant in the
+// same change.
+const SUPPORTED_GATEWAY_UPLOAD_SCHEMA_VERSION = 2;
+
+// Test & Save writes the current schemaVersion; it is metadata, not a setup field, and must survive
+// a round trip through this parser. Refuse unknown versions rather than misreading their shape.
+function unsupportedSchemaVersion(schemaVersion: unknown): boolean {
+  return schemaVersion !== undefined && schemaVersion !== SUPPORTED_GATEWAY_UPLOAD_SCHEMA_VERSION;
+}
+
 export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploadResult {
   if (exceedsByteCeiling(serialized)) return { outcome: "invalid" };
   const root = uploadRoot(serialized);
   if (root === undefined) return { outcome: "invalid" };
+  if (unsupportedSchemaVersion(root.schemaVersion)) return { outcome: "invalid" };
   if (!Object.keys(root).every((key) => REPRESENTABLE_ROOT_KEYS.has(key))) {
     return { outcome: "unsupportedSetting" };
   }

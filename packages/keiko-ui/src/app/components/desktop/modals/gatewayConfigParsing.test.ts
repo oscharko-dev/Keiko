@@ -76,6 +76,7 @@ describe("parseGatewayConfigUpload", () => {
   it("maps the documented keiko.config.json shape onto the form fields", () => {
     const fields = fieldsOf(
       JSON.stringify({
+        schemaVersion: 2,
         providers: [
           providerFixture(),
           providerFixture({
@@ -99,6 +100,39 @@ describe("parseGatewayConfigUpload", () => {
       figmaAccessToken: undefined,
       ...NO_VOICE_FIELDS,
     });
+  });
+
+  it("accepts the persisted schema version and rejects unknown versions", () => {
+    const file = { schemaVersion: 2, providers: [providerFixture()] };
+    expect(parseGatewayConfigUpload(JSON.stringify(file)).outcome).toBe("fields");
+    expect(parseGatewayConfigUpload(JSON.stringify({ ...file, schemaVersion: 3 }))).toEqual({
+      outcome: "invalid",
+    });
+  });
+
+  // #3563 CodeRabbit follow-up: guard the schema-version check with malformed and boundary values.
+  // Everything except the literal number `2` (Test & Save writes exactly that) must refuse — a bare
+  // absence stays accepted for compatibility with hand-written files (covered above).
+  it.each([
+    ["null", null],
+    ['empty string ""', ""],
+    ['string "2"', "2"],
+    ["empty object {}", {}],
+    ["empty array []", []],
+    ["zero", 0],
+    ["one", 1],
+    ["three", 3],
+    ["negative", -1],
+    ["fractional", 2.5],
+    ["boolean true", true],
+  ] as const)("rejects schemaVersion %s as an unsupported value", (_label, schemaVersion) => {
+    const file = { schemaVersion, providers: [providerFixture()] };
+    expect(parseGatewayConfigUpload(JSON.stringify(file))).toEqual({ outcome: "invalid" });
+  });
+
+  it("accepts a file that omits schemaVersion entirely (hand-written compatibility)", () => {
+    const file = { providers: [providerFixture()] };
+    expect(parseGatewayConfigUpload(JSON.stringify(file)).outcome).toBe("fields");
   });
 
   it("loads the persisted product configuration shape: chat, embedding, and voice together", () => {

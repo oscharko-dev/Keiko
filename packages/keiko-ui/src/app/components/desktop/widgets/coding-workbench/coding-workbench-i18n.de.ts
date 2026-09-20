@@ -267,12 +267,15 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.eyebrow": "Autonomie",
   "codingWorkbench.mode.unconfirmed": "Warten auf Serverbestätigung",
   "codingWorkbench.mode.governed-assist.label": "Um Genehmigung bitten",
+  "codingWorkbench.mode.governed-assist.short": "Jede Änderung freigeben",
   "codingWorkbench.mode.governed-assist.description":
     "Lese- und Planungsvorgänge werden ausgeführt; Bearbeitungen im Arbeitsbereich, Befehle, der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
   "codingWorkbench.mode.supervised-coding.label": "Überwachter Workspace",
+  "codingWorkbench.mode.supervised-coding.short": "Routine läuft, Riskantes fragt",
   "codingWorkbench.mode.supervised-coding.description":
     "Routinemäßige Bearbeitungen im Arbeitsbereich mit niedrigem und mittlerem Risiko, geprüfte Befehle und Verifizierungen werden ausgeführt; der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
   "codingWorkbench.mode.autonomous-delivery.label": "Vollzugriff",
+  "codingWorkbench.mode.autonomous-delivery.short": "Läuft ohne Freigabe pro Aktion",
   "codingWorkbench.mode.autonomous-delivery.description":
     "Datei- und Internetvorgänge sowie akzeptierte Code-Task-Operationen zum Committen, Pushen und Erstellen eines Draft-Pull-Requests werden innerhalb des validierten Authority Envelope ohne Genehmigung pro Aktion ausgeführt. Merge bleibt separat genehmigungspflichtig.",
   "codingWorkbench.task.eyebrow": "Aufgabe",
@@ -305,9 +308,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Rechte konnten nicht geladen werden. „Um Genehmigung bitten“ bleibt ausgewählt.",
   "codingWorkbench.composer.authority.error.persist":
     "Die Rechte konnten nicht gespeichert werden. Die vorherige Auswahl bleibt aktiv.",
-  "codingWorkbench.composer.context.label": "Coding-Kontext",
-  "codingWorkbench.composer.repository.open": "Repository {repository} in Git verwalten",
-  "codingWorkbench.composer.branch.open": "Branch {branch} in Git verwalten",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva verwendet in der Coding Workbench ausschließlich das aktive Projekt-Memory.",
@@ -320,7 +320,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.help":
     "Pausieren Sie den aktiven Lauf, um eine Rückfrage zu senden. Ein entworfener Follow-up wird nur im pausierten Zustand zugelassen und niemals in eine Warteschlange gestellt.",
   "codingWorkbench.composer.workspaceMismatch":
-    "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Repository- und Branch-Chip beschreiben weiterhin diesen Lauf. Wechseln Sie zurück, um seine Dateien zu prüfen oder zu bearbeiten.",
+    "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Das Informationspanel und der Laufstatus beschreiben weiterhin diesen Lauf. Wechseln Sie über die Workspace-Auswahl oben zurück, um seine Dateien zu prüfen oder zu bearbeiten.",
   "codingWorkbench.composer.blocked.busy": "Keiko verarbeitet gerade eine Runtime-Aktion.",
   "codingWorkbench.composer.blocked.emptyStart": "Beschreibe zuerst, was Keiko tun soll.",
   "codingWorkbench.composer.blocked.emptyFollowUp": "Schreibe zuerst eine Rückfrage.",
@@ -373,6 +373,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Binde einen vorhandenen lokalen Git-Checkout, damit der Coding-Lauf in einem gesteuerten Aufgabenarbeitsbereich startet.",
   "codingWorkbench.setup.repositoryPath": "Repository-Pfad",
   "codingWorkbench.setup.repositoryPathPlaceholder": "/absoluter/pfad/zum/repository",
+  "codingWorkbench.setup.browse": "Durchsuchen…",
+  "codingWorkbench.setup.browseError":
+    "Der Ordner-Dialog konnte nicht geöffnet werden. Gib den Pfad manuell ein.",
   "codingWorkbench.setup.branchesLoading": "Branches werden geladen…",
   "codingWorkbench.setup.branchesUnavailable": "Branches nicht verfügbar",
   "codingWorkbench.setup.branchSelect": "Branch auswählen",

@@ -30,6 +30,9 @@ import {
 import KeikoSelect from "../../KeikoSelect";
 import { VoiceDictationButton, VoiceDictationPreviewFromController } from "../../VoiceDictation";
 import { OrganicWorkspaceBubble } from "../../EmptyWorkspaceBlob";
+// KeikoSelect is retained above for the model/source/authority controls; the composer's own
+// repository chooser was removed with #3563 (single source of truth is the header-wide workspace
+// switcher).
 import { useDictation } from "../../hooks/useDictation";
 import { supportsDictation, useVoiceCapability } from "../../hooks/useVoiceCapability";
 import { dictationCaptureSupported } from "../../hooks/dictation-recorder";
@@ -41,8 +44,6 @@ const CodingWorkbenchIcon = Icons.codingWorkbench;
 const MinimizeIcon = Icons.minimize;
 const FwdIcon = Icons.fwd;
 const ArrowUpIcon = Icons.arrowUp;
-const FolderIcon = Icons.folder;
-const BranchIcon = Icons.branch;
 const CubeIcon = Icons.cube;
 const BrainIcon = Icons.brain;
 
@@ -104,10 +105,8 @@ interface TaskStartSectionProps {
   readonly mutationPending: boolean;
   readonly startBusy: boolean;
   readonly startBlockedReason: string | null;
-  readonly repositoryLabel: string | null;
-  readonly branchLabel: string | null;
-  readonly branchContext: "repository" | "task";
-  readonly onOpenGit: () => void;
+  /** Retained so `ProjectMemoryToggle` can be re-mounted (currently hidden per owner directive)
+   * without a signature change; the composer's context row is not rendered at all right now. */
   readonly projectMemoryEnabled: boolean;
   readonly onProjectMemoryEnabledChange: (enabled: boolean) => void;
   readonly autonomyMode: CodingWorkbenchMode | null;
@@ -236,61 +235,17 @@ export function TaskStartSection(input: TaskStartSectionProps): ReactNode {
       <label className="sr-only" htmlFor="coding-workbench-task-intent">
         {t("codingWorkbench.task.instructions")}
       </label>
-      <ComposerContext input={input} t={t} />
       <TaskComposerBox input={input} controller={controller} t={t} />
     </form>
   );
 }
 
-function branchContextLabel(input: TaskStartSectionProps, t: CodingWorkbenchTranslate): string {
-  return t(
-    input.branchContext === "task"
-      ? "codingWorkbench.info.taskBranch"
-      : "codingWorkbench.info.repositoryBranch",
-  );
-}
-
-function ComposerContext({ input, t }: ControlProps): ReactNode {
-  if (input.repositoryLabel === null && input.branchLabel === null) return null;
-  const branchLabel = branchContextLabel(input, t);
-  return (
-    <div
-      className={styles.composerContext}
-      aria-label={t("codingWorkbench.composer.context.label")}
-    >
-      {input.repositoryLabel === null ? null : (
-        <button
-          className={`${styles.composerContextChip} ${styles.composerContextButton}`}
-          type="button"
-          title={input.repositoryLabel}
-          aria-label={t("codingWorkbench.composer.repository.open", {
-            repository: input.repositoryLabel,
-          })}
-          onClick={input.onOpenGit}
-        >
-          <FolderIcon size={14} />
-          <span>{input.repositoryLabel}</span>
-        </button>
-      )}
-      {input.branchLabel === null ? null : (
-        <button
-          className={`${styles.composerContextChip} ${styles.composerContextButton}`}
-          type="button"
-          title={`${branchLabel}: ${input.branchLabel}`}
-          aria-label={t("codingWorkbench.composer.branch.open", {
-            branch: input.branchLabel,
-          })}
-          onClick={input.onOpenGit}
-        >
-          <BranchIcon size={14} />
-          <span>{input.branchLabel}</span>
-        </button>
-      )}
-      <ProjectMemoryToggle input={input} t={t} />
-    </div>
-  );
-}
-
+// #3563 owner directive: the composer no longer renders its own repository chip, branch chip, or
+// MemoriaViva toggle. The header-wide RepositoryFolderSwitcher is the single source of
+// workspace-context truth, exactly like every other window (Editor, Git, Local Knowledge).
+// `ProjectMemoryToggle` is kept below (unused) so re-enabling MemoriaViva is a one-line change: add
+// a wrapper that renders `<ProjectMemoryToggle input={input} t={t} />` above `TaskComposerBox`.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained for MemoriaViva re-enable
 function ProjectMemoryToggle({ input, t }: ControlProps): ReactNode {
   const enabled = input.projectMemoryEnabled;
   return (
@@ -411,10 +366,13 @@ function DictationControl({
 function ComposerConfigurationControls({ input, t }: ControlProps): ReactNode {
   const selected = input.models.find((model) => model.id === input.selectedModelId);
   const efforts = selected?.reasoningEfforts ?? [];
+  // #3563 owner directive: only Keiko Gateway ships today; a Codex-subscription source is not
+  // decided yet. Hiding the source dropdown avoids offering a choice that does not exist. The
+  // `SourceControl` component below stays defined so re-enabling it is a one-line change once
+  // that decision lands (add `<SourceControl input={input} t={t} />` back into this row).
   return (
     <div className={`cmp-bar-model ${styles.composerConfiguration}`}>
       <CodingModelControl input={input} t={t} />
-      <SourceControl input={input} t={t} />
       <ReasoningControl input={input} efforts={efforts} t={t} />
       <AuthorityControl input={input} t={t} />
     </div>
@@ -446,6 +404,7 @@ function CodingModelControl({ input, t }: ControlProps): ReactNode {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained for the restore-path
 function SourceControl({ input, t }: ControlProps): ReactNode {
   const options = runtimePreferenceOptions(t);
   return (
@@ -502,7 +461,7 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
   const confirmedModeId = useId();
   return (
     <div
-      className={`cmp-model mono ${styles.authorityControl}`}
+      className={`cmp-model ${styles.authorityControl}`}
       {...(confirmed && input.autonomyMode === "autonomous-delivery"
         ? { "data-full-access": "true" }
         : {})}
@@ -512,9 +471,9 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         ariaLabel={t("codingWorkbench.composer.authority.label")}
         ariaDescribedBy={confirmed ? confirmedModeId : undefined}
         menuTitle={t("codingWorkbench.composer.authority.menu")}
-        menuMinWidth={260}
+        menuMinWidth={180}
+        showMenuHeader={false}
         disabled={input.configurationLocked}
-        mono
         leadingVisual={<CodingWorkbenchIcon size={14} />}
         sections={[{ options: autonomyOptions(t) }]}
         onValueChange={(value): void => {

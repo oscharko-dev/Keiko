@@ -248,12 +248,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.eyebrow": "Autonomy",
   "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
   "codingWorkbench.mode.governed-assist.label": "Ask for approval",
+  "codingWorkbench.mode.governed-assist.short": "Approve every workspace change",
   "codingWorkbench.mode.governed-assist.description":
     "Reads and planning proceed; workspace edits, commands, external-file access, and internet use require approval. Delivery remains separately human-approved.",
   "codingWorkbench.mode.supervised-coding.label": "Supervised workspace",
+  "codingWorkbench.mode.supervised-coding.short": "Routine edits proceed; risky asks",
   "codingWorkbench.mode.supervised-coding.description":
     "Routine low- and medium-risk workspace edits, vetted commands, and verification proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
   "codingWorkbench.mode.autonomous-delivery.label": "Full access",
+  "codingWorkbench.mode.autonomous-delivery.short": "Runs without per-action approval",
   "codingWorkbench.mode.autonomous-delivery.description":
     "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
   "codingWorkbench.task.eyebrow": "Task",
@@ -286,9 +289,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Run authority could not be loaded. Ask for approval remains selected.",
   "codingWorkbench.composer.authority.error.persist":
     "Run authority could not be saved. The previous authority remains active.",
-  "codingWorkbench.composer.context.label": "Coding context",
-  "codingWorkbench.composer.repository.open": "Manage repository {repository}",
-  "codingWorkbench.composer.branch.open": "Manage branch {branch}",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva uses only the active project memory in Coding Workbench.",
@@ -301,7 +301,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.help":
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
   "codingWorkbench.composer.workspaceMismatch":
-    "This run keeps the authority of the workspace it started in, which is no longer the active one. The repository and branch chips keep describing that run; switch back to review or edit its files.",
+    "This run keeps the authority of the workspace it started in, which is no longer the active one. The information panel and run status keep describing that run; switch back through the header workspace selector to review or edit its files.",
   "codingWorkbench.composer.blocked.busy": "Keiko is already processing a runtime action.",
   "codingWorkbench.composer.blocked.emptyStart": "Describe what Keiko should do first.",
   "codingWorkbench.composer.blocked.emptyFollowUp": "Write a follow-up first.",
@@ -353,6 +353,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Bind an existing local Git checkout so the coding run starts inside a governed task workspace.",
   "codingWorkbench.setup.repositoryPath": "Repository path",
   "codingWorkbench.setup.repositoryPathPlaceholder": "/absolute/path/to/repository",
+  "codingWorkbench.setup.browse": "Browse…",
+  "codingWorkbench.setup.browseError": "The folder picker could not open. Enter the path manually.",
   "codingWorkbench.setup.branchesLoading": "Loading branches…",
   "codingWorkbench.setup.branchesUnavailable": "Branches unavailable",
   "codingWorkbench.setup.branchSelect": "Select a branch",

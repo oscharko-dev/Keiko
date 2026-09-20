@@ -1,16 +1,11 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  I18N_STORAGE_KEY,
-  I18nProvider,
-  loadLocaleMessages,
-  resetLoadedMessageCatalogs,
-} from "@/lib/i18n";
+import { I18N_STORAGE_KEY, resetLoadedMessageCatalogs } from "@/lib/i18n";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
@@ -57,7 +52,6 @@ function composerProps(
   actions: TaskComposerActions,
   taskIntent = "Investigate the failing test",
   onReasoningEffortChange = vi.fn(),
-  onOpenGit = vi.fn(),
 ): ComposerProps {
   return {
     taskIntent,
@@ -69,10 +63,6 @@ function composerProps(
     mutationPending: false,
     startBusy: false,
     startBlockedReason: null,
-    repositoryLabel: "Keiko",
-    branchLabel: "dev",
-    branchContext: "repository",
-    onOpenGit,
     projectMemoryEnabled: true,
     onProjectMemoryEnabledChange: vi.fn(),
     autonomyMode: "supervised-coding",
@@ -95,12 +85,9 @@ function renderComposer(
   actions: TaskComposerActions,
   taskIntent = "Investigate the failing test",
   onReasoningEffortChange = vi.fn(),
-  onOpenGit = vi.fn(),
 ): void {
   render(
-    <TaskStartSection
-      {...composerProps(runState, actions, taskIntent, onReasoningEffortChange, onOpenGit)}
-    />,
+    <TaskStartSection {...composerProps(runState, actions, taskIntent, onReasoningEffortChange)} />,
   );
 }
 
@@ -124,66 +111,17 @@ describe("Coding Workbench composer", () => {
     expect(authority.querySelector('path[d*="M13.5 5.5"]')).not.toBeInTheDocument();
   });
 
-  it("opens Git from the active repository and branch controls", async () => {
-    const user = userEvent.setup();
-    const onOpenGit = vi.fn();
-    renderComposer("idle", composerActions(), undefined, undefined, onOpenGit);
-
-    const context = screen.getByLabelText("Coding context");
-    await user.click(within(context).getByRole("button", { name: "Manage repository Keiko" }));
-    await user.click(within(context).getByRole("button", { name: "Manage branch dev" }));
-
-    expect(onOpenGit).toHaveBeenCalledTimes(2);
-    expect(within(context).queryByText("Repository branch")).toBeNull();
-    expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
-  });
-
-  it("keeps project memory active by default and lets the operator toggle it per run", async () => {
-    const user = userEvent.setup();
-    const onProjectMemoryEnabledChange = vi.fn();
-    renderComposerWithOverrides({ onProjectMemoryEnabledChange });
-
-    const context = screen.getByLabelText("Coding context");
-    const toggle = within(context).getByRole("button", {
-      name: "Disable project memory for this run",
-    });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    expect(within(toggle).queryByText("On")).toBeNull();
-    expect(within(toggle).queryByText("Off")).toBeNull();
-
-    await user.click(toggle);
-
-    expect(onProjectMemoryEnabledChange).toHaveBeenCalledExactlyOnceWith(false);
-  });
-
-  it("shows the disabled project memory state as a real toggle state", () => {
-    renderComposerWithOverrides({ projectMemoryEnabled: false });
-
-    const toggle = screen.getByRole("button", {
-      name: "Enable project memory for this run",
-    });
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(within(toggle).getByText("MemoriaViva")).toBeInTheDocument();
-    expect(within(toggle).queryByText("On")).toBeNull();
-    expect(within(toggle).queryByText("Off")).toBeNull();
-  });
-
-  it("localizes the repository branch context in German", async () => {
-    await loadLocaleMessages("de");
-    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
-
-    render(
-      <I18nProvider>
-        <TaskStartSection {...composerProps("idle", composerActions())} />
-      </I18nProvider>,
-    );
-
-    expect(
-      await screen.findByRole("button", {
-        name: "Branch dev in Git verwalten",
-      }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Repository branch")).not.toBeInTheDocument();
+  // #3563 owner directive: the composer no longer renders its own repository chooser, branch chip
+  // or MemoriaViva toggle. The header-wide RepositoryFolderSwitcher is the single source of
+  // workspace-context truth. This pin makes sure the context row does NOT reappear: no combobox
+  // labelled "Choose repository", no "Manage branch" button, no MemoriaViva toggle, no aria-label
+  // "Coding context" region. When MemoriaViva returns, replace this pin with the toggle's own tests.
+  it("does not render the repository, branch or MemoriaViva chips in the composer", () => {
+    renderComposer("idle", composerActions());
+    expect(screen.queryByLabelText("Coding context")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Manage branch/u })).toBeNull();
+    expect(screen.queryByText("MemoriaViva")).toBeNull();
   });
 
   it("shows Start while idle and calls the start handler", async () => {
@@ -273,38 +211,39 @@ describe("Coding Workbench composer", () => {
     expect(screen.queryByRole("option", { name: "Extra high" })).toBeNull();
   });
 
-  it("changes the coding model, model source, and run authority", async () => {
+  // #3563 owner directive: only Keiko Gateway ships today; the Model source dropdown is hidden
+  // (SourceControl component kept for a one-line re-enable once a second source is decided).
+  it("changes the coding model and run authority without exposing a Model source dropdown", async () => {
     const user = userEvent.setup();
     const onSelectedModelChange = vi.fn();
-    const onRuntimePreferenceChange = vi.fn();
     const onRequestedModeChange = vi.fn();
     renderComposerWithOverrides({
       models: [CODING_MODEL, ALTERNATE_MODEL],
       onSelectedModelChange,
-      onRuntimePreferenceChange,
       onRequestedModeChange,
     });
 
+    expect(screen.queryByRole("combobox", { name: "Model source" })).toBeNull();
+
     await user.click(screen.getByRole("combobox", { name: "Coding model" }));
     await user.click(screen.getByRole("option", { name: "gpt-5.5" }));
-    await user.click(screen.getByRole("combobox", { name: "Model source" }));
-    await user.click(screen.getByRole("option", { name: "ChatGPT/Codex subscription" }));
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
     await user.click(screen.getByRole("option", { name: "Full access" }));
 
     expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
-    expect(onRuntimePreferenceChange).toHaveBeenCalledWith("codex-subscription");
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
   });
 
-  it("hides gateway-only controls for a Codex model with one reasoning level", () => {
+  // Same hiding rule applies regardless of the runtimePreference the state carries; the operator
+  // never sees the Codex option, so the choice cannot be made from this surface.
+  it("still hides the Model source dropdown when the state carries a codex-subscription runtime", () => {
     renderComposerWithOverrides({
       runtimePreference: "codex-subscription",
       models: [ALTERNATE_MODEL],
       selectedModelId: ALTERNATE_MODEL.id,
     });
 
-    expect(screen.queryByRole("combobox", { name: "Coding model" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Model source" })).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
   });
 
@@ -316,8 +255,6 @@ describe("Coding Workbench composer", () => {
       actions,
       taskIntent: "",
       canStart: false,
-      repositoryLabel: null,
-      branchLabel: null,
       autonomyMode: null,
       onTaskIntentChange,
     });

@@ -436,6 +436,7 @@ export interface CodingWorkbenchGitTarget {
 }
 
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
+function noopSelectRepository(_root: string): void {}
 
 function repositoryRootOrNull(root: string | null | undefined): string | null {
   return typeof root === "string" && root.trim() !== "" ? root : null;
@@ -459,6 +460,9 @@ function idleRepositoryRoot(
   activeWorkspace: WorkbenchWorkspaceApi,
   selectedRoot: string | undefined,
 ): string | null {
+  // Bound instance wins: with #3563 the composer no longer carries its own repository chooser, so
+  // preferring `selectedRoot` first (as the Codex handoff briefly did) would let a stale shell
+  // selection silently discard a validly bound idle session.
   const activeInstance = activeWorkspace.activeInstance;
   const activeRoot = repositoryRootOrNull(activeInstance?.repositoryRoot);
   if (activeRoot !== null) return activeRoot;
@@ -481,6 +485,37 @@ function inactiveWorkbenchRepositoryRoot(
   selectedRoot: string | undefined,
 ): string | null {
   return idleRepositoryRoot(activeWorkspace, selectedRoot);
+}
+
+/** Selects the repository root reflecting the run's own attribution while active, else the idle
+ * projection. The run-is-active check is derived from the runtime state internally (rather than
+ * accepted as a boolean parameter, which would trip SonarJS S2301 by turning this into a flag-
+ * dispatching helper); extracted so the enclosing `CodingWorkbenchWindow` stays under the
+ * complexity ceiling (AGENTS.md §6: cyclomatic complexity <= 10). */
+function workbenchRepositoryRoot(
+  state: CodingWorkbenchRuntimeState,
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  selectedRoot: string | undefined,
+): string | null {
+  return runIsActiveFrom(state)
+    ? activeWorkbenchRepositoryRoot(runWorkspace, activeWorkspace, selectedRoot)
+    : inactiveWorkbenchRepositoryRoot(activeWorkspace, selectedRoot);
+}
+
+/** Pendant to `activeRunState`: the run's pending permission, or `undefined` when no run runs. Kept
+ * beside `activeRunState` so the two share a single owner and neither surface has to re-derive it
+ * with an optional-chain expression that would push the calling scope over the complexity ceiling. */
+function runPendingPermission(
+  state: CodingWorkbenchRuntimeState,
+): CodingWorkbenchRuntimePendingPermission | undefined {
+  return state.run.value?.pendingPermission;
+}
+
+/** True when the run's own state (never the live workspace pointer) is active. See `activeRunState`
+ * — this wraps the optional-chain form so callers do not spend a branching point on it. */
+function runIsActiveFrom(state: CodingWorkbenchRuntimeState): boolean {
+  return activeRunState(state.run.value?.state);
 }
 
 function repositoryBranchReadRoot(
@@ -664,6 +699,7 @@ function welcomeEligible(
 export function CodingWorkbenchWindow({
   selectedRoot,
   onOpenGit = noopOpenGit,
+  onSelectRepository = noopSelectRepository,
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
@@ -673,6 +709,9 @@ export function CodingWorkbenchWindow({
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
+  /** Persists the parent window's selection after a successful bind (per-window cfg). The composer
+   * itself no longer chooses repositories — the header-wide RepositoryFolderSwitcher does that. */
+  readonly onSelectRepository?: ((root: string) => void) | undefined;
 }): ReactNode {
   const workspaceContext = useOptionalActiveWorkspace();
   const activeWorkspace = workspaceContext ?? EMPTY_WORKSPACE;
@@ -707,17 +746,20 @@ export function CodingWorkbenchWindow({
   const t = useCodingWorkbenchTranslate();
   const authority = useWorkbenchAuthoritySelection(state, actions, t);
   const workbenchLabel = useTranslate()("rail.coding");
-  const pendingPermission = state.run.value?.pendingPermission;
+  const pendingPermission = runPendingPermission(state);
   const alert = visibleAlert(
     state,
     t,
     bootstrapSetupVisible(state, activeWorkspace),
     authority.errorMessage,
   );
-  const runIsActive = activeRunState(state.run.value?.state);
-  const repositoryRoot = runIsActive
-    ? activeWorkbenchRepositoryRoot(runWorkspace, activeWorkspace, selectedRoot)
-    : inactiveWorkbenchRepositoryRoot(activeWorkspace, selectedRoot);
+  const runIsActive = runIsActiveFrom(state);
+  const repositoryRoot = workbenchRepositoryRoot(
+    state,
+    runWorkspace,
+    activeWorkspace,
+    selectedRoot,
+  );
 
   useEffect(() => {
     if (!approvalAction.current || pendingPermission !== undefined) return;
@@ -749,6 +791,7 @@ export function CodingWorkbenchWindow({
       codingModels={codingModels}
       authority={authority}
       onOpenGit={onOpenGit}
+      onSelectRepository={onSelectRepository}
       runWorkspace={runWorkspace}
       repositoryRoot={repositoryRoot}
       runIsActive={runIsActive}
@@ -797,6 +840,10 @@ interface WorkbenchContentProps {
   readonly codingModels: readonly ModelCapability[];
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
+  /** Persists the parent-window selection after a successful bind. Never invoked by the composer,
+   * which no longer chooses repositories on its own — the header-wide RepositoryFolderSwitcher is
+   * the single source of workspace-context truth. */
+  readonly onSelectRepository: (root: string) => void;
   /** The run's own workspace attribution, independent of the live pointer (#3381 review). */
   readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;
   /** One repository projection shared by the information panel and composer. */
@@ -932,6 +979,7 @@ function WorkbenchColumns({
   state,
   actions,
   activeWorkspace,
+  selectedRoot,
   taskIntent,
   onTaskIntentChange,
   focusRef,
@@ -941,6 +989,7 @@ function WorkbenchColumns({
   codingModels,
   authority,
   onOpenGit,
+  onSelectRepository,
   runWorkspace,
   repositoryRoot,
   runIsActive,
@@ -957,11 +1006,6 @@ function WorkbenchColumns({
   );
   const issuePending = issueIntake.state.kind === "loading";
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
-  // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
-  // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
-  // hides behind runtime availability: on an unactivated install it stays reachable and honestly
-  // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
-  // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
   const showSetup = bootstrapSetupVisible(state, activeWorkspace);
   const startBlocker = startBlockedReason(state, t, showSetup, authority.errorMessage);
   const runtimePosture = useRuntimeAssurancePosture(state);
@@ -1039,18 +1083,9 @@ function WorkbenchColumns({
     pausedRun?.effectiveMode,
   );
   const resumeModes = pausedRun?.effectiveMode ? resumableModes(pausedRun.effectiveMode) : [];
-  // The composer acts on the repository the bound task workspace belongs to, not on a folder
-  // selected elsewhere in the Workbench. The run attribution below still names the run's task
-  // branch/workspace, but the repository chip and normal Git target remain the repository's Git
-  // control surface. Showing an internal task worktree as the Git repository made branch switching
-  // look like a workspace operation instead of repository administration.
-  //
-  // During a run the branch chip names the RUN's workspace, which the server still holds authority
-  // over, not the live pointer: labelling a run in A with B's branch invited the operator to act on
-  // the wrong tree (#3381 review).
-  const repositoryBranch = useRepositoryBranchState(
-    repositoryBranchReadRoot(runIsActive, repositoryRoot),
-  );
+  // The composer branch chip was removed with #3563 (header-wide switcher is the single source of
+  // workspace-context truth); the info panel still reads its own branch state through
+  // `SessionContextBar`'s `useRepositoryBranchState`, so no additional subscription is needed here.
   useEffect(() => {
     setProjectMemoryEnabled(true);
   }, [repositoryRoot]);
@@ -1085,22 +1120,6 @@ function WorkbenchColumns({
         issuePending || (state.mutation.kind === "start" && state.mutation.status === "pending")
       }
       startBlockedReason={startBlocker}
-      repositoryLabel={repositoryLabel(repositoryRoot)}
-      branchLabel={
-        runIsActive || history.detail !== null
-          ? (history.detail?.task.branch ??
-            runWorkspace.bound?.taskBranch ??
-            activeWorkspace.activeInstance?.taskBranch ??
-            null)
-          : repositoryBranch.currentBranch
-      }
-      branchContext={runIsActive || history.detail !== null ? "task" : "repository"}
-      onOpenGit={() =>
-        onOpenGit({
-          root: repositoryRoot,
-          binding: "repository",
-        })
-      }
       projectMemoryEnabled={projectMemoryEnabled}
       onProjectMemoryEnabledChange={setProjectMemoryEnabled}
       autonomyMode={confirmedMode(state)}
@@ -1132,6 +1151,13 @@ function WorkbenchColumns({
           runtimePosture={runtimePosture}
           repositoryPathDraft={repositoryPathDraft}
           onRepositoryPathDraftChange={setRepositoryPathDraft}
+          onBoundRepository={(boundRoot): void => {
+            // A successful bind flips the shared context back to a bound state; the parent window
+            // persists that selection for the next time this window opens and the setup-owned
+            // draft is released so a later selection change can seed the field again.
+            onSelectRepository(boundRoot);
+            setRepositoryPathDraft(null);
+          }}
         />
       </div>
     );
@@ -1303,8 +1329,11 @@ function confirmedMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode 
   );
 }
 
-// Single source for "the bootstrap Code setup section is on screen". Two copies of this predicate
-// would let the live alert and the setup section disagree about who states a condition.
+// Single source for "the bootstrap Code setup section is on screen". The setup card only appears
+// on the initial bootstrap (nothing bound yet); every subsequent workspace change flows through
+// the header-wide RepositoryFolderSwitcher and the shared ActiveWorkspaceContext, exactly like
+// every other window (Editor, Git, Local Knowledge). #3563 owner directive: the composer never
+// carries its own chooser — one place for workspace selection, not two.
 function bootstrapSetupVisible(
   state: CodingWorkbenchRuntimeState,
   activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"],
