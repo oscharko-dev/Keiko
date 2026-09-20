@@ -12,6 +12,11 @@
 // reported `denied`.
 
 import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
+import { createHash } from "node:crypto";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   runVerification,
   type VerificationPlan,
@@ -29,6 +34,45 @@ import {
 } from "../diagnostics-log.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { createWorkspaceMutexRegistry, fileWriteKeys } from "../task-workspace/mutex.js";
+
+const verificationWorkspaces = createWorkspaceMutexRegistry();
+const VERIFICATION_WORKSPACE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.verification.workspace",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.verificationExecution.workspaceAdmission",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["waiting", "acquired", "released"],
+    },
+    workspaceDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["verification-runner-failure"],
+  proofIds: ["editor.verification.workspace.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function workspaceAdmission(
+  args: ExecuteVerificationArgs,
+  state: "waiting" | "acquired" | "released",
+): void {
+  (args.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      VERIFICATION_WORKSPACE_OPERATION,
+      { correlationId: args.correlationId ?? UNKNOWN_CORRELATION_ID },
+      { state, workspaceDigest: createHash("sha256").update(args.workspace.root).digest("hex") },
+    ),
+  );
+}
 
 export interface NetworkIsolationProbe {
   readonly available: boolean;
@@ -118,6 +162,20 @@ export function verificationDependencyFailureHandler(
 // Probe, then run the plan under enforced, fail-closed egress isolation. Behavior is identical to the
 // composition postApplyVerification.ts performed inline before this extraction.
 export async function executeVerificationEnforced(
+  args: ExecuteVerificationArgs,
+): Promise<ExecuteVerificationResult> {
+  workspaceAdmission(args, "waiting");
+  return verificationWorkspaces.runExclusive(fileWriteKeys(args.workspace.root), async () => {
+    workspaceAdmission(args, "acquired");
+    try {
+      return await executeExclusiveVerification(args);
+    } finally {
+      workspaceAdmission(args, "released");
+    }
+  });
+}
+
+async function executeExclusiveVerification(
   args: ExecuteVerificationArgs,
 ): Promise<ExecuteVerificationResult> {
   const probe = probeNetworkIsolation(args.probeCwd ?? args.workspace.root);

@@ -186,6 +186,13 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "editor.verificationRunner.recordDependencyBootstrap",
   fields: {
+    completionReceipt: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["missing", "changed", "current"],
+    },
+    completionRecorded: { type: "boolean", dataClass: "closed-enum", required: false },
     state: {
       type: "string",
       dataClass: "closed-enum",
@@ -531,6 +538,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       workspace: resolved.workspace,
       signal: entry.controller.signal,
       correlationId: entry.correlationId,
+      activityLog: this.activityLog,
       diagnostics: this.diagnostics,
       fs: resolved.access.fs,
       dependencyBootstrap: "auto",
@@ -758,6 +766,14 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         EDITOR_VERIFICATION_DEPENDENCIES_OPERATION,
         { correlationId },
         {
+          ...(dependencies.completionReceipt === undefined
+            ? {}
+            : {
+                completionReceipt: dependencies.completionReceipt,
+              }),
+          ...(dependencies.completionRecorded === undefined
+            ? {}
+            : { completionRecorded: dependencies.completionRecorded }),
           state: dependencies.state,
           lockfile: dependencies.lockfile,
           ...(dependencies.exitCode === null ? {} : { exitCode: dependencies.exitCode }),

@@ -8523,12 +8523,6 @@
     },
     {
       "path": "packages/keiko-verification/src/dependencies.ts",
-      "owner": "installBehindProxy",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-verification/src/dependencies.ts",
       "owner": "parsedJsonObject",
       "kind": "unregistered-catch",
       "count": 1

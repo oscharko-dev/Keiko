@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "80804b17fcc4cae76e968abd7bc1825cf1d1fcf20eca18304e3b0e280e4f8f5b",
+    "catalogDigest": "85e6eeac6f0a8ffaa723f972cf61a110d4e71b9d60e1b0cce7217c1aca64c565",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8126,6 +8126,17 @@
             "dataClass": "loss-state",
             "required": true
           },
+          "completionReceipt": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["missing", "changed", "current"]
+          },
+          "completionRecorded": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
           "state": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -8174,7 +8185,7 @@
         "proofIds": ["editor.verification.dependencies.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:181",
-        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:757"]
+        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:765"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8317,10 +8328,50 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:82",
         "emitterSites": [
-          "packages/keiko-server/src/editor/verificationRunner.ts:736",
-          "packages/keiko-server/src/editor/verificationRunner.ts:783",
-          "packages/keiko-server/src/editor/verificationRunner.ts:811"
+          "packages/keiko-server/src/editor/verificationRunner.ts:744",
+          "packages/keiko-server/src/editor/verificationRunner.ts:799",
+          "packages/keiko-server/src/editor/verificationRunner.ts:827"
         ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "editor.verification.workspace",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "editor.verificationExecution.workspaceAdmission",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "state": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["waiting", "acquired", "released"]
+          },
+          "workspaceDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["verification-runner-failure"],
+        "proofIds": ["editor.verification.workspace.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/verificationExecution.ts:40",
+        "emitterSites": ["packages/keiko-server/src/editor/verificationExecution.ts:69"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36133,20 +36184,27 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["editor.verification.execute"],
+          "state": ["editor.verification.execute", "editor.verification.workspace"],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["editor.verification.execute"],
+        "requiredCausalOperations": [
+          "editor.verification.execute",
+          "editor.verification.workspace"
+        ],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["editor.verification.execute"],
+        "requiredProofOperations": ["editor.verification.execute", "editor.verification.workspace"],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["editor.verification.execute"],
+        "requiredResourceOperations": [
+          "editor.verification.execute",
+          "editor.verification.workspace"
+        ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
           "count",
+          "digest",
           "error-kind",
           "loss-state",
           "opaque-id"
@@ -67891,6 +67949,18 @@
               "analyzerProjection": "process-lifecycle",
               "safeContextFields": [
                 {
+                  "name": "completionReceipt",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "completionRecorded",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "durationMs",
                   "type": "integer",
                   "dataClass": "duration",
@@ -67953,7 +68023,7 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["editor.verification.execute"],
+            "state": ["editor.verification.execute", "editor.verification.workspace"],
             "end": [],
             "failure": [],
             "loss": []
@@ -67962,10 +68032,14 @@
             {
               "op": "editor.verification.execute",
               "mode": "correlation"
+            },
+            {
+              "op": "editor.verification.workspace",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["editor.verification.execute"],
+          "resourceSignals": ["editor.verification.execute", "editor.verification.workspace"],
           "replayReferences": [],
           "operations": [
             {
@@ -68086,6 +68160,36 @@
                 "causeChain": true
               },
               "proofIds": ["editor.verification.execute.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "editor.verification.workspace",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "state",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "workspaceDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.verification.workspace.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -72375,15 +72479,21 @@
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:916",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:932",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.subscriber",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1120",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1136",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.workspace",
+      "category": "process",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:43",
       "package": "keiko-server"
     },
     {
@@ -73966,7 +74076,7 @@
     {
       "op": "verification.dependency-bootstrap",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:109",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:153",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -74275,6 +74385,7 @@
     "editor.verification.dependencies",
     "editor.verification.execute",
     "editor.verification.subscriber",
+    "editor.verification.workspace",
     "editor.workspace-watch.authority-revoked",
     "embedding.batch.array-unsupported",
     "embedding.batch.budgeting-failed",

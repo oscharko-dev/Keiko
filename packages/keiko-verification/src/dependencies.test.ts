@@ -1,4 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -86,7 +97,6 @@ function writeInstalledTree(
     JSON.stringify({ lockfileVersion: 3, packages }),
     "utf8",
   );
-  writeFileSync(join(root, "node_modules", ".keiko-install-complete"), "", "utf8");
 }
 
 function planFor(root: string): ReturnType<typeof planDependencyBootstrap> {
@@ -131,6 +141,14 @@ function bootstrapDepsFor(
 }
 
 describe("planDependencyBootstrap", () => {
+  it("never accepts a workspace-written completion marker as install evidence", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeLockfile(root);
+    writeInstalledTree(root);
+    writeFileSync(join(root, "node_modules", ".keiko-install-complete"), "", "utf8");
+    expect(planFor(root).kind).toBe("install");
+  });
   it("plans 'none' when the workspace has no package.json", () => {
     const root = tempRoot();
     expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({ kind: "none" });
@@ -209,7 +227,7 @@ describe("planDependencyBootstrap", () => {
     });
   });
 
-  it("plans 'current' when the hidden installed-tree marker is newer than the manifest and lockfile", () => {
+  it("reuses only a completed bootstrap bound to unchanged installed entries and inputs", async () => {
     const root = tempRoot();
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
     writeLockfile(root);
@@ -220,7 +238,13 @@ describe("planDependencyBootstrap", () => {
     utimesSync(join(root, "package.json"), base, base);
     utimesSync(join(root, "package-lock.json"), base, base);
     utimesSync(join(root, "node_modules", ".package-lock.json"), installedAt, installedAt);
-    utimesSync(join(root, "node_modules", ".keiko-install-complete"), installedAt, installedAt);
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const outcome = await runDependencyBootstrap(
+      { kind: "install", lockfile: "present" },
+      bootstrapDepsFor(root, rec.fn),
+    );
+    expect(outcome.summary.completionRecorded).toBe(true);
 
     expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({
       kind: "current",
@@ -528,14 +552,25 @@ describe("runDependencyBootstrap — settled plans (no spawn)", () => {
     expect(rec.calls()).toHaveLength(0);
   });
 
-  it("settles 'current' without spawning", async () => {
+  it("settles an authenticated current receipt without spawning again", async () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeLockfile(root);
+    writeInstalledTree(root);
+    const installed = recordingSpawn();
+    scriptChildClose(installed.child, { exitCode: 0 });
+    await runDependencyBootstrap(planFor(root), bootstrapDepsFor(root, installed.fn));
     const rec = recordingSpawn();
-    const outcome = await runDependencyBootstrap(
-      { kind: "current", lockfile: "present" },
-      bootstrapDepsFor(tempRoot(), rec.fn),
-    );
+    const outcome = await runDependencyBootstrap(planFor(root), bootstrapDepsFor(root, rec.fn));
     expect(outcome).toEqual({
-      summary: { state: "current", lockfile: "present", exitCode: null, durationMs: 0 },
+      summary: {
+        state: "current",
+        lockfile: "present",
+        exitCode: null,
+        durationMs: 0,
+        completionReceipt: "current",
+        completionRecorded: true,
+      },
     });
     expect(rec.calls()).toHaveLength(0);
   });
@@ -602,6 +637,8 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     expect(DEPENDENCY_INSTALL_ARGS).toContain("--ignore-scripts");
     expect(outcome.summary).toEqual({
       state: "installed",
+      completionReceipt: "missing",
+      completionRecorded: true,
       lockfile: "absent",
       exitCode: 0,
       durationMs: expect.any(Number) as number,
@@ -649,6 +686,8 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
 
     expect(outcome.summary).toEqual({
       state: "refused",
+      completionReceipt: "missing",
+      completionRecorded: false,
       lockfile: "absent",
       exitCode: 0,
       durationMs: expect.any(Number) as number,
@@ -823,6 +862,113 @@ describe("runDependencyBootstrap — registry egress", () => {
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
     return planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
   }
+
+  async function completedFixture(root: string): Promise<void> {
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    mkdirSync(join(root, "node_modules", "left-pad"));
+    writeFileSync(join(root, "node_modules", "left-pad", "index.js"), "original");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(outcome.summary.completionRecorded).toBe(true);
+    expect(planFor(root).kind).toBe("current");
+    expect(existsSync(join(root, "node_modules", ".keiko-install-complete"))).toBe(false);
+  }
+
+  it.each(["modify", "delete", "manifest", "lockfile"])(
+    "invalidates a private receipt after %s even with restored mtime",
+    async (mutation) => {
+      const root = tempRoot();
+      await completedFixture(root);
+      const file = join(root, "node_modules", "left-pad", "index.js");
+      const prior = statSync(file);
+      if (mutation === "modify") {
+        writeFileSync(file, "modified");
+        utimesSync(file, prior.atime, prior.mtime);
+      } else if (mutation === "delete") rmSync(file);
+      else if (mutation === "manifest")
+        writeManifest(root, { dependencies: { "left-pad": "1.1.0" } });
+      else writeLockfile(root);
+      expect(planFor(root).kind).toBe("install");
+    },
+  );
+
+  it("rechecks a previously current plan before consumption and records why it reinstalls", async () => {
+    const root = tempRoot();
+    await completedFixture(root);
+    const stale = planFor(root);
+    rmSync(join(root, "node_modules", "left-pad", "index.js"));
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 1 });
+    const outcome = await runDependencyBootstrap(stale, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(rec.calls()).toHaveLength(1);
+    expect(outcome.summary).toMatchObject({
+      state: "failed",
+      completionReceipt: "changed",
+      completionRecorded: false,
+    });
+    expect(planFor(root).kind).toBe("install");
+  });
+
+  it("cannot write or unlink a host completion marker after a directory symlink swap", async () => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    writeInstalledTree(outside);
+    const external = join(outside, "node_modules", ".keiko-install-complete");
+    writeFileSync(external, "untouched");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    let swapped = false;
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      fs: {
+        ...nodeWorkspaceFs,
+        stat: (path) => {
+          const result = nodeWorkspaceFs.stat(path);
+          if (!swapped && path === join(root, "node_modules")) {
+            swapped = true;
+            renameSync(path, join(root, "old_modules"));
+            symlinkSync(join(outside, "node_modules"), path, "junction");
+          }
+          return result;
+        },
+      },
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(swapped).toBe(true);
+    expect(readFileSync(external, "utf8")).toBe("untouched");
+    expect(outcome.summary.completionRecorded).toBe(false);
+    expect(planFor(root).kind).toBe("install");
+  });
+
+  it("reports a command-boundary rejection through the structured failure port", async () => {
+    const root = tempRoot();
+    const error = new TypeError("executable unavailable", {
+      cause: new Error("resolution failed"),
+    });
+    const onFailure = vi.fn();
+    const rec = recordingSpawn();
+    const outcome = await runDependencyBootstrap(installPlan(root), {
+      ...bootstrapDepsFor(root, rec.fn),
+      resolveExecutable: () => {
+        throw error;
+      },
+      onFailure,
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(outcome.summary.state).toBe("failed");
+    expect(onFailure).toHaveBeenCalledWith({ stage: "command", error });
+    expect(rec.calls()).toHaveLength(0);
+  });
 
   it("runs npm behind the egress proxy, records its tunnels and closes it", async () => {
     const root = tempRoot();

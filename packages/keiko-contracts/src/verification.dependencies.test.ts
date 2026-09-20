@@ -74,6 +74,27 @@ const ALL_DEPENDENCY_STATES: readonly VerificationDependencyState[] = [
 const ALL_LOCKFILE_STATES: readonly VerificationLockfileState[] = ["present", "created", "absent"];
 
 describe("isVerificationDependencySummary", () => {
+  it.each(["missing", "changed", "current"])(
+    "accepts paired %s completion evidence",
+    (completionReceipt) => {
+      expect(
+        isVerificationDependencySummary({
+          ...dependencySummary(),
+          completionReceipt,
+          completionRecorded: true,
+        }),
+      ).toBe(true);
+    },
+  );
+  it.each([
+    { completionReceipt: "forged", completionRecorded: true },
+    { completionReceipt: "current" },
+    { completionRecorded: true },
+    { completionReceipt: "missing", completionRecorded: "true" },
+  ])("rejects malformed completion evidence %j", (completion) => {
+    expect(isVerificationDependencySummary({ ...dependencySummary(), ...completion })).toBe(false);
+  });
+
   it("accepts every valid state/lockfile combination", () => {
     for (const state of ALL_DEPENDENCY_STATES) {
       for (const lockfile of ALL_LOCKFILE_STATES) {

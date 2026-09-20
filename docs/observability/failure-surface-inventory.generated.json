@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "80804b17fcc4cae76e968abd7bc1825cf1d1fcf20eca18304e3b0e280e4f8f5b"
+    "catalogDigest": "85e6eeac6f0a8ffaa723f972cf61a110d4e71b9d60e1b0cce7217c1aca64c565"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 445,
-    "proofCount": 453,
-    "resolvedProofCount": 453,
+    "operationCount": 446,
+    "proofCount": 454,
+    "resolvedProofCount": 454,
     "failureClassCount": 316,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -422,6 +422,7 @@
         "editor.producer-turn.completed",
         "editor.verification.dependencies",
         "editor.verification.execute",
+        "editor.verification.workspace",
         "editor.workspace-watch.authority-revoked",
         "git-change.chat.blocked",
         "git-change.chat.connected",
@@ -1278,10 +1279,14 @@
       "packages/keiko-server/src/editor/agentProducerRoute.test.ts"
     ],
     "editor.verification.dependencies.emitted-line": [
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.execute.emitted-line": [
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
+    ],
+    "editor.verification.workspace.emitted-line": [
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts"
     ],
     "editor.workspace-watch.authority-revoked.emitted-line": [
       "packages/keiko-server/src/editor/watch/workspaceWatchRoutes.test.ts"
@@ -1985,7 +1990,8 @@
     ],
     "server.diagnostic.failure.activity-log-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
-      "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts"
+      "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "speech.stt.language.normalized.emitted-line": [

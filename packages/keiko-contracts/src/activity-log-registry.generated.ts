@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "80804b17fcc4cae76e968abd7bc1825cf1d1fcf20eca18304e3b0e280e4f8f5b" as const;
+  "85e6eeac6f0a8ffaa723f972cf61a110d4e71b9d60e1b0cce7217c1aca64c565" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7716,6 +7716,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      completionReceipt: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["missing", "changed", "current"],
+      },
+      completionRecorded: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       state: {
         type: "string",
         dataClass: "closed-enum",
@@ -7894,6 +7905,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["verification-runner-refusal", "verification-runner-failure"],
     proofIds: ["editor.verification.execute.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "editor.verification.workspace",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "editor.verificationExecution.workspaceAdmission",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["waiting", "acquired", "released"],
+      },
+      workspaceDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["verification-runner-failure"],
+    proofIds: ["editor.verification.workspace.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -57810,6 +57859,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "process-lifecycle",
           safeContextFields: [
             {
+              name: "completionReceipt",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "completionRecorded",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "durationMs",
               type: "integer",
               dataClass: "duration",
@@ -57866,7 +57927,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["editor.verification.execute"],
+        state: ["editor.verification.execute", "editor.verification.workspace"],
         end: [],
         failure: [],
         loss: [],
@@ -57876,9 +57937,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "editor.verification.execute",
           mode: "correlation",
         },
+        {
+          op: "editor.verification.workspace",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
-      resourceSignals: ["editor.verification.execute"],
+      resourceSignals: ["editor.verification.execute", "editor.verification.workspace"],
       replayReferences: [],
       operations: [
         {
@@ -57999,6 +58064,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: true,
           },
           proofIds: ["editor.verification.execute.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "editor.verification.workspace",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "workspaceDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["editor.verification.workspace.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -59609,6 +59704,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "editor.producer-turn.completed": "editor-delivery",
     "editor.verification.dependencies": "editor-delivery",
     "editor.verification.execute": "editor-delivery",
+    "editor.verification.workspace": "editor-delivery",
     "editor.workspace-watch.authority-revoked": "editor-delivery",
     "embedding.batch.array-unsupported": "model-gateway",
     "embedding.batch.budgeting-failed": "memory-knowledge",

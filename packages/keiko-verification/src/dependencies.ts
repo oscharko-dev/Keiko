@@ -23,7 +23,7 @@
 // package below the workspace's own manifests names. After npm exits, the tree it installed is
 // still held to the same rule.
 
-import { closeSync, lstatSync, mkdirSync, openSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
@@ -88,7 +88,11 @@ const LOCKFILE_MAX_BYTES = 64 * 1_048_576;
 const MANIFEST = "package.json";
 const LOCKFILES: readonly string[] = ["package-lock.json", "npm-shrinkwrap.json"];
 const INSTALLED_TREE_MARKER = join("node_modules", ".package-lock.json");
-const COMPLETED_INSTALL_MARKER = ".keiko-install-complete";
+// Process-owned receipt: repository files cannot create or extend installation authority.
+// Restarts discard receipts and require a fresh successful bootstrap.
+const completedInstalls = new Map<string, string>();
+const MAX_INSTALL_RECEIPTS = 32;
+const MAX_INSTALL_ENTRIES = 100_000;
 // Every lockfile npm reads a source from: the root lockfiles and the tree it already installed.
 const SOURCE_LOCKFILES: readonly string[] = [...LOCKFILES, INSTALLED_TREE_MARKER];
 const LOCKFILE_VERSIONS: ReadonlySet<unknown> = new Set<unknown>([2, 3]);
@@ -144,13 +148,16 @@ export interface DependencyBootstrapDeps {
   // Starts the registry egress proxy the install runs behind; tests inject their own.
   readonly startEgressProxy?: (() => Promise<RegistryEgressProxy>) | undefined;
   readonly onFailure?:
-    | ((failure: { readonly stage: "proxy-start" | "post-proxy"; readonly error: unknown }) => void)
+    | ((failure: {
+        readonly stage: "proxy-start" | "post-proxy" | "command";
+        readonly error: unknown;
+      }) => void)
     | undefined;
 }
 
 function reportDependencyBootstrapFailure(
   deps: DependencyBootstrapDeps,
-  stage: "proxy-start" | "post-proxy",
+  stage: "proxy-start" | "post-proxy" | "command",
   error: unknown,
 ): void {
   deps.onFailure?.({ stage, error });
@@ -374,52 +381,99 @@ function lockfileState(root: string, fs: WorkspaceFs): VerificationLockfileState
     : "absent";
 }
 
-function completedInstallCurrent(root: string, fs: WorkspaceFs, installed: number): boolean {
-  const modules = statOrUndefined(fs, join(root, "node_modules"));
-  if (modules?.isDirectory !== true || modules.isSymbolicLink) return false;
-  const completed = statOrUndefined(fs, join(root, "node_modules", COMPLETED_INSTALL_MARKER));
-  return !(
-    completed?.isFile !== true ||
-    completed.isSymbolicLink ||
-    completed.mtimeMs === undefined ||
-    completed.mtimeMs < installed
+function completedInstallCurrent(root: string, fs: WorkspaceFs): boolean {
+  const receipt = completedInstalls.get(root);
+  return receipt !== undefined && receipt === installationFingerprint(root, fs);
+}
+
+// Bind the private receipt to every entry's non-user-settable change time and inode identity,
+// plus the root manifest/lockfiles. No directory links are traversed and missing metadata fails
+// closed to a reinstall. Bounded enumeration prevents a workspace from growing host work forever.
+function installationFingerprint(root: string, fs: WorkspaceFs): string | undefined {
+  const hash = createHash("sha256");
+  const pending = [join(root, "node_modules")];
+  let entries = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (directory === undefined) return undefined;
+    const stat = statOrUndefined(fs, directory);
+    if (stat?.isDirectory !== true || stat.isSymbolicLink) return undefined;
+    if (!fingerprintStat(hash, directory, stat)) return undefined;
+    const children = fs.readDir(directory, MAX_INSTALL_ENTRIES - entries);
+    entries += children.length;
+    if (entries >= MAX_INSTALL_ENTRIES) return undefined;
+    if (!fingerprintChildren(directory, children, fs, hash, pending)) return undefined;
+  }
+  return fingerprintInputs(root, fs, hash) ? hash.digest("hex") : undefined;
+}
+
+function fingerprintChildren(
+  directory: string,
+  children: ReturnType<WorkspaceFs["readDir"]>,
+  fs: WorkspaceFs,
+  hash: ReturnType<typeof createHash>,
+  pending: string[],
+): boolean {
+  for (const child of children) {
+    const path = join(directory, child.name);
+    const stat = statOrUndefined(fs, path);
+    if (!fingerprintStat(hash, path, stat)) return false;
+    if (stat?.isDirectory && !stat.isSymbolicLink) pending.push(path);
+  }
+  return true;
+}
+
+function fingerprintInputs(
+  root: string,
+  fs: WorkspaceFs,
+  hash: ReturnType<typeof createHash>,
+): boolean {
+  for (const name of [MANIFEST, ...LOCKFILES]) {
+    const stat = statOrUndefined(fs, join(root, name));
+    if (stat === undefined) hash.update(JSON.stringify([name, "absent"]));
+    else if (!fingerprintStat(hash, name, stat)) return false;
+  }
+  return true;
+}
+
+function fingerprintStat(
+  hash: ReturnType<typeof createHash>,
+  name: string,
+  stat: WorkspaceStat | undefined,
+): boolean {
+  if (stat?.fileIdentity === undefined || stat.ctimeNs === undefined) return false;
+  hash.update(
+    JSON.stringify([name, stat.fileIdentity, stat.ctimeNs, stat.size, stat.isSymbolicLink]),
   );
+  return true;
 }
 
 // npm may write its hidden lockfile before an install fails, leaving packages only partly unpacked.
 // Trust its currency heuristic only after this bootstrap has observed a successful, confined install.
 function installedTreeCurrent(root: string, fs: WorkspaceFs): boolean {
   const installed = statOrUndefined(fs, join(root, INSTALLED_TREE_MARKER))?.mtimeMs;
-  if (installed === undefined || !completedInstallCurrent(root, fs, installed)) return false;
+  if (installed === undefined || !completedInstallCurrent(root, fs)) return false;
   const inputs = [MANIFEST, ...LOCKFILES]
     .map((name) => statOrUndefined(fs, join(root, name))?.mtimeMs)
     .filter((mtime): mtime is number => mtime !== undefined);
   return inputs.every((mtime) => mtime <= installed);
 }
 
-function installedDirectory(root: string): string | undefined {
-  const path = join(root, "node_modules");
-  const stat = lstatSync(path, { throwIfNoEntry: false });
-  if (stat === undefined) return undefined;
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error("dependency install directory unavailable");
+function recordCompletedInstall(root: string, fs: WorkspaceFs): void {
+  const fingerprint = installationFingerprint(root, fs);
+  if (fingerprint === undefined) return;
+  completedInstalls.delete(root);
+  if (completedInstalls.size >= MAX_INSTALL_RECEIPTS) {
+    const oldest = completedInstalls.keys().next().value;
+    if (oldest !== undefined) completedInstalls.delete(oldest);
   }
-  return path;
+  completedInstalls.set(root, fingerprint);
 }
 
-function clearCompletedInstall(root: string): void {
-  const directory = installedDirectory(root);
-  if (directory === undefined) return;
-  const marker = join(directory, COMPLETED_INSTALL_MARKER);
-  if (lstatSync(marker, { throwIfNoEntry: false }) !== undefined) unlinkSync(marker);
-}
-
-function recordCompletedInstall(root: string): void {
-  const existing = installedDirectory(root);
-  const directory = existing ?? join(root, "node_modules");
-  if (existing === undefined) mkdirSync(directory);
-  const descriptor = openSync(join(directory, COMPLETED_INSTALL_MARKER), "wx", 0o600);
-  closeSync(descriptor);
+function assertInstallDirectory(root: string, fs: WorkspaceFs): void {
+  const stat = statOrUndefined(fs, join(root, "node_modules"));
+  if (stat !== undefined && (!stat.isDirectory || stat.isSymbolicLink))
+    throw new TypeError("dependency install directory unavailable");
 }
 
 export function planDependencyBootstrap(
@@ -565,7 +619,7 @@ function installOutcome(
   return state === "installed" ? { summary } : { summary, excerpt: outputExcerpt(result) };
 }
 
-export async function runDependencyBootstrap(
+async function executeDependencyBootstrap(
   plan: DependencyBootstrapPlan,
   deps: DependencyBootstrapDeps,
 ): Promise<DependencyBootstrapOutcome> {
@@ -574,6 +628,7 @@ export async function runDependencyBootstrap(
   if (plan.kind === "refused")
     return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason]);
   const startedAt = deps.now();
+  completedInstalls.delete(deps.workspace.root);
   let proxy: RegistryEgressProxy;
   try {
     proxy = await (deps.startEgressProxy ?? startApprovedRegistryProxy)();
@@ -591,10 +646,10 @@ export async function runDependencyBootstrap(
     };
   }
   try {
-    clearCompletedInstall(deps.workspace.root);
+    assertInstallDirectory(deps.workspace.root, deps.fs);
     const outcome = await installBehindProxy(plan.lockfile, deps, proxy.url, startedAt);
     const checked = withEgress(outcome, proxy.counts(), proxy.fault());
-    if (checked.summary.state === "installed") recordCompletedInstall(deps.workspace.root);
+    if (checked.summary.state === "installed") recordCompletedInstall(deps.workspace.root, deps.fs);
     return checked;
   } catch (error) {
     reportDependencyBootstrapFailure(deps, "post-proxy", error);
@@ -671,6 +726,7 @@ async function installBehindProxy(
       deps,
     );
   } catch (error) {
+    reportDependencyBootstrapFailure(deps, "command", error);
     // A refusal by the command boundary (rule, containment, host) is a failed bootstrap with its
     // already-redacted reason; the report never carries the raw error.
     const detail =
@@ -685,4 +741,28 @@ async function installBehindProxy(
       },
     };
   }
+}
+
+export async function runDependencyBootstrap(
+  plan: DependencyBootstrapPlan,
+  deps: DependencyBootstrapDeps,
+): Promise<DependencyBootstrapOutcome> {
+  const admitted =
+    plan.kind === "current" ? planDependencyBootstrap(deps.workspace, deps.fs) : plan;
+  const receipt =
+    admitted.kind === "current"
+      ? "current"
+      : completedInstalls.has(deps.workspace.root)
+        ? "changed"
+        : "missing";
+  const outcome = await executeDependencyBootstrap(admitted, deps);
+  if (admitted.kind === "none" || admitted.kind === "refused") return outcome;
+  return {
+    ...outcome,
+    summary: {
+      ...outcome.summary,
+      completionReceipt: receipt,
+      completionRecorded: completedInstalls.has(deps.workspace.root),
+    },
+  };
 }
