@@ -297,3 +297,24 @@ run passes 105 tests. Root lint found one void callback style error; its correct
 same strict lint rule. Combined incremental coverage is 86.1% across 2,632 new lines/conditions.
 The fresh 32-run native OpenCode series and the unchanged performance-budget/source-freshness
 gate pass with the pinned Node 24.18.0 toolchain. No calibration or budget was relaxed.
+
+## Merge review: dependency provenance and workspace serialization
+
+A repository-written completion marker reproduced a false `current` install before the fix.
+Completion now lives in a bounded process-owned cache and is bound to manifest/lockfile and installed
+entry identities and change times. Host marker writes were removed. Reusing a previously current
+plan rechecks that receipt, while failed installs invalidate it. Verification uses the existing
+workspace mutex across bootstrap and script execution; concurrent requests produce ordered,
+correlated waiting/acquired/released evidence. Receipt reason and completion state are recorded on
+the existing dependency operation. Command-boundary failures now reach the structured diagnostic
+port, removing one legacy unlogged-catch exemption.
+
+Validation: 386 tests across 21 affected suites passed, including actual runner/execution/bootstrap
+composition with a failing network boundary and persisted diagnostic assertions, concurrent runs,
+forged markers, file mutation with restored mtime, stale plans and a directory symlink swap. Root
+and UI lint, typecheck, formatting, architecture/negative fixtures, all seven Activity Log checks,
+ADR index and real local Sonar passed. Incremental coverage is 86.2% across 2,718 new lines/conditions.
+
+The first 32-run native measurement exceeded the cold-start p95 budget while the local analyzer
+was running. With the analyzer and test gates finished, a complete fresh 32-run series passed the
+same budget and source-freshness checks. No samples were removed and no budget/calibration changed.
