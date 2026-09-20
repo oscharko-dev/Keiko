@@ -166,23 +166,51 @@ describe("zizmor ignore anchors", () => {
 // together: two anchors can resolve to the same step, which moves a reviewed acceptance onto a step
 // nobody reviewed. That is the failure this suite exists to prevent.
 describe("re-pinning shifted anchors", () => {
-  // Two anchors, two cache steps, arranged so that nearest-line gives BOTH anchors the same step.
+  // A PURE SHIFT: both cache steps keep their job, only their line moved. The layout is chosen so
+  // nearest-line would give BOTH anchors the same step (10 -> 15 and 20 -> 15), which is the
+  // collision that moves an accepted risk onto another job's step.
+  //
+  // COMMITTED (what the anchors were verified against): cache in job `a` at 10, job `b` at 20.
+  const COMMITTED_WORKFLOW = [
+    "name: W", // 1
+    "jobs:", // 2
+    "  a:", // 3
+    "    steps:", // 4
+    "      - run: one", // 5
+    "      - run: two", // 6
+    "      - run: three", // 7
+    "      - run: four", // 8
+    "      - run: five", // 9
+    "      - uses: actions/cache@abc", // 10
+    "  b:", // 11
+    "    steps:", // 12
+    "      - run: six", // 13
+    "      - run: seven", // 14
+    "      - run: eight", // 15
+    "      - run: nine", // 16
+    "      - run: ten", // 17
+    "      - run: eleven", // 18
+    "      - run: twelve", // 19
+    "      - uses: actions/cache@def", // 20
+  ].join("\n");
+
+  // CURRENT: the same two steps in the same two jobs, shifted up by preceding lines being removed.
   const SHIFTED_WORKFLOW = [
     "name: W", // 1
     "jobs:", // 2
     "  a:", // 3
     "    steps:", // 4
-    "      - uses: actions/cache@abc # first", // 5
-    "      - run: one", // 6
-    "      - run: two", // 7
-    "      - run: three", // 8
-    "  b:", // 9
-    "    steps:", // 10
-    "      - run: four", // 11
-    "      - run: five", // 12
-    "      - run: six", // 13
-    "      - run: seven", // 14
-    "      - uses: actions/cache@def # second", // 15
+    "      - uses: actions/cache@abc", // 5
+    "  b:", // 6
+    "    steps:", // 7
+    "      - run: six", // 8
+    "      - run: seven", // 9
+    "      - run: eight", // 10
+    "      - run: nine", // 11
+    "      - run: ten", // 12
+    "      - run: eleven", // 13
+    "      - run: twelve", // 14
+    "      - uses: actions/cache@def", // 15
   ].join("\n");
 
   const SHIFTED_CONFIG = `rules:
@@ -194,19 +222,41 @@ describe("re-pinning shifted anchors", () => {
 
   const anchorsOf = (config) => parseAnchors(config);
   const readShifted = () => SHIFTED_WORKFLOW;
+  const readCommitted = () => COMMITTED_WORKFLOW;
 
   it("pairs anchors with steps by order, not by nearest line", () => {
-    const corrections = correctedAnchors(anchorsOf(SHIFTED_CONFIG), readShifted);
+    const corrections = correctedAnchors(anchorsOf(SHIFTED_CONFIG), readShifted, readCommitted);
     expect([...corrections.values()]).toEqual([5, 15]);
   });
 
   it("writes each anchor back to its own step", () => {
     const anchors = anchorsOf(SHIFTED_CONFIG);
-    const rewritten = applyCorrections(SHIFTED_CONFIG, correctedAnchors(anchors, readShifted));
+    const rewritten = applyCorrections(
+      SHIFTED_CONFIG,
+      correctedAnchors(anchors, readShifted, readCommitted),
+    );
     expect(rewritten).toContain("- w.yml:5");
     expect(rewritten).toContain("- w.yml:15");
     expect(rewritten).not.toContain("- w.yml:10");
     expect(rewritten).not.toContain("- w.yml:20");
+  });
+
+  it("refuses a step that moved to a different job, even when the count is unchanged", () => {
+    // `a` loses its cache step and `b` gains a second one: two before, two after.
+    const replaced = [
+      "name: W",
+      "jobs:",
+      "  a:",
+      "    steps:",
+      "      - run: replaced",
+      "  b:",
+      "    steps:",
+      "      - uses: actions/cache@def",
+      "      - uses: actions/cache@new",
+    ].join("\n");
+    const corrections = correctedAnchors(anchorsOf(SHIFTED_CONFIG), () => replaced, readCommitted);
+    // The anchor from job `a` must NOT be carried into job `b`.
+    expect([...corrections.values()]).not.toContain(8);
   });
 
   it("refuses to re-pin when a step was added or removed, which is not a shift", () => {
@@ -217,7 +267,11 @@ describe("re-pinning shifted anchors", () => {
       "    steps:",
       "      - uses: actions/cache@abc",
     ].join("\n");
-    const corrections = correctedAnchors(anchorsOf(SHIFTED_CONFIG), () => oneStepOnly);
+    const corrections = correctedAnchors(
+      anchorsOf(SHIFTED_CONFIG),
+      () => oneStepOnly,
+      readCommitted,
+    );
     expect(corrections.size).toBe(0);
   });
 
@@ -228,7 +282,7 @@ describe("re-pinning shifted anchors", () => {
       - w.yml:5
       - w.yml:15
 `;
-    expect(correctedAnchors(anchorsOf(correct), readShifted).size).toBe(0);
+    expect(correctedAnchors(anchorsOf(correct), readShifted, readShifted).size).toBe(0);
     expect(applyCorrections(correct, new Map())).toBe(correct);
   });
 });

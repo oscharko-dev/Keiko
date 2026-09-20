@@ -13,9 +13,12 @@
 // each anchor still lands on a step of the kind its rule is about. Getting a `zizmor` verdict
 // remains zizmor's job.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONFIG = join(repoRoot, ".github", "zizmor.yml");
@@ -107,6 +110,43 @@ function nearestMatch(lines, from, matches) {
   return undefined;
 }
 
+/**
+ * The workflow as committed at HEAD — the revision whose anchors were last verified. Without it
+ * there is no evidence of what an anchor documented, so re-pinning is refused rather than guessed.
+ * @returns {string | undefined}
+ */
+function readCommittedWorkflow(file) {
+  let git;
+  try {
+    // Resolved through the repository's trusted-root helper rather than PATH (javascript:S4036):
+    // a writeable PATH entry would otherwise decide which binary supplies the evidence that
+    // authorises moving a reviewed risk acceptance.
+    git = resolveHostExecutable("git");
+  } catch {
+    return undefined;
+  }
+  const result = spawnSync(git, ["show", `HEAD:.github/workflows/${file}`], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return result.status === 0 && typeof result.stdout === "string" ? result.stdout : undefined;
+}
+
+/**
+ * The job that owns a line: the nearest `  <job>:` key at or above it. Returns undefined when the
+ * line sits outside any job, which refuses the re-pin rather than inventing an owner.
+ * @returns {string | undefined}
+ */
+function jobAtLine(source, line) {
+  const lines = source.split(/\r?\n/u);
+  if (line < 1 || line > lines.length) return undefined;
+  for (let index = line - 1; index >= 0; index -= 1) {
+    const match = /^ {2}([A-Za-z0-9][\w-]*):\s*$/u.exec(lines[index] ?? "");
+    if (match?.[1] !== undefined) return match[1];
+  }
+  return undefined;
+}
+
 /** Every line of `source` the rule's subject matches, in document order. */
 function matchingLines(source, matches) {
   const lines = source.split(/\r?\n/u);
@@ -130,7 +170,7 @@ function matchingLines(source, matches) {
  * a shift. This returns nothing for that rule instead of guessing.
  * @returns {Map<object, number>} anchor -> corrected line, only for anchors that must move
  */
-export function correctedAnchors(anchors, readWorkflow) {
+export function correctedAnchors(anchors, readWorkflow, readPrevious = readCommittedWorkflow) {
   const groups = new Map();
   for (const anchor of anchors) {
     const key = `${anchor.rule}\u0000${anchor.file}`;
@@ -144,11 +184,38 @@ export function correctedAnchors(anchors, readWorkflow) {
     if (source === undefined) continue;
     const found = matchingLines(source, subject.matches);
     if (found.length !== group.length) continue;
-    group.forEach((anchor, index) => {
-      if (anchor.line !== found[index]) corrections.set(anchor, found[index]);
-    });
+    // Equal counts do NOT prove a pure shift: a change can delete one matched step and add a
+    // different one, keeping the count identical. Re-pinning on the count alone would then carry
+    // the accepted risk onto a step nobody reviewed — the exact outcome this gate exists to
+    // prevent. So each anchor is re-pinned only when the line it currently documents still exists
+    // verbatim in the new file, read from the committed revision it was last verified against.
+    const previous = readPrevious(file);
+    if (previous === undefined) continue;
+    for (const [anchor, target] of sameJobMoves(group, found, previous, source)) {
+      corrections.set(anchor, target);
+    }
   }
   return corrections;
+}
+
+/**
+ * The anchors that merely MOVED within their own job, paired with their new line.
+ *
+ * The line CONTENT does not identify a step — every `actions/cache@<sha>` line in this repository
+ * is byte-identical — so the owning job is the identity. A change that deletes one matched step
+ * and adds another elsewhere keeps the count intact, and matching on count alone would carry the
+ * accepted risk onto a step nobody reviewed. Comparing the job forecloses that.
+ * @returns {Array<[object, number]>}
+ */
+function sameJobMoves(group, found, previous, source) {
+  const moves = [];
+  for (const [index, anchor] of group.entries()) {
+    const target = found[index];
+    if (target === undefined || anchor.line === target) continue;
+    if (jobAtLine(previous, anchor.line) !== jobAtLine(source, target)) continue;
+    moves.push([anchor, target]);
+  }
+  return moves;
 }
 
 /** Rewrite the config with each corrected anchor moved to its resolved line. */
@@ -213,7 +280,13 @@ export function main(io = {}) {
   }
   const anchors = parseAnchors(config);
   if (io.fix ?? process.argv.includes("--fix")) {
-    repairAnchors({ anchors, config, readWorkflow, writeConfig: io.writeConfig });
+    repairAnchors({
+      anchors,
+      config,
+      readPrevious: io.readPrevious ?? readCommittedWorkflow,
+      readWorkflow,
+      writeConfig: io.writeConfig,
+    });
     return;
   }
   const failures = anchorFailures(anchors, readWorkflow);
@@ -236,8 +309,8 @@ export function main(io = {}) {
  * An anchor whose step was added or removed is not a shift and is left for a human, so this can
  * never silently move a reviewed risk acceptance onto a step nobody reviewed.
  */
-function repairAnchors({ anchors, config, readWorkflow, writeConfig }) {
-  const corrections = correctedAnchors(anchors, readWorkflow);
+function repairAnchors({ anchors, config, readPrevious, readWorkflow, writeConfig }) {
+  const corrections = correctedAnchors(anchors, readWorkflow, readPrevious);
   const unresolved = anchorFailures(anchors, readWorkflow).length - corrections.size;
   if (corrections.size === 0) {
     console.log(

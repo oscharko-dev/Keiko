@@ -65,6 +65,24 @@ const WORKFLOW_GATES = Object.freeze([
   },
 ]);
 
+/** A path that is simply absent, which is the one filesystem error this scan may ignore. */
+function isMissing(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+/**
+ * Report a filesystem failure and fail the run. An unreadable directory or file would otherwise
+ * shorten the consumer list silently, which is the opposite of what this tool is for: an
+ * incomplete list that looks complete is worse than no list.
+ */
+function reportScanFailure(path, error) {
+  const code = typeof error === "object" && error !== null && "code" in error ? error.code : "?";
+  console.error(
+    `list-workflow-consumers: cannot scan ${relative(REPO_ROOT, path)} (${String(code)})`,
+  );
+  process.exitCode = 1;
+}
+
 /**
  * Every source file under the search roots, skipping build output and dependencies.
  * @returns {string[]} absolute paths
@@ -75,7 +93,12 @@ function sourceFiles() {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      // A directory that is not there is an expected absence. Anything else — a permission or I/O
+      // failure — would silently shorten the consumer list while the run still looked successful,
+      // so it is reported and the run fails rather than under-reporting coupling.
+      if (isMissing(error)) return;
+      reportScanFailure(dir, error);
       return;
     }
     for (const entry of entries) {
@@ -89,8 +112,9 @@ function sourceFiles() {
     const path = join(REPO_ROOT, root);
     try {
       if (statSync(path).isDirectory()) walk(path);
-    } catch {
-      continue;
+    } catch (error) {
+      if (isMissing(error)) continue;
+      reportScanFailure(path, error);
     }
   }
   return found;
@@ -145,7 +169,9 @@ function reportWorkflow(workflow, files) {
     let text;
     try {
       text = readFileSync(file, "utf8");
-    } catch {
+    } catch (error) {
+      if (isMissing(error)) continue;
+      reportScanFailure(file, error);
       continue;
     }
     if (!addresses.test(text)) continue;
