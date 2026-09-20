@@ -204,6 +204,7 @@
     "check:coverage:write-baseline": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json --write-baseline docs/qa/package-coverage-baseline.json --file-floor-threshold 50",
     "check:sonar-scope": "node scripts/sonar-analysis-scope.mjs",
     "check:zizmor-anchors": "node scripts/check-zizmor-anchors.mjs",
+    "list:workflow-consumers": "node scripts/list-workflow-consumers.mjs",
     "check:workflow-branch-parity": "node scripts/check-workflow-branch-parity.mjs",
     "check:native:macos": "./scripts/check-macos-native-quality.sh",
     "check:native:windows": "pwsh -NoProfile -NonInteractive -File scripts/check-windows-native-quality.ps1",

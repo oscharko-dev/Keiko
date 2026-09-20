@@ -49,6 +49,7 @@ function runCiAggregate(overrides = {}) {
       SECRET_SCAN_RESULT: "success",
       SEMANTIC_DUPLICATION_RESULT: "success",
       UI_RESULT: "success",
+      VERIFIED_TREE_RESULT: "success",
       ...overrides,
     },
   });
@@ -423,10 +424,25 @@ describe("dev quality workflows", () => {
       .map((line) => line.replace(/^ {6}- /u, "").trim())
       .filter(Boolean)
       .sort();
-    expect(declaredNeeds).toEqual(["coverage-packages", "coverage-scripts", "coverage-ui"]);
+    // ADR-0178 adds `verified-tree`, and the invariant this pin protects is unchanged: Sonar still
+    // queues behind nothing but its own three coverage suites. `verified-tree` is not a gate — it is
+    // the ~20-second resolver that answers whether this exact tree was already proven, and the job
+    // cannot read `needs.verified-tree.outputs` without declaring it. Set equality is kept so the
+    // NEXT addition still has to be justified here rather than slipping through.
+    expect(declaredNeeds).toEqual([
+      "coverage-packages",
+      "coverage-scripts",
+      "coverage-ui",
+      "verified-tree",
+    ]);
     // always() plus an explicit per-suite success check: failure, cancelled AND skipped must all
     // turn this context red, so a silently skipped shard can never pass it with a suite unexecuted.
-    expect(coverageJob).toContain("if: ${{ always() }}");
+    // ADR-0178: `always()` is unchanged and still load-bearing — a failed, cancelled or skipped
+    // shard must turn this context red. The reuse guard is pinned alongside it, exactly, so that
+    // neither the `always()` nor the guard can be altered without failing here.
+    expect(coverageJob).toContain(
+      "if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}",
+    );
     expect(coverageJob).toContain('if [ "${entry#*:}" != "success" ]');
     expect(coverageJob).toContain("needs.coverage-packages.result");
     expect(coverageJob).toContain("needs.coverage-scripts.result");

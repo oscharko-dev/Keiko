@@ -200,12 +200,28 @@ function conditionExpression(condition, event) {
       return String(event === "pull_request" && compareKnownValue("dev", operator, value));
     })
     .replace(/\balways\(\)|\bsuccess\(\)|!cancelled\(\)/gu, "true")
+    .replace(TREE_REUSE_GUARD, (_match, operator) => String(operator === "!="))
     .replace(UNKNOWN_REFERENCE, (value) => {
       return value === "true" || value === "false" ? value : "unknown";
     })
     .trim();
   return BOOLEAN_EXPRESSION.test(withEventValues) ? withEventValues : undefined;
 }
+
+// ADR-0178's reuse guard. It reads `needs.verified-tree.outputs.tree-verified != 'true'`, whose
+// job name carries a hyphen and whose right-hand side is a quoted string — neither is something
+// UNKNOWN_REFERENCE can reduce, so without this the whole condition becomes unparsable and every
+// suite in the guarded job would be misreported as `unwired`.
+//
+// It resolves to the value the guard actually takes, for both classified events:
+//   * on `pull_request` the resolver refuses to reuse anything and publishes `false`, so the job
+//     runs exactly as before — proven by the resolver's own suite, which executes it against every
+//     disallowed event and asserts the published value AND the stated reason;
+//   * on `push` the guard may be true, but only when this commit's tree is byte-identical to a
+//     pull-request head whose run executed this very job, including these suites. The protection
+//     the baseline records is therefore preserved on the same bytes rather than skipped.
+// A comparison written the other way round (`== 'true'`) is genuinely restrictive and stays false.
+const TREE_REUSE_GUARD = /needs\.verified-tree\.outputs\.tree-verified\s*(==|!=)\s*(['"])true\2/gu;
 
 const EVENT_COMPARISON = /github\.event_name\s*(==|!=)\s*(['"])([^'"]+)\2/gu;
 const BASE_REF_COMPARISON = /github\.base_ref\s*(==|!=)\s*(['"])([^'"]+)\2/gu;

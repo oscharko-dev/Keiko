@@ -93,6 +93,16 @@ repository-owned `check:zizmor-anchors` ahead of zizmor, so a line anchor that d
 and their bounded zero-cost eligibility are recorded in
 [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md).
 
+The required matrix measures a change once. `dev` is protected with linear history and signed
+squash merges of up-to-date heads, so the integration commit carries a new sha and the identical
+tree sha as the pull-request head the matrix already proved green. The `dev` run resolves that
+before any gate starts and reuses that verdict rather than re-measuring identical bytes
+([ADR-0178](docs/adr/ADR-0178-reuse-proven-tree-evidence-on-integration-runs.md)). Reuse requires
+the merge commit to be that pull request's exact `merge_commit_sha`, the trees to match, a completed
+successful `pull_request` run on that head, and that run to have executed every skipped job; any
+other outcome runs the full matrix, and the `ci` aggregate still fails closed. Editing a workflow
+changes the tree, so CI changes always measure themselves.
+
 No human approving review or manual merge is required. GitHub native auto-merge integrates only
 after the required checks succeed on the exact current head and every review conversation is
 resolved. CodeRabbit reviews every pull request targeting `dev` and every subsequent push with no
