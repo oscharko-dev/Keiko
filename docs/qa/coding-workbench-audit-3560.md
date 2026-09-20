@@ -211,6 +211,30 @@ One late event was rejected as `no-live-run` after settlement; this is distinct 
 repaired native text-projection validation drops and is not counted as a successful lossless live
 feed qualification.
 
+## Review corrections — verification and history failures — 2026-09-20
+
+Commit `b004c6e2c` separates optional commit-proof failures from executed verification results.
+Exceptions while beginning, completing or observing proof invalidate the proof and report
+`proof-unavailable`; they do not rewrite a passed test as failed. Passed outcome records now retain
+the closed commit-proof refusal reason. The verified-commit owner records verification generations
+so a superseded ticket can be joined to its replacement without retaining invalidated authority.
+
+V2 reconciliation failures now use the history diagnostic identity, including safe stack frames and
+cause chains. A malformed tool identity is rejected before argument diagnostics can hash a missing
+name. Reproductions failed before both fixes, and existing oversized-argument and redaction pins
+remain enforced.
+
+The affected runtime, Git-delivery and diagnostics coverage run passes 3,937 tests with eight
+existing skips. The focused suites pass 361 tests. Incremental new-code coverage is 85.9% over
+2,618 lines/conditions, replacing changed-file LCOV with this run and retaining earlier full reports
+for unchanged sources. Typecheck, strict scoped lint, full formatting, the seven-check Activity Log
+and architecture gate, and real local Sonar pass. This round introduces no UI change or gateway
+special case. The first native performance series exceeded the throughput budget (129.395 ms
+against 123.094 ms) while this checkout's development watcher consumed over one CPU core. After
+stopping the idle development instance, a fresh 32-run series passed the unchanged native budgets
+and source-freshness gate. The initial failure is not counted as a passing qualification. Remaining
+review conversations still block merging.
+
 ## Remaining qualification
 
 - Repeated selection of the same history task, concurrent refreshes, and title synchronization.
