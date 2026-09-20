@@ -385,3 +385,40 @@ lint, formatting, all seven Activity Log gates and real local Sonar pass. Increm
 86.7% across 2,943 new lines/conditions. The initial native series exceeded the throughput p95
 ceiling at 123.579 ms; the complete repeated 32-run series passed the unchanged budgets and
 freshness gate. No sample was removed and no threshold or calibration changed.
+
+## Merge review: durable issue context and ordered history activation
+
+Context-linked issues now retain the existing content-free identity with a closed SQL purpose.
+Retry without a new issue reference and history continuation reattach through the authorized issue
+reader. The retry regression failed before this change; SQLite reconstruction and exclusive-purpose
+checks preserve the distinction from delivery obligations. ADR-0137 now explicitly distinguishes
+native Workbench turn completion from a delivery-artifact claim, in line with the product owner's
+instruction to support general agent tasks without a mandatory commit/push workflow.
+
+The shared workspace state owner serializes actual activation mutations. Both the strengthened
+server-truth regression and a real History/workspace-hook composition finish on the later selection
+when the earlier activation is delayed. A provenance mismatch retains its preview correlation and
+closed failure classification through the browser transport and persisted Activity Log. Prompt
+admission evidence distinguishes budget exhaustion, changed authority and an actual SQLite charge
+write refusal; removing the new fields makes all three emitted-line proofs fail.
+
+The tool-catalog producer now measures the shipped managed OpenCode V2 projection in the pinned
+Linux reference container. The one-time inventory extension derives only the new managed-case
+ceiling and preserves all previous maxima and ceilings exactly. Calibration and an independent
+candidate pass, including the closed overflow case. A fresh native series of two warmups plus
+30 measured samples passes the unchanged coding-runtime budgets. The final source refresh binds commit `94145b31a`,
+which also updates the generated Activity Log registry after the last emitter relocation.
+
+Validation: affected server/contracts/store coverage passed 3,525 tests with eight existing skips;
+the final orchestrator refactor passed 164 tests. Full UI coverage passed 8,591 tests with one
+existing skip (93.10% lines), and script conformance/coverage passed 141 tests. New-code coverage is
+87.3% across 3,240 new lines/conditions, using fresh complete records for changed sources. Root/UI
+typecheck, strict lint, formatting and the production editor bundle gates pass. The hosted package
+shard's inventory failure was reproduced locally and repaired using the existing inventory-only
+refresh command; only the server file count changes, from 750 to 751, with all coverage floors and
+metrics unchanged. The second hosted Core-quality failure was stale generated emitter locations;
+the generator refresh repairs the catalog and its shared fingerprint. Hosted exact-head checks
+remain the final merge arbiter.
+
+All seven final Activity Log gates, including architecture and negative checks, and the real
+local Sonar analyzer pass. No required check or review conversation is bypassed.
