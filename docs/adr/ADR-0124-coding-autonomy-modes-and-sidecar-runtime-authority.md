@@ -136,6 +136,12 @@ Delivery-substrate authority is modeled as its own action class and stays separa
 Issue #1983 owns the D10 implementation split for that substrate. This ADR fixes the contract
 boundary now so later children do not blur coding assistance with delivery execution.
 
+Successful workspace verification is independent of commit eligibility. The model-facing result
+reports `verification.status: passed` and the completed check kinds. Optional `verification.commit`
+evidence may still refuse a commit because the candidate is unstaged or has drifted. That refusal
+never reclassifies executed checks as unrun and never requires staging for ordinary coding work.
+Staging and fresh commit proof remain mandatory only for an accepted commit/delivery action.
+
 Runtime event contracts are content-free and closed. The shared event family includes:
 
 - runtime start/stop/health,

@@ -78,6 +78,7 @@ import {
   dependencyBootstrapFailureSummary,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
+  type CodingToolCommitProofResult,
   type VerificationNotRunReason,
   type VerificationNotRunStep,
 } from "./codingToolIpc.js";
@@ -296,7 +297,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["not-run", "target-bound"],
+      values: ["not-run", "target-bound", "passed"],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
     steps: {
@@ -305,6 +306,11 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       required: false,
       maxItems: 5,
       values: [
+        "test:passed",
+        "targeted-test:passed",
+        "typecheck:passed",
+        "lint:passed",
+        "build:passed",
         "test:denied",
         "test:cancelled",
         "test:dependencies-unavailable",
@@ -340,6 +346,12 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
     },
     targetCount: { type: "integer", dataClass: "count", required: false },
     targetPathSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    commitProof: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-applicable", "recorded", "unavailable"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -1544,7 +1556,7 @@ type VerificationAttempt =
       readonly outcome: "completed";
       readonly report: VerificationReport;
       readonly failureOutput: readonly VerificationStepOutput[];
-      readonly commitProof: CodingToolVerificationResult | undefined;
+      readonly commitProof: CodingToolCommitProofResult | undefined;
     }
   | { readonly outcome: "threw"; readonly error: unknown };
 
@@ -1727,8 +1739,40 @@ function verificationOutcome(
   // A passing runner whose authority lapsed is a refusal, never a failed test run.
   const refusal = verificationLivenessRefusal(input, guard, signal);
   return refusal === undefined
-    ? { status: "completed", ...(commitProof === undefined ? {} : { verification: commitProof }) }
+    ? passedVerificationOutcome(input, report, commitProof)
     : verificationPortRefusal(input, "verification-authority-revoked", refusal);
+}
+
+function passedVerificationOutcome(
+  input: ProductionManagedWorktreeToolInput,
+  report: VerificationReport,
+  commit: CodingToolCommitProofResult | undefined,
+): VerificationPortResult {
+  const completed = [
+    ...new Set(
+      report.results.filter((result) => result.status === "passed").map((result) => result.kind),
+    ),
+  ];
+  if (completed.length === 0) {
+    recordVerificationNotRun(input, []);
+    return { status: "failed", reasonCode: "VERIFICATION_NOT_RUN" };
+  }
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      { correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID },
+      {
+        state: "passed",
+        stepCount: completed.length,
+        steps: completed.map((kind) => `${kind}:passed` as const),
+        commitProof: commit?.commitProof ?? "not-applicable",
+      },
+    ),
+  );
+  return {
+    status: "completed",
+    verification: { status: "passed", completed, ...(commit === undefined ? {} : { commit }) },
+  };
 }
 
 // The red ends a step that ran can reach, in the order the model is told about them: a failure
@@ -1895,7 +1939,7 @@ async function completeCandidateVerification(
   report: VerificationReport,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-): Promise<CodingToolVerificationResult | undefined> {
+): Promise<CodingToolCommitProofResult | undefined> {
   if (input.verifiedCommitService === undefined || begun === undefined) return undefined;
   if (begun.kind !== "ticket") {
     // Not a commit proof, but still a check the run ran: kept for the pull request's list (F57).

@@ -76,7 +76,7 @@ import {
 import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
+import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import {
   createBufferedServerLogSink,
   createServerLogger,
@@ -1356,10 +1356,34 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  it("refuses an empty passed report rather than claiming a check ran", async () => {
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve({ ...verificationReport("passed"), results: [] }),
+      records: [],
+      log,
+    });
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "empty-check",
+        idempotencyKey: "empty-check",
+        verifierId: "test",
+      }),
+    });
+    expect(result).toMatchObject({ status: "failed", reasonCode: "VERIFICATION_NOT_RUN" });
+    expect(log.find((event) => event.op === "coding-runtime.verification")).toMatchObject({
+      extra: { state: "not-run" },
+    });
+  });
+
   it("reports a passed run as completed", async () => {
+    const log: ServerLogEvent[] = [];
     const facade = verificationFacade({
       runToReport: () => Promise.resolve(verificationReport("passed")),
       records: [],
+      log,
     });
 
     await expect(
@@ -1372,7 +1396,27 @@ describe("production managed worktree tools", () => {
           verifierId: "test",
         }),
       }),
-    ).resolves.toMatchObject({ status: "completed" });
+    ).resolves.toMatchObject({
+      status: "completed",
+      verification: { status: "passed", completed: ["test"] },
+    });
+    const event = log.find(
+      (entry) => entry.op === "coding-runtime.verification" && entry.extra?.state === "passed",
+    );
+    if (event === undefined) throw new Error("Expected the passed verification event");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({
+      correlationId: "run-verification-3",
+      state: "passed",
+      stepCount: 1,
+      steps: ["test:passed"],
+      commitProof: "not-applicable",
+      loss: "none",
+    });
   });
 
   it("runs targeted-test against the exact bounded target and logs only its digest", async () => {
@@ -1492,18 +1536,36 @@ describe("production managed worktree tools", () => {
   });
 
   it("routes the generated native target through IPC, catalog admission, and the real verifier port", async () => {
-    const runToReport = vi.fn(() => Promise.resolve(verificationReport("passed")));
+    const report = verificationReport("passed");
+    const runToReport = vi.fn(() =>
+      Promise.resolve({
+        ...report,
+        results: report.results.map((result) => ({ ...result, kind: "targeted-test" as const })),
+      }),
+    );
     const facade = verificationFacade({ runToReport, records: [] });
-    const tool = loadGeneratedVerificationTool((_url, init) => {
+    const tool = await loadGeneratedVerificationTool((_url, init) => {
       if (typeof init?.body !== "string") throw new TypeError("Expected generated request body");
       return facade
         .execute({ capability: "runtime-capability", body: init.body })
         .then((result) => new Response(JSON.stringify(result)));
     });
-    await tool.execute(
+    const result = await tool.execute(
       { verifierId: "targeted-test", targetPath: "src/math.test.ts" },
       generatedToolContext("native-targeted"),
     );
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("content" in result) ||
+      typeof result.content !== "string"
+    )
+      throw new TypeError("Expected native V2 tool content");
+    const output: unknown = JSON.parse(result.content);
+    expect(output).toMatchObject({
+      status: "completed",
+      verification: { status: "passed", completed: ["targeted-test"] },
+    });
     expect(runToReport).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ kinds: ["targeted-test"], targetPath: "src/math.test.ts" }),
       expect.any(AbortSignal),
@@ -1587,7 +1649,10 @@ describe("production managed worktree tools", () => {
             verifierId: "test",
           }),
         }),
-      ).resolves.toMatchObject({ status: "completed", verification: expected });
+      ).resolves.toMatchObject({
+        status: "completed",
+        verification: { status: "passed", completed: ["test"], commit: expected },
+      });
       expect(beginVerification).toHaveBeenCalledOnce();
       expect(completeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 1 : 0);
       // F57: a run's check that cannot prove a commit is still kept for the pull request's list.
@@ -2794,12 +2859,30 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
 function verificationReport(overallStatus: VerificationStatus): VerificationReport {
   return {
     workspaceRoot: "/managed/worktree",
-    results: [],
+    results:
+      overallStatus === "passed"
+        ? [
+            {
+              kind: "test",
+              scriptName: "test",
+              command: "npm",
+              args: ["test"],
+              status: "passed",
+              exitCode: 0,
+              signal: null,
+              durationMs: 2,
+              truncated: false,
+              redacted: true,
+              outputSummary: "command completed",
+              appliedLimits: [],
+            },
+          ]
+        : [],
     overallStatus,
     startedAtMs: 1,
     durationMs: 2,
     counts: {
-      passed: 0,
+      passed: overallStatus === "passed" ? 1 : 0,
       failed: 0,
       skipped: 0,
       denied: 0,
@@ -3348,8 +3431,10 @@ function generatedToolContext(callID: string): Parameters<GeneratedVerificationT
   };
 }
 
-function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerificationTool {
-  const source = createGeneratedOpenCodeBundle().toolSources.keiko_verification;
+async function loadGeneratedVerificationTool(
+  fetchImpl: typeof fetch,
+): Promise<GeneratedVerificationTool> {
+  const source = createGeneratedOpenCodeV2Plugins().keiko_verification;
   if (source === undefined) throw new Error("keiko_verification tool source missing");
   const value: unknown = new Script(
     `${source.replace("export default", "const generated =")}\ngenerated;`,
@@ -3369,15 +3454,38 @@ function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerifi
     setTimeout,
     clearTimeout,
   });
+  return registeredVerificationTool(value);
+}
+
+async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVerificationTool> {
   if (
-    typeof value !== "object" ||
-    value === null ||
-    !("execute" in value) ||
-    typeof value.execute !== "function"
-  ) {
-    throw new Error("generated verification tool invalid");
-  }
-  return value as GeneratedVerificationTool;
+    typeof plugin !== "object" ||
+    plugin === null ||
+    !("setup" in plugin) ||
+    typeof plugin.setup !== "function"
+  )
+    throw new TypeError("generated verification plugin invalid");
+  let registered: unknown;
+  const setup = plugin.setup as (ctx: unknown) => Promise<void>;
+  await setup({
+    tool: {
+      transform: (transform: (editor: unknown) => void): void => {
+        transform({
+          add: (tool: unknown): void => {
+            registered = tool;
+          },
+        });
+      },
+    },
+  });
+  if (
+    typeof registered !== "object" ||
+    registered === null ||
+    !("execute" in registered) ||
+    typeof registered.execute !== "function"
+  )
+    throw new TypeError("generated verification tool invalid");
+  return registered as GeneratedVerificationTool;
 }
 
 function verificationService(): VerifiedCommitService {

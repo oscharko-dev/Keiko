@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "846d4036d7087d7e68710a7ed5c922c70819d7c629c53043679239d1d679b144" as const;
+  "61bec4881fdc4983fd033c6def6b4a13d99c15160720d1ac398b5153cc0f96c8" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -6517,7 +6517,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["not-run", "target-bound"],
+        values: ["not-run", "target-bound", "passed"],
       },
       stepCount: {
         type: "integer",
@@ -6530,6 +6530,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxItems: 5,
         values: [
+          "test:passed",
+          "targeted-test:passed",
+          "typecheck:passed",
+          "lint:passed",
+          "build:passed",
           "test:denied",
           "test:cancelled",
           "test:dependencies-unavailable",
@@ -6573,6 +6578,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: false,
         maxLength: 64,
+      },
+      commitProof: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["not-applicable", "recorded", "unavailable"],
       },
     },
     causal: "correlation",
@@ -33914,6 +33925,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
+            {
+              name: "commitProof",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
             {
               name: "state",
               type: "string",

@@ -189,7 +189,11 @@ describe("canonical catalog facade bridge", () => {
       return Promise.resolve({
         status: "completed" as const,
         evidence: [{ kind: "governed-delegate", code: "completed" }],
-        verification: { commitProof: "recorded" as const },
+        verification: {
+          status: "passed" as const,
+          completed: ["test"] as const,
+          commit: { commitProof: "recorded" as const },
+        },
       });
     });
     const result = await bridge.execute(request, facadeInput(), run);

@@ -66,7 +66,14 @@ export interface CodingToolApprovalProof {
   readonly approvalDigest: string;
 }
 
-export type CodingToolVerificationResult =
+/** Executed checks and optional commit eligibility are independent outcomes. */
+export interface CodingToolVerificationResult {
+  readonly status: "passed";
+  readonly completed: readonly VerificationKind[];
+  readonly commit?: CodingToolCommitProofResult;
+}
+
+export type CodingToolCommitProofResult =
   | { readonly commitProof: "recorded" }
   | {
       readonly commitProof: "unavailable";

@@ -391,15 +391,15 @@ function verificationSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.verification.run",
     alias: "keiko_verification",
     description:
-      "Run one named verification gate (test, typecheck, lint or build). Ordinary working-tree " +
-      "tests use an empty targetPath and may pass without commit proof; targeted-test requires " +
-      "one workspace-relative test path. For a commit, execute a ready stage proposal, or an " +
-      "approval-required stage proposal after approval, then rerun verification and proceed only " +
-      'when the result reports verification: { commitProof: "recorded" }. A ' +
-      "candidate-not-staged result with nextAction stage-then-verify names, under blocking, the " +
-      "unstaged and untracked paths that keep the proof from forming (a lockfile the dependency " +
-      "install created, build output no .gitignore covers): stage exactly those paths, or ignore " +
-      "them deliberately, then run the verification again.",
+      "Run one named verification gate (test, targeted-test, typecheck, lint or build). " +
+      "Ordinary working-tree checks use an empty targetPath; targeted-test requires one " +
+      "workspace-relative test path. verification.status passed and verification.completed " +
+      "confirm which checks ran successfully. The optional verification.commit describes " +
+      "commit eligibility separately: candidate-not-staged never means checks did not run. " +
+      "Only when the accepted task requests a commit, stage the intended changes and rerun " +
+      'verification until verification.commit.commitProof is "recorded". For that workflow, ' +
+      "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
+      "the intended paths or ignore generated output deliberately before verifying again.",
     inputSchema: managedObjectSchema(
       {
         verifierId: {
@@ -591,7 +591,7 @@ function gitCommitSpec(): OpenCodeToolSpec {
     description:
       "Create a commit proposal over the staged changes. This call does not " +
       "create a commit. First complete staging and rerun verification until it reports " +
-      'verification: { commitProof: "recorded" }.' +
+      'verification: { status: "passed", commit: { commitProof: "recorded" } }.' +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       { message: { type: "string", minLength: 1, maxLength: 8_192 } },

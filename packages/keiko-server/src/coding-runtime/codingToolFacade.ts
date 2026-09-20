@@ -48,6 +48,7 @@ import {
   type CodingToolResult,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
+  type CodingToolCommitProofResult,
   type VerificationNotRunReason,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
@@ -391,6 +392,17 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
 }
 
 function isCodingToolVerificationResult(value: unknown): value is CodingToolVerificationResult {
+  if (!isRecord(value) || value.status !== "passed" || !Array.isArray(value.completed))
+    return false;
+  if (value.completed.length === 0 || !Array.from(value.completed).every(isVerificationKind))
+    return false;
+  if (new Set(value.completed).size !== value.completed.length) return false;
+  return value.commit === undefined
+    ? Object.keys(value).length === 2
+    : Object.keys(value).length === 3 && isCodingToolCommitProofResult(value.commit);
+}
+
+function isCodingToolCommitProofResult(value: unknown): value is CodingToolCommitProofResult {
   if (!isRecord(value)) return false;
   if (value.commitProof === "recorded") return Object.keys(value).length === 1;
   if (value.commitProof !== "unavailable") return false;
