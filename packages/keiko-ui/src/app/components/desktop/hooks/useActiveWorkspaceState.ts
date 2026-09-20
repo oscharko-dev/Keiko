@@ -317,12 +317,8 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       // the final applied pointer. Other mutation outcomes still reconcile with server truth.
       const run = (): Promise<boolean> =>
         mutate(() => setActiveTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR }));
-      const pending = switchTail.current === null ? run() : switchTail.current.then(run, run);
+      const pending = switchTail.current?.then(run, run) ?? run();
       switchTail.current = pending;
-      const release = (): void => {
-        if (switchTail.current === pending) switchTail.current = null;
-      };
-      void pending.then(release, release);
       return pending;
     },
     [mutate],

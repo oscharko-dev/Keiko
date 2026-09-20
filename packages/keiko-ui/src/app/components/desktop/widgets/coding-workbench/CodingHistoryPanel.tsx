@@ -10,6 +10,7 @@ import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import styles from "./CodingHistory.module.css";
+import type { WindowRenderContext } from "../../windows/WindowsRegistry";
 
 function historyError(error: unknown): void {
   reportClientDiagnostic(`[keiko] coding history request failed: ${clientErrorSummary(error)}`, {
@@ -47,6 +48,25 @@ function useHistoryList(): {
     return (): void => window.removeEventListener(CODING_HISTORY_CHANGED, reload);
   }, [refresh]);
   return { tasks, error, loading, refresh };
+}
+
+// Keep task navigation in the history chunk; the desktop shell needs only its window host.
+export function CodingHistoryWindowHost({
+  context,
+}: {
+  readonly context: Pick<WindowRenderContext, "openWindow">;
+}): ReactNode {
+  return (
+    <CodingHistoryPanel
+      onOpen={(task) =>
+        context.openWindow("coding", {
+          repositoryPath: task.projectPath,
+          historySelection: task.id,
+        })
+      }
+      onNew={() => context.openWindow("coding", { historySelection: `new:${Date.now()}` })}
+    />
+  );
 }
 
 export function CodingHistoryPanel({

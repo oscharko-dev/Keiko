@@ -113,7 +113,9 @@ async function resolvePromptIssue(
       publish({ kind: "failed", failure: "multiple-issues", correlationId: previewCorrelationId });
       return;
     }
-    reportClientDiagnostic("[keiko] coding workbench prompt issue resolved");
+    reportClientDiagnostic("[keiko] coding workbench prompt issue resolved", {
+      correlationId: previewCorrelationId,
+    });
     await start({
       issueRef: qualified ?? reference.issueRef,
       expectedIssueBindingDigest: response.binding.bindingDigest,

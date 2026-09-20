@@ -173,13 +173,6 @@ import {
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
-// Only the one numeric bound below is a genuine eager dependency: `GITHUB_ISSUE_REFERENCE_MAX_CHARS`
-// is a value re-export consumed synchronously by CodingWorkbenchIssueIntake.tsx (a `maxLength` prop,
-// not behind the dynamic() boundary the rest of the Coding Workbench tree sits behind). Every other
-// binding this module used to import here — `isGitHubOwnerAndRepo`, the issue-preview title/excerpt
-// bounds, `GITHUB_ISSUE_NUMBER_MAX` — moved to `./coding-workbench-lazy-fetchers.ts` (epic #3384
-// final-audit F18), loaded only through `previewCodingWorkbenchIssue`'s `await import(...)` below.
-export { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { PrDescriptionLanguage } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import type {

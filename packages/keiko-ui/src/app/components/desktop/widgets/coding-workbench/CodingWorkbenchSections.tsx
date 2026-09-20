@@ -39,13 +39,21 @@ import styles from "./CodingWorkbenchWindow.module.css";
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CodingWorkbenchIcon = Icons.codingWorkbench;
 const MinimizeIcon = Icons.minimize;
-const StopIcon = Icons.stop;
 const FwdIcon = Icons.fwd;
 const ArrowUpIcon = Icons.arrowUp;
 const FolderIcon = Icons.folder;
 const BranchIcon = Icons.branch;
 const CubeIcon = Icons.cube;
 const BrainIcon = Icons.brain;
+
+// Only the workbench uses this glyph; retain it behind the workbench's lazy boundary.
+function StopIcon({ size }: { readonly size: number }): ReactNode {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 
 export function WorkbenchWelcome(): ReactNode {
   return (

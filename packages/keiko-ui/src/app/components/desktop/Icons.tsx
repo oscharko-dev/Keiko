@@ -185,10 +185,7 @@ export const Icons = {
   ),
   /* Lift: archive lid box with one seam + body + handle. */
   codingHistory: (p: IcoProps): ReactNode => (
-    <Ico {...p}>
-      <path d="M13.2 4.5h6.3v4h-15v-4h6.3M6 8.5v11h12v-11" />
-      <path d="m10 12-2 2 2 2m4-4 2 2-2 2" />
-    </Ico>
+    <Ico {...p} d="M13.2 4.5h6.3v4h-15v-4h6.3M6 8.5v11h12v-11M10 12l-2 2 2 2m4-4 2 2-2 2" />
   ),
   archive: (p: IcoProps): ReactNode => (
     <Ico {...p}>
@@ -209,11 +206,6 @@ export const Icons = {
     <Ico {...p}>
       <path d="M7 14 H10.4" />
       <path d="M13.6 14 H17" />
-    </Ico>
-  ),
-  stop: (p: IcoProps): ReactNode => (
-    <Ico {...p}>
-      <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />
     </Ico>
   ),
   expand: (p: IcoProps): ReactNode => <Ico {...p} d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5" />,

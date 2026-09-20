@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingHistoryTask } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { CodingHistoryPanel } from "./CodingHistoryPanel";
+import { CodingHistoryPanel, CodingHistoryWindowHost } from "./CodingHistoryPanel";
 import {
   CODING_HISTORY_CHANGED,
   fetchCodingHistory,
@@ -43,6 +43,20 @@ beforeEach(() => {
 });
 
 describe("coding history navigation", () => {
+  it("opens saved and new tasks through the lazy window host", async () => {
+    const openWindow = vi.fn();
+    render(<CodingHistoryWindowHost context={{ openWindow }} />);
+    fireEvent.click(await screen.findByText(task.title));
+    expect(openWindow).toHaveBeenCalledWith("coding", {
+      repositoryPath: task.projectPath,
+      historySelection: task.id,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(openWindow).toHaveBeenLastCalledWith("coding", {
+      historySelection: expect.stringMatching(/^new:\d+$/u) as string,
+    });
+  });
+
   it("opens the selected task, filters by state, title and branch, and creates a fresh task", async () => {
     const open = vi.fn();
     const create = vi.fn();

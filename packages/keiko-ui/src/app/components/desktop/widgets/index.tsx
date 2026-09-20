@@ -127,8 +127,8 @@ const RuntimeHubWidget = dynamic(
   () => import("./cards/RuntimeHubWidget").then((mod) => mod.RuntimeHubWidget),
   { ssr: false, loading: windowChunkFallback },
 );
-const CodingHistoryPanel = dynamic(
-  () => import("./coding-workbench/CodingHistoryPanel").then((mod) => mod.CodingHistoryPanel),
+const CodingHistoryWindowHost = dynamic(
+  () => import("./coding-workbench/CodingHistoryPanel").then((mod) => mod.CodingHistoryWindowHost),
   { ssr: false },
 );
 const CodingWorkbenchWindow = dynamic(
@@ -756,14 +756,7 @@ registerWindowRender("runtime", (cfg, ctx) => {
     </BoundRootSurface>
   );
 });
-registerWindowRender("codingHistory", (_cfg, ctx) => (
-  <CodingHistoryPanel
-    onOpen={(task) =>
-      ctx.openWindow("coding", { repositoryPath: task.projectPath, historySelection: task.id })
-    }
-    onNew={() => ctx.openWindow("coding", { historySelection: `new:${Date.now()}` })}
-  />
-));
+registerWindowRender("codingHistory", (_cfg, ctx) => <CodingHistoryWindowHost context={ctx} />);
 registerWindowRender("coding", (cfg, ctx) => <CodingWorkbenchWindow cfg={cfg} context={ctx} />);
 // Epic #1571, Issue #1574 — Git client window shell. The selected repository root acts as the
 // projectId. Read it from cfg (projectPath / workspaceRoot) and fall back to the global selected

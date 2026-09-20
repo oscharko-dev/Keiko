@@ -50,7 +50,9 @@ describe("prompt-driven issue intake", () => {
       issueRef: "https://github.com/acme/repo/issues/13",
       expectedIssueBindingDigest: "a".repeat(64),
     });
-    expect(log).toHaveBeenCalledWith("[keiko] coding workbench prompt issue resolved");
+    expect(log).toHaveBeenCalledWith("[keiko] coding workbench prompt issue resolved", {
+      correlationId: preview.mock.calls[0]?.[2] as unknown,
+    });
     expect(JSON.stringify(log.mock.calls)).not.toContain("acme/repo");
   });
 
