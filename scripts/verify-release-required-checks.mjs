@@ -340,7 +340,7 @@ async function fetchCommitEvidence({ owner, repo, sha, token }) {
  * Read the tree sha a commit points at, or undefined when it cannot be read.
  * @returns {Promise<string | undefined>}
  */
-async function fetchTreeSha({ owner, repo, sha, token }) {
+export async function fetchTreeSha({ owner, repo, sha, token }) {
   try {
     const commit = await githubJson(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`,
@@ -359,7 +359,7 @@ async function fetchTreeSha({ owner, repo, sha, token }) {
  * before any of its evidence is used. Any error yields no evidence, so the caller fails closed.
  * @returns {Promise<Array<{name?: unknown, status?: unknown, conclusion?: unknown}>>}
  */
-async function fetchTreeIdenticalCheckRuns({ owner, repo, sha, token }) {
+export async function fetchTreeIdenticalCheckRuns({ owner, repo, sha, token }) {
   const treeSha = await fetchTreeSha({ owner, repo, sha, token });
   if (treeSha === undefined) return [];
   let pulls;
@@ -387,7 +387,7 @@ async function fetchTreeIdenticalCheckRuns({ owner, repo, sha, token }) {
  * A tree that cannot be read, or that differs, yields nothing.
  * @returns {Promise<Array<{name?: unknown, status?: unknown, conclusion?: unknown}>>}
  */
-async function checkRunsForIdenticalTree({ headSha, owner, repo, token, treeSha }) {
+export async function checkRunsForIdenticalTree({ headSha, owner, repo, token, treeSha }) {
   const headTree = await fetchTreeSha({ owner, repo, sha: headSha, token });
   if (headTree === undefined || headTree !== treeSha) return [];
   try {
@@ -463,7 +463,7 @@ async function verifyRequiredChecks() {
  * a verdict with nothing skipped is returned untouched without any extra API call.
  * @returns {Promise<typeof verdict>}
  */
-async function applyTreeEvidence(config, verdict) {
+export async function applyTreeEvidence(config, verdict) {
   if (!verdict.failed.some((entry) => entry.state === "skipped")) return verdict;
   const resolved = resolveSkippedWithTreeEvidence(
     verdict,

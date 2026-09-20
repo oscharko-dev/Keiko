@@ -241,6 +241,108 @@ describe("re-pinning shifted anchors", () => {
     expect(rewritten).not.toContain("- w.yml:20");
   });
 
+  // Boundary and refusal paths of the helpers. Each one decides whether a suppression may move, so
+  // an unexercised branch here is an unexercised decision about a reviewed risk acceptance.
+  it("refuses an anchor whose line lies outside the file", () => {
+    const workflow = [
+      "name: W",
+      "jobs:",
+      "  a:",
+      "    steps:",
+      "      - uses: actions/cache@abc",
+    ].join("\n");
+    const config = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:900
+`;
+    expect(
+      correctedAnchors(
+        parseAnchors(config),
+        () => workflow,
+        () => workflow,
+      ).size,
+    ).toBe(0);
+  });
+
+  it("refuses when the committed revision cannot be read at all", () => {
+    const workflow = [
+      "name: W",
+      "jobs:",
+      "  a:",
+      "    steps:",
+      "      - run: filler",
+      "      - uses: actions/cache@abc",
+    ].join("\n");
+    const config = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:5
+`;
+    // No committed revision -> no evidence of what the anchor documented -> no re-pin.
+    expect(
+      correctedAnchors(
+        parseAnchors(config),
+        () => workflow,
+        () => undefined,
+      ).size,
+    ).toBe(0);
+  });
+
+  it("refuses when the workflow itself cannot be read", () => {
+    const config = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:5
+`;
+    expect(
+      correctedAnchors(
+        parseAnchors(config),
+        () => undefined,
+        () => undefined,
+      ).size,
+    ).toBe(0);
+  });
+
+  it("spans blank lines inside a step block rather than ending at the first one", () => {
+    // A blank line between `with:` entries must not truncate the step's identity, or two different
+    // steps could compare equal.
+    const committed = [
+      "name: W", // 1
+      "jobs:", // 2
+      "  a:", // 3
+      "    steps:", // 4
+      "      - run: filler", // 5
+      "      - uses: actions/cache@abc", // 6
+      "        with:", // 7
+      "", // 8
+      "          key: ORIGINAL", // 9
+    ].join("\n");
+    const current = [
+      "name: W", // 1
+      "jobs:", // 2
+      "  a:", // 3
+      "    steps:", // 4
+      "      - uses: actions/cache@abc", // 5
+      "        with:", // 6
+      "", // 7
+      "          key: CHANGED", // 8
+    ].join("\n");
+    const config = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:6
+`;
+    // The key changed beyond the blank line, so the step is NOT the same step.
+    expect(
+      correctedAnchors(
+        parseAnchors(config),
+        () => current,
+        () => committed,
+      ).size,
+    ).toBe(0);
+  });
+
   it("refuses a replacement step inside the SAME job, where count and job both still agree", () => {
     // The hardest case: `a` keeps exactly one cache step, so the count matches AND the owning job
     // matches — but it is a DIFFERENT step. Only the step body distinguishes them, and carrying the
@@ -437,6 +539,67 @@ describe("main", () => {
 
     expect(process.exitCode).toBe(1);
     expect(err.join("\n")).toContain("--fix");
+  });
+
+  it("writes the repaired config and reports each move when anchors only shifted", () => {
+    capture();
+    const committed = [
+      "name: W",
+      "jobs:",
+      "  a:",
+      "    steps:",
+      "      - run: filler",
+      "      - uses: actions/cache@abc",
+    ].join("\n");
+    const current = [
+      "name: W",
+      "jobs:",
+      "  a:",
+      "    steps:",
+      "      - uses: actions/cache@abc",
+    ].join("\n");
+    const config = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:6
+`;
+    let written;
+    main({
+      fix: true,
+      readConfig: () => config,
+      readPrevious: () => committed,
+      readWorkflow: () => current,
+      writeConfig: (text) => {
+        written = text;
+      },
+    });
+
+    expect(written).toContain("- w.yml:5");
+    expect(out.join("\n")).toContain("re-pinned");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("fails when an anchor cannot be re-pinned automatically", () => {
+    capture();
+    const config = `rules:
+  cache-poisoning:
+    ignore:
+      - w.yml:5
+`;
+    let written;
+    main({
+      fix: true,
+      readConfig: () => config,
+      readPrevious: () => undefined,
+      readWorkflow: () => "      run: echo not-a-cache",
+      writeConfig: (text) => {
+        written = text;
+      },
+    });
+
+    expect(written).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    expect(out.join("\n")).toContain("human decision");
   });
 
   it("fails closed when the configuration is missing rather than reporting nothing to check", () => {

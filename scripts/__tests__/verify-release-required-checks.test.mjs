@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyTreeEvidence,
+  checkRunsForIdenticalTree,
   evaluateRequiredChecks,
+  fetchTreeIdenticalCheckRuns,
+  fetchTreeSha,
   latestCheckRunsByName,
   parseRequiredChecks,
   requiredChecksFromBranchProtection,
@@ -143,5 +147,227 @@ describe("resolveSkippedWithTreeEvidence", () => {
     const resolved = resolveSkippedWithTreeEvidence(mixed, [green("ui")]);
     expect(resolved.ok).toBe(false);
     expect(resolved.missing).toEqual(["workflow hygiene"]);
+  });
+});
+
+// `githubJson` prefers the `gh` CLI and only falls back to fetch. These tests drive the HTTP
+// layer, so the CLI resolution is made to fail: that is the documented fallback path, not a
+// behaviour change, and it keeps the suite hermetic (no `gh`, no network, no credentials).
+vi.mock("../lib/host-executable.mjs", () => ({
+  resolveHostExecutable: () => {
+    throw new Error("gh unavailable in tests");
+  },
+}));
+
+// ADR-0178 added the tree-identity path to this verifier: a required check that is `skipped` on the
+// release commit counts when a commit carrying the IDENTICAL tree proved it green. Every step of
+// that path is exercised here, because each one can only ever widen what the release accepts.
+describe("tree-identity evidence lookup", () => {
+  const OWNER = "owner";
+  const REPO = "repo";
+  const TOKEN = "t";
+  const SHA = "a".repeat(40);
+  const HEAD = "b".repeat(40);
+  const TREE = "c".repeat(40);
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /**
+   * Route fetch by URL substring, MOST SPECIFIC FIRST. The check-runs URL also contains
+   * "/commits/", so a plain first-match would answer it with the commit payload and the test would
+   * fail for a reason that has nothing to do with the code under test.
+   */
+  function routeFetch(routes) {
+    globalThis.fetch = async (url) => {
+      const ordered = Object.entries(routes).toSorted(
+        ([left], [right]) => right.length - left.length,
+      );
+      for (const [needle, value] of ordered) {
+        if (String(url).includes(needle)) {
+          if (value === "throw") throw new Error("network");
+          return { ok: true, status: 200, json: async () => value };
+        }
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+  }
+
+  describe("fetchTreeSha", () => {
+    it("reads a well-formed tree sha", async () => {
+      routeFetch({ "/commits/": { commit: { tree: { sha: TREE } } } });
+      await expect(
+        fetchTreeSha({ owner: OWNER, repo: REPO, sha: SHA, token: TOKEN }),
+      ).resolves.toBe(TREE);
+    });
+
+    it.each([
+      ["a malformed sha", { commit: { tree: { sha: "nope" } } }],
+      ["a missing tree", { commit: {} }],
+      ["a request failure", "throw"],
+    ])("returns undefined for %s, so no evidence is inferred", async (_label, body) => {
+      routeFetch({ "/commits/": body });
+      await expect(
+        fetchTreeSha({ owner: OWNER, repo: REPO, sha: SHA, token: TOKEN }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe("checkRunsForIdenticalTree", () => {
+    it("returns the head's check runs when its tree matches", async () => {
+      routeFetch({
+        "/commits/": { commit: { tree: { sha: TREE } } },
+        "/check-runs": { check_runs: [{ name: "ui", status: "completed", conclusion: "success" }] },
+      });
+      const runs = await checkRunsForIdenticalTree({
+        headSha: HEAD,
+        owner: OWNER,
+        repo: REPO,
+        token: TOKEN,
+        treeSha: TREE,
+      });
+      expect(runs).toHaveLength(1);
+    });
+
+    it("returns nothing when the candidate's tree differs by one byte", async () => {
+      routeFetch({ "/commits/": { commit: { tree: { sha: "d".repeat(40) } } } });
+      await expect(
+        checkRunsForIdenticalTree({
+          headSha: HEAD,
+          owner: OWNER,
+          repo: REPO,
+          token: TOKEN,
+          treeSha: TREE,
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    it("returns nothing when the check-run request fails", async () => {
+      routeFetch({ "/commits/": { commit: { tree: { sha: TREE } } }, "/check-runs": "throw" });
+      await expect(
+        checkRunsForIdenticalTree({
+          headSha: HEAD,
+          owner: OWNER,
+          repo: REPO,
+          token: TOKEN,
+          treeSha: TREE,
+        }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  describe("fetchTreeIdenticalCheckRuns", () => {
+    it("collects evidence from a pull-request head that carries the same tree", async () => {
+      globalThis.fetch = async (url) => {
+        const text = String(url);
+        if (text.includes("/pulls")) {
+          return { ok: true, status: 200, json: async () => [{ head: { sha: HEAD } }] };
+        }
+        if (text.includes("/check-runs")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              check_runs: [{ name: "ui", status: "completed", conclusion: "success" }],
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ commit: { tree: { sha: TREE } } }) };
+      };
+      const runs = await fetchTreeIdenticalCheckRuns({
+        owner: OWNER,
+        repo: REPO,
+        sha: SHA,
+        token: TOKEN,
+      });
+      expect(runs.map((run) => run.name)).toEqual(["ui"]);
+    });
+
+    it("returns nothing when this commit's own tree cannot be read", async () => {
+      routeFetch({ "/commits/": "throw" });
+      await expect(
+        fetchTreeIdenticalCheckRuns({ owner: OWNER, repo: REPO, sha: SHA, token: TOKEN }),
+      ).resolves.toEqual([]);
+    });
+
+    it("returns nothing when the pull-request lookup fails or is malformed", async () => {
+      routeFetch({ "/commits/": { commit: { tree: { sha: TREE } } }, "/pulls": "throw" });
+      await expect(
+        fetchTreeIdenticalCheckRuns({ owner: OWNER, repo: REPO, sha: SHA, token: TOKEN }),
+      ).resolves.toEqual([]);
+    });
+
+    it("skips a candidate whose head IS this commit, which is not independent evidence", async () => {
+      globalThis.fetch = async (url) => {
+        const text = String(url);
+        if (text.includes("/pulls")) {
+          return { ok: true, status: 200, json: async () => [{ head: { sha: SHA } }] };
+        }
+        return { ok: true, status: 200, json: async () => ({ commit: { tree: { sha: TREE } } }) };
+      };
+      await expect(
+        fetchTreeIdenticalCheckRuns({ owner: OWNER, repo: REPO, sha: SHA, token: TOKEN }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  describe("applyTreeEvidence", () => {
+    const config = { owner: OWNER, repo: REPO, sha: SHA, token: TOKEN };
+
+    it("returns the verdict untouched when nothing is skipped, without any request", async () => {
+      let called = false;
+      globalThis.fetch = async () => {
+        called = true;
+        return { ok: false, status: 404, json: async () => ({}) };
+      };
+      const verdict = { failed: [], missing: [], ok: true, passed: ["ci"], pending: [] };
+      await expect(applyTreeEvidence(config, verdict)).resolves.toBe(verdict);
+      expect(called).toBe(false);
+    });
+
+    it("accepts a skipped check that an identical tree proved green", async () => {
+      globalThis.fetch = async (url) => {
+        const text = String(url);
+        if (text.includes("/pulls")) {
+          return { ok: true, status: 200, json: async () => [{ head: { sha: HEAD } }] };
+        }
+        if (text.includes("/check-runs")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              check_runs: [{ name: "ui", status: "completed", conclusion: "success" }],
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ commit: { tree: { sha: TREE } } }) };
+      };
+      const verdict = {
+        failed: [{ name: "ui", source: "check-run", state: "skipped" }],
+        missing: [],
+        ok: false,
+        passed: [],
+        pending: [],
+      };
+      const resolved = await applyTreeEvidence(config, verdict);
+      expect(resolved.ok).toBe(true);
+      expect(resolved.passed).toContain("ui");
+    });
+
+    it("leaves a skipped check failing when no identical tree proves it", async () => {
+      routeFetch({ "/commits/": "throw" });
+      const verdict = {
+        failed: [{ name: "ui", source: "check-run", state: "skipped" }],
+        missing: [],
+        ok: false,
+        passed: [],
+        pending: [],
+      };
+      const resolved = await applyTreeEvidence(config, verdict);
+      expect(resolved.ok).toBe(false);
+      expect(resolved.failed).toHaveLength(1);
+    });
   });
 });
