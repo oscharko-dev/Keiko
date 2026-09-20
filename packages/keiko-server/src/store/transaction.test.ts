@@ -29,7 +29,9 @@ describe("nested store transactions", () => {
     db.exec("CREATE TABLE records (id TEXT PRIMARY KEY)");
     expect(() =>
       withImmediateTransaction(db, () => {
-        withImmediateTransaction(db, () => db.exec("INSERT INTO records VALUES ('inner')"));
+        withImmediateTransaction(db, () => {
+          db.exec("INSERT INTO records VALUES ('inner')");
+        });
         throw new TypeError("Rejected outer write");
       }),
     ).toThrow("Rejected outer write");
