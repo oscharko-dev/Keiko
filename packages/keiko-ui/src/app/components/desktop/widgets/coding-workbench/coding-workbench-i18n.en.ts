@@ -248,12 +248,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.eyebrow": "Autonomy",
   "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
   "codingWorkbench.mode.governed-assist.label": "Ask for approval",
+  "codingWorkbench.mode.governed-assist.short": "Approve every workspace change",
   "codingWorkbench.mode.governed-assist.description":
     "Reads and planning proceed; workspace edits, commands, external-file access, and internet use require approval. Delivery remains separately human-approved.",
   "codingWorkbench.mode.supervised-coding.label": "Supervised workspace",
+  "codingWorkbench.mode.supervised-coding.short": "Routine edits proceed; risky asks",
   "codingWorkbench.mode.supervised-coding.description":
     "Routine low- and medium-risk workspace edits, vetted commands, and verification proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
   "codingWorkbench.mode.autonomous-delivery.label": "Full access",
+  "codingWorkbench.mode.autonomous-delivery.short": "Runs without per-action approval",
   "codingWorkbench.mode.autonomous-delivery.description":
     "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
   "codingWorkbench.task.eyebrow": "Task",

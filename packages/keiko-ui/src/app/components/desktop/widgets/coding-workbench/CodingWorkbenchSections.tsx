@@ -461,7 +461,7 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
   const confirmedModeId = useId();
   return (
     <div
-      className={`cmp-model mono ${styles.authorityControl}`}
+      className={`cmp-model ${styles.authorityControl}`}
       {...(confirmed && input.autonomyMode === "autonomous-delivery"
         ? { "data-full-access": "true" }
         : {})}
@@ -471,9 +471,9 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         ariaLabel={t("codingWorkbench.composer.authority.label")}
         ariaDescribedBy={confirmed ? confirmedModeId : undefined}
         menuTitle={t("codingWorkbench.composer.authority.menu")}
-        menuMinWidth={260}
+        menuMinWidth={180}
+        showMenuHeader={false}
         disabled={input.configurationLocked}
-        mono
         leadingVisual={<CodingWorkbenchIcon size={14} />}
         sections={[{ options: autonomyOptions(t) }]}
         onValueChange={(value): void => {

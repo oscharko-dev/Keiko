@@ -267,12 +267,15 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.mode.eyebrow": "Autonomie",
   "codingWorkbench.mode.unconfirmed": "Warten auf Serverbestätigung",
   "codingWorkbench.mode.governed-assist.label": "Um Genehmigung bitten",
+  "codingWorkbench.mode.governed-assist.short": "Jede Änderung freigeben",
   "codingWorkbench.mode.governed-assist.description":
     "Lese- und Planungsvorgänge werden ausgeführt; Bearbeitungen im Arbeitsbereich, Befehle, der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
   "codingWorkbench.mode.supervised-coding.label": "Überwachter Workspace",
+  "codingWorkbench.mode.supervised-coding.short": "Routine läuft, Riskantes fragt",
   "codingWorkbench.mode.supervised-coding.description":
     "Routinemäßige Bearbeitungen im Arbeitsbereich mit niedrigem und mittlerem Risiko, geprüfte Befehle und Verifizierungen werden ausgeführt; der Zugriff auf externe Dateien und die Internetnutzung erfordern eine Genehmigung. Die Auslieferung bleibt separat menschlich genehmigt.",
   "codingWorkbench.mode.autonomous-delivery.label": "Vollzugriff",
+  "codingWorkbench.mode.autonomous-delivery.short": "Läuft ohne Freigabe pro Aktion",
   "codingWorkbench.mode.autonomous-delivery.description":
     "Datei- und Internetvorgänge sowie akzeptierte Code-Task-Operationen zum Committen, Pushen und Erstellen eines Draft-Pull-Requests werden innerhalb des validierten Authority Envelope ohne Genehmigung pro Aktion ausgeführt. Merge bleibt separat genehmigungspflichtig.",
   "codingWorkbench.task.eyebrow": "Aufgabe",
