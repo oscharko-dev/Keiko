@@ -122,7 +122,8 @@ export type DependencyBootstrapRefusal =
   | "manifest-unreadable"
   | "lockfile-unreadable"
   | "unapproved-source"
-  | "workspaces-unresolved";
+  | "workspaces-unresolved"
+  | "install-inspection-unavailable";
 
 export type DependencyBootstrapPlan =
   | { readonly kind: "none" }
@@ -149,15 +150,15 @@ export interface DependencyBootstrapDeps {
   readonly startEgressProxy?: (() => Promise<RegistryEgressProxy>) | undefined;
   readonly onFailure?:
     | ((failure: {
-        readonly stage: "proxy-start" | "post-proxy" | "command";
+        readonly stage: "proxy-start" | "post-proxy" | "command" | "inspection";
         readonly error: unknown;
       }) => void)
     | undefined;
 }
 
 function reportDependencyBootstrapFailure(
-  deps: DependencyBootstrapDeps,
-  stage: "proxy-start" | "post-proxy" | "command",
+  deps: Pick<DependencyBootstrapDeps, "onFailure">,
+  stage: "proxy-start" | "post-proxy" | "command" | "inspection",
   error: unknown,
 ): void {
   deps.onFailure?.({ stage, error });
@@ -386,25 +387,59 @@ function completedInstallCurrent(root: string, fs: WorkspaceFs): boolean {
   return receipt !== undefined && receipt === installationFingerprint(root, fs);
 }
 
-// Bind the private receipt to every entry's non-user-settable change time and inode identity,
-// plus the root manifest/lockfiles. No directory links are traversed and missing metadata fails
-// closed to a reinstall. Bounded enumeration prevents a workspace from growing host work forever.
-function installationFingerprint(root: string, fs: WorkspaceFs): string | undefined {
+type InstallInspectionCode =
+  | "DEPENDENCY_TREE_UNREADABLE"
+  | "DEPENDENCY_TREE_LIMIT"
+  | "DEPENDENCY_TREE_IDENTITY_UNAVAILABLE"
+  | "DEPENDENCY_TREE_DIRECTORY_UNSAFE";
+class InstallInspectionError extends Error {
+  public constructor(
+    public readonly code: InstallInspectionCode,
+    cause?: unknown,
+  ) {
+    super("Dependency installation identity inspection failed", { cause });
+  }
+}
+
+function inspectionStat(fs: WorkspaceFs, path: string): WorkspaceStat {
+  try {
+    return fs.stat(path);
+  } catch (cause) {
+    throw new InstallInspectionError("DEPENDENCY_TREE_UNREADABLE", cause);
+  }
+}
+
+// A receipt is usable only when every contained entry has current identity evidence.
+function installationFingerprint(root: string, fs: WorkspaceFs): string {
   const hash = createHash("sha256");
   const pending = [join(root, "node_modules")];
   let entries = 0;
   while (pending.length > 0) {
     const directory = pending.pop();
-    if (directory === undefined) return undefined;
-    const stat = statOrUndefined(fs, directory);
-    if (stat?.isDirectory !== true || stat.isSymbolicLink) return undefined;
-    if (!fingerprintStat(hash, directory, stat)) return undefined;
-    const children = fs.readDir(directory, MAX_INSTALL_ENTRIES - entries);
+    if (directory === undefined) break;
+    const stat = inspectionStat(fs, directory);
+    if (!stat.isDirectory || stat.isSymbolicLink)
+      throw new InstallInspectionError("DEPENDENCY_TREE_DIRECTORY_UNSAFE");
+    fingerprintStat(hash, directory, stat);
+    const children = inspectionChildren(fs, directory, MAX_INSTALL_ENTRIES - entries);
     entries += children.length;
-    if (entries >= MAX_INSTALL_ENTRIES) return undefined;
-    if (!fingerprintChildren(directory, children, fs, hash, pending)) return undefined;
+    if (entries >= MAX_INSTALL_ENTRIES) throw new InstallInspectionError("DEPENDENCY_TREE_LIMIT");
+    fingerprintChildren(directory, children, fs, hash, pending);
   }
-  return fingerprintInputs(root, fs, hash) ? hash.digest("hex") : undefined;
+  fingerprintInputs(root, fs, hash);
+  return hash.digest("hex");
+}
+
+function inspectionChildren(
+  fs: WorkspaceFs,
+  directory: string,
+  limit: number,
+): ReturnType<WorkspaceFs["readDir"]> {
+  try {
+    return fs.readDir(directory, limit);
+  } catch (cause) {
+    throw new InstallInspectionError("DEPENDENCY_TREE_UNREADABLE", cause);
+  }
 }
 
 function fingerprintChildren(
@@ -413,39 +448,37 @@ function fingerprintChildren(
   fs: WorkspaceFs,
   hash: ReturnType<typeof createHash>,
   pending: string[],
-): boolean {
+): void {
   for (const child of children) {
     const path = join(directory, child.name);
-    const stat = statOrUndefined(fs, path);
-    if (!fingerprintStat(hash, path, stat)) return false;
-    if (stat?.isDirectory && !stat.isSymbolicLink) pending.push(path);
+    const stat = inspectionStat(fs, path);
+    fingerprintStat(hash, path, stat);
+    if (stat.isDirectory && !stat.isSymbolicLink) pending.push(path);
   }
-  return true;
 }
 
 function fingerprintInputs(
   root: string,
   fs: WorkspaceFs,
   hash: ReturnType<typeof createHash>,
-): boolean {
+): void {
   for (const name of [MANIFEST, ...LOCKFILES]) {
-    const stat = statOrUndefined(fs, join(root, name));
-    if (stat === undefined) hash.update(JSON.stringify([name, "absent"]));
-    else if (!fingerprintStat(hash, name, stat)) return false;
+    const path = join(root, name);
+    if (!fs.exists(path)) hash.update(JSON.stringify([name, "absent"]));
+    else fingerprintStat(hash, name, inspectionStat(fs, path));
   }
-  return true;
 }
 
 function fingerprintStat(
   hash: ReturnType<typeof createHash>,
   name: string,
-  stat: WorkspaceStat | undefined,
-): boolean {
-  if (stat?.fileIdentity === undefined || stat.ctimeNs === undefined) return false;
+  stat: WorkspaceStat,
+): void {
+  if (stat.fileIdentity === undefined || stat.ctimeNs === undefined)
+    throw new InstallInspectionError("DEPENDENCY_TREE_IDENTITY_UNAVAILABLE");
   hash.update(
     JSON.stringify([name, stat.fileIdentity, stat.ctimeNs, stat.size, stat.isSymbolicLink]),
   );
-  return true;
 }
 
 // npm may write its hidden lockfile before an install fails, leaving packages only partly unpacked.
@@ -461,7 +494,6 @@ function installedTreeCurrent(root: string, fs: WorkspaceFs): boolean {
 
 function recordCompletedInstall(root: string, fs: WorkspaceFs): void {
   const fingerprint = installationFingerprint(root, fs);
-  if (fingerprint === undefined) return;
   completedInstalls.delete(root);
   if (completedInstalls.size >= MAX_INSTALL_RECEIPTS) {
     const oldest = completedInstalls.keys().next().value;
@@ -479,6 +511,7 @@ function assertInstallDirectory(root: string, fs: WorkspaceFs): void {
 export function planDependencyBootstrap(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
+  onFailure?: DependencyBootstrapDeps["onFailure"],
 ): DependencyBootstrapPlan {
   const root = workspace.root;
   const manifest = readManifest(root, fs);
@@ -493,12 +526,19 @@ export function planDependencyBootstrap(
   }
   const refusal = sourceRefusal(root, manifest, fs);
   if (refusal !== undefined) return { kind: "refused", reason: refusal, lockfile };
-  return installedTreeCurrent(root, fs)
-    ? { kind: "current", lockfile }
-    : { kind: "install", lockfile };
+  try {
+    return installedTreeCurrent(root, fs)
+      ? { kind: "current", lockfile }
+      : { kind: "install", lockfile };
+  } catch (error) {
+    reportDependencyBootstrapFailure({ onFailure }, "inspection", error);
+    return { kind: "refused", reason: "install-inspection-unavailable", lockfile };
+  }
 }
 
 const REFUSAL_DETAIL: Readonly<Record<DependencyBootstrapRefusal, string>> = {
+  "install-inspection-unavailable":
+    "installed dependency identity unavailable; verification refused",
   "project-npm-config": "project npm config present; dependency installation refused",
   "manifest-unreadable": "package.json unreadable; dependency installation refused",
   "lockfile-unreadable":
@@ -748,7 +788,9 @@ export async function runDependencyBootstrap(
   deps: DependencyBootstrapDeps,
 ): Promise<DependencyBootstrapOutcome> {
   const admitted =
-    plan.kind === "current" ? planDependencyBootstrap(deps.workspace, deps.fs) : plan;
+    plan.kind === "current"
+      ? planDependencyBootstrap(deps.workspace, deps.fs, deps.onFailure)
+      : plan;
   const priorReceipt = completedInstalls.has(deps.workspace.root) ? "changed" : "missing";
   const receipt = admitted.kind === "current" ? "current" : priorReceipt;
   const outcome = await executeDependencyBootstrap(admitted, deps);

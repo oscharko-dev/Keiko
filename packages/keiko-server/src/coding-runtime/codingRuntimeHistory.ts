@@ -20,6 +20,12 @@ import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingSafeActivityContent } from "./codingSafeActivityProjection.js";
 
+// Keep source offsets stable across streaming captures without splitting a UTF-16 surrogate pair.
+function nativeChunkEnd(content: string, offset: number): number {
+  const end = Math.min(content.length, offset + CODING_HISTORY_MESSAGE_MAX_CHARS);
+  return (content.codePointAt(end - 1) ?? 0) > 0xffff ? end - 1 : end;
+}
+
 const HISTORY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -361,6 +367,15 @@ export class CodingRuntimeHistory {
           conversationId: task.id,
           messageCount,
           sourceMessageCount: messages.length,
+          contextDigest: digest(
+            JSON.stringify(
+              messages.map(({ messageId, role, content }) => [
+                messageId,
+                role,
+                stripUnsafeFormatChars(content),
+              ]),
+            ),
+          ),
           captureSource: "native-history",
         });
       return true;
@@ -379,7 +394,8 @@ export class CodingRuntimeHistory {
   private captureNativeMessage(id: string, runId: string, message: CodingHistoryMessage): number {
     const content = stripUnsafeFormatChars(message.content);
     let written = 0;
-    for (let offset = 0; offset < content.length; offset += CODING_HISTORY_MESSAGE_MAX_CHARS) {
+    for (let offset = 0; offset < content.length;) {
+      const end = nativeChunkEnd(content, offset);
       const sourceId =
         offset === 0 ? message.messageId : `${digest(message.messageId)}:${String(offset)}`;
       if (
@@ -388,10 +404,11 @@ export class CodingRuntimeHistory {
           runId,
           sourceId,
           message.role,
-          content.slice(offset, offset + CODING_HISTORY_MESSAGE_MAX_CHARS),
+          content.slice(offset, end),
         )
       )
         written += 1;
+      offset = end;
     }
     return written;
   }

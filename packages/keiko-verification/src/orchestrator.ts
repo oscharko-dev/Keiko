@@ -592,9 +592,10 @@ async function bootstrapDependencies(
 ): Promise<DependencyBootstrapOutcome | undefined> {
   if (plan.steps.every((step) => step.skipReason !== undefined)) return undefined;
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const bootstrapPlan = planDependencyBootstrap(deps.workspace, fs);
+  const bootstrap = bootstrapDeps(deps, fs, baseSpawn);
+  const bootstrapPlan = planDependencyBootstrap(deps.workspace, fs, bootstrap.onFailure);
   if (bootstrapPlan.kind === "none") return undefined;
-  const outcome = await runDependencyBootstrap(bootstrapPlan, bootstrapDeps(deps, fs, baseSpawn));
+  const outcome = await runDependencyBootstrap(bootstrapPlan, bootstrap);
   if (outcome.excerpt !== undefined) {
     deps.onStepOutput?.({ step: "dependencies", scriptName: undefined, excerpt: outcome.excerpt });
   }

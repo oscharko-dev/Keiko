@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "35b0b028e279b26a851c9c16a002a34ff757fa144f920642c1ff25cb85b91f7f" as const;
+  "c09574611c628c3979a25198eec22dfd2ae5def90d567c9022d2e5c4ed6a3bca" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4598,6 +4598,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: true,
         maxLength: 64,
+      },
+      failureReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["native-tool-error"],
       },
       state: {
         type: "string",
@@ -34584,6 +34590,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "digest",
               required: true,
+            },
+            {
+              name: "failureReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "state",

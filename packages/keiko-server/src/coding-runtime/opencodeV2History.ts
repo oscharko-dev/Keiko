@@ -43,6 +43,12 @@ const NATIVE_QUESTION_OPERATION = defineActivityLogOperation({
   emitter: "coding-runtime.opencodeV2History.recordNativeQuestions",
   fields: {
     callDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    failureReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["native-tool-error"],
+    },
     state: {
       type: "string",
       dataClass: "closed-enum",
@@ -454,8 +460,15 @@ function recordNativeQuestions(
     activity.activityLog.write(
       activityLogEvent(
         NATIVE_QUESTION_OPERATION,
-        { correlationId: activity.runId },
-        { callDigest: digest(signal.callId), state: signal.state },
+        {
+          correlationId: activity.runId,
+          ...(signal.state === "failed" ? ({ level: "warn", errorKind: "internal" } as const) : {}),
+        },
+        {
+          callDigest: digest(signal.callId),
+          state: signal.state,
+          ...(signal.state === "failed" ? { failureReason: "native-tool-error" } : {}),
+        },
       ),
     );
   }

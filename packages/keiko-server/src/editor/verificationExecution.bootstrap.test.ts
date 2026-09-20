@@ -1,7 +1,14 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { RunCommandDeps, RunCommandInput, CommandResult } from "@oscharko-dev/keiko-tools";
+import type { RegistryEgressProxy } from "../../../keiko-verification/dist/registryEgress.js";
+import { runDependencyBootstrap } from "../../../keiko-verification/dist/dependencies.js";
+import { EventEmitter } from "node:events";
+import type { ChildProcess } from "node:child_process";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -13,7 +20,26 @@ import {
   readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
 
-const proxyStart = vi.hoisted(() => vi.fn<() => Promise<never>>());
+const proxyStart = vi.hoisted(() => vi.fn<() => Promise<RegistryEgressProxy>>());
+const executableBoundary = vi.hoisted(() => ({ error: undefined as Error | undefined }));
+vi.mock("../../../keiko-tools/dist/exec.js", async (original) => {
+  const actual = await original<typeof import("../../../keiko-tools/dist/exec.js")>();
+  return {
+    ...actual,
+    runCommand: (input: RunCommandInput, deps: RunCommandDeps): Promise<CommandResult> =>
+      actual.runCommand(
+        input,
+        executableBoundary.error === undefined
+          ? deps
+          : {
+              ...deps,
+              resolveExecutable: (): string => {
+                throw executableBoundary.error ?? new Error("missing resolver fixture");
+              },
+            },
+      ),
+  };
+});
 // Only the OS/network boundary fails. Runner, execution composition, orchestrator and bootstrap
 // are the production implementations, including the packaged cross-package imports.
 vi.mock("../../../keiko-verification/dist/registryEgress.js", async (original) => ({
@@ -40,6 +66,7 @@ beforeEach(() => {
   vi.stubEnv("KEIKO_STATE_DIR", stateDir);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
   proxyStart.mockReset();
+  executableBoundary.error = undefined;
 });
 afterEach(() => {
   store.close();
@@ -65,6 +92,53 @@ function failure(): Error {
   error.stack =
     "TypeError: PRIVATE_REGISTRY_FAILURE\n    at startRegistryEgressProxy (/app/packages/keiko-verification/dist/registryEgress.js:50:4)";
   return error;
+}
+function proxy(): RegistryEgressProxy {
+  return {
+    url: "http://127.0.0.1:4873",
+    counts: () => ({ allowed: 0, refused: 0 }),
+    fault: () => undefined,
+    close: () => Promise.resolve(),
+  };
+}
+async function completedInstall(): Promise<void> {
+  mkdirSync(join(root, "node_modules", "typescript"), { recursive: true });
+  writeFileSync(join(root, "node_modules", "typescript", "index.js"), "original");
+  writeFileSync(
+    join(root, "node_modules", ".package-lock.json"),
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "node_modules/typescript": {
+          resolved: "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz",
+          integrity: "sha512-YWJj",
+          version: "6.0.3",
+        },
+      },
+    }),
+  );
+  const spawn = (): ChildProcess => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: (): boolean => true,
+    });
+    queueMicrotask(() => child.emit("close", 0, null));
+    return child as unknown as ChildProcess;
+  };
+  const result = await runDependencyBootstrap(
+    { kind: "install", lockfile: "absent" },
+    {
+      workspace: detectWorkspace(root),
+      fs: nodeWorkspaceFs,
+      spawn,
+      processEnv: { PATH: "/usr/bin" },
+      now: Date.now,
+      resolveExecutable: () => "/usr/bin/npm",
+      startEgressProxy: () => Promise.resolve(proxy()),
+    },
+  );
+  expect(result.summary.completionRecorded).toBe(true);
 }
 describe("composed verification dependency bootstrap", () => {
   it("persists the real proxy failure with its initiating correlation and classified cause", async () => {
@@ -104,6 +178,62 @@ describe("composed verification dependency bootstrap", () => {
       completionReceipt: "missing",
       completionRecorded: false,
     });
+  });
+
+  it("persists command-resolution failure from the real command executor", async () => {
+    proxyStart.mockResolvedValue(proxy());
+    const error = failure();
+    error.stack =
+      "TypeError: PRIVATE_RESOLVER\n    at resolveExecutable (/app/packages/keiko-tools/dist/exec.js:800:4)";
+    executableBoundary.error = error;
+    const result = await manager().runToReport(
+      { projectId: root, kinds: ["typecheck"], correlationId: "bootstrap-command-request" },
+      new AbortController().signal,
+    );
+    expect(result.report.overallStatus).toBe("failed");
+    const raw = readPersistedActivityLog(stateDir);
+    const line = persistedActivityLogLines(raw, "server.diagnostic.failure").at(-1);
+    expect(
+      expectActivityLogProof("server.diagnostic.failure.activity-log-line", line ?? ""),
+    ).toMatchObject({
+      correlationId: "bootstrap-command-request",
+      errorKind: "internal",
+      source: "verification.dependency-bootstrap.command",
+      diagnosticErrorClass: "TypeError",
+      frames: ["packages/keiko-tools/dist/exec.js:800:4"],
+      causeChain: ["RangeError"],
+    });
+    expect(raw).not.toContain("PRIVATE_");
+    expect(raw).not.toContain(root);
+  });
+
+  it("persists inconclusive installation inspection and refuses without spawning npm", async () => {
+    await completedInstall();
+    const originalStat = nodeWorkspaceFs.stat;
+    const cause = Object.assign(failure(), { code: "EACCES" });
+    vi.spyOn(nodeWorkspaceFs, "stat").mockImplementation((path) => {
+      if (path === join(root, "node_modules", "typescript", "index.js")) throw cause;
+      return originalStat(path);
+    });
+    const result = await manager().runToReport(
+      { projectId: root, kinds: ["typecheck"], correlationId: "bootstrap-inspection-request" },
+      new AbortController().signal,
+    );
+    expect(result.report.overallStatus).toBe("failed");
+    expect(proxyStart).not.toHaveBeenCalled();
+    const raw = readPersistedActivityLog(stateDir);
+    const line = persistedActivityLogLines(raw, "server.diagnostic.failure").at(-1);
+    expect(
+      expectActivityLogProof("server.diagnostic.failure.activity-log-line", line ?? ""),
+    ).toMatchObject({
+      correlationId: "bootstrap-inspection-request",
+      errorKind: "internal",
+      source: "verification.dependency-bootstrap.inspection",
+      code: "DEPENDENCY_TREE_UNREADABLE",
+      causeChain: ["TypeError", "RangeError"],
+    });
+    expect(raw).not.toContain("PRIVATE_");
+    expect(raw).not.toContain(root);
   });
 
   it("holds the workspace until verification settles and then admits the queued run", async () => {

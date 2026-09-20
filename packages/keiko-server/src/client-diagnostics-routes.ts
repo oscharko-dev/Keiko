@@ -1040,7 +1040,6 @@ function logVoiceDialogueStage(
     completeness: "complete",
     loss: "none",
   };
-  projectHistoryScope(request, extra);
   projectClientLoss(request.loss, extra);
   getServerLogger().info(
     activityLogEvent(
@@ -1069,7 +1068,6 @@ function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId
     completeness: "complete",
     loss: "none",
   };
-  projectHistoryScope(request, extra);
   projectClientLoss(request.loss, extra);
   getServerLogger().info(
     activityLogEvent(

@@ -879,6 +879,61 @@ describe("runDependencyBootstrap — registry egress", () => {
     expect(existsSync(join(root, "node_modules", ".keiko-install-complete"))).toBe(false);
   }
 
+  it.each(["stat", "read-directory", "identity", "timestamp", "limit"])(
+    "refuses inconclusive %s inspection without reinstalling",
+    async (fault) => {
+      const root = tempRoot();
+      await completedFixture(root);
+      const onFailure = vi.fn();
+      const target = join(root, "node_modules", "left-pad", "index.js");
+      const fs = {
+        ...nodeWorkspaceFs,
+        stat: (path: string): ReturnType<typeof nodeWorkspaceFs.stat> => {
+          const value = nodeWorkspaceFs.stat(path);
+          if (path !== target) return value;
+          if (fault === "stat") throw Object.assign(new Error("PRIVATE_ENTRY"), { code: "EACCES" });
+          if (fault === "identity") {
+            const { fileIdentity: _identity, ...rest } = value;
+            return rest;
+          }
+          if (fault === "timestamp") {
+            const { ctimeNs: _time, ...rest } = value;
+            return rest;
+          }
+          return value;
+        },
+        readDir: (path: string, limit?: number): ReturnType<typeof nodeWorkspaceFs.readDir> => {
+          if (fault === "read-directory") throw new Error("PRIVATE_DIRECTORY");
+          const entries = nodeWorkspaceFs.readDir(path, limit);
+          return fault === "limit"
+            ? Array.from({ length: 100_000 }, () => ({
+                name: "entry",
+                isDirectory: false,
+                isFile: true,
+                isSymbolicLink: false,
+              }))
+            : entries;
+        },
+      };
+      const plan = planDependencyBootstrap(workspaceAt(root), fs, onFailure);
+      expect(plan).toMatchObject({ kind: "refused", reason: "install-inspection-unavailable" });
+      const code =
+        fault === "limit"
+          ? "DEPENDENCY_TREE_LIMIT"
+          : fault === "identity" || fault === "timestamp"
+            ? "DEPENDENCY_TREE_IDENTITY_UNAVAILABLE"
+            : "DEPENDENCY_TREE_UNREADABLE";
+      expect(onFailure).toHaveBeenCalledWith({
+        stage: "inspection",
+        error: expect.objectContaining({ code }) as unknown,
+      });
+      const rec = recordingSpawn();
+      const result = await runDependencyBootstrap(plan, { ...bootstrapDepsFor(root, rec.fn), fs });
+      expect(result.summary.state).toBe("refused");
+      expect(rec.calls()).toHaveLength(0);
+    },
+  );
+
   it.each(["modify", "delete", "manifest", "lockfile"])(
     "invalidates a private receipt after %s even with restored mtime",
     async (mutation) => {
@@ -946,6 +1001,7 @@ describe("runDependencyBootstrap — registry egress", () => {
     });
     expect(swapped).toBe(true);
     expect(readFileSync(external, "utf8")).toBe("untouched");
+    expect(outcome.summary.state).toBe("failed");
     expect(outcome.summary.completionRecorded).toBe(false);
     expect(planFor(root).kind).toBe("install");
   });

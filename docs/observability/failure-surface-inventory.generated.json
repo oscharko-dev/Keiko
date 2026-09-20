@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "35b0b028e279b26a851c9c16a002a34ff757fa144f920642c1ff25cb85b91f7f"
+    "catalogDigest": "c09574611c628c3979a25198eec22dfd2ae5def90d567c9022d2e5c4ed6a3bca"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1290,7 +1290,8 @@
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.workspace.emitted-line": [
-      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts"
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
+      "packages/keiko-server/src/run-engine.test.ts"
     ],
     "editor.workspace-watch.authority-revoked.emitted-line": [
       "packages/keiko-server/src/editor/watch/workspaceWatchRoutes.test.ts"

@@ -90,6 +90,11 @@ describe("OpenCode V2 native tool history", () => {
         callDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
       });
     }
+    expect(records.at(-1)).toMatchObject({
+      errorKind: "internal",
+      failureReason: "native-tool-error",
+    });
+    expect(records.slice(0, -1).every((record) => record.errorKind === undefined)).toBe(true);
     expect(JSON.stringify(records)).not.toContain("PRIVATE_");
     expect(JSON.stringify(records)).not.toContain("call_question");
   });

@@ -204,6 +204,17 @@ describe("paired coding conversation history", () => {
     expect(history.captureNative(runId, [message])).toBe(true);
     expect(history.captureNative(runId, [{ ...message, content: "Hello world" }])).toBe(true);
     expect(history.captureNative(runId, [{ ...message, content: "Hello world" }])).toBe(true);
+    const captures = sink.events
+      .filter((item) => item.extra?.event === "captured")
+      .map((item) =>
+        expectActivityLogProof(
+          "coding-runtime.history.emitted-line",
+          formatActivityLogProofLine(item),
+        ),
+      );
+    expect(captures).toHaveLength(2);
+    expect(captures[0]?.contextDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(captures[1]?.contextDigest).not.toBe(captures[0]?.contextDigest);
     const long = { ...message, messageId: `msg_${"a".repeat(251)}`, content: "x".repeat(90_000) };
     expect(history.captureNative(runId, [long])).toBe(true);
     expect(history.detail(id, "read-stream")?.messages.map((item) => item.content)).toEqual([
@@ -222,6 +233,40 @@ describe("paired coding conversation history", () => {
       loss: "event-dropped",
     });
     expect(history.captureNative("unknown-native-run", [message])).toBe(false);
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.history.emitted-line",
+        formatActivityLogProofLine(sink.events.at(-1) ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: "unknown-native-run",
+      runId: "unknown-native-run",
+      event: "unavailable",
+      errorKind: "unavailable",
+      captureSource: "native-history",
+      completeness: "partial",
+      loss: "event-dropped",
+    });
+  });
+
+  it("preserves astral text across chunk boundaries through SQLite and replay", () => {
+    const { history, id } = fixture();
+    const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+    const content = "a".repeat(65_535) + "😀z";
+    const message = { messageId: "msg_astral", role: "assistant" as const, content };
+    expect(history.captureNative(runId, [message])).toBe(true);
+    expect(history.captureNative(runId, [message])).toBe(true);
+    const messages = history.detail(id, "read-unicode")?.messages.slice(1);
+    expect(messages?.map((item) => item.content)).toEqual(["a".repeat(65_535), "😀z"]);
+    expect(messages?.map((item) => item.content).join("")).toBe(content);
+    expect(history.captureNative(runId, [{ ...message, content: content + " next" }])).toBe(true);
+    expect(
+      history
+        .detail(id, "read-unicode-update")
+        ?.messages.slice(1)
+        .map((item) => item.content)
+        .join(""),
+    ).toBe(content + " next");
   });
 
   it.each(["coding_history_runs", "coding_history_message_bindings"])(
