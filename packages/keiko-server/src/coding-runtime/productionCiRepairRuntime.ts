@@ -60,6 +60,31 @@ function recordObservationRequirement(
   };
 }
 
+function recordPromptAdmission(
+  deps: DraftDeliveryDependencies,
+  verified: VerifiedCommitRuntimeDependencies,
+  binding: VerifiedCommitRuntimeBinding,
+): (tokens: number, accepted: boolean) => void {
+  return (tokens, accepted): void => {
+    (
+      deps.execution?.activityLog ??
+      verified.execution?.activityLog ??
+      processServerLogSink()
+    ).write(
+      activityLogEvent(
+        GIT_CI_REPAIR_BUDGET_OPERATION,
+        { correlationId: correlationIdOrUnknown(binding.runId), level: accepted ? "info" : "warn" },
+        {
+          phase: "prompt-admission",
+          status: accepted ? "available" : "blocked",
+          runId: binding.runId,
+          requestedPromptTokenCount: tokens,
+        },
+      ),
+    );
+  };
+}
+
 export function createProductionCiRepairBudget(
   deps: DraftDeliveryDependencies | undefined,
   verified: VerifiedCommitRuntimeDependencies | undefined,
@@ -104,6 +129,7 @@ export function createProductionCiRepairBudget(
       reason: "invalid-binding",
     }),
     recordObservationRequirement(deps, verified, binding),
+    recordPromptAdmission(deps, verified, binding),
   );
 }
 function budgetContext(
@@ -225,6 +251,7 @@ function gateBudget(
   budget: CiRepairExecutionBudget,
   allowed: () => boolean,
   recordObservationRequired: () => void,
+  recordPrompt: (tokens: number, accepted: boolean) => void,
 ): CiRepairExecutionBudget {
   return {
     admitTool: (request): CiRepairExecutionLease | undefined => {
@@ -235,7 +262,11 @@ function gateBudget(
         : { ...lease, check: () => allowed() && lease.check() };
     },
     canChargePrompt: (tokens) => allowed() && budget.canChargePrompt(tokens),
-    chargePrompt: (tokens) => allowed() && budget.chargePrompt(tokens),
+    chargePrompt: (tokens): boolean => {
+      const accepted = allowed() && budget.chargePrompt(tokens);
+      recordPrompt(tokens, accepted);
+      return accepted;
+    },
     chargeDelegatedRead: (id, key) => allowed() && budget.chargeDelegatedRead?.(id, key) === true,
     canChargeDelegatedRead: () => allowed() && budget.canChargeDelegatedRead?.() === true,
     ciObservationRequired: (): boolean => {

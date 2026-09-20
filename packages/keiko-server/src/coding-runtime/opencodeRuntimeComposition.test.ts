@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
 import { createHash } from "node:crypto";
 import {
   accessSync,
@@ -35,6 +36,7 @@ import {
 } from "../diagnostics-log.js";
 import {
   expectActivityLogProof,
+  formatActivityLogProofLine,
   persistedActivityLogLines,
   readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
@@ -126,6 +128,7 @@ interface OpenCodeRuntimeCompositionModule {
     body: string | undefined,
   ) => number;
   createOpenCodeRuntimeComposition(input: {
+    readonly activityLog?: ServerLogSink;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
         readonly protocolSchemaRawSha256: string;
@@ -341,6 +344,7 @@ type FixtureSafeActivity = NonNullable<
 type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
+  readonly activityLog?: ServerLogSink;
   readonly startTimeoutMs?: number;
   readonly historyResponse?: Promise<Response>;
   readonly historyResponseFactory?: () => Promise<Response>;
@@ -422,6 +426,12 @@ function runtimeMode(
   control: StartBridgeControl | undefined,
 ): NonNullable<StartBridgeControl["mode"]> {
   return control?.mode ?? "supervised-coding";
+}
+
+function optionalActivityLog(control: StartBridgeControl | undefined): {
+  readonly activityLog?: ServerLogSink;
+} {
+  return control?.activityLog === undefined ? {} : { activityLog: control.activityLog };
 }
 
 async function startBridgeFixture(
@@ -601,6 +611,7 @@ async function startBridgeFixture(
     ...optionalSafeActivity(control),
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
+    ...optionalActivityLog(control),
     ...optionalRuntimeEvents(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
@@ -1298,6 +1309,7 @@ describe("private OpenCode run control", () => {
   it("accepts status omission only when causal terminal history exists", async () => {
     const prompt = "SENTINEL_PRIVATE_RUN_PROMPT";
     const initialContext = "SENTINEL_UNTRUSTED_ISSUE_CONTEXT";
+    const activityLog = createBufferedServerLogSink();
     const governedEvents: OpenCodeReconciliationEvent[] = [];
     let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
     const runControl = {
@@ -1309,6 +1321,7 @@ describe("private OpenCode run control", () => {
     const fixture = await startBridgeFixture(facade, undefined, {
       governedEvents,
       runControl,
+      activityLog,
       historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
       afterStart: (_runtime, root): void => {
         runRoot = root;
@@ -1362,6 +1375,20 @@ describe("private OpenCode run control", () => {
     ].join("\n");
     expect(retained).not.toContain(prompt);
     expect(retained).not.toContain(initialContext);
+    const presentation = activityLog.events.find(
+      (event) => event.extra?.event === "context-presented",
+    );
+    if (presentation === undefined) throw new Error("Missing context presentation");
+    const line = formatActivityLogProofLine(presentation);
+    expect(JSON.parse(line)).toMatchObject({
+      op: "coding-runtime.history",
+      correlationId: FIXTURE_RUN_ID,
+      event: "context-presented",
+      runId: FIXTURE_RUN_ID,
+      messageCount: 1,
+    });
+    expect(line).not.toContain(initialContext);
+    expect(line).not.toContain(prompt);
 
     await fixture.stop();
     await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "after stop")).resolves.toBe(

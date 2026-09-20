@@ -25,6 +25,28 @@ function codingHistory(): NonNullable<UiStore["codingHistory"]> {
 }
 
 describe("Coding History on the existing conversation store", () => {
+  it.each(["", "   "])(
+    "rolls back automatic project registration when title %j is invalid",
+    (title) => {
+      store.deleteProject(root);
+      const projects = store.listProjects();
+      const manifests = store.listWorkspaceManifestRecords();
+      expect(() =>
+        codingHistory().create({
+          projectPath: root,
+          title,
+          modelId: "coding",
+          workspaceId: "ws_new",
+          taskId: "task_new",
+          branch: "keiko/task/new",
+          operatorDigest: "a".repeat(64),
+        }),
+      ).toThrow();
+      expect(store.listProjects()).toEqual(projects);
+      expect(store.listWorkspaceManifestRecords()).toEqual(manifests);
+    },
+  );
+
   it("registers an accepted workspace repository before storing its first coding task", () => {
     store.deleteProject(root);
     const task = codingHistory().create({

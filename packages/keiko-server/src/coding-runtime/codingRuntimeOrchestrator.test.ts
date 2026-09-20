@@ -1,3 +1,5 @@
+import { createInMemoryUiStore } from "../store/index.js";
+import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -208,6 +210,7 @@ function fixture(
   newRunId?: () => string,
   snapshotStore?: CodingRuntimeSnapshotStore,
   projectMemory?: CodingRuntimeProjectMemoryPort,
+  history?: CodingRuntimeHistory,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -433,6 +436,7 @@ function fixture(
       pendingResearchApprovals,
       approvedSkills: () => APPROVED_SKILLS,
       ...optionalOrchestratorDeps({ diagnostics, activityLog, issueIntake, projectMemory }),
+      ...(history === undefined ? {} : { history }),
       now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
       newRunId: newRunId ?? ((): string => `run-${String(rows.size + 1)}`),
     },
@@ -4140,6 +4144,40 @@ describe("issue-bound runs (#3385)", () => {
     expect(JSON.stringify(captured.records)).not.toContain(ISSUE_REF);
   });
 
+  it("records context-only issue purpose on the emitted attachment line", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      issueIntake(),
+      undefined,
+      undefined,
+      () => "context-issue-run",
+    );
+    const result = await f.orchestrator.start({
+      ...start,
+      issueRef: ISSUE_REF,
+      issuePurpose: "context",
+    });
+    expect(successfulSnapshot(result).state).toBe("running");
+    const attached = captured.records.find(
+      (event) => event.op === "coding-runtime.run.issue-context-attached",
+    );
+    if (attached === undefined) throw new Error("Missing context attachment");
+    const line = formatActivityLogProofLine(attached);
+    expect(JSON.parse(line)).toMatchObject({
+      op: "coding-runtime.run.issue-context-attached",
+      correlationId: "context-issue-run",
+      runId: "context-issue-run",
+      issuePurpose: "context",
+      issueNumber: 3385,
+    });
+    expect(line).not.toContain(ISSUE_REF);
+  });
+
   it("binds the run to the resolved issue, persists the content-free binding and attaches the context once", async () => {
     const captured = captureActivityLog();
     const intake = issueIntake();
@@ -5317,5 +5355,50 @@ describe("CodingRuntimeOrchestrator approved skills (#3417)", () => {
     expect(f.orchestrator.approvedSkills("")).toBeUndefined();
     expect(f.orchestrator.approvedSkills("../run-1")).toBeUndefined();
     expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("skl_repo-structure-summary");
+  });
+});
+
+describe("history initialization diagnostics", () => {
+  it("retains a persistence cause under the history diagnostic owner", async () => {
+    const store = createInMemoryUiStore();
+    try {
+      const history = new CodingRuntimeHistory(store, () => "operator", undefined);
+      const error = new TypeError("PRIVATE_HISTORY", { cause: new RangeError("PRIVATE_CAUSE") });
+      error.stack =
+        "TypeError: PRIVATE_HISTORY\n    at begin (/app/packages/keiko-server/dist/store/codingHistory.js:22:4)";
+      vi.spyOn(history, "begin").mockImplementation(() => {
+        throw error;
+      });
+      const captured = captureDiagnostics();
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        captured.diagnostics,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        () => "history-start-run",
+        undefined,
+        undefined,
+        history,
+      );
+      await f.orchestrator.start(start);
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          correlationId: "history-start-run",
+          operation: "coding-runtime.history",
+          message: "runtime-history-failed",
+          errorClass: "TypeError",
+          frames: ["packages/keiko-server/dist/store/codingHistory.js:22:4"],
+          causeChain: ["RangeError"],
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_");
+      expect(f.manager.start).not.toHaveBeenCalled();
+    } finally {
+      store.close();
+    }
   });
 });

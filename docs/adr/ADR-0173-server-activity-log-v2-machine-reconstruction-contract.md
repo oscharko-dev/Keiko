@@ -1021,6 +1021,14 @@ id is caller content or operator-chosen text that no check proves body-free. Two
 candidates stay apart, a retried one reads as the same, and a reader who holds the configuration
 recomputes the digest to name the model.
 
+The Coding Workbench model selector is a passive catalog reader (ADR-0124 D5), separate from
+the chat entry points described above. Opening or refreshing it does not start an automatic
+readiness probe. If its existing tool-call proof is missing or expired, no
+`gateway.readiness.automatic.*` record is expected from that catalog read. The operator can run
+the explicit check in Gateway Settings; follow `gateway.readiness.started` / `.completed` with
+`trigger: settings`, then the refreshed catalog response. Absence of an automatic probe in this
+Workbench path is intentional and must not be diagnosed as a lost provider call.
+
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 
 The Activity Log is one logical log stored as immutable segments in one closed-grammar directory,

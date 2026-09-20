@@ -177,7 +177,7 @@ function liveDraft(
   if (draft === undefined) return undefined;
   return [
     snapshot.terminalAt === undefined,
-    new Set(["ready", "running", "awaiting-approval"]).has(snapshot.state),
+    new Set(["starting", "ready", "running", "awaiting-approval"]).has(snapshot.state),
     snapshot.issueBinding?.remoteDigest === context.remoteDigest,
     draft.binding.remoteDigest === context.remoteDigest,
     draft.binding.issueBindingDigest === snapshot.issueBinding?.bindingDigest,

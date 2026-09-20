@@ -1729,6 +1729,7 @@ describe("production managed worktree tools", () => {
         ),
       ).toMatchObject({
         correlationId: "run-verification-3",
+        errorKind: "unavailable",
         proofStage: stage,
         commitProofReason: "proof-unavailable",
         frames: ["packages/keiko-server/dist/gitDelivery/verifiedCommitFacts.js:40:8"],

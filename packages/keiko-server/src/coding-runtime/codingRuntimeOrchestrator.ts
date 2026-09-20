@@ -951,6 +951,7 @@ function runtimeApprovalIssueFailureCode(
 }
 
 type RuntimeStartFailureReason =
+  | "history-initialization"
   | CodingRuntimeFailureCode
   | "initial-turn-dispatch"
   | "initial-turn-recovery"
@@ -984,10 +985,12 @@ function recordRuntimeStartFailure(
   emitServerDiagnostic(diagnostics, {
     correlationId: runtimeDiagnosticCorrelationId(runId),
     timestamp: new Date().toISOString(),
-    operation: "coding-runtime.start",
+    operation:
+      reason === "history-initialization" ? "coding-runtime.history" : "coding-runtime.start",
     source: "coding-runtime-orchestrator.start",
-    errorClass: error === undefined ? "CodingRuntimeStartFailure" : contentFreeErrorClass(error),
-    message: "runtime-start-failed",
+    ...(error === undefined ? { errorClass: "CodingRuntimeStartFailure" } : describeError(error)),
+    message:
+      reason === "history-initialization" ? "runtime-history-failed" : "runtime-start-failed",
     code: launchReason === undefined ? diagnosticCode : `${diagnosticCode}:${launchReason}`,
   });
 }
@@ -2867,8 +2870,8 @@ export class CodingRuntimeOrchestrator {
     try {
       this.deps.history?.begin(request, active, runId);
       return true;
-    } catch {
-      recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
+    } catch (error) {
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "history-initialization", error);
       return false;
     }
   }

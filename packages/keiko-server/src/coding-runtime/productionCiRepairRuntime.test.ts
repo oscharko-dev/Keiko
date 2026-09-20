@@ -14,6 +14,7 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { DraftDeliveryDependencies } from "../gitDelivery/draftDeliveryTypes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
+import { formatActivityLogProofLine } from "../../../../tests/support/activity-log-proof.js";
 import { createCodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessStore.js";
 import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
 import type {
@@ -175,6 +176,7 @@ function fixture(
   options: {
     readonly predecessorReadiness?: ReadinessSnapshot;
     readonly seedExhaustedBudget?: boolean;
+    readonly starting?: boolean;
   } = {},
 ): {
   readonly snapshots: CodingRuntimeSnapshotStore;
@@ -187,6 +189,11 @@ function fixture(
   const db = new DatabaseSync(":memory:");
   databases.push(db);
   const snapshots = createDraftRun(db);
+  if (options.starting)
+    db.prepare("UPDATE coding_runtime_snapshots SET state = ? WHERE run_id = ?").run(
+      "starting",
+      "run-1",
+    );
   const initial = snapshots.get("run-1");
   if (initial?.draftDelivery === undefined) throw new Error("Missing initial draft");
   if (options.predecessorReadiness !== undefined) {
@@ -273,21 +280,29 @@ const editRequest = {
 } as const;
 describe("production CI repair accounting availability", () => {
   it("admits a model prompt while the runtime authority is live and the snapshot is starting", () => {
-    const test = fixture(false, { seedExhaustedBudget: false });
-    const current = test.snapshots.get("run-1");
-    if (current === undefined) throw new Error("Missing run");
-    const snapshots = {
-      ...test.snapshots,
-      get: (runId: string): CodingRuntimeSnapshot | undefined =>
-        runId === current.runId ? { ...current, state: "starting" } : test.snapshots.get(runId),
-    };
-    const budget = createProductionCiRepairBudget(
-      { ...test.deps, snapshots },
-      test.verified,
-      test.current,
-    );
+    const test = fixture(false, { seedExhaustedBudget: false, starting: true });
+    expect(test.snapshots.get("run-1")?.state).toBe("starting");
+    const budget = createProductionCiRepairBudget(test.deps, test.verified, test.current);
     expect(budget?.canChargePrompt(1)).toBe(true);
     expect(budget?.chargePrompt(1)).toBe(true);
+    expect(test.events.filter((event) => event.extra?.phase === "prompt-admission")).toMatchObject([
+      {
+        op: "git.ci-repair.budget",
+        extra: {
+          phase: "prompt-admission",
+          status: "available",
+          requestedPromptTokenCount: 1,
+          runId: "run-1",
+        },
+      },
+    ]);
+    const event = test.events.find((entry) => entry.extra?.phase === "prompt-admission");
+    if (event === undefined) throw new Error("Missing prompt admission evidence");
+    const line = formatActivityLogProofLine(event);
+    expect(line).toContain("op=git.ci-repair.budget");
+    expect(line).toContain("runId=run-1");
+    expect(line).toContain("phase=prompt-admission");
+    expect(line).toContain("requestedPromptTokenCount=1");
   });
   it.each([
     [false, "ciRepairBudget"],

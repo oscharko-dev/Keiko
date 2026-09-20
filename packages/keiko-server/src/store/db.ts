@@ -1,3 +1,4 @@
+import { withImmediateTransaction } from "./transaction.js";
 import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
 // `node:sqlite` DatabaseSync drives both factories; the node adapter adds directory creation,
@@ -306,16 +307,11 @@ function createProjectRecord(
   const normalized = validateProjectPath(path, { mustExist: true });
   const resolvedName = deriveProjectName(name, normalized);
   const now = options.now();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return withImmediateTransaction(db, () => {
     const project = sqlUpsertProject(db, normalized, resolvedName, name !== undefined, now);
     ensureProjectWorkspaceManifest(db, project.path, project.name, now);
-    db.exec("COMMIT");
     return project;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 function reconnectProjectRecord(
@@ -400,18 +396,6 @@ function clientTurnContentMatches(
   return turn.contentDigest === undefined
     ? turn.userMessage?.content === legacyContent
     : turn.contentDigest === expectedDigest;
-}
-
-function withImmediateTransaction<T>(db: DatabaseSync, operation: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = operation();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 function existingTurnAdmission(

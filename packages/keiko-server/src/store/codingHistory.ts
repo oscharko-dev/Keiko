@@ -1,3 +1,4 @@
+import { withImmediateTransaction } from "./transaction.js";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   CodingHistoryTask,
@@ -53,18 +54,6 @@ function assertId(value: string): void {
   if (!SAFE_ID.test(value)) throw invalidRequest("Invalid Coding History identity.");
 }
 
-function transaction<T>(db: DatabaseSync, work: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = work();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 function readTask(
   db: DatabaseSync,
   store: UiStore,
@@ -113,10 +102,10 @@ function createTask(
   assertId(input.taskId);
   if (!/^[a-f0-9]{64}$/u.test(input.operatorDigest))
     throw invalidRequest("Invalid operator identity.");
-  if (!store.listProjects().some((project) => project.path === input.projectPath))
-    store.createProject(input.projectPath);
-  return transaction(db, () => {
-    const chat = store.createChat(input.projectPath, input.title, input.modelId, {
+  return withImmediateTransaction(db, () => {
+    if (!store.listProjects().some((project) => project.path === input.projectPath))
+      store.createProject(input.projectPath);
+    const chat = store.createChat(input.projectPath, input.title.trim(), input.modelId, {
       branchLabel: input.branch,
     });
     db.prepare("INSERT INTO coding_history_tasks VALUES (?, ?, ?, ?, 'active')").run(
@@ -143,7 +132,7 @@ function bindRun(
     .get(runId);
   if (existing?.chat_id === id) return;
   if (existing !== undefined) throw invalidRequest("Run already belongs to another coding task.");
-  transaction(db, () => {
+  withImmediateTransaction(db, () => {
     db.prepare(
       "INSERT INTO coding_history_runs SELECT ?, ?, COALESCE(MAX(sequence), 0) + 1 FROM coding_history_runs WHERE chat_id = ?",
     ).run(runId, id, id);
@@ -170,7 +159,7 @@ function appendMessage(
     throw invalidRequest("Invalid coding message size.");
   const binding = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id = ?").get(runId);
   if (binding?.chat_id !== id) throw invalidRequest("Coding task run binding mismatch.");
-  transaction(db, () => {
+  withImmediateTransaction(db, () => {
     if (
       db
         .prepare("SELECT 1 FROM coding_history_message_bindings WHERE run_id = ? AND source_id = ?")
@@ -221,7 +210,7 @@ function updateTask(
   id: string,
   patch: Parameters<CodingHistoryStore["update"]>[1],
 ): CodingHistoryTask {
-  return transaction(db, () => {
+  return withImmediateTransaction(db, () => {
     requireTask(db, store, id);
     if (patch.title !== undefined) store.updateChat(id, { title: patch.title });
     if (patch.status !== undefined)
