@@ -320,7 +320,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.help":
     "Pausieren Sie den aktiven Lauf, um eine Rückfrage zu senden. Ein entworfener Follow-up wird nur im pausierten Zustand zugelassen und niemals in eine Warteschlange gestellt.",
   "codingWorkbench.composer.workspaceMismatch":
-    "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Das Informationspanel und der Laufstatus beschreiben weiterhin diesen Lauf. Wechseln Sie über den Workspace-Auswahler oben zurück, um seine Dateien zu prüfen oder zu bearbeiten.",
+    "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Das Informationspanel und der Laufstatus beschreiben weiterhin diesen Lauf. Wechseln Sie über die Workspace-Auswahl oben zurück, um seine Dateien zu prüfen oder zu bearbeiten.",
   "codingWorkbench.composer.blocked.busy": "Keiko verarbeitet gerade eine Runtime-Aktion.",
   "codingWorkbench.composer.blocked.emptyStart": "Beschreibe zuerst, was Keiko tun soll.",
   "codingWorkbench.composer.blocked.emptyFollowUp": "Schreibe zuerst eine Rückfrage.",
