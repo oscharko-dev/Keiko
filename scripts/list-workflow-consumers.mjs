@@ -101,9 +101,14 @@ const QUOTE = "[\"'`]";
 const PATH_SEPARATOR = String.raw`[/\\]`;
 const DIGITS = String.raw`\d+`;
 
-/** A workflow name as a regular-expression literal: only the dot needs escaping. */
+/**
+ * A workflow name as a regular-expression LITERAL: every metacharacter escaped, not only the dot.
+ * The name reaches this from the command line, so escaping one character would leave the pattern
+ * injectable (CodeQL js/regex-injection) and would also make a name like `a+b.yml` silently match
+ * the wrong files.
+ */
 function asPattern(workflow) {
-  return workflow.replaceAll(".", String.raw`\.`);
+  return workflow.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 }
 
 /**
@@ -165,14 +170,36 @@ function reportWorkflow(workflow, files) {
 const args = process.argv.slice(2);
 const all = args.includes("--all");
 const requested = args.filter((arg) => !arg.startsWith("--"));
-/** Which workflows to report: every one with --all, the named ones, otherwise ci.yml. */
+/** The workflow files that exist, which is the only set this tool ever reports on. */
+function availableWorkflows() {
+  return readdirSync(WORKFLOW_DIR).filter(
+    (name) => name.endsWith(".yml") || name.endsWith(".yaml"),
+  );
+}
+
+/**
+ * Which workflows to report: every one with --all, the named ones, otherwise ci.yml.
+ *
+ * A requested name is RESOLVED against the directory rather than used as given. A name that does
+ * not exist is a typo the caller should see, not a scan that quietly finds nothing — and resolving
+ * it means no command-line string ever reaches the pattern builder.
+ */
 function selectWorkflows(everyWorkflow, named) {
-  if (everyWorkflow) {
-    return readdirSync(WORKFLOW_DIR).filter(
-      (name) => name.endsWith(".yml") || name.endsWith(".yaml"),
-    );
+  const available = availableWorkflows();
+  if (everyWorkflow) return available;
+  if (named.length === 0) return available.filter((name) => name === "ci.yml");
+  const selected = [];
+  for (const request of named) {
+    const match = available.find((name) => name === request);
+    if (match === undefined) {
+      console.error(`list-workflow-consumers: no such workflow: ${request}`);
+      console.error(`  available: ${available.join(", ")}`);
+      process.exitCode = 1;
+      continue;
+    }
+    selected.push(match);
   }
-  return named.length > 0 ? named : ["ci.yml"];
+  return selected;
 }
 
 const workflows = selectWorkflows(all, requested);
