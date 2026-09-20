@@ -835,14 +835,14 @@
   font: inherit;
 }
 
-.pathFieldRow {
+.cmpPathFieldRow {
   display: flex;
   gap: var(--space-2);
   align-items: center;
   min-width: 0;
 }
 
-.pathFieldRow > .setupInput {
+.cmpPathFieldRow > .setupInput {
   flex: 1 1 auto;
   min-width: 0;
 }

@@ -1070,7 +1070,7 @@ function RepositoryPathFieldView({
       <label className={styles.fieldLabel} htmlFor="coding-workbench-setup-path">
         {t("codingWorkbench.setup.repositoryPath")}
       </label>
-      <div className={styles.pathFieldRow}>
+      <div className={styles.cmpPathFieldRow}>
         {children}
         {browse.supported ? (
           <button
