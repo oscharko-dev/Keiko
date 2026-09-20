@@ -422,3 +422,38 @@ remain the final merge arbiter.
 
 All seven final Activity Log gates, including architecture and negative checks, and the real
 local Sonar analyzer pass. No required check or review conversation is bypassed.
+
+## Merge handoff: installation containment and hosted build parity
+
+Installed-tree receipts now verify canonical containment of nested directory and file symlinks,
+include contained target identity, and bound traversal through visited directories. Installation
+rechecks that boundary immediately before OS spawn. The root-swap regression would write outside
+the workspace if a process were started; the corrected path refuses before spawning. An unreadable
+installation marker fails closed instead of being mistaken for absent metadata. The composed
+post-install failure proof traverses the real verification/bootstrap/command layers and reads the
+physical activity log; removing the failure callback makes the proof fail.
+
+Durable issue-context admission is recorded before runtime startup can throw or refuse, and a
+successful browser issue preview retains the initiating correlation. The regeneration parser now
+explicitly covers `--extend-managed-runtime`. All seven review findings have corresponding repairs
+and focused proofs; none is dismissed to obtain a green check.
+
+The hosted failures in runs `35490106615` and `35490091440` were reproduced locally. The first-load
+bundle exceeded its unchanged ceiling by 108 bytes. History navigation and the Workbench stop glyph stay
+inside their existing lazy boundaries; unused rail/image and issue-intake exports are removed,
+and workspace activation retains FIFO ordering with a simpler promise tail. The exact static-export
+bundle command now passes in the CI Linux image. Editor evidence is regenerated from that Linux
+build, correcting the platform-dependent runtime fingerprint. Eight real updater browser journeys
+regenerate the stale UI evidence, including the BFF-unavailable case.
+
+Final local validation: 8,592 UI tests pass with one existing skip, 469 affected verification/server
+tests pass, and 73 affected script tests pass. The Linux history/workspace/accessibility composition
+passes 32 tests. New-code coverage is 87.6% across 3,273 lines/conditions, above the 85% floor.
+Root/UI typecheck, scoped strict lint, formatting, architecture and negative checks, all seven
+Activity Log gates, updater evidence freshness and the real local Sonar analyzer pass. Hosted
+checks for the pushed handoff revision remain authoritative; these local results do not claim a
+completed merge. No gate, coverage floor, bundle budget or performance calibration was relaxed.
+
+The final native qualification binds product commit `2c3b210e1`: two warmups plus 30 measured
+samples pass the unchanged runtime budgets and strict source-freshness gate. The product owner
+requested a handoff after publication; no further optimization or merge action is started.
