@@ -185,17 +185,26 @@ function recordRequiredCheck(name, context) {
  * @param {Array<{name?: unknown, status?: unknown, conclusion?: unknown}>} treeCheckRuns
  * @returns {typeof result}
  */
+/** Identity of a check for reuse: its name AND the app that produced it. */
+function evidenceKey(name, appId) {
+  return `${String(name)}\u0000${appId === undefined || appId === null ? "" : String(appId)}`;
+}
+
 export function resolveSkippedWithTreeEvidence(result, treeCheckRuns) {
+  // Keyed by name AND producing app id. A check name is not unique across GitHub Apps, so matching
+  // on the name alone would let an unrelated app's same-named success rescue a skipped required
+  // check. An entry whose own app is unknown can only be matched by an evidence run whose app is
+  // equally unknown, so the pairing never loosens.
   const provenByTree = new Set(
     (Array.isArray(treeCheckRuns) ? treeCheckRuns : [])
       .filter((run) => run?.status === "completed" && run?.conclusion === "success")
-      .map((run) => run?.name)
-      .filter((name) => typeof name === "string"),
+      .filter((run) => typeof run?.name === "string")
+      .map((run) => evidenceKey(run.name, run?.app?.id)),
   );
   if (provenByTree.size === 0) return result;
 
   const rescued = result.failed.filter(
-    (entry) => entry.state === "skipped" && provenByTree.has(entry.name),
+    (entry) => entry.state === "skipped" && provenByTree.has(evidenceKey(entry.name, entry.appId)),
   );
   if (rescued.length === 0) return result;
 
@@ -214,7 +223,12 @@ function recordCheckRun(name, checkRun, result) {
     result.passed.push(name);
     return;
   }
-  const entry = { name, source: "check-run", state: describeCheckRun(checkRun) };
+  const entry = {
+    name,
+    source: "check-run",
+    state: describeCheckRun(checkRun),
+    appId: checkRun?.app?.id,
+  };
   if (checkRun.status === "completed") {
     result.failed.push(entry);
     return;
@@ -373,13 +387,17 @@ export async function fetchTreeIdenticalCheckRuns({ owner, repo, sha, token }) {
   }
   if (!Array.isArray(pulls)) return [];
 
-  const collected = [];
+  // ONE candidate, never a union. Combining check runs from several tree-identical commits would
+  // let a gate be satisfied by pieces from different runs, with no single commit having passed the
+  // complete gate. The first candidate that carries the identical tree is the evidence, or there
+  // is none.
   for (const pull of pulls) {
     const headSha = pull?.head?.sha;
     if (typeof headSha !== "string" || headSha === sha) continue;
-    collected.push(...(await checkRunsForIdenticalTree({ headSha, owner, repo, token, treeSha })));
+    const runs = await checkRunsForIdenticalTree({ headSha, owner, repo, token, treeSha });
+    if (runs.length > 0) return runs;
   }
-  return collected;
+  return [];
 }
 
 /**

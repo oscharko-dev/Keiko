@@ -371,3 +371,84 @@ describe("tree-identity evidence lookup", () => {
     });
   });
 });
+
+// Reuse must come from ONE candidate and ONE producing app. Both of these widen what the release
+// accepts if they are wrong, so each is pinned by the case that would exploit it.
+describe("reuse evidence is bound, not aggregated", () => {
+  const skipped = (appId) => ({
+    failed: [{ name: "ui", source: "check-run", state: "skipped", appId }],
+    missing: [],
+    ok: false,
+    passed: [],
+    pending: [],
+  });
+  const success = (name, appId) => ({
+    name,
+    status: "completed",
+    conclusion: "success",
+    app: { id: appId },
+  });
+
+  it("accepts a success from the SAME app", () => {
+    const resolved = resolveSkippedWithTreeEvidence(skipped(42), [success("ui", 42)]);
+    expect(resolved.ok).toBe(true);
+    expect(resolved.passed).toContain("ui");
+  });
+
+  it("refuses a same-named success from a DIFFERENT app", () => {
+    const resolved = resolveSkippedWithTreeEvidence(skipped(42), [success("ui", 99)]);
+    expect(resolved.ok).toBe(false);
+    expect(resolved.failed).toHaveLength(1);
+  });
+
+  it("refuses when the evidence carries no app and the skipped check does", () => {
+    const resolved = resolveSkippedWithTreeEvidence(skipped(42), [success("ui", undefined)]);
+    expect(resolved.ok).toBe(false);
+  });
+
+  it("refuses when the skipped check carries no app and the evidence does", () => {
+    const resolved = resolveSkippedWithTreeEvidence(skipped(undefined), [success("ui", 42)]);
+    expect(resolved.ok).toBe(false);
+  });
+
+  it("takes evidence from ONE candidate, never a union across commits", async () => {
+    // Two tree-identical candidates: the first proves only `ui`, the second only `Core quality`.
+    // A union would satisfy both; binding to one candidate must not.
+    const HEAD_A = "1".repeat(40);
+    const HEAD_B = "2".repeat(40);
+    const TREE = "c".repeat(40);
+    const SHA = "a".repeat(40);
+    const original = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const text = String(url);
+      if (text.includes("/pulls")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [{ head: { sha: HEAD_A } }, { head: { sha: HEAD_B } }],
+        };
+      }
+      if (text.includes("/check-runs")) {
+        const name = text.includes(HEAD_A) ? "ui" : "Core quality";
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ check_runs: [success(name, 7)] }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ commit: { tree: { sha: TREE } } }) };
+    };
+    try {
+      const runs = await fetchTreeIdenticalCheckRuns({
+        owner: "owner",
+        repo: "repo",
+        sha: SHA,
+        token: "t",
+      });
+      // Only the first candidate's evidence, so `Core quality` is not in it.
+      expect(runs.map((run) => run.name)).toEqual(["ui"]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
