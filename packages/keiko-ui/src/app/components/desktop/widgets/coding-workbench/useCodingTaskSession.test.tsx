@@ -6,6 +6,18 @@ import { useCodingTaskSession } from "./useCodingTaskSession";
 import type { ActiveWorkspaceApi } from "../../context/ActiveWorkspaceContext";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
+const scopeEffects = vi.hoisted(() => ({ deferred: false }));
+vi.mock("react", async (importOriginal) => {
+  const react = await importOriginal<typeof import("react")>();
+  return {
+    ...react,
+    useEffect: (effect: React.EffectCallback, deps?: React.DependencyList): void => {
+      const delayed = scopeEffects.deferred && deps?.length === 4 && typeof deps[0] === "string";
+      react.useEffect(delayed ? (): undefined => undefined : effect, deps);
+    },
+  };
+});
+
 const read = vi.hoisted(() => vi.fn());
 const update = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/coding-history-api", () => ({
@@ -104,6 +116,32 @@ beforeEach(() => {
 });
 
 describe("coding task selection", () => {
+  it("distinguishes a returned task from another repository", async () => {
+    read.mockResolvedValue({ ...detail, task: { ...detail.task, projectPath: "/other" } });
+    const { result } = renderHook(() =>
+      useCodingTaskSession({
+        snapshot: snapshot("chat-one"),
+        active: false,
+        root: "/repo",
+        workspace: activeWorkspace(),
+        selection: undefined,
+      }),
+    );
+    await waitFor(() => expect(result.current.pending).toBe(false));
+    expect(result.current.detail).toBeNull();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding task history scope outcome",
+      expect.objectContaining({
+        correlationId: read.mock.calls[0]?.[1],
+        codingHistoryScope: expect.objectContaining({
+          reason: "repository-mismatch",
+          taskId: "chat-one",
+        }),
+      }),
+    );
+    expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain("/other");
+  });
+
   it.each(["/repo", "/other-repository"])(
     "keeps an explicitly opened task visible after switching from %s",
     async (initialRoot) => {
@@ -174,14 +212,29 @@ describe("coding task selection", () => {
     expect(result.current.conversationId).toBeUndefined();
     expect(result.current.visibleRun).toBe(false);
     expect(reportClientDiagnostic).toHaveBeenCalledWith(
-      "[keiko] coding task history scope changed: detail-cleared",
-      { correlationId: "run-one" },
+      "[keiko] coding task history scope outcome",
+      expect.objectContaining({
+        correlationId: expect.any(String),
+        codingHistoryScope: expect.objectContaining({
+          reason: "detail-cleared",
+          taskId: "chat-one",
+          requestedScopeId: expect.any(String),
+          currentScopeId: expect.any(String),
+        }),
+      }),
     );
     await waitFor(() => expect(result.current.pending).toBe(false));
     expect(result.current.detail).toBeNull();
     expect(reportClientDiagnostic).toHaveBeenCalledWith(
-      "[keiko] coding task history scope mismatch",
-      { correlationId: "run-one" },
+      "[keiko] coding task history scope outcome",
+      expect.objectContaining({
+        correlationId: expect.any(String),
+        codingHistoryScope: expect.objectContaining({
+          reason: "workspace-mismatch",
+          targetWorkspaceId: "ws-one",
+          currentWorkspaceId: "ws-two",
+        }),
+      }),
     );
   });
 
@@ -231,7 +284,7 @@ describe("coding task selection", () => {
       }),
     );
     await act(async () => Promise.resolve());
-    expect(read).toHaveBeenCalledWith("chat-one");
+    expect(read).toHaveBeenCalledWith("chat-one", expect.any(String));
     expect(result.current.detail).toBeNull();
   });
 
@@ -305,6 +358,38 @@ describe("coding task selection", () => {
 });
 
 describe("pending history activation scope", () => {
+  it("rejects a stale selection before passive scope effects run", async () => {
+    const workspace = activeWorkspace();
+    if (workspace.activeInstance === null) throw new Error("Missing fixture");
+    const pending = deferred<CodingHistoryDetail>();
+    read.mockReturnValue(pending.promise);
+    const { result, rerender } = renderHook(
+      ({ current }) =>
+        useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace: current,
+          selection: "chat-one",
+        }),
+      { initialProps: { current: workspace } },
+    );
+    scopeEffects.deferred = true;
+    try {
+      rerender({
+        current: {
+          ...workspace,
+          activeInstance: { ...workspace.activeInstance, workspaceId: "ws-external" },
+        },
+      });
+      await act(async () => pending.resolve(detail));
+      expect(workspace.switchTo).not.toHaveBeenCalled();
+      expect(result.current.detail).toBeNull();
+    } finally {
+      scopeEffects.deferred = false;
+    }
+  });
+
   it.each([false, true])(
     "does not override an external workspace switch (return=%s)",
     async (returnToSource) => {
@@ -422,8 +507,16 @@ describe("history activation settlement", () => {
       else {
         expect(result.current.detail).toBeNull();
         expect(reportClientDiagnostic).toHaveBeenCalledWith(
-          "[keiko] coding task history scope changed: activation-superseded",
-          { correlationId: undefined },
+          "[keiko] coding task history scope outcome",
+          expect.objectContaining({
+            correlationId: expect.any(String),
+            codingHistoryScope: expect.objectContaining({
+              reason: "activation-superseded",
+              taskId: "chat-one",
+              requestedScopeId: expect.any(String),
+              currentScopeId: expect.any(String),
+            }),
+          }),
         );
       }
     },
@@ -453,8 +546,16 @@ describe("history activation settlement", () => {
     });
     expect(result.current.detail).toBeNull();
     expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
-      "[keiko] coding task history scope changed: detail-cleared",
-      { correlationId: undefined },
+      "[keiko] coding task history scope outcome",
+      expect.objectContaining({
+        correlationId: expect.any(String),
+        codingHistoryScope: expect.objectContaining({
+          reason: "detail-cleared",
+          taskId: "chat-one",
+          requestedScopeId: expect.any(String),
+          currentScopeId: expect.any(String),
+        }),
+      }),
     );
     expect(read).toHaveBeenCalledTimes(1);
   });
@@ -479,8 +580,16 @@ describe("history activation settlement", () => {
     expect(result.current.detail).toBeNull();
     expect(result.current.pending).toBe(false);
     expect(reportClientDiagnostic).toHaveBeenCalledWith(
-      "[keiko] coding task history scope changed: activation-superseded",
-      { correlationId: undefined },
+      "[keiko] coding task history scope outcome",
+      expect.objectContaining({
+        correlationId: expect.any(String),
+        codingHistoryScope: expect.objectContaining({
+          reason: "activation-superseded",
+          taskId: "chat-one",
+          requestedScopeId: expect.any(String),
+          currentScopeId: expect.any(String),
+        }),
+      }),
     );
   });
 
@@ -503,9 +612,23 @@ describe("history activation settlement", () => {
     expect(result.current.error).toBe(false);
     expect(result.current.pending).toBe(false);
     expect(reportClientDiagnostic).toHaveBeenCalledWith(
-      "[keiko] coding task history scope changed: activation-cancelled",
-      { correlationId: undefined },
+      "[keiko] coding task history scope outcome",
+      expect.objectContaining({
+        correlationId: expect.any(String),
+        codingHistoryScope: expect.objectContaining({
+          reason: "activation-cancelled",
+          taskId: "chat-one",
+          requestedScopeId: expect.any(String),
+          currentScopeId: expect.any(String),
+        }),
+      }),
     );
+    expect(vi.mocked(reportClientDiagnostic).mock.calls.at(-1)?.[1]?.correlationId).toBe(
+      read.mock.calls[0]?.[1],
+    );
+    const scope = vi.mocked(reportClientDiagnostic).mock.calls.at(-1)?.[1]?.codingHistoryScope;
+    expect(scope?.requestedScopeId).not.toBe(scope?.currentScopeId);
+
     expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain(
       "private server response",
     );

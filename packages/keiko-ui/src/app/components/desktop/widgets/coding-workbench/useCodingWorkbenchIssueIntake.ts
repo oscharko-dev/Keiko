@@ -37,7 +37,8 @@ function issueFailure(error: unknown): IssueIntakeFailure {
   return codingWorkbenchIssueFailure(error.code) ?? "unknown";
 }
 
-type PromptReference = { readonly issueRef?: string } | { readonly failure: IssueIntakeFailure };
+type PromptIssue = { readonly issueRef?: string; readonly qualifiedRef?: string };
+type PromptReference = PromptIssue | { readonly failure: IssueIntakeFailure };
 const URL_TRAILING_PUNCTUATION = new Set([")", "]", ".", ",", ";", "!", "?"]);
 
 function issueUrlToken(token: string): string | undefined {
@@ -65,30 +66,51 @@ function promptReference(prompt: string): PromptReference {
     refs.add(
       `https://github.com/${reference.ownerAndRepo.toLowerCase()}/issues/${String(reference.issueNumber)}`,
     );
-  const qualifiedNumbers = new Set([...refs].map((reference) => reference.split("/").at(-1)));
   for (const [, number] of prompt.matchAll(/(?:^|\s)#(\d{1,10})(?=$|[\s.,:;!?])/gu)) {
-    if (!qualifiedNumbers.has(number)) refs.add(`#${number}`);
+    refs.add(`#${number}`);
   }
-  if (refs.size > 1) return { failure: "multiple-issues" };
+  if (refs.size > 1) return mixedReference(refs);
   const issueRef = [...refs][0];
   return issueRef === undefined ? {} : { issueRef };
 }
 
+function mixedReference(refs: ReadonlySet<string>): PromptReference {
+  const bare = [...refs].find((ref) => ref.startsWith("#"));
+  const qualified = [...refs].find((ref) => ref.startsWith("https://"));
+  if (refs.size !== 2 || bare === undefined || qualified?.split("/").at(-1) !== bare.slice(1))
+    return { failure: "multiple-issues" };
+  // Only the server-resolved checkout remote can tell whether these denote the same issue.
+  return { issueRef: bare, qualifiedRef: qualified };
+}
+
 async function resolvePromptIssue(
   root: string,
-  issueRef: string,
+  reference: PromptIssue & { readonly issueRef: string },
   controller: AbortController,
   publish: (state: IssueIntakeState) => void,
   start: StartIssue,
 ): Promise<void> {
   try {
     const response = await previewCodingWorkbenchIssue(
-      { repositoryPath: root.trim(), issueRef },
+      { repositoryPath: root.trim(), issueRef: reference.issueRef },
       controller.signal,
     );
     if (controller.signal.aborted) return;
+    const qualified = reference.qualifiedRef;
+    if (
+      qualified !== undefined &&
+      qualified !==
+        `https://github.com/${response.preview.provenance.ownerAndRepo.toLowerCase()}/issues/${String(response.preview.provenance.issueNumber)}`
+    ) {
+      reportClientDiagnostic("[keiko] coding workbench prompt issue refused: multiple-issues");
+      publish({ kind: "failed", failure: "multiple-issues", correlationId: undefined });
+      return;
+    }
     reportClientDiagnostic("[keiko] coding workbench prompt issue resolved");
-    await start({ issueRef, expectedIssueBindingDigest: response.binding.bindingDigest });
+    await start({
+      issueRef: qualified ?? reference.issueRef,
+      expectedIssueBindingDigest: response.binding.bindingDigest,
+    });
     if (!controller.signal.aborted) publish({ kind: "empty" });
   } catch (error) {
     if (controller.signal.aborted) return;
@@ -138,7 +160,13 @@ export function useCodingWorkbenchIssueIntake(
     request.current = controller;
     setState({ kind: "loading" });
     reportClientDiagnostic("[keiko] coding workbench prompt issue requested");
-    await resolvePromptIssue(repositoryPath, reference.issueRef, controller, setState, start);
+    await resolvePromptIssue(
+      repositoryPath,
+      { ...reference, issueRef: reference.issueRef },
+      controller,
+      setState,
+      start,
+    );
   };
   return { state, submit, cancel };
 }

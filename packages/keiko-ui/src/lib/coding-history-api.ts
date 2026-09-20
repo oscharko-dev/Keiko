@@ -17,9 +17,16 @@ export async function fetchCodingHistory(): Promise<readonly CodingHistoryTask[]
   return result.tasks;
 }
 
-export async function fetchCodingTask(id: string): Promise<CodingHistoryDetail> {
+export async function fetchCodingTask(
+  id: string,
+  correlationId?: string,
+): Promise<CodingHistoryDetail> {
   await codingAppSessionPairingSettled();
-  return bffFetchJson(`${ROOT}/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(15_000) });
+  return bffFetchJson(
+    `${ROOT}/${encodeURIComponent(id)}`,
+    { signal: AbortSignal.timeout(15_000) },
+    correlationId === undefined ? undefined : { correlationId },
+  );
 }
 
 export async function updateCodingTask(

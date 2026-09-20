@@ -152,6 +152,46 @@ export interface ClientDiagnosticWorkspaceTrustBinding {
   readonly workspaceId: string;
 }
 
+export const CLIENT_CODING_HISTORY_REASONS = [
+  "repository-mismatch",
+  "workspace-mismatch",
+  "activation-cancelled",
+  "activation-superseded",
+  "detail-cleared",
+] as const;
+export interface ClientDiagnosticCodingHistoryScope {
+  readonly reason: (typeof CLIENT_CODING_HISTORY_REASONS)[number];
+  readonly taskId: string;
+  readonly requestedScopeId: string;
+  readonly currentScopeId: string;
+  readonly requestedWorkspaceId?: string | undefined;
+  readonly currentWorkspaceId?: string | undefined;
+  readonly targetWorkspaceId?: string | undefined;
+}
+
+const CODING_HISTORY_REASON_SET: ReadonlySet<unknown> = new Set(CLIENT_CODING_HISTORY_REASONS);
+const CODING_HISTORY_SCOPE_IDS = new Set([
+  "taskId",
+  "requestedScopeId",
+  "currentScopeId",
+  "requestedWorkspaceId",
+  "currentWorkspaceId",
+  "targetWorkspaceId",
+]);
+function isCodingHistoryScope(value: unknown): value is ClientDiagnosticCodingHistoryScope {
+  if (!isRecord(value)) return false;
+  if (!CODING_HISTORY_REASON_SET.has(value.reason)) return false;
+  for (const key of ["taskId", "requestedScopeId", "currentScopeId"]) {
+    if (typeof value[key] !== "string") return false;
+  }
+  return Object.entries(value).every(
+    ([key, id]) =>
+      key === "reason" ||
+      (CODING_HISTORY_SCOPE_IDS.has(key) &&
+        (id === undefined || (typeof id === "string" && /^[A-Za-z0-9._:-]{1,256}$/u.test(id)))),
+  );
+}
+
 // The browser-side sink already bounds a diagnostic message to this length (client-diagnostics.ts,
 // `reportClientDiagnostic`); the server enforces the SAME bound independently rather than trusting
 // the browser's own promise, per this module's header.
@@ -340,6 +380,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
 }
 
@@ -504,7 +545,10 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
-  return isOptional(loss, isClientDiagnosticLossCounts);
+  return (
+    isOptional(value.codingHistoryScope, isCodingHistoryScope) &&
+    isOptional(loss, isClientDiagnosticLossCounts)
+  );
 }
 
 export function isClientDiagnosticIngestRequest(

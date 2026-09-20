@@ -245,6 +245,21 @@ describe("CodingWorkbenchTimeline", () => {
     },
   );
 
+  it.each([
+    [{ truncated: true }, "Activity truncated."],
+    [{ droppedEventCount: 2 }, "2 update(s) omitted."],
+  ])("retains terminal reconstruction warnings for an empty feed: %s", (loss, warning) => {
+    render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({ ...bareFeed(), ...loss })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(screen.getByText(warning)).toBeVisible();
+  });
+
   it("uses per-kind default heights for the pre-measurement virtualized window", () => {
     // 101 events forces the virtual mode; only 96 rows render and the tail sits behind a spacer.
     const events = Array.from({ length: 101 }, (_, index) => event(index + 1));

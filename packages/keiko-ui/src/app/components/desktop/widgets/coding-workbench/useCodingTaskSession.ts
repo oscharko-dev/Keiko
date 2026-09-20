@@ -18,6 +18,8 @@ import {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { secureRandomId } from "@/lib/secure-random";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import type { ClientDiagnosticCodingHistoryScope } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 export interface CodingTaskSession {
   readonly detail: CodingHistoryDetail | null;
@@ -127,29 +129,33 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
   const load = useCallback(
     async (id: string, activate: boolean): Promise<void> => {
       const seq = ++sequence.current;
-      const requestedScope = scopeRevision.current;
+      const operation = historyLoad(id, scopeRevision.current.scope);
       setPending(true);
       setError(false);
       try {
-        const result = await fetchCodingTask(id);
+        const result = await fetchCodingTask(id, operation.correlationId);
         if (seq !== sequence.current) return;
-        if (requestedScope !== scopeRevision.current) {
-          reportScopeChange(latest.current, "activation-cancelled");
-          return;
-        }
-        const activated = await activateHistoryTask(result, latest, activate);
+        if (historyLoadCancelled(operation, scopeRevision.current.scope)) return;
+        const activated = await activateHistoryTask(
+          result,
+          latest,
+          activate,
+          operation,
+          scopeRevision.current.scope,
+        );
         if (seq !== sequence.current) return;
-        if (activationSuperseded(result, latest.current, requestedScope, scopeRevision.current))
+        if (activationSuperseded(result, latest.current, operation, scopeRevision.current.scope))
           return;
         if (!activated) {
           setDetail(null);
           return;
         }
+        scopeRevision.current.accepted = operation;
         setDetail(result);
       } catch (cause) {
         if (seq !== sequence.current) return;
-        if (requestedScope !== scopeRevision.current)
-          reportScopeChange(latest.current, "activation-cancelled");
+        if (operation.scope.id !== scopeRevision.current.scope.id)
+          reportScopeChange(operation, scopeRevision.current.scope, "activation-cancelled");
         else {
           reportFailure(cause);
           setError(true);
@@ -163,17 +169,27 @@ function useTaskLoader(latest: { current: SessionInput }): TaskLoader {
   return { detail, setDetail, pending, setPending, error, setError, load, sequence };
 }
 
+function historyLoad(taskId: string, scope: HistoryScope): HistoryLoad {
+  return { correlationId: newClientCorrelationId(), taskId, scope };
+}
+
+function historyLoadCancelled(operation: HistoryLoad, current: HistoryScope): boolean {
+  if (operation.scope.id === current.id) return false;
+  reportScopeChange(operation, current, "activation-cancelled");
+  return true;
+}
+
 function activationSuperseded(
   result: CodingHistoryDetail,
   input: SessionInput,
-  requestedScope: number,
-  currentScope: number,
+  operation: HistoryLoad,
+  currentScope: HistoryScope,
 ): boolean {
   const acknowledged =
     input.workspace?.activeInstance?.workspaceId === result.task.workspaceId &&
     input.root === result.task.projectPath;
-  if (requestedScope === currentScope || acknowledged) return false;
-  reportScopeChange(input, "activation-superseded");
+  if (operation.scope.id === currentScope.id || acknowledged) return false;
+  reportScopeChange(operation, currentScope, "activation-superseded", result.task.workspaceId);
   return true;
 }
 
@@ -181,9 +197,18 @@ async function activateHistoryTask(
   result: CodingHistoryDetail,
   latest: { current: SessionInput },
   activate: boolean,
+  operation: HistoryLoad,
+  currentScope: HistoryScope,
 ): Promise<boolean> {
   if (!taskScopeMatches(result, latest.current, activate)) {
-    reportScopeMismatch(latest.current);
+    reportScopeChange(
+      operation,
+      currentScope,
+      result.task.projectPath !== latest.current.root
+        ? "repository-mismatch"
+        : "workspace-mismatch",
+      result.task.workspaceId,
+    );
     return false;
   }
   if (activate && !(await latest.current.workspace?.switchTo(result.task.workspaceId)))
@@ -191,18 +216,38 @@ async function activateHistoryTask(
   return true;
 }
 
-function reportScopeMismatch(input: SessionInput): void {
-  reportClientDiagnostic("[keiko] coding task history scope mismatch", {
-    correlationId: input.snapshot?.runId,
-  });
+interface HistoryScope {
+  readonly id: string;
+  readonly root: string | undefined;
+  readonly workspaceId: string | undefined;
+}
+interface HistoryLoad {
+  readonly correlationId: string;
+  readonly taskId: string;
+  readonly scope: HistoryScope;
+}
+interface HistoryScopeState {
+  scope: HistoryScope;
+  accepted?: HistoryLoad;
 }
 
 function reportScopeChange(
-  input: SessionInput,
-  reason: "activation-cancelled" | "activation-superseded" | "detail-cleared",
+  operation: HistoryLoad,
+  current: HistoryScope,
+  reason: ClientDiagnosticCodingHistoryScope["reason"],
+  targetWorkspaceId?: string,
 ): void {
-  reportClientDiagnostic(`[keiko] coding task history scope changed: ${reason}`, {
-    correlationId: input.snapshot?.runId,
+  reportClientDiagnostic("[keiko] coding task history scope outcome", {
+    correlationId: operation.correlationId,
+    codingHistoryScope: {
+      reason,
+      taskId: operation.taskId,
+      requestedScopeId: operation.scope.id,
+      currentScopeId: current.id,
+      requestedWorkspaceId: operation.scope.workspaceId,
+      currentWorkspaceId: current.workspaceId,
+      targetWorkspaceId,
+    },
   });
 }
 
@@ -211,8 +256,14 @@ function useHistoryScope(
   detail: CodingHistoryDetail | null,
   setDetail: TaskLoader["setDetail"],
   sequence: TaskLoader["sequence"],
-): { current: number } {
-  const revision = useRef(0);
+): { current: HistoryScopeState } {
+  const root = latest.current.root;
+  const workspaceId = latest.current.workspace?.activeInstance?.workspaceId;
+  const tracker = useRef<HistoryScopeState>({
+    scope: { id: secureRandomId("history-scope"), root, workspaceId },
+  });
+  if (tracker.current.scope.root !== root || tracker.current.scope.workspaceId !== workspaceId)
+    tracker.current.scope = { id: secureRandomId("history-scope"), root, workspaceId };
   useEffect(
     () => (): void => {
       sequence.current += 1;
@@ -221,16 +272,20 @@ function useHistoryScope(
   );
   const stored = useRef(detail);
   stored.current = detail;
-  const root = latest.current.root;
-  const workspaceId = latest.current.workspace?.activeInstance?.workspaceId;
   useEffect(() => {
-    revision.current += 1;
     if (stored.current !== null && !taskScopeMatches(stored.current, latest.current, false)) {
+      const accepted = tracker.current.accepted;
+      if (accepted !== undefined)
+        reportScopeChange(
+          accepted,
+          tracker.current.scope,
+          "detail-cleared",
+          stored.current.task.workspaceId,
+        );
       setDetail(null);
-      reportScopeChange(latest.current, "detail-cleared");
     }
   }, [root, workspaceId, latest, setDetail]);
-  return revision;
+  return tracker;
 }
 
 function useNewTask(

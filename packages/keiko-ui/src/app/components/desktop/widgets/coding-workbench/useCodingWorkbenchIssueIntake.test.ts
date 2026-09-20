@@ -20,7 +20,10 @@ function mount(
   });
 }
 
-const response = { binding: { bindingDigest: "a".repeat(64), issueNumber: 13 } };
+const response = {
+  binding: { bindingDigest: "a".repeat(64), issueNumber: 13 },
+  preview: { provenance: { ownerAndRepo: "acme/repo", issueNumber: 13 } },
+};
 
 describe("prompt-driven issue intake", () => {
   it("submits an ordinary prompt without an issue read", async () => {
@@ -64,11 +67,28 @@ describe("prompt-driven issue intake", () => {
   ])("recognizes and deduplicates %s", async (prompt, issueRef) => {
     preview.mockResolvedValue(response);
     const { result } = mount();
-    await act(() => result.current.submit(prompt, vi.fn()));
+    const start = vi.fn();
+    await act(() => result.current.submit(prompt, start));
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ issueRef }));
     expect(preview).toHaveBeenCalledWith(
-      expect.objectContaining({ issueRef }),
+      expect.objectContaining({ issueRef: prompt.includes("verify #13") ? "#13" : issueRef }),
       expect.any(AbortSignal),
     );
+  });
+
+  it("keeps equal issue numbers from different repositories distinct", async () => {
+    preview.mockResolvedValue({
+      ...response,
+      preview: { provenance: { ownerAndRepo: "acme/current", issueNumber: 13 } },
+    });
+    const { result } = mount();
+    const start = vi.fn();
+    await act(() =>
+      result.current.submit("Implement https://github.com/acme/other/issues/13 and #13", start),
+    );
+    expect(result.current.state).toMatchObject({ kind: "failed", failure: "multiple-issues" });
+    expect(start).not.toHaveBeenCalled();
+    expect(JSON.stringify(log.mock.calls)).not.toContain("acme/");
   });
 
   it.each([

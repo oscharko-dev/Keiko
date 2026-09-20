@@ -69,6 +69,46 @@ describe("client diagnostics loss evidence", () => {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
   }
 
+  it.each([
+    "repository-mismatch",
+    "workspace-mismatch",
+    "activation-cancelled",
+    "activation-superseded",
+    "detail-cleared",
+  ])("persists correlated coding history scope evidence: %s", async (reason) => {
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private project name must not be logged",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_history-load-0001",
+          codingHistoryScope: {
+            reason,
+            taskId: "chat-one",
+            requestedScopeId: "scope-one",
+            currentScopeId: "scope-two",
+            requestedWorkspaceId: "ws-one",
+            currentWorkspaceId: "ws-two",
+            targetWorkspaceId: "ws-target",
+          },
+        }),
+      ),
+    );
+    expect(result.status).toBe(204);
+    const [persisted] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", persisted ?? "")).toMatchObject({
+      correlationId: "ui_history-load-0001",
+      historyScopeReason: reason,
+      historyTaskId: "chat-one",
+      requestedScopeId: "scope-one",
+      currentScopeId: "scope-two",
+      requestedWorkspaceId: "ws-one",
+      currentWorkspaceId: "ws-two",
+      targetWorkspaceId: "ws-target",
+    });
+    expect(persisted).not.toContain("private project name");
+  });
+
   it("persists body-free Markdown layout evidence with counted loss", async () => {
     const result = await handleClientDiagnosticIngest(
       context(

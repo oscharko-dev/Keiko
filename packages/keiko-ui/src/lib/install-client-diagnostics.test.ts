@@ -524,6 +524,26 @@ describe("fanOutClientDiagnostic stage evidence", () => {
 // #3557 review: a restored window's binding outcome posts its closed report with the correlation id
 // of the request that decided it, never the message body, and never drains the loss ledger.
 describe("fanOutClientDiagnostic binding evidence", () => {
+  it("preserves the history load correlation and closed scope evidence through transport", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const codingHistoryScope = {
+      reason: "activation-cancelled" as const,
+      taskId: "chat-one",
+      requestedScopeId: "scope-one",
+      currentScopeId: "scope-two",
+    };
+    fanOutClientDiagnostic("[keiko] coding task history scope outcome", {
+      correlationId: "ui_history-load-0001",
+      codingHistoryScope,
+    });
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      correlationId: "ui_history-load-0001",
+      codingHistoryScope,
+    });
+  });
+
   it("posts the closed binding wire shape with the deciding request's correlation id", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

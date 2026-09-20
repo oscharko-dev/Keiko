@@ -6,6 +6,7 @@ import {
   updateCodingTask,
 } from "./coding-history-api";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import { CORRELATION_HEADER } from "./bff-correlation";
 
 vi.mock("./coding-app-session-client", () => ({ codingAppSessionPairingSettled: vi.fn() }));
 vi.mock("./client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
@@ -51,6 +52,16 @@ describe("paired history client", () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("carries the initiating load correlation across the HTTP request", async () => {
+    fetchMock.mockResolvedValue(
+      response({ task: { id: "task-one" }, messages: [], truncated: false }),
+    );
+    await fetchCodingTask("task-one", "ui_history-load-0001");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      [CORRELATION_HEADER]: "ui_history-load-0001",
+    });
   });
 
   it("encodes a task id as a single path segment when reading or renaming", async () => {

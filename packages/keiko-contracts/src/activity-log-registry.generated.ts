@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0c925f00560d06a6bb817cbce9c9aa5e5ecfc14ffb745c34963c88d83eb40f4e" as const;
+  "35b0b028e279b26a851c9c16a002a34ff757fa144f920642c1ff25cb85b91f7f" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2249,6 +2249,54 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 256,
       },
       workspaceId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 256,
+      },
+      historyScopeReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "repository-mismatch",
+          "workspace-mismatch",
+          "activation-cancelled",
+          "activation-superseded",
+          "detail-cleared",
+        ],
+      },
+      historyTaskId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 256,
+      },
+      requestedScopeId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 256,
+      },
+      currentScopeId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 256,
+      },
+      requestedWorkspaceId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 256,
+      },
+      currentWorkspaceId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 256,
+      },
+      targetWorkspaceId: {
         type: "string",
         dataClass: "opaque-id",
         required: false,
@@ -6929,17 +6977,23 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["model-context-window-insufficient"],
+        values: ["model-context-window-insufficient", "no-tool-calling", "tool-calling-unverified"],
       },
       maxPromptTokens: {
         type: "integer",
         dataClass: "count",
-        required: true,
+        required: false,
       },
       minimumRequiredPromptTokens: {
         type: "integer",
         dataClass: "count",
+        required: false,
+      },
+      probeMode: {
+        type: "string",
+        dataClass: "closed-enum",
         required: true,
+        values: ["passive"],
       },
     },
     causal: "correlation",
@@ -29652,6 +29706,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "currentScopeId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "currentWorkspaceId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "disposition",
               type: "string",
               dataClass: "closed-enum",
@@ -29667,6 +29733,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "frames",
               type: "string-array",
               dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "historyScopeReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "historyTaskId",
+              type: "string",
+              dataClass: "opaque-id",
               required: false,
             },
             {
@@ -29706,9 +29784,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "requestedScopeId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "requestedWorkspaceId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "snapshotDigest",
               type: "string",
               dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "targetWorkspaceId",
+              type: "string",
+              dataClass: "opaque-id",
               required: false,
             },
             {
@@ -34585,12 +34681,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "maxPromptTokens",
               type: "integer",
               dataClass: "count",
-              required: true,
+              required: false,
             },
             {
               name: "minimumRequiredPromptTokens",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "probeMode",
+              type: "string",
+              dataClass: "closed-enum",
               required: true,
             },
             {

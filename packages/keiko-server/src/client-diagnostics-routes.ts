@@ -392,6 +392,29 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
     },
     repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    historyScopeReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "repository-mismatch",
+        "workspace-mismatch",
+        "activation-cancelled",
+        "activation-superseded",
+        "detail-cleared",
+      ],
+    },
+    historyTaskId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    requestedScopeId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    currentScopeId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    requestedWorkspaceId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 256,
+    },
+    currentWorkspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    targetWorkspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
     clientBufferEvicted: { type: "integer", dataClass: "count", required: false },
     clientPostsThrottled: { type: "integer", dataClass: "count", required: false },
     clientPostsFailed: { type: "integer", dataClass: "count", required: false },
@@ -1017,6 +1040,7 @@ function logVoiceDialogueStage(
     completeness: "complete",
     loss: "none",
   };
+  projectHistoryScope(request, extra);
   projectClientLoss(request.loss, extra);
   getServerLogger().info(
     activityLogEvent(
@@ -1045,6 +1069,7 @@ function logMarkdownLayout(request: ClientDiagnosticIngestRequest, correlationId
     completeness: "complete",
     loss: "none",
   };
+  projectHistoryScope(request, extra);
   projectClientLoss(request.loss, extra);
   getServerLogger().info(
     activityLogEvent(
@@ -1088,6 +1113,22 @@ function projectClientFailure(
     extra.voiceCaptureReason = request.voiceCaptureReason;
 }
 
+function projectHistoryScope(
+  request: ClientDiagnosticIngestRequest,
+  extra: Record<string, unknown>,
+): void {
+  const scope = request.codingHistoryScope;
+  if (scope === undefined) return;
+  extra.historyScopeReason = scope.reason;
+  extra.historyTaskId = scope.taskId;
+  extra.requestedScopeId = scope.requestedScopeId;
+  extra.currentScopeId = scope.currentScopeId;
+  if (scope.requestedWorkspaceId !== undefined)
+    extra.requestedWorkspaceId = scope.requestedWorkspaceId;
+  if (scope.currentWorkspaceId !== undefined) extra.currentWorkspaceId = scope.currentWorkspaceId;
+  if (scope.targetWorkspaceId !== undefined) extra.targetWorkspaceId = scope.targetWorkspaceId;
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -1119,6 +1160,7 @@ function logClientDiagnostic(
     extra.repositoryId = request.workspaceTrustBinding.repositoryId;
     extra.workspaceId = request.workspaceTrustBinding.workspaceId;
   }
+  projectHistoryScope(request, extra);
   projectClientLoss(request.loss, extra);
   extra.completeness = "complete";
   extra.loss = "none";

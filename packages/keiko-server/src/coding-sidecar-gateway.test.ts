@@ -3859,6 +3859,33 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
     } satisfies RouteContext;
   }
 
+  it.each([false, true])(
+    "records passive tool-capability refusal without probing: %s",
+    (declared) => {
+      const sink = captureServerLog("warn");
+      const chat = vi.fn();
+      const { toolCallingVerification: _verification, ...unverified } = capability();
+      const result = handleCodingSidecarGatewayProfile(
+        { ...profileContext(), correlationId: "passive-profile-0001" },
+        depsValue(configValue(provider(), { ...unverified, toolCalling: declared }), chat),
+      );
+      const reason = declared ? "tool-calling-unverified" : "no-tool-calling";
+      expect(result.body).toMatchObject({ status: "unavailable", reason });
+      expect(chat).not.toHaveBeenCalled();
+      const line = expectActivityLogProof(
+        "coding-sidecar.gateway.readiness-insufficient.line",
+        formatActivityLogProofLine(sink.events[0] ?? {}),
+      );
+      expect(line).toMatchObject({
+        correlationId: "passive-profile-0001",
+        errorKind: "unavailable",
+        reason,
+        probeMode: "passive",
+      });
+      expect(JSON.stringify(line)).not.toContain("apiKey");
+    },
+  );
+
   it("demotes an available profile whose setup-placeholder capability cannot survive one request", () => {
     const sink = captureServerLog("warn");
     // #3390 live incident: a coding-safe model configured with the setup placeholder capability
@@ -3886,6 +3913,7 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
         errorKind: "unavailable",
         extra: {
           reason: "model-context-window-insufficient",
+          probeMode: "passive",
           maxPromptTokens: 4_096,
           minimumRequiredPromptTokens: 32_000,
           completeness: "complete",
