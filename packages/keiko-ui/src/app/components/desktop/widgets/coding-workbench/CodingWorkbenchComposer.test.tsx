@@ -213,38 +213,39 @@ describe("Coding Workbench composer", () => {
     expect(screen.queryByRole("option", { name: "Extra high" })).toBeNull();
   });
 
-  it("changes the coding model, model source, and run authority", async () => {
+  // #3563 owner directive: only Keiko Gateway ships today; the Model source dropdown is hidden
+  // (SourceControl component kept for a one-line re-enable once a second source is decided).
+  it("changes the coding model and run authority without exposing a Model source dropdown", async () => {
     const user = userEvent.setup();
     const onSelectedModelChange = vi.fn();
-    const onRuntimePreferenceChange = vi.fn();
     const onRequestedModeChange = vi.fn();
     renderComposerWithOverrides({
       models: [CODING_MODEL, ALTERNATE_MODEL],
       onSelectedModelChange,
-      onRuntimePreferenceChange,
       onRequestedModeChange,
     });
 
+    expect(screen.queryByRole("combobox", { name: "Model source" })).toBeNull();
+
     await user.click(screen.getByRole("combobox", { name: "Coding model" }));
     await user.click(screen.getByRole("option", { name: "gpt-5.5" }));
-    await user.click(screen.getByRole("combobox", { name: "Model source" }));
-    await user.click(screen.getByRole("option", { name: "ChatGPT/Codex subscription" }));
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
     await user.click(screen.getByRole("option", { name: "Full access" }));
 
     expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
-    expect(onRuntimePreferenceChange).toHaveBeenCalledWith("codex-subscription");
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
   });
 
-  it("hides gateway-only controls for a Codex model with one reasoning level", () => {
+  // Same hiding rule applies regardless of the runtimePreference the state carries; the operator
+  // never sees the Codex option, so the choice cannot be made from this surface.
+  it("still hides the Model source dropdown when the state carries a codex-subscription runtime", () => {
     renderComposerWithOverrides({
       runtimePreference: "codex-subscription",
       models: [ALTERNATE_MODEL],
       selectedModelId: ALTERNATE_MODEL.id,
     });
 
-    expect(screen.queryByRole("combobox", { name: "Coding model" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Model source" })).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
   });
 

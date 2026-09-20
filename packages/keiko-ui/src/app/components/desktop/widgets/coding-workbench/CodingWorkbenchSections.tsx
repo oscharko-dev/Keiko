@@ -366,10 +366,13 @@ function DictationControl({
 function ComposerConfigurationControls({ input, t }: ControlProps): ReactNode {
   const selected = input.models.find((model) => model.id === input.selectedModelId);
   const efforts = selected?.reasoningEfforts ?? [];
+  // #3563 owner directive: only Keiko Gateway ships today; a Codex-subscription source is not
+  // decided yet. Hiding the source dropdown avoids offering a choice that does not exist. The
+  // `SourceControl` component below stays defined so re-enabling it is a one-line change once
+  // that decision lands (add `<SourceControl input={input} t={t} />` back into this row).
   return (
     <div className={`cmp-bar-model ${styles.composerConfiguration}`}>
       <CodingModelControl input={input} t={t} />
-      <SourceControl input={input} t={t} />
       <ReasoningControl input={input} efforts={efforts} t={t} />
       <AuthorityControl input={input} t={t} />
     </div>
@@ -401,6 +404,7 @@ function CodingModelControl({ input, t }: ControlProps): ReactNode {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained for the restore-path
 function SourceControl({ input, t }: ControlProps): ReactNode {
   const options = runtimePreferenceOptions(t);
   return (
