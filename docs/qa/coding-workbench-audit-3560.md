@@ -180,6 +180,37 @@ the changed runtime files use fresh runtime-suite LCOV and unchanged sources ret
 full-suite package/UI/scripts reports. This is not a new complete package-coverage run or a hosted
 verdict for the new head.
 
+## Independent verification outcomes — 2026-09-20
+
+A real same-task continuation reproduced successful test/build checks being reported as unrun
+because the candidate had not been staged. The governed verifier now returns explicit
+`verification.status: passed` and completed check kinds, with commit eligibility in the optional
+`verification.commit` field. OpenCode's canonical tool descriptions and launch guidance explain
+that staging belongs only to an accepted delivery task. The existing commit-proof checks remain
+unchanged. Malformed result and unsafe blocking-path rejection pins exercise the new nested
+contract, and an empty passed report cannot claim that a check executed.
+
+The before-fix reproduction failed five assertions. The updated runtime/catalog coverage run
+passes 2,976 tests with eight existing skips; 283 focused tests also pass. The generated native V2
+plugin is exercised through registration, IPC, canonical admission and the verification port.
+New-code coverage is 85.7% over 2,564 lines/conditions, using fresh coverage for this round's source
+files and the preceding full reports for unchanged sources. Typecheck, scoped strict lint,
+formatting, architecture/negative checks, the full Activity Log gate, and real local Sonar pass.
+The tool-catalog candidate was remeasured in its pinned Linux reference container without changing
+calibration or budgets. Native V2 qualification adds 32 successful runs with an exact answer and
+zero safe-feed drops; source-freshness passes against the frozen native calibration and ceilings.
+
+The same real Workbench task was resumed after the server restart. Test and build each ran once,
+and the model now correctly reports both as passed while retaining the optional missing commit
+proof as separate information. No files changed, and no stage, commit, push, issue or PR action
+was requested or executed. The UI reached Succeeded at revision 9. Both successful checks own
+correlated `coding-runtime.verification` activity records with their actual kind and proof status.
+The run required two one-time command approvals; the composer displayed Supervised workspace while
+also showing the effective Ask for approval label. That discrepancy remains to be investigated.
+One late event was rejected as `no-live-run` after settlement; this is distinct from the previously
+repaired native text-projection validation drops and is not counted as a successful lossless live
+feed qualification.
+
 ## Remaining qualification
 
 - Repeated selection of the same history task, concurrent refreshes, and title synchronization.
