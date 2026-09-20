@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c41e9854b0d1bf52d620a40b562f8b3bfbd17b32aa9cf6d8b25e966c0fed9731" as const;
+  "846d4036d7087d7e68710a7ed5c922c70819d7c629c53043679239d1d679b144" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4310,6 +4310,47 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["coding-history-persistence"],
     proofIds: ["coding-runtime.history.emitted-line"],
     releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-runtime.history-projection",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.opencodeV2History.project",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      eventCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      signalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      emptyTextCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-safe-activity-projection"],
+    proofIds: ["coding-runtime.history-projection.emitted-line"],
+    releaseImpact: "patch",
   },
   {
     contractKind: "activity-log-operation",
@@ -34012,24 +34053,64 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "coding-safe-activity-projection",
       requirementContract: "coding-safe-activity-projection",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["loss"],
+      lifecycleTransitions: ["loss", "state"],
       lifecycleOperations: {
         start: [],
-        state: [],
+        state: ["coding-runtime.history-projection"],
         end: [],
         failure: [],
         loss: ["coding-runtime.safe-activity"],
       },
       causalEdges: [
         {
+          op: "coding-runtime.history-projection",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.safe-activity",
           mode: "correlation",
         },
       ],
       lossSignals: ["coding-runtime.safe-activity"],
-      resourceSignals: [],
+      resourceSignals: ["coding-runtime.history-projection"],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.history-projection",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "emptyTextCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "eventCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "signalCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.history-projection.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.safe-activity",
           owner: "keiko-server",
@@ -59226,6 +59307,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.event.dropped": "tools-workflows",
     "coding-runtime.follow-up.dispatch-failed": "tools-workflows",
     "coding-runtime.history": "tools-workflows",
+    "coding-runtime.history-projection": "tools-workflows",
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
     "coding-runtime.operation.refused": "tools-workflows",

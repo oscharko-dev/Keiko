@@ -864,7 +864,7 @@ required contract vocabulary.
           },
           "sbomEvidence": {
             "path": "runtime/sidecars/opencode-compatible/evidence/sbom.cdx.json",
-            "sha256": "64-hex-opencode-compatible-sbom-digest"
+            "sha256": "553fedfc7a92fe8e7c4c6f0bc77b71986e50a91e4d930017a2b1a072891e3826"
           },
           "signing": {
             "verificationPolicy": "production",

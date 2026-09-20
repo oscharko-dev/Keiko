@@ -298,6 +298,7 @@ async function outputCount(context) {
   );
   const feed = channel.content?.feed;
   if (feed?.availability !== "available") throw new Error("fixture-output-unavailable");
+  if (feed.droppedEventCount !== 0) throw new Error("fixture-activity-events-dropped");
   const assistant = feed.turns
     .flatMap((turn) => turn.messages)
     .filter((message) => message.role === "assistant")

@@ -1,24 +1,61 @@
 import { createHash } from "node:crypto";
 
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
 
+const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.history-projection",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeV2History.project",
+  fields: {
+    eventCount: { type: "integer", dataClass: "count", required: true },
+    signalCount: { type: "integer", dataClass: "count", required: true },
+    emptyTextCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-safe-activity-projection"],
+  proofIds: ["coding-runtime.history-projection.emitted-line"],
+  releaseImpact: "patch",
+});
+
+interface HistoryActivity {
+  readonly runId: string;
+  readonly activityLog: ServerLogSink | undefined;
+}
+
 interface Candidate {
   readonly key: string;
   readonly digest: string;
   readonly kind: OpenCodeReconciliationEvent["kind"];
   readonly signal?: CodingSafeActivitySignal | undefined;
+  readonly emptyText?: true;
 }
 
 interface PendingProjection {
-  readonly nextKnown: ReadonlyMap<string, string>;
+  readonly nextKnown: ReadonlyMap<string, KnownCandidate>;
   readonly events: readonly OpenCodeReconciliationEvent[];
   readonly signals: ReadonlyMap<string, CodingSafeActivitySignal>;
+  readonly emptyTextCount: number;
+}
+
+interface KnownCandidate {
+  readonly digest: string;
+  readonly textLength?: number;
 }
 
 export class OpenCodeV2HistoryError extends Error {
@@ -161,7 +198,10 @@ function candidate(
 
 function textCandidate(id: string, index: number, text: string, occurredAt: string): Candidate {
   if (Buffer.byteLength(text, "utf8") > 65_536) throw new Error("opencode-v2-text-oversized");
-  return candidate(`${id}:text:${String(index)}`, "observation", text, {
+  const key = `${id}:text:${String(index)}`;
+  // V2 starts streaming with an empty part. Reconcile its identity, but publish no empty text.
+  if (text.length === 0) return { ...candidate(key, "observation", text), emptyText: true };
+  return candidate(key, "observation", text, {
     kind: "text",
     messageId: id,
     text,
@@ -316,29 +356,73 @@ function allCandidates(
 function makePending(
   sessionId: string,
   checkpoint: number,
-  known: ReadonlyMap<string, string>,
+  known: ReadonlyMap<string, KnownCandidate>,
   candidates: readonly Candidate[],
 ): PendingProjection {
   const nextKnown = new Map(known);
   const events: OpenCodeReconciliationEvent[] = [];
   const signals = new Map<string, CodingSafeActivitySignal>();
+  let emptyTextCount = 0;
   for (const item of candidates) {
-    if (known.get(item.key) === item.digest) continue;
+    const previous = known.get(item.key);
+    if (previous?.digest === item.digest) continue;
     const sequence = checkpoint + events.length + 1;
     const id = `evt_${item.digest.slice(0, 32)}`;
     const event = { id, aggregateId: sessionId, sequence, digest: item.digest, kind: item.kind };
     events.push(event);
-    nextKnown.set(item.key, item.digest);
-    if (item.signal !== undefined)
-      signals.set(`${sessionId}\u0000${String(sequence)}`, item.signal);
+    const text = candidateText(item);
+    nextKnown.set(item.key, {
+      digest: item.digest,
+      ...(text === undefined ? {} : { textLength: text.length }),
+    });
+    if (item.emptyText) emptyTextCount += 1;
+    const signal = incrementalSignal(item, previous);
+    if (signal !== undefined) signals.set(`${sessionId}\u0000${String(sequence)}`, signal);
     if (events.length === 256) break;
   }
-  return { nextKnown, events, signals };
+  return { nextKnown, events, signals, emptyTextCount };
+}
+
+function candidateText(item: Candidate): string | undefined {
+  if (item.emptyText) return "";
+  return item.signal?.kind === "text" ? item.signal.text : undefined;
+}
+
+function incrementalSignal(
+  item: Candidate,
+  previous: KnownCandidate | undefined,
+): CodingSafeActivitySignal | undefined {
+  const text = candidateText(item);
+  const offset = previous?.textLength;
+  if (text === undefined || offset === undefined) return item.signal;
+  if (offset > text.length || digest([item.key, text.slice(0, offset)]) !== previous?.digest)
+    throw new OpenCodeV2HistoryError("reason=text-prefix-invalid");
+  return item.signal?.kind === "text" ? { ...item.signal, text: text.slice(offset) } : item.signal;
+}
+
+function recordHistoryProjection(
+  activity: HistoryActivity | undefined,
+  pending: PendingProjection,
+): void {
+  if (pending.events.length === 0) return;
+  activity?.activityLog?.write(
+    activityLogEvent(
+      HISTORY_PROJECTION_OPERATION,
+      { correlationId: activity.runId },
+      {
+        eventCount: pending.events.length,
+        signalCount: pending.signals.size,
+        emptyTextCount: pending.emptyTextCount,
+      },
+    ),
+  );
 }
 
 /** A pull repeats unchanged candidates until the adapter commits its checkpoint. */
-export function createOpenCodeV2HistoryProjection(): OpenCodeV2HistoryProjection {
-  let known = new Map<string, string>();
+export function createOpenCodeV2HistoryProjection(
+  activity?: HistoryActivity,
+): OpenCodeV2HistoryProjection {
+  let known = new Map<string, KnownCandidate>();
   let pending: PendingProjection | undefined;
   let pendingStart = -1;
   const activeSignals = new Map<string, CodingSafeActivitySignal>();
@@ -352,7 +436,10 @@ export function createOpenCodeV2HistoryProjection(): OpenCodeV2HistoryProjection
       if (pending !== undefined && position !== pendingStart) {
         throw new Error("opencode-v2-checkpoint-invalid");
       }
-      pending ??= makePending(sessionId, position, known, allCandidates(sessionId, messages));
+      if (pending === undefined) {
+        pending = makePending(sessionId, position, known, allCandidates(sessionId, messages));
+        recordHistoryProjection(activity, pending);
+      }
       pendingStart = position;
       for (const [key, signal] of pending.signals) activeSignals.set(key, signal);
       return pending.events;

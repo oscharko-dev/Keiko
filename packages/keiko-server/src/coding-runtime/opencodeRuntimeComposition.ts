@@ -844,7 +844,10 @@ function readinessV2Ports(
 ): Parameters<typeof createOpenCodeRuntimeAdapter>[0]["readiness"] {
   let fixedSessionId: string | undefined;
   let startupRead = false;
-  const history = createOpenCodeV2HistoryProjection();
+  const history = createOpenCodeV2HistoryProjection({
+    runId: run.runId,
+    activityLog: input.activityLog,
+  });
   const staged = new Map<
     string,
     import("./codingSafeActivityProjection.js").CodingSafeActivitySignal

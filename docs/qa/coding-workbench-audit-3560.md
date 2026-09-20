@@ -152,6 +152,27 @@ gateway selection and launch-profile owners. Negative fixtures deliberately diff
 limit, so they remain rejection proofs when the functional model's output allowance changes. All
 27 runner tests pass after reproducing the stale-limit failures and the incorrect-version report.
 
+## Native V2 activity reconciliation — 2026-09-20
+
+The native performance fixture reproduced `safe-activity-dropped-validation-rejected` with a
+body-free diagnostic probe: the rejected signal was a validly identified text part of length zero.
+OpenCode creates that placeholder before streaming characters. The history adapter now reconciles
+its identity without publishing empty text. A native success assertion rejects any nonzero feed
+drop count; it failed against the previous implementation. Placeholder observations carry bounded
+counts and the run correlation through the existing Activity Log, with replay and emitted-line
+proofs. This finding did not establish loss of a nonempty message in the observed native samples.
+
+A second regression reproduced cumulative native text (`Hello`, then `Hello world`) being appended
+twice. The adapter now emits only new characters and retains only the prior digest and character
+count. An unexpected rewrite or truncation fails closed without advancing the checkpoint, and a
+subsequent valid continuation remains recoverable. It does not weaken safe-feed validation.
+
+The current CI installation failure was reproduced by `check:portable-manifest`: the contract
+example's reviewed sidecar binding retained a placeholder SBOM digest while its manifest used the
+V2 digest. Both now match. The UI smoke failure was also reproduced: its workspace-health assertion
+read the collapsed Details section. The journey now opens that actual control and retains the
+health and effective-mode assertions before starting the run. The targeted two-test suite passes.
+
 ## Remaining qualification
 
 - Repeated selection of the same history task, concurrent refreshes, and title synchronization.
