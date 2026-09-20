@@ -7,6 +7,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { useActiveWorkspaceState } from "./useActiveWorkspaceState";
+import { useCodingTaskSession } from "../widgets/coding-workbench/useCodingTaskSession";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 function instance(workspaceId: string, root: string): WorkspaceInstance {
@@ -440,12 +441,8 @@ describe("useActiveWorkspaceState", () => {
     expect(result.current.error).toBeNull();
   });
 
-  // Two switches in flight at once. `mutationSeqRef` orders the CLIENT's commits, but it cannot
-  // un-apply a request the server is already executing: here ws-2 answers first and ws-1's POST
-  // lands last, so the server pointer ends on ws-1. The surface must end where the SERVER ended —
-  // it advertised ws-2 while every bound surface would have resolved ws-1's root (#3381 review).
-  // The convergence is asserted against the routed server's own state, not a literal, so the pin
-  // cannot pass on a UI and a server that merely happen to both be wrong.
+  // Preserve the server-truth invariant from #3381 and strengthen it: a rapid history
+  // selection must apply both mutations in click order, so B remains selected after A settles.
   it("converges on server truth after every applied switch of a burst has settled", async () => {
     const postWs1 = deferred<Response>();
     const postWs2 = deferred<Response>();
@@ -483,27 +480,110 @@ describe("useActiveWorkspaceState", () => {
       second = result.current.switchTo("ws-2");
     });
 
-    // The newer switch settles first and owns the surface: its reload is not clobbered by the
-    // older request that is still executing.
+    // Even if B could answer first, its mutation must wait for A to settle. This keeps
+    // the latest selection authoritative without ever hiding the server's applied state.
     await act(async (): Promise<void> => {
       postWs2.resolve(json({}));
-      await second;
+      await Promise.resolve();
     });
-    expect(result.current.activeRoot).toBe("/wt/2");
-    expect(state.active?.instance.workspaceId).toBe("ws-2");
-
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) => url === "/api/task-workspaces/active" && requestMethod(init) === "POST",
+      ),
+    ).toHaveLength(1);
     await act(async (): Promise<void> => {
       postWs1.resolve(json({}));
-      await first;
+      await Promise.all([first, second]);
     });
-    // The server ended on ws-1, so the surface does too — an applied mutation is never dropped
-    // just because a newer one committed first.
-    expect(state.active?.instance.workspaceId).toBe("ws-1");
+    expect(state.active?.instance.workspaceId).toBe("ws-2");
     expect(result.current.activeRoot).toBe(state.active?.binding.activeRoot);
     expect(result.current.activeInstance?.workspaceId).toBe(state.active?.instance.workspaceId);
-    expect(result.current.activeRoot).toBe("/wt/1");
+    expect(result.current.activeRoot).toBe("/wt/2");
     expect(result.current.switching).toBe(false);
     expect(result.current.error).toBeNull();
+  });
+
+  it("keeps history B and the actual workspace pointer aligned after a slow A activation", async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    const applied: string[] = [];
+    const requested: string[] = [];
+    const state: RouterState = {
+      active: null,
+      instances: [instance("ws-1", "/wt/1"), instance("ws-2", "/wt/2")],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const method = requestMethod(init);
+        const read = workspaceReadResponse(state, url, method);
+        if (read !== undefined) return read;
+        if (url.startsWith("/api/coding-workbench/history/")) {
+          const id = url.endsWith("chat-A") ? "1" : "2";
+          return Promise.resolve(
+            json({
+              task: {
+                id: `chat-${id === "1" ? "A" : "B"}`,
+                title: "Task",
+                projectPath: "/repo",
+                modelId: "coding",
+                branch: `keiko/ws-${id}`,
+                workspaceId: `ws-${id}`,
+                taskId: `ws-${id}`,
+                status: "active",
+                createdAt: 1,
+                updatedAt: 1,
+              },
+              messages: [],
+              truncated: false,
+            }),
+          );
+        }
+        if (url === "/api/task-workspaces/active" && method === "POST") {
+          const id = requestedWorkspaceId(init);
+          requested.push(id);
+          return (id === "ws-1" ? first : second).promise.then(() => {
+            activateWorkspace(state, id);
+            applied.push(id);
+            return json({ instance: state.active?.instance, binding: state.active?.binding });
+          });
+        }
+        return Promise.resolve(json({}, 404));
+      }),
+    );
+    const { result, rerender } = renderHook(
+      ({ selection }: { selection: string | undefined }) => {
+        const workspace = useActiveWorkspaceState();
+        const session = useCodingTaskSession({
+          snapshot: null,
+          active: false,
+          root: "/repo",
+          workspace,
+          selection,
+        });
+        return { workspace, session };
+      },
+      { initialProps: { selection: undefined as string | undefined } },
+    );
+    await act(() => result.current.workspace.refresh());
+    rerender({ selection: "chat-A" });
+    await waitFor(() => expect(requested).toEqual(["ws-1"]));
+    rerender({ selection: "chat-B" });
+    await act(async () => {
+      second.resolve(json({}));
+      await Promise.resolve();
+    });
+    expect(requested).toEqual(["ws-1"]);
+    await act(async () => {
+      first.resolve(json({}));
+    });
+    await waitFor(() => expect(result.current.session.detail?.task.id).toBe("chat-B"));
+    expect(applied).toEqual(["ws-1", "ws-2"]);
+    expect(state.active?.instance.workspaceId).toBe("ws-2");
+    expect(result.current.workspace.activeRoot).toBe(state.active?.binding.activeRoot);
+    expect(result.current.session.detail?.task.workspaceId).toBe(
+      state.active?.instance.workspaceId,
+    );
   });
 
   // The authoritative re-read of an applied-but-superseded mutation must not swallow the refusal

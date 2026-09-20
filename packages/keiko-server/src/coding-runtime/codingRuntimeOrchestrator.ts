@@ -1,3 +1,4 @@
+import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 /** Server-owned, single-slot lifecycle coordinator for the Coding Workbench (issue #2256). */
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -697,6 +698,12 @@ const CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION = defineActivityLogOperati
     itemCount: { type: "integer", dataClass: "count", required: true },
     linkedIssueCount: { type: "integer", dataClass: "count", required: true },
     byteCount: { type: "integer", dataClass: "count", required: true },
+    issuePurpose: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["context", "delivery"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -705,6 +712,10 @@ const CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION = defineActivityLogOperati
   proofIds: ["coding-runtime.run.issue-context-attached.emitted-line"],
   releaseImpact: "patch",
 });
+
+function issuePurposeOf(request: CodingWorkbenchRuntimeStartRequest): "context" | "delivery" {
+  return request.issuePurpose ?? "delivery";
+}
 
 const CODING_RUNTIME_DESCRIPTION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -940,6 +951,7 @@ function runtimeApprovalIssueFailureCode(
 }
 
 type RuntimeStartFailureReason =
+  | "history-initialization"
   | CodingRuntimeFailureCode
   | "initial-turn-dispatch"
   | "initial-turn-recovery"
@@ -973,10 +985,12 @@ function recordRuntimeStartFailure(
   emitServerDiagnostic(diagnostics, {
     correlationId: runtimeDiagnosticCorrelationId(runId),
     timestamp: new Date().toISOString(),
-    operation: "coding-runtime.start",
+    operation:
+      reason === "history-initialization" ? "coding-runtime.history" : "coding-runtime.start",
     source: "coding-runtime-orchestrator.start",
-    errorClass: error === undefined ? "CodingRuntimeStartFailure" : contentFreeErrorClass(error),
-    message: "runtime-start-failed",
+    ...(error === undefined ? { errorClass: "CodingRuntimeStartFailure" } : describeError(error)),
+    message:
+      reason === "history-initialization" ? "runtime-history-failed" : "runtime-start-failed",
     code: launchReason === undefined ? diagnosticCode : `${diagnosticCode}:${launchReason}`,
   });
 }
@@ -2419,6 +2433,7 @@ export class CodingRuntimeOrchestrator {
     const current = this.current();
     if (current?.runId !== runId) return;
     if (await this.continueForDelivery(current, outcome)) return;
+    this.captureHistory(runId);
     const stopped = await this.stopForSettlement(runId, outcome);
     const live = this.current();
     if (live?.runId !== runId) return;
@@ -2787,6 +2802,10 @@ export class CodingRuntimeOrchestrator {
     }
   }
 
+  public getHistory(): CodingRuntimeHistory | undefined {
+    return this.deps.history;
+  }
+
   private async startFresh(
     input: unknown,
     predecessorRunId?: string,
@@ -2797,14 +2816,16 @@ export class CodingRuntimeOrchestrator {
       return this.fail(parsed.ok ? "active-run-conflict" : "invalid-intent");
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
-    const active = this.activeWorkspaceOrUndefined();
-    const principal = this.deps.serverPrincipal();
-    if (!active || !principal) return this.fail("authority-resolution-failed");
+    const scope = this.historyStartScope(parsed.value);
+    if (scope === undefined) return this.fail("authority-resolution-failed");
+    const { active, principal } = scope;
+    let { request } = scope;
     const runId = this.newRunId();
-    const issue = await this.admitIssue(parsed.value, active, runId, predecessorRunId);
+    const issue = await this.admitIssue(request, active, runId, predecessorRunId);
     if (!issue.ok) return { ...issue, runId };
+    request = this.requestWithContextPurpose(request, issue.contextBinding);
     const resolved = await this.resolveLaunch(
-      parsed.value,
+      request,
       active,
       principal,
       runId,
@@ -2814,27 +2835,99 @@ export class CodingRuntimeOrchestrator {
     if (!resolved.ok) return { ok: false, failureCode: resolved.failureCode, runId };
     const launch = resolved.launch;
     const initialSnapshot = this.buildStartSnapshot(
-      parsed.value,
+      request,
       active,
       principal,
       runId,
       launch,
       predecessorRunId,
-      issue.binding,
+      { issueBinding: issue.binding, issueContextBinding: issue.contextBinding },
     );
     const selection = this.selectStartPredecessor(initialSnapshot, predecessorRunId);
     const snapshot = selection.snapshot;
     this.deps.snapshots.create(snapshot);
+    this.activateStartedRun(runId, launch, selection);
+    this.recordIssueAdmission(request, runId, issue.attachment);
+    if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
+    this.projection.publish(snapshot);
+    if (!this.beginHistory(request, active, runId))
+      return this.transitionActive("failed", "runtime-failed");
+    const started = await this.startManagedRuntime(request, active, runId, launch);
+    if (started !== undefined) return started;
+    return this.runInitialTurn(request, active, runId, issue.attachment);
+  }
+
+  private activateStartedRun(
+    runId: string,
+    launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
+    selection: PredecessorSelection,
+  ): void {
     this.activeRunId = runId;
     this.settledRunId = undefined;
     this.activeEffectiveMode = launch.effectiveMode;
-    const { activityLog } = this.deps;
-    recordRuntimeRunStarted(activityLog, snapshot, launch.effectiveMode, selection.reason);
-    if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
-    this.projection.publish(snapshot);
-    const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
-    if (started !== undefined) return started;
-    return this.runInitialTurn(parsed.value, active, runId, issue.attachment);
+    recordRuntimeRunStarted(
+      this.deps.activityLog,
+      selection.snapshot,
+      launch.effectiveMode,
+      selection.reason,
+    );
+  }
+
+  private requestWithContextPurpose(
+    request: CodingWorkbenchRuntimeStartRequest,
+    binding: CodingWorkbenchIssueBinding | undefined,
+  ): CodingWorkbenchRuntimeStartRequest {
+    return binding === undefined ? request : { ...request, issuePurpose: "context" };
+  }
+
+  private captureHistory(runId: string): void {
+    this.deps.history?.capture(runId, this.deps.safeActivityProjection?.currentContent());
+  }
+
+  private beginHistory(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+  ): boolean {
+    try {
+      this.deps.history?.begin(request, active, runId);
+      return true;
+    } catch (error) {
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "history-initialization", error);
+      return false;
+    }
+  }
+
+  private historyStartScope(request: CodingWorkbenchRuntimeStartRequest):
+    | {
+        readonly active: ActiveWorkspaceView;
+        readonly principal: string;
+        readonly request: CodingWorkbenchRuntimeStartRequest;
+      }
+    | undefined {
+    const active = this.activeWorkspaceOrUndefined();
+    const principal = this.deps.serverPrincipal();
+    if (!active || !principal) return undefined;
+    if (request.conversationId === undefined) return { active, principal, request };
+    if (!this.deps.history?.admits(request.conversationId, active)) return undefined;
+    const priorId = this.deps.history.previousRunId(request.conversationId);
+    const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
+    if (prior === undefined) return undefined;
+    return { active, principal, request: this.continuedIssueRequest(request, prior) };
+  }
+
+  private continuedIssueRequest(
+    request: CodingWorkbenchRuntimeStartRequest,
+    prior: CodingRuntimeSnapshot,
+  ): CodingWorkbenchRuntimeStartRequest {
+    const issue = prior.issueBinding ?? prior.issueContextBinding;
+    if (issue === undefined) return request;
+    return {
+      ...request,
+      issueRef: `#${String(issue.issueNumber)}`,
+      expectedIssueBindingDigest: issue.bindingDigest,
+      issuePurpose: prior.issueContextBinding === undefined ? "delivery" : "context",
+    };
   }
 
   private selectStartPredecessor(
@@ -2909,10 +3002,37 @@ export class CodingRuntimeOrchestrator {
         predecessorRunId === undefined
           ? undefined
           : this.deps.snapshots.get(predecessorRunId)?.issueBinding,
+      priorContextBinding:
+        predecessorRunId === undefined
+          ? undefined
+          : this.deps.snapshots.get(predecessorRunId)?.issueContextBinding,
       intake: this.deps.issueIntake,
       activityLog: this.deps.activityLog,
       deploymentCeiling: this.deps.deploymentCeiling,
     });
+  }
+
+  private recordIssueAdmission(
+    request: CodingWorkbenchRuntimeStartRequest,
+    runId: string,
+    attachment: CodingRuntimeIssueAttachment | undefined,
+  ): void {
+    if (attachment !== undefined) {
+      this.deps.activityLog?.write(
+        activityLogEvent(
+          CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION,
+          { correlationId: runId },
+          {
+            runId,
+            issueNumber: attachment.issueNumber,
+            itemCount: attachment.itemCount,
+            linkedIssueCount: attachment.linkedIssueCount,
+            byteCount: attachment.byteCount,
+            issuePurpose: issuePurposeOf(request),
+          },
+        ),
+      );
+    }
   }
 
   private async runInitialTurn(
@@ -2952,21 +3072,6 @@ export class CodingRuntimeOrchestrator {
       taskIntent: request.taskIntent,
       ...(initialContext === undefined ? {} : { initialContext }),
     });
-    if (initialTurn === "accepted" && attachment !== undefined) {
-      this.deps.activityLog?.write(
-        activityLogEvent(
-          CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION,
-          { correlationId: runId },
-          {
-            runId,
-            issueNumber: attachment.issueNumber,
-            itemCount: attachment.itemCount,
-            linkedIssueCount: attachment.linkedIssueCount,
-            byteCount: attachment.byteCount,
-          },
-        ),
-      );
-    }
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
     // revision in the SAME call that commits its production-guard reservation
     // (codingRuntimeOperationCoordinator.ts's submitFollowUp/applyAnswer via advanceRevision) --
@@ -2999,7 +3104,11 @@ export class CodingRuntimeOrchestrator {
     const issueContext =
       attachment === undefined ? undefined : renderInitialTurnContext(attachment);
     const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
-    return composeCodingRuntimeInitialContext([issueContext, memoryContext]);
+    return composeCodingRuntimeInitialContext([
+      issueContext,
+      memoryContext,
+      this.deps.history?.initialContext(runId),
+    ]);
   }
 
   private async projectMemoryInitialContext(
@@ -3081,7 +3190,7 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
     predecessorRunId?: string,
-    issueBinding?: CodingWorkbenchIssueBinding,
+    issue: Pick<CodingRuntimeSnapshot, "issueBinding" | "issueContextBinding"> = {},
   ): CodingRuntimeSnapshot {
     const now = this.now().toISOString();
     return {
@@ -3104,7 +3213,10 @@ export class CodingRuntimeOrchestrator {
       patchByteCount: 0,
       modelRequestCount: 0,
       ...(predecessorRunId ? { predecessorRunId } : {}),
-      ...(issueBinding === undefined ? {} : { issueBinding }),
+      ...(issue.issueBinding === undefined ? {} : { issueBinding: issue.issueBinding }),
+      ...(issue.issueContextBinding === undefined
+        ? {}
+        : { issueContextBinding: issue.issueContextBinding }),
     };
   }
 
@@ -3174,6 +3286,7 @@ export class CodingRuntimeOrchestrator {
     if (!this.isEndRequestConsistent(parsed, runId, current)) return this.fail("invalid-intent");
     if (!current) return this.stopSettledRun(kind, runId);
     if (current.state === "recovery-required") return this.fail("recovery-required");
+    this.captureHistory(runId);
     this.deps.safeActivityProjection?.purge(runId, kind === "stop" ? "stop" : "takeover");
     const stopping = this.createEndStoppingTransition(kind, current);
     if (!stopping.ok) return stopping;
@@ -3373,7 +3486,9 @@ export class CodingRuntimeOrchestrator {
   private publicSnapshotWithDescription(
     snapshot: CodingRuntimeSnapshot | undefined,
   ): PublicSnapshot {
-    const base = this.projection.publicSnapshot(snapshot);
+    const projected = this.projection.publicSnapshot(snapshot);
+    const history = snapshot === undefined ? undefined : this.deps.history?.forRun(snapshot.runId);
+    const base = history === undefined ? projected : { ...projected, conversationId: history.id };
     const persisted =
       snapshot === undefined ? undefined : this.description?.jobs.current(snapshot.runId);
     const status =

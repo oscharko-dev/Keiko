@@ -1,3 +1,4 @@
+import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
@@ -117,6 +118,7 @@ export interface ProductionOpenCodeBackendInput {
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
+  readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   /** Explicit functional-test seam. Production composition never supplies this. */
   readonly createSupervisor?:
@@ -163,6 +165,7 @@ function createOpenCodeRun(
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,
     safeActivityProjection,
+    input.historyCapture,
   );
   try {
     const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry);
@@ -261,6 +264,7 @@ function openSafeActivity(
 function safeActivityController(
   runId: string,
   projection: CodingSafeActivityProjection,
+  historyCapture: ProductionOpenCodeBackendInput["historyCapture"],
 ): NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]> {
   const terminal =
     boundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>();
@@ -276,6 +280,7 @@ function safeActivityController(
     return accepted;
   };
   return {
+    captureMessages: (messages): boolean => armed && historyCapture?.(runId, messages) === true,
     arm: (): void => {
       armed = true;
     },

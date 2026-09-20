@@ -30,7 +30,7 @@ export function assertCatalogDialect(dialect: CatalogVersionRef, runtime: Catalo
   requireCatalog(dialect.version === 1 && DIALECT_IDS.has(dialect.id), "unsupported-dialect");
   if (dialect.id === "managed-runtime-json-schema") {
     requireCatalog(
-      runtime.id === "opencode" && runtime.version === "1.18.30",
+      runtime.id === "opencode" && runtime.version === "2.0.10",
       "unsupported-dialect",
     );
   } else {
@@ -49,12 +49,10 @@ function managedInputSchema(schema: CatalogJsonObject): CatalogJsonObject {
       catalogArray(schema.required).length === Object.keys(properties).length,
       "unrepresentable-projection",
     );
-    // The pinned runtime strips this keyword. Only its default-true semantics survive.
-    requireCatalog(schema.additionalProperties === true, "unrepresentable-projection");
-    const projected = { ...schema };
-    delete projected.additionalProperties;
+    // V2 supplies a closed boundary; accepting an open declaration would silently narrow it.
+    requireCatalog(schema.additionalProperties === false, "unrepresentable-projection");
     return {
-      ...projected,
+      ...schema,
       properties: Object.fromEntries(
         Object.entries(properties).map(([key, value]) => [
           key,

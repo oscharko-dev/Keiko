@@ -1,0 +1,81 @@
+.cmpBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+}
+.cmpCopy {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+  flex: 1;
+}
+.cmpCopy strong {
+  font-size: var(--text-caption);
+}
+.cmpIndicator {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+.cmpBar[data-status="working"] {
+  border-color: var(--accent-line);
+}
+.cmpBar[data-status="working"] .cmpIndicator {
+  border-color: var(--border-subtle);
+  border-top-color: var(--text-accent);
+  animation: workbench-spin 1.2s linear infinite;
+}
+.cmpBar[data-status="approval"],
+.cmpBar[data-status="question"] {
+  color: var(--warn);
+}
+.cmpBar[data-status="approval"] .cmpIndicator,
+.cmpBar[data-status="question"] .cmpIndicator {
+  color: var(--warn);
+}
+.cmpAction {
+  min-height: 2rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+.cmpAction:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 3px;
+}
+@keyframes workbench-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmpBar[data-status="working"] .cmpIndicator {
+    animation: none;
+  }
+}
+@media (max-width: 480px) {
+  .cmpBar {
+    flex-wrap: wrap;
+  }
+  .cmpAction {
+    margin-inline-start: 22px;
+  }
+}

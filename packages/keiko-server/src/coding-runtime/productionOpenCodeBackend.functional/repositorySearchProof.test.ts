@@ -37,7 +37,6 @@ describe("real-binary H1 model response boundary", () => {
       old: "export const marker = true;\n",
       next: "export const marker = false;\n",
     } as ScriptState;
-    scriptedResponse(script);
     expect(scriptedResponse(script).toolCalls[0]).toMatchObject({
       name: "keiko_repository_search",
       arguments: { mode: "literal", query: script.old.trim() },

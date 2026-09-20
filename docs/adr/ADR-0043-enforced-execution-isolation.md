@@ -462,7 +462,8 @@ nothing was impossible by construction.
 The dependency bootstrap (`packages/keiko-verification/src/dependencies.ts`) closes that gap at the
 layer that owns the plan. Before the first script step of a plan that has one, the orchestrator
 reads the workspace's `package.json`; when it declares dependencies and npm's own hidden lockfile
-(`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, it runs
+(`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, or Keiko
+has not recorded a completed install for that tree, it runs
 exactly `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error` through
 the same keiko-tools command boundary as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm
 install` and nothing else, no leading flags, `-c`/`--call` denied), under
@@ -527,10 +528,27 @@ an upstream proxy is not supported. After npm exits, the tree it installed is st
 same rule through its hidden lockfile: an install that left none, or one naming another source, is
 `refused` and its steps are skipped.
 
+The hidden lockfile alone is not completion evidence: npm can write it before returning a failure
+and leave a partly unpacked package behind. A successful bootstrap records a process-owned receipt
+only after npm exits successfully, the installed tree passes the source check, and registry egress
+has no refusal or fault. The receipt is bound to the manifest, lockfiles and installed entries by
+filesystem identity, size and change time; restored modification times cannot preserve it. Keiko
+writes no completion file in the workspace. Repository-written marker files confer no authority.
+The cache holds at most 32 workspaces, enumerates at most 100,000 installed entries, follows no
+directory symlinks and fails closed to reinstall when identity metadata is unavailable. Changed
+entries, eviction and process restart require another successful bootstrap. This receipt records
+installation provenance, not trust in dependency code; source checks and execution isolation remain
+mandatory. The shared verification execution entry point holds the existing workspace mutex across
+dependency planning, installation and all verification steps, preventing another managed verification
+from modifying dependencies during execution. Admission, acquisition and release emit a correlated
+`editor.verification.workspace` event with a workspace digest.
+
 The outcome is part of the report (`VerificationReport.dependencies`: state, lockfile
 `present`/`created`/`absent`, npm's exit code, duration, a short redacted detail, the tunnels
 and refusals of its egress) and of the activity log (`editor.verification.dependencies`, the same
 fields, the counts as `egressAllowed` and `egressRefused`), never the install's output.
+`completionReceipt` distinguishes a missing, changed or current receipt; `completionRecorded`
+reports whether the completed operation left a reusable receipt.
 When the bootstrap does not leave the workspace fit for its steps (`refused`, `failed`,
 `timed-out`), the steps are recorded as skipped with that reason and the report is `failed` —
 `matchesOverallStatus` applies the same rule on the wire — so a report whose steps all read

@@ -57,6 +57,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   PatchApplyError,
+  parseUnifiedDiff,
   PatchValidationError,
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
@@ -3995,6 +3996,28 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(JSON.stringify(emitted.changeset?.prepared)).not.toContain("FORGED_PREVIEW");
     expect(reads).toEqual([join(workspaceRoot, "src/a.txt"), join(workspaceRoot, "src/b.txt")]);
     vi.restoreAllMocks();
+  });
+
+  it("reviews the validated three-file patch when model hunk counts need normalization", async () => {
+    const files = ["src/a.txt", "src/b.txt", "README.md"];
+    for (const file of files) writeWorkspaceFile(workspaceRoot, file, "before\n");
+    const patch = oneLineModifyPatch(
+      files.map((file) => ({ file, before: "before", after: "after" })),
+    ).replaceAll("@@ -1 +1 @@", "@@ -1,99 +1,99 @@");
+    const proposed = changesetActionFor(workspaceRoot, patch, files);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", files);
+
+    expect((await handleEditorAgentActions(context(proposed))).status).toBe(202);
+    const emitted = lastEmittedAction(bridge.frames());
+    const reviewPatch = emitted.changeset?.patch ?? "";
+    // The bridge must never render the unvalidated model spelling: stale counts swallow the
+    // next file header in the UI parser, hiding a member of the approved changeset (#3560).
+    expect(parseUnifiedDiff(reviewPatch).files.map((file) => file.path)).toEqual(files);
+    expect(emitted.changeset?.prepared?.files.map((file) => file.file)).toEqual(files);
+    for (const file of files) expect(readWorkspaceFile(workspaceRoot, file)).toBe("before\n");
+    expect((await postActionResult(proposed, "succeeded")).status).toBe(200);
+    for (const file of files) expect(readWorkspaceFile(workspaceRoot, file)).toBe("after\n");
+    expect(auditRecords().map((record) => record.outcome)).toEqual(["queued", "succeeded"]);
   });
 
   it("preserves chat origin through a queued applyChangeset and its audit record (#2119)", async () => {

@@ -1250,17 +1250,12 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": {
     "complexity": {
       "count": 1
     },
     "max-lines-per-function": {
-      "count": 4
+      "count": 3
     }
   },
   "src/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel.tsx": {

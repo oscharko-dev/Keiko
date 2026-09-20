@@ -29,8 +29,8 @@ import {
   projectedGatewaySchema,
 } from "../opencodeToolSchemas.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  projectOpenCodeProtocolSurface,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  projectOpenCodeV2ProtocolSurface,
 } from "../opencodeProtocolSurface.js";
 import {
   createRuntimeProcessSupervisor,
@@ -44,172 +44,19 @@ import {
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
-const PROTOCOL_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
+const PROTOCOL_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
 const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
 
-/** OpenAPI projection served by the scripted child; it projects to the pinned handshake digest. */
-const FUNCTIONAL_OPENCODE_OPENAPI = {
-  openapi: "3.1.0",
-  paths: {
-    "/global/health": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: {
-          "200": { $ref: "#/components/responses/Health" },
-          "401": { $ref: "#/components/responses/Unauthorized" },
-        },
-      },
-    },
-    "/global/event": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/EventStream" } },
-      },
-    },
-    "/doc": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/sync/history": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/History" } },
-      },
-    },
-    "/session": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Sessions" } },
-      },
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Session" } },
-      },
-    },
-    "/session/status": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/SessionStatus" } },
-      },
-    },
-    "/session/{sessionID}/prompt_async": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/session/{sessionID}/abort": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/permission": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/permission/{requestID}/reply": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question/{requestID}/reply": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question/{requestID}/reject": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-  },
-  components: {
-    securitySchemes: { basicAuth: { type: "http", scheme: "basic" } },
-    responses: {
-      Health: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/Health" } } },
-      },
-      Unauthorized: { description: "unauthorized" },
-      EventStream: { content: { "text/event-stream": { schema: { type: "string" } } } },
-      History: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/History" } } },
-      },
-      Sessions: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/SessionList" } } },
-      },
-      Session: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/Session" } } },
-      },
-      SessionStatus: {
-        content: {
-          "application/json": { schema: { $ref: "#/components/schemas/SessionStatusMap" } },
-        },
-      },
-    },
-    schemas: {
-      Health: {
-        type: "object",
-        required: ["healthy", "version"],
-        properties: { healthy: { type: "boolean" }, version: { type: "string" } },
-      },
-      History: { type: "array", items: { $ref: "#/components/schemas/Event" } },
-      Event: {
-        type: "object",
-        required: ["id", "aggregate_id", "seq", "type", "data"],
-        properties: {
-          id: { type: "string" },
-          aggregate_id: { type: "string" },
-          seq: { type: "integer" },
-          type: { type: "string" },
-          data: { type: "object" },
-        },
-      },
-      Session: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-      SessionList: {
-        type: "array",
-        items: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-      },
-      SessionStatusMap: {
-        type: "object",
-        additionalProperties: { $ref: "#/components/schemas/SessionStatus" },
-      },
-      SessionStatus: {
-        oneOf: [
-          { type: "object", required: ["type"], properties: { type: { const: "idle" } } },
-          { type: "object", required: ["type"], properties: { type: { const: "busy" } } },
-          {
-            type: "object",
-            required: ["type", "attempt", "message", "next"],
-            properties: {
-              type: { const: "retry" },
-              attempt: { type: "integer" },
-              message: { type: "string" },
-              next: { type: "number" },
-            },
-          },
-        ],
-      },
-    },
-  },
-} as const;
-
-const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeProtocolSurface(
+/** Captured OpenCode 2.0.10 protocol projection served by the scripted V2 child. */
+const FUNCTIONAL_OPENCODE_OPENAPI: unknown = JSON.parse(
+  readFileSync(
+    new URL("../opencodeProtocolSurface.opencode-2.0.10.fixture.json", import.meta.url),
+    "utf8",
+  ),
+);
+const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(
   FUNCTIONAL_OPENCODE_OPENAPI,
 ).digest;
 
@@ -224,7 +71,7 @@ export interface FunctionalGatewayTool {
  * test can derive a deliberately incomplete projection (e.g. `.filter(...)` out one tool) for a
  * live fail-closed proof against the real sidecar gateway route, without restating this mapping.
  * Derives every entry's parameters from `opencodeToolSchemas.ts`'s own `projectedGatewaySchema`
- * (the single source for OpenCode's v1.18.30 wire projection) so this scripted advertisement can
+ * (the single source for OpenCode's v2.0.10 wire projection) so this scripted advertisement can
  * never drift from the incoming trust check it is meant to satisfy.
  */
 export function functionalGatewayTools(): readonly FunctionalGatewayTool[] {
@@ -265,7 +112,7 @@ export function stagedFunctionalPortable(testRoot: string): FunctionalPortableOp
   // surface pin, not onto the scripted harness surface digest.
   const sidecar = {
     ...verification(installRoot, target),
-    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   };
   return {
     evidenceClass: "functional-not-platform-qualified",
@@ -381,7 +228,7 @@ function verification(
     sbomEvidenceSha256: digest(join(installRoot, "payload/evidence/sbom.cdx.json")),
     protocolSchemaRawSha256: PROTOCOL_SCHEMA_SHA256,
     protocolHandshakeDigest: PROTOCOL_HANDSHAKE_DIGEST,
-    protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1",
+    protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2",
     availability: {
       redistributionApproved: true,
       payloadPresent: true,
@@ -407,7 +254,7 @@ function verificationSummary(
     upstreamName: "opencode",
     upstreamVersion: OPENCODE_PINNED_VERSION,
     adapterName: "keiko-coding-sidecar",
-    adapterVersion: "1",
+    adapterVersion: "2",
     protocolVersion: "http-sse",
     platformTarget: target,
     payloadSha256,
@@ -688,27 +535,24 @@ class FakeOpenCodeChild {
 
   // eslint-disable-next-line complexity -- the finite pinned endpoint table is intentionally explicit.
   private route(method: string, path: string, body: string, response: ServerResponse): void {
-    if (method === "GET" && path === "/global/health") {
-      json(response, { healthy: true, version: OPENCODE_PINNED_VERSION });
-    } else if (method === "GET" && path === "/doc") {
+    if (method === "GET" && path === "/api/info") {
+      json(response, { version: OPENCODE_PINNED_VERSION });
+    } else if (method === "GET" && path === "/openapi.json") {
       json(response, FUNCTIONAL_OPENCODE_OPENAPI);
-    } else if (method === "GET" && path === "/global/event") {
+    } else if (method === "GET" && path === "/api/event") {
       this.openEvents(response);
-    } else if (method === "POST" && path === "/session") {
+    } else if (method === "POST" && path === "/api/session") {
       this.createSession(response);
-    } else if (method === "GET" && path === "/session") {
-      json(response, [{ id: FAKE_SESSION_ID }]);
-    } else if (method === "GET" && path === "/session/status") {
-      json(response, this.busy ? { [FAKE_SESSION_ID]: { type: "busy" } } : {});
-    } else if (method === "GET" && path === "/permission") {
-      json(response, this.governedTools?.rows() ?? []);
-    } else if (method === "GET" && path === "/question") {
-      json(
-        response,
-        [...this.questions.values()].map((pending) => pending.row),
-      );
-    } else if (method === "POST" && path === "/sync/history") {
-      json(response, this.historyRows);
+    } else if (method === "GET" && path === "/api/session") {
+      json(response, { data: [{ id: FAKE_SESSION_ID }] });
+    } else if (method === "GET" && path === "/api/session/active") {
+      json(response, { data: this.busy ? { [FAKE_SESSION_ID]: { type: "busy" } } : {} });
+    } else if (method === "GET" && path === "/api/permission/request") {
+      json(response, { data: this.governedTools?.rows() ?? [] });
+    } else if (method === "GET" && path === "/api/form") {
+      json(response, { data: [...this.questions.values()].map((pending) => pending.row) });
+    } else if (method === "GET" && path === `/api/session/${FAKE_SESSION_ID}/message`) {
+      json(response, { data: this.v2Messages().slice().reverse() });
     } else if (this.routePermission(method, path, body, response)) {
       return;
     } else {
@@ -722,32 +566,35 @@ class FakeOpenCodeChild {
     body: string,
     response: ServerResponse,
   ): boolean {
-    const permission = /^\/permission\/([^/]+)\/reply$/u.exec(path);
+    const permission = /^\/api\/session\/[^/]+\/permission\/([^/]+)\/reply$/u.exec(path);
     if (method === "POST" && permission !== null) {
-      json(response, this.governedTools?.reply(permission[1] ?? "", body) ?? false);
+      json(response, { data: this.governedTools?.reply(permission[1] ?? "", body) ?? false });
       return true;
     }
     return false;
   }
 
   private routeDynamic(method: string, path: string, body: string, response: ServerResponse): void {
-    const prompt = /^\/session\/([^/]+)\/prompt_async$/u.exec(path);
+    const prompt = /^\/api\/session\/([^/]+)\/prompt$/u.exec(path);
     if (method === "POST" && prompt !== null) {
       this.acceptPrompt(prompt[1] ?? "", body, response);
       return;
     }
-    const abort = /^\/session\/([^/]+)\/abort$/u.exec(path);
+    const abort = /^\/api\/session\/([^/]+)\/interrupt$/u.exec(path);
     if (method === "POST" && abort !== null) {
       this.turnController?.abort();
-      json(response, true);
+      json(response, { data: {} });
       return;
     }
-    const question = /^\/question\/([^/]+)\/(reply|reject)$/u.exec(path);
-    if (method === "POST" && question !== null) {
-      this.settleQuestion(question[1] ?? "", question[2] === "reply", body, response);
-      return;
-    }
+    if (this.routeForm(method, path, body, response)) return;
     response.writeHead(404).end();
+  }
+
+  private routeForm(method: string, path: string, body: string, response: ServerResponse): boolean {
+    const form = /^\/api\/session\/[^/]+\/form\/([^/]+)(?:\/reply)?$/u.exec(path);
+    if (form === null || (method !== "POST" && method !== "DELETE")) return false;
+    this.settleQuestion(form[1] ?? "", method === "POST", body, response);
+    return true;
   }
 
   private acceptPrompt(sessionId: string, body: string, response: ServerResponse): void {
@@ -756,7 +603,7 @@ class FakeOpenCodeChild {
       return;
     }
     const text = functionalPromptText(body);
-    response.writeHead(204).end();
+    json(response, { data: {} });
     const controller = new AbortController();
     this.turnController = controller;
     this.turnTail = this.turnTail.then(() => this.runTurn(text, controller));
@@ -777,7 +624,7 @@ class FakeOpenCodeChild {
     pending.settle(
       answered ? { kind: "answered", answers: parseAnswers(body) } : { kind: "rejected" },
     );
-    json(response, true);
+    json(response, { data: {} });
   }
 
   private createSession(response: ServerResponse): void {
@@ -788,7 +635,7 @@ class FakeOpenCodeChild {
         info: { id: FAKE_SESSION_ID },
       });
     }
-    json(response, { id: FAKE_SESSION_ID });
+    json(response, { data: { id: FAKE_SESSION_ID } });
   }
 
   private openEvents(response: ServerResponse): void {
@@ -808,9 +655,23 @@ class FakeOpenCodeChild {
     properties: Record<string, unknown>,
   ): void {
     this.liveEventSequence += 1;
-    const payload = { id: `evt_live${String(this.liveEventSequence)}`, type, properties };
+    const payload = {
+      id: `evt_live${String(this.liveEventSequence)}`,
+      type:
+        type === "session.status"
+          ? "session.execution.started"
+          : type === "session.idle"
+            ? "session.execution.succeeded"
+            : type === "question.asked"
+              ? "form.created"
+              : type,
+      data:
+        type === "question.asked"
+          ? { form: { id: properties.id, sessionID: properties.sessionID } }
+          : properties,
+    };
     if (!client.writableEnded && !client.destroyed) {
-      client.write(`data: ${JSON.stringify({ payload })}\n\n`);
+      client.write(`data: ${JSON.stringify(payload)}\n\n`);
     }
   }
 
@@ -826,6 +687,10 @@ class FakeOpenCodeChild {
     if (!parsed.ok) this.historyFixtureFailures.push(`${type}:${parsed.reason}`);
     this.historyRows.push(row);
     this.broadcast("history.updated", {});
+  }
+
+  private v2Messages(): readonly Readonly<Record<string, unknown>>[] {
+    return mergeV2Messages(this.historyRows.flatMap(v2MessageFromHistoryRow));
   }
 
   private async runTurn(text: string, controller: AbortController): Promise<void> {
@@ -904,7 +769,7 @@ class FakeOpenCodeChild {
       sessionID: FAKE_SESSION_ID,
       info: assistantHistoryInfo(messageId, parentId, { created }),
     });
-    for (const [index, chunk] of splitFunctionalText(expandFunctionalDisplayText(text)).entries()) {
+    for (const [index, chunk] of splitFunctionalText(text).entries()) {
       this.appendHistory("message.part.updated.1", {
         sessionID: FAKE_SESSION_ID,
         part: {
@@ -1002,19 +867,18 @@ class FakeOpenCodeChild {
 
   private executeToolCall(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     if (call.name === "question") return this.askQuestion(call, signal);
-    if (call.name === "todowrite") return Promise.resolve(executeBuiltInTodoWrite(call));
     return this.callToolFacade(call, signal);
   }
 
   /**
    * A rejected (or aborted) question fails the tool and ends the turn, like the real binary.
-   * The real v1.18.30 publishes its question lifecycle live-only over /global/event — question
+   * The real v2.0.10 publishes its question lifecycle live-only over /global/event — question
    * rows never reach the durable history — so the fake mirrors exactly that.
    */
   private askQuestion(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     this.questionSequence += 1;
-    const id = `que_functional${String(this.questionSequence)}`;
-    const row = { id, sessionID: FAKE_SESSION_ID, questions: call.args.questions };
+    const id = `frm_functional${String(this.questionSequence)}`;
+    const row = v2QuestionForm(id, call.args.questions);
     return new Promise<string>((resolveQuestion, rejectQuestion) => {
       const settled = (outcome: FakeQuestionOutcome): void => {
         signal.removeEventListener("abort", onAbort);
@@ -1072,22 +936,12 @@ class FakeOpenCodeChild {
   }
 }
 
-/** Mirrors the v1.18.30 built-in: full-replace todo state, no facade round-trip, no tool event. */
-function executeBuiltInTodoWrite(call: FakeToolCall): string {
-  return JSON.stringify(call.args.todos ?? [], null, 2);
-}
-
 function splitFunctionalText(value: string): readonly string[] {
   const chunks: string[] = [];
   for (let start = 0; start < value.length; start += 4096) {
     chunks.push(value.slice(start, start + 4096));
   }
   return chunks;
-}
-
-function expandFunctionalDisplayText(value: string): string {
-  if (value.length === 0) return value;
-  return `${value.slice(0, 256)}${"x".repeat(4096 * 5)}${value.slice(-128)}`;
 }
 
 function assistantHistoryInfo(
@@ -1182,13 +1036,7 @@ function readBoundedBody(request: IncomingMessage): Promise<string> {
 export function functionalPromptText(body: string): string {
   try {
     const parsed: unknown = JSON.parse(body);
-    if (!isRecord(parsed) || !Array.isArray(parsed.parts) || parsed.parts.length === 0) return "";
-    const text: string[] = [];
-    for (const part of parsed.parts) {
-      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") return "";
-      text.push(part.text);
-    }
-    return text.join("\n\n");
+    return isRecord(parsed) && typeof parsed.text === "string" ? parsed.text : "";
   } catch {
     return "";
   }
@@ -1196,11 +1044,42 @@ export function functionalPromptText(body: string): string {
 
 function parseAnswers(body: string): readonly (readonly string[])[] {
   try {
-    const parsed = JSON.parse(body) as { answers?: readonly (readonly string[])[] };
-    return parsed.answers ?? [];
+    const parsed: unknown = JSON.parse(body);
+    const answer = isRecord(parsed) && isRecord(parsed.answer) ? parsed.answer : {};
+    return Object.values(answer).map((value) =>
+      Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : typeof value === "string"
+          ? [value]
+          : [],
+    );
   } catch {
     return [];
   }
+}
+
+function v2QuestionForm(id: string, questions: unknown): Record<string, unknown> {
+  const source = Array.isArray(questions) ? questions : [];
+  return {
+    id,
+    sessionID: FAKE_SESSION_ID,
+    title: "Question",
+    fields: source.map((value: unknown, index) => {
+      const question = isRecord(value) ? value : {};
+      const options = Array.isArray(question.options) ? question.options : [];
+      return {
+        key: `q${String(index)}`,
+        title: typeof question.header === "string" ? question.header : "Question",
+        description: typeof question.question === "string" ? question.question : "Question",
+        type: question.multiple === true ? "multiselect" : "string",
+        options: options.filter(isRecord).map((option) => ({
+          label: option.label,
+          value: option.label,
+          description: option.description,
+        })),
+      };
+    }),
+  };
 }
 
 function assistantMessage(turn: FakeGatewayTurn): Record<string, unknown> {
@@ -1244,6 +1123,93 @@ function parseToolCall(value: Record<string, unknown>): FakeToolCall | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function v2ToolState(state: Record<string, unknown>): Readonly<Record<string, unknown>> {
+  const input = isRecord(state.input) ? state.input : {};
+  if (state.status === "pending") return { status: "streaming", input: JSON.stringify(input) };
+  if (state.status === "running") return { status: "running", input, metadata: {} };
+  return { status: "completed", input, content: [{ type: "text", text: state.output ?? "" }] };
+}
+
+function v2PartMessage(row: FakeHistoryRow): Readonly<Record<string, unknown>>[] {
+  const part = row.data.part;
+  if (!isRecord(part)) return [];
+  const id =
+    typeof part.messageID === "string" ? part.messageID : `msg_functional_${String(row.seq)}`;
+  const time = { created: typeof row.data.time === "number" ? row.data.time : row.seq };
+  if (part.type === "text" && typeof part.text === "string") {
+    if (id.startsWith("msg_user_")) {
+      return [{ id, time, type: "user", text: part.text }];
+    }
+    return [
+      {
+        id,
+        time,
+        type: "assistant",
+        agent: "build",
+        model: { providerID: "keiko-runtime", modelID: "coding" },
+        content: [{ id: part.id, type: "text", text: part.text }],
+      },
+    ];
+  }
+  if (part.type !== "tool" || !isRecord(part.state)) return [];
+  return [
+    {
+      id,
+      time,
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "keiko-runtime", modelID: "coding" },
+      content: [
+        {
+          type: "tool",
+          id: part.callID,
+          name: part.tool,
+          time,
+          state: v2ToolState(part.state),
+        },
+      ],
+    },
+  ];
+}
+
+function v2MessageFromHistoryRow(row: FakeHistoryRow): Readonly<Record<string, unknown>>[] {
+  if (row.type === "message.part.updated.1") return v2PartMessage(row);
+  if (row.type !== "session.idle") return [];
+  return [
+    {
+      id: `msg_functional_${String(row.seq)}`,
+      time: { created: row.seq },
+      type: "idle",
+      outcome: "succeeded",
+    },
+  ];
+}
+
+function mergeV2Messages(
+  messages: readonly Readonly<Record<string, unknown>>[],
+): readonly Readonly<Record<string, unknown>>[] {
+  const grouped = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const message of messages) {
+    const id = message.id;
+    if (typeof id !== "string") continue;
+    const previous = grouped.get(id);
+    if (message.type !== "assistant" || previous === undefined) {
+      grouped.set(id, message);
+      continue;
+    }
+    const existing: unknown = previous.content;
+    const incoming: unknown = message.content;
+    const parts = Array.isArray(existing) ? existing.filter(isRecord) : [];
+    for (const item of Array.isArray(incoming) ? incoming.filter(isRecord) : []) {
+      const index = parts.findIndex((value) => isRecord(value) && value.id === item.id);
+      if (index < 0) parts.push(item);
+      else parts[index] = item;
+    }
+    grouped.set(id, { ...previous, content: parts });
+  }
+  return [...grouped.values()];
 }
 
 /** Narrows one durable history row to its completed tool-call result, when it carries one. */
@@ -1293,8 +1259,7 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
     child
       .listen()
       .then((port) => {
-        if (!tree.exited)
-          stdout.write(`opencode server listening on http://127.0.0.1:${String(port)}\n`);
+        if (!tree.exited) stdout.write(`server listening on http://127.0.0.1:${String(port)}\n`);
       })
       .catch(() => {
         if (!stdout.writableEnded) stdout.end();

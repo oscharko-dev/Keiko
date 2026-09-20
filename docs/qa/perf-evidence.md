@@ -94,7 +94,8 @@ Commit the resulting document as the final change that moves the workspace measu
 ## Tool-catalog compiler evidence (#3415)
 
 This target measures the shipped tool-catalog producer through its built package. It covers the
-legacy native profile and a 300-tool synthetic profile, the largest stable fixture below the
+legacy native profile, the shipped OpenCode V2 managed profile (including closed-object schema
+projection), and a 300-tool synthetic profile, the largest stable fixture below the
 producer's 262,144-byte catalog bound. A separate 320-tool fixture must be rejected with
 `input-bound`. Each case retains two warmups and then thirty samples. Lookup work is bounded by
 6,000 comparisons per sample, so the normal pull-request gate proves complete work without using a
@@ -121,6 +122,17 @@ could not reproduce that subject.
 ```bash
 npm run perf:evidence:regen:tool-catalog
 ```
+
+The V2 case is added with the explicit one-time extension mode:
+
+```bash
+npm run perf:evidence:regen:tool-catalog -- --extend-managed-runtime
+```
+
+This mode accepts only the previous two-case inventory and the same reference environment and
+case identities. It derives the new managed-case ceiling from fresh calibration samples, preserves
+both previous numeric maxima and ceilings exactly, and records an independent candidate run.
+The normal gate requires all three cases; it cannot accept evidence that omits the managed path.
 
 When a reviewed producer-only change intentionally changes the catalog revision or projection
 digest without changing the measurement ruler, reference environment, case inventory, or tool
@@ -282,6 +294,15 @@ developer machine is a named CI worker. Linux editor timings and hosted runner r
 incompatible and must not be substituted, even if they are faster. As with the D12 reference,
 reserve the host for one measurement: stop other benchmark containers and wait for builds, tests,
 coverage and analyzers to finish before starting. Keep that quiet window through both runs.
+
+An approved OpenCode upgrade changes the measured payload itself. For that explicit migration,
+`npm run perf:evidence:coding-runtime -- --recalibrate-runtime` permits only the runtime version
+and payload digest to differ from the previous calibration. The host, toolchain and secure-read
+helper must still match exactly, and both runtime fields must change. Production discovery still
+verifies the approved payload during every sample. This mode uses the same shrink-only budget
+ratchet as `--recalibrate`; it cannot widen a previously reviewed ceiling. Follow it with a
+separate ordinary candidate measurement and the full freshness check. Ordinary recalibration
+continues to reject runtime changes.
 
 From a clean checkout on that reference:
 

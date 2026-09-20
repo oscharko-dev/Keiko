@@ -19,6 +19,7 @@ export interface CodingWorkbenchIssueStartIntent {
 }
 
 export interface CodingWorkbenchStartOptions {
+  readonly conversationId?: string | undefined;
   readonly issue?: CodingWorkbenchIssueStartIntent | undefined;
   readonly projectMemoryEnabled: boolean;
 }

@@ -246,6 +246,8 @@ function clientMessagePostBody(
     errorEvidence: meta.errorEvidence,
     gitChangeDescription: meta.gitChangeDescription,
     workspaceTrustBinding: meta.workspaceTrustBinding,
+    codingHistoryScope: meta.codingHistoryScope,
+    codingIssueOutcome: meta.codingIssueOutcome,
     loss,
   };
   const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];

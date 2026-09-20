@@ -16,8 +16,12 @@ import {
   CodingRuntimeCiRepairController,
   type CiRepairExecutionBudget,
   type CiRepairExecutionLease,
+  type CiRepairPromptAdmission,
 } from "./codingRuntimeCiRepairController.js";
-import type { CiRepairBudgetContext } from "./codingRuntimeCiRepairBudgetTypes.js";
+import {
+  ciRepairBudgetErrorKind,
+  type CiRepairBudgetContext,
+} from "./codingRuntimeCiRepairBudgetTypes.js";
 import {
   draftDeliveryLineageRecord,
   draftRecoveryTarget,
@@ -54,6 +58,36 @@ function recordObservationRequirement(
           state: "blocked",
           reason: "ci-observation-required",
           runId: binding.runId,
+        },
+      ),
+    );
+  };
+}
+
+function recordPromptAdmission(
+  deps: DraftDeliveryDependencies,
+  verified: VerifiedCommitRuntimeDependencies,
+  binding: VerifiedCommitRuntimeBinding,
+): (tokens: number, outcome: CiRepairPromptAdmission) => void {
+  return (tokens, outcome): void => {
+    (
+      deps.execution?.activityLog ??
+      verified.execution?.activityLog ??
+      processServerLogSink()
+    ).write(
+      activityLogEvent(
+        GIT_CI_REPAIR_BUDGET_OPERATION,
+        {
+          correlationId: correlationIdOrUnknown(binding.runId),
+          level: outcome.accepted ? "info" : "warn",
+          ...(outcome.accepted ? {} : { errorKind: ciRepairBudgetErrorKind(outcome.reason) }),
+        },
+        {
+          phase: "prompt-admission",
+          status: outcome.accepted ? "available" : "blocked",
+          ...(outcome.accepted ? {} : { reason: outcome.reason }),
+          runId: binding.runId,
+          requestedPromptTokenCount: tokens,
         },
       ),
     );
@@ -104,6 +138,7 @@ export function createProductionCiRepairBudget(
       reason: "invalid-binding",
     }),
     recordObservationRequirement(deps, verified, binding),
+    recordPromptAdmission(deps, verified, binding),
   );
 }
 function budgetContext(
@@ -136,6 +171,7 @@ function budgetContext(
 }
 
 const LIVE_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
+  "starting",
   "ready",
   "running",
   "awaiting-approval",
@@ -145,13 +181,14 @@ function unavailableBudget(
   verified: VerifiedCommitRuntimeDependencies | undefined,
   binding: VerifiedCommitRuntimeBinding,
 ): CiRepairExecutionBudget {
-  const allowed = availabilityGuard({
+  const availability = availabilityGuard({
     deps,
     verified,
     binding,
     allowConfirmed: false,
     reason: "storage-unavailable",
   });
+  const allowed = (): boolean => availability().accepted;
   return {
     admitTool: () => (allowed() ? { check: allowed, settle: () => undefined } : undefined),
     canChargePrompt: allowed,
@@ -173,30 +210,20 @@ interface AvailabilityInput {
   readonly reason: "invalid-binding" | "storage-unavailable";
 }
 
-function availabilityErrorKind(
-  error: unknown,
-  reason: AvailabilityInput["reason"],
-): "internal" | "unavailable" | "validation-failed" {
-  if (error !== undefined) return "internal";
-  return reason === "invalid-binding" ? "validation-failed" : "unavailable";
-}
-
-function availabilityGuard(input: AvailabilityInput): () => boolean {
+function availabilityGuard(input: AvailabilityInput): () => CiRepairPromptAdmission {
   const { deps, verified, binding } = input;
   const snapshots = deps?.snapshots ?? verified?.snapshots;
   const log =
     deps?.execution?.activityLog ?? verified?.execution?.activityLog ?? processServerLogSink();
-  return (): boolean => {
+  return (): CiRepairPromptAdmission => {
     let error: unknown;
+    let reason: "authority-denied" | AvailabilityInput["reason"] = input.reason;
     try {
-      if (
-        binding.stillAuthorized() &&
-        !binding.signal.aborted &&
-        knownScope(snapshots, binding, input.allowConfirmed)
-      )
-        return true;
+      if (!binding.stillAuthorized() || binding.signal.aborted) reason = "authority-denied";
+      else if (knownScope(snapshots, binding, input.allowConfirmed)) return { accepted: true };
     } catch (error_) {
       error = error_;
+      reason = "storage-unavailable";
     }
     log.write(
       activityLogEvent(
@@ -204,12 +231,12 @@ function availabilityGuard(input: AvailabilityInput): () => boolean {
         {
           level: "warn",
           correlationId: correlationIdOrUnknown(binding.runId),
-          errorKind: availabilityErrorKind(error, input.reason),
+          errorKind: error === undefined ? ciRepairBudgetErrorKind(reason) : "internal",
         },
         {
           phase: "availability",
           state: "blocked",
-          reason: input.reason,
+          reason,
           runId: binding.runId,
           ...(error === undefined
             ? {}
@@ -217,14 +244,16 @@ function availabilityGuard(input: AvailabilityInput): () => boolean {
         },
       ),
     );
-    return false;
+    return { accepted: false, reason: error === undefined ? reason : "storage-unavailable" };
   };
 }
 function gateBudget(
-  budget: CiRepairExecutionBudget,
-  allowed: () => boolean,
+  budget: CodingRuntimeCiRepairController,
+  availability: () => CiRepairPromptAdmission,
   recordObservationRequired: () => void,
+  recordPrompt: (tokens: number, outcome: CiRepairPromptAdmission) => void,
 ): CiRepairExecutionBudget {
+  const allowed = (): boolean => availability().accepted;
   return {
     admitTool: (request): CiRepairExecutionLease | undefined => {
       if (!allowed()) return undefined;
@@ -234,11 +263,16 @@ function gateBudget(
         : { ...lease, check: () => allowed() && lease.check() };
     },
     canChargePrompt: (tokens) => allowed() && budget.canChargePrompt(tokens),
-    chargePrompt: (tokens) => allowed() && budget.chargePrompt(tokens),
-    chargeDelegatedRead: (id, key) => allowed() && budget.chargeDelegatedRead?.(id, key) === true,
-    canChargeDelegatedRead: () => allowed() && budget.canChargeDelegatedRead?.() === true,
+    chargePrompt: (tokens): boolean => {
+      const available = availability();
+      const outcome = available.accepted ? budget.chargePromptOutcome(tokens) : available;
+      recordPrompt(tokens, outcome);
+      return outcome.accepted;
+    },
+    chargeDelegatedRead: (id, key) => allowed() && budget.chargeDelegatedRead(id, key),
+    canChargeDelegatedRead: () => allowed() && budget.canChargeDelegatedRead(),
     ciObservationRequired: (): boolean => {
-      const required = allowed() && budget.ciObservationRequired?.() === true;
+      const required = allowed() && budget.ciObservationRequired();
       if (required) recordObservationRequired();
       return required;
     },
@@ -248,7 +282,7 @@ function gateBudget(
     // #3384 wave-3 W3-8 "needs": forwards the controller's real exhaustion read through the same
     // `allowed()` gate every other budget effect already goes through, so an authority-denied run
     // never reports "exhausted" for a budget it was never entitled to read in the first place.
-    repairBudgetExhausted: () => allowed() && budget.repairBudgetExhausted?.() === true,
+    repairBudgetExhausted: () => allowed() && budget.repairBudgetExhausted(),
   };
 }
 function knownScope(

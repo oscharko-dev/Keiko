@@ -23,7 +23,7 @@ import {
   type DevLaneOpenCodeDiscovery,
   type DevLaneOpenCodeTarget,
 } from "./devLanePortableCodingRuntime.js";
-import { OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256 } from "./opencodeProtocolSurface.js";
+import { OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 } from "./opencodeProtocolSurface.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
 
 const roots: string[] = [];
@@ -78,7 +78,7 @@ describe("dev-lane OpenCode discovery", () => {
     expect(runtime.installRoot).toBe(join(staged.paths.stagedTargetRoot, "opencode-compatible"));
     expect(runtime.sidecar.summary).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "1.18.30",
+      upstreamVersion: "2.0.10",
       platformTarget: "macos-arm64",
       status: "verified",
     });
@@ -88,7 +88,9 @@ describe("dev-lane OpenCode discovery", () => {
       qualificationVerified: false,
       executableTreeDigestVerified: true,
     });
-    expect(runtime.sidecar.protocolHandshakeDigest).toBe(OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256);
+    expect(runtime.sidecar.protocolHandshakeDigest).toBe(
+      OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+    );
     expect(runtime.qualification).toMatchObject({
       platform: "darwin",
       arch: "arm64",

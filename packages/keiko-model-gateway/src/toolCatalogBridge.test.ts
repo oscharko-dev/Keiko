@@ -591,7 +591,7 @@ describe("representable gateway schemas", () => {
   });
 });
 
-describe("native extensions (question/todowrite, #3414 follow-up)", () => {
+describe("native extensions (OpenCode V2 question, #3414 follow-up)", () => {
   it("merges a bound advertisement's native extensions into the model-visible tool list", () => {
     const bridge = createGatewayToolCatalogBridge(
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
@@ -633,12 +633,12 @@ describe("native extensions (question/todowrite, #3414 follow-up)", () => {
         },
       },
     );
-    bridge.bind({ id: "call-1", name: "todowrite", arguments: { todos: [] } });
+    bridge.bind({ id: "call-1", name: "question", arguments: { questions: [] } });
     expect(events.map((event) => event.op)).toEqual([
       "gateway.tool-catalog.projected",
       "gateway.tool-catalog.native-passthrough",
     ]);
-    expect(JSON.stringify(events)).not.toContain("todos");
+    expect(JSON.stringify(events)).not.toContain("questions");
     const passthroughPersisted = expectActivityLogProof(
       "gateway.tool-catalog.native-passthrough.emitted-line",
       formatActivityLogProofLine(events[1] ?? {}),
@@ -667,7 +667,7 @@ describe("native extensions (question/todowrite, #3414 follow-up)", () => {
     );
     const oversized = "x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1);
     expect(() =>
-      bridge.bind({ id: "call-1", name: "todowrite", arguments: { todos: [oversized] } }),
+      bridge.bind({ id: "call-1", name: "question", arguments: { questions: [oversized] } }),
     ).toThrow(GatewayToolCatalogError);
   });
 
@@ -704,7 +704,7 @@ describe("native extensions (question/todowrite, #3414 follow-up)", () => {
       (): number => NOW,
       sink,
     );
-    bridge.bind({ id: "call-1", name: "todowrite", arguments: { todos: [] } });
+    bridge.bind({ id: "call-1", name: "question", arguments: { questions: [] } });
     const passthrough = events.find(
       (event) => event.op === "gateway.tool-catalog.native-passthrough",
     );
@@ -811,13 +811,13 @@ describe("provider invocation batch bounds", () => {
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       (): number => NOW,
     );
-    const bigTodo = "x".repeat(65_000); // under maxStringBytes (65_536) on its own
+    const bigQuestion = "x".repeat(65_000); // under maxStringBytes (65_536) on its own
     const calls = Array.from({ length: 5 }, (_unused, index) => ({
       id: `call-${String(index)}`,
-      name: "todowrite",
-      arguments: { todos: [bigTodo] },
+      name: "question",
+      arguments: { questions: [bigQuestion] },
     }));
-    expect(bigTodo.length * calls.length).toBeGreaterThan(TOOL_CATALOG_LIMITS.maxArgumentBytes);
+    expect(bigQuestion.length * calls.length).toBeGreaterThan(TOOL_CATALOG_LIMITS.maxArgumentBytes);
     const bound = bridge.bindCalls(calls);
     expect(bound.map((call) => call.id)).toEqual(calls.map((call) => call.id));
   });
@@ -830,9 +830,9 @@ describe("provider invocation batch bounds", () => {
     const tooBig = "x".repeat(65_000);
     const calls = Array.from({ length: 5 }, (_unused, index) => ({
       id: `call-${String(index)}`,
-      name: "todowrite",
+      name: "question",
       // Five strings well past maxArgumentBytes on their own -- this ONE call must still fail.
-      arguments: { todos: [tooBig, tooBig, tooBig, tooBig, tooBig] },
+      arguments: { questions: [tooBig, tooBig, tooBig, tooBig, tooBig] },
     }));
     expect(() => bridge.bindCalls(calls)).toThrow(GatewayToolCatalogError);
   });
@@ -842,7 +842,7 @@ describe("provider invocation batch bounds", () => {
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       (): number => NOW,
     );
-    const calls = [{ id: "call-0", name: "todowrite", arguments: { todos: [] } }];
+    const calls = [{ id: "call-0", name: "question", arguments: { questions: [] } }];
     calls.length = 2; // a hole at index 1: no own property, but `.length` reports 2
     expect(() => bridge.bindCalls(calls)).toThrow(
       expect.objectContaining({ reason: "invalid-arguments" }),
@@ -860,7 +860,7 @@ describe("provider invocation batch bounds", () => {
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       (): number => NOW,
     );
-    const calls = [{ id: "call-0", name: "todowrite", arguments: { todos: [] } }];
+    const calls = [{ id: "call-0", name: "question", arguments: { questions: [] } }];
     calls.length = 2; // a hole at index 1
     (calls as unknown as Record<string, unknown>).extra = "x"; // keeps ownKeys.length === length+1
     expect(() => bridge.bindCalls(calls)).toThrow(

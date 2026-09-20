@@ -475,7 +475,7 @@ function sidecarAdapterCompatibility(spec) {
   );
   return {
     adapterName: requiredSpecLiteral(adapter, "adapterName", "keiko-coding-sidecar"),
-    adapterVersion: requiredSpecLiteral(adapter, "adapterVersion", "1"),
+    adapterVersion: requiredSpecLiteral(adapter, "adapterVersion", "2"),
     transport: requiredSpecLiteral(adapter, "transport", "http-sse"),
   };
 }
@@ -548,10 +548,10 @@ function sidecarArchive(spec, upstream, platformTarget) {
   requireExactRecordKeys(archive, ["platformTarget", "url", "sizeBytes", "sha256"], "archive");
   requiredSpecLiteral(archive, "platformTarget", platformTarget);
   const url = requiredSpecHttpsUrl(archive, "url");
-  const parsed = new URL(url);
-  const expectedPrefix = `/${upstream.owner}/${upstream.repository}/releases/download/${upstream.tag}/`;
-  if (parsed.hostname !== "github.com" || !parsed.pathname.startsWith(expectedPrefix)) {
-    fail("sidecar archive URL must bind the approved upstream repository and tag");
+  const target = portableTargetByName(platformTarget);
+  const expectedUrl = `https://opencode.ai/files/bin/${upstream.version}/${target?.sidecarArchiveName}`;
+  if (url !== expectedUrl) {
+    fail("sidecar archive URL must bind the OpenCode release version and platform archive");
   }
   return {
     platformTarget,

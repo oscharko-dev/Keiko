@@ -106,9 +106,13 @@ Initial identity reservations (all version 1):
 | Editor | `keiko.editor.sessions`, `keiko.editor.snapshot`, `keiko.editor.navigate`, `keiko.editor.symbol`, `keiko.editor.search`, `keiko.editor.git`, `keiko.editor.edit`, `keiko.editor.changeset`, `keiko.editor.verify` | Existing nine aliases in versioned Editor profile; active subset is separately governed |
 
 Different read contracts remain different identities; a profile cannot disguise a lossy transform as
-equivalence. OpenCode-native `question` and `todowrite` are exhaustively declared native extensions,
-not Keiko tools or compatibility exceptions. Arbitrary sidecar tool definitions remain transport
-data and cannot register a descriptor, handler, effect or authority. Codex remains disabled.
+equivalence. OpenCode V2 native `question` is an exhaustively declared native extension,
+not a Keiko tool or compatibility exception. The clean-cut V2 integration (#3561) removes V1
+`todowrite` from the runtime catalog, history projection, and controlled journey tool inventory;
+planning stays in the agent conversation rather than an invented replacement tool. Qualification
+still requires the complete governed read, edit, verification, and delivery inventory and its
+real-model evidence. Arbitrary sidecar tool definitions remain transport data and cannot register
+a descriptor, handler, effect or authority. Codex remains disabled.
 
 ### D3 — Digest inputs and compatibility
 
@@ -138,6 +142,13 @@ checkpoint may end it earlier. Unknown, expired, downgraded or stale work cannot
 Unsupported persisted bindings yield `invalid / recovery-required`; only a human-selected restart
 creates a new binding/invocation. Rollback restores an exact compatible deployed artifact; it does
 not reactivate expired aliases or replay uncertain effects.
+
+The clean-cut OpenCode V2 profile uses closed, all-required custom-tool input objects. The
+canonical descriptor declares these constraints, including nested objects; compilation preserves
+them exactly and rejects open boundaries or optional arguments that this profile cannot represent.
+It must not silently close a V1 open-object descriptor. The existing catalog/projection digests in
+bound and offered activity-log evidence identify this changed descriptor set; handlers and authority
+checks remain unchanged.
 
 ### D4 — Offer, dispatch and bounded data
 

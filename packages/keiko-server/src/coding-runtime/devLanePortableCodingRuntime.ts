@@ -7,8 +7,8 @@ import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contract
 import { productionUpdateFacts } from "../update-install-mode.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
 } from "./opencodeProtocolSurface.js";
 import type { SecureWorkspaceTextReadArtifact } from "./secureWorkspaceTextReadArtifact.js";
 
@@ -323,8 +323,8 @@ function verifiedPayload(
       sbomEvidencePath: sbomPath,
       sbomEvidenceSha256,
       protocolSchemaRawSha256: approved.protocolSchemaSha256,
-      protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-      protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+      protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+      protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
       availability: devLaneAvailability(),
       summary: devLaneSummary(target, approved, payloadRoot, join(installRoot, executablePath)),
     },

@@ -612,7 +612,6 @@ const FIXED_OPENCODE_ARGS = Object.freeze([
   "127.0.0.1",
   "--port",
   "0",
-  "--no-mdns",
 ] as const);
 const FIXED_CODEX_ARGS = Object.freeze([] as const);
 const CODEX_STATE_DIRECTORY = "coding-runtime/codex";

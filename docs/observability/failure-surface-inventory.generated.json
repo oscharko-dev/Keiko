@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "944cb80041aa2b6efb951282a5f7d88904896adf7a62b8bc7a1d048dd5e2bff8"
+    "catalogDigest": "7492093735fb159a51024a6fcf9fa898e261e5546a37571e8157aed7fa3033c9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 443,
-    "proofCount": 451,
-    "resolvedProofCount": 451,
-    "failureClassCount": 315,
+    "operationCount": 447,
+    "proofCount": 455,
+    "resolvedProofCount": 455,
+    "failureClassCount": 316,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -247,8 +247,11 @@
         "coding-runtime.editor-mutation.settled",
         "coding-runtime.event.dropped",
         "coding-runtime.follow-up.dispatch-failed",
+        "coding-runtime.history",
+        "coding-runtime.history-projection",
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
+        "coding-runtime.native-question.observed",
         "coding-runtime.operation.refused",
         "coding-runtime.operator-decision",
         "coding-runtime.project-memory.context",
@@ -420,6 +423,7 @@
         "editor.producer-turn.completed",
         "editor.verification.dependencies",
         "editor.verification.execute",
+        "editor.verification.workspace",
         "editor.workspace-watch.authority-revoked",
         "git-change.chat.blocked",
         "git-change.chat.connected",
@@ -609,6 +613,7 @@
     }
   ],
   "failureClassScenarios": {
+    "coding-history-persistence": ["tools-workflows.dependency-failure"],
     "activity-log-contract": ["lifecycle-crash.loss"],
     "activity-log-loss": ["lifecycle-crash.loss"],
     "activity-log-persistence": ["lifecycle-crash.loss"],
@@ -1126,11 +1131,20 @@
     "coding-runtime.follow-up.dispatch-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
     ],
+    "coding-runtime.history.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.test.ts"
+    ],
+    "coding-runtime.history-projection.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
+    ],
     "coding-runtime.initial-turn.dispatch-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
     ],
     "coding-runtime.initial-turn.stop-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
+    ],
+    "coding-runtime.native-question.observed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeV2History.test.ts"
     ],
     "coding-runtime.operation.refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeRoutes.test.ts"
@@ -1269,10 +1283,15 @@
       "packages/keiko-server/src/editor/agentProducerRoute.test.ts"
     ],
     "editor.verification.dependencies.emitted-line": [
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
     ],
     "editor.verification.execute.emitted-line": [
       "packages/keiko-server/src/editor/verificationRunner.test.ts"
+    ],
+    "editor.verification.workspace.emitted-line": [
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",
+      "packages/keiko-server/src/run-engine.test.ts"
     ],
     "editor.workspace-watch.authority-revoked.emitted-line": [
       "packages/keiko-server/src/editor/watch/workspaceWatchRoutes.test.ts"
@@ -1500,7 +1519,8 @@
       "packages/keiko-server/src/gitDelivery/ciObservationService.test.ts"
     ],
     "git.ci-repair.budget.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.test.ts",
+      "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.test.ts"
     ],
     "git.commit.draft.completed.emitted-line": [
       "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts"
@@ -1975,7 +1995,9 @@
       "packages/keiko-server/src/observability/server-log.activity-log-proof.test.ts"
     ],
     "server.diagnostic.failure.activity-log-line": [
-      "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts"
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
+      "packages/keiko-server/src/diagnostics-log.activity-log-proof.test.ts",
+      "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts"
     ],
     "server.runtime.shutdown.lifecycle": ["packages/keiko-server/src/deps-activity.test.ts"],
     "speech.stt.language.normalized.emitted-line": [

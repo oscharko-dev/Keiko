@@ -80,6 +80,8 @@ const NODE_VERSION = "24.14.0";
 const STAGE_COMMAND_TIMEOUT_MS = 300_000;
 const VERIFY_SIGNING_SCRIPT = "scripts/verify-portable-runtime-signing.mjs";
 const ROOT_MANIFEST = JSON.parse(readFileSync("package.json", "utf8"));
+const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
+  .sidecarRuntimes[0];
 const ROOT_PACKAGE_VERSION = ROOT_MANIFEST.version;
 const ROOT_RELEASE_TAG = `v${ROOT_PACKAGE_VERSION}`;
 // DERIVED FROM THE PRODUCER, NOT RESTATED (AGENTS.md §7). The three vocabularies below are the
@@ -1376,28 +1378,9 @@ function sidecarRuntimeFor(platformTarget, overrides = {}) {
     approvalSchemaVersion: 2,
     name,
     kind: "coding-runtime",
-    upstream: {
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.18.30",
-      tag: "v1.18.30",
-      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
-    },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      transport: "http-sse",
-    },
-    protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
-      sha256: DIGEST_A,
-      hashAlgorithm: "sha256",
-      hashEncoding: "lowercase-hex",
-      digestInput: "upstream-raw-bytes",
-      transport: "http-sse",
-    },
+    upstream: { ...APPROVED_SIDECAR.upstream },
+    adapterCompatibility: { ...APPROVED_SIDECAR.adapterCompatibility },
+    protocolSchema: { ...APPROVED_SIDECAR.protocolSchema, sha256: DIGEST_A },
     releaseApproval: {
       redistribution: {
         status: "approved",
@@ -1410,12 +1393,12 @@ function sidecarRuntimeFor(platformTarget, overrides = {}) {
     },
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
+      url: APPROVED_SIDECAR.license.url,
       sha256: DIGEST_F,
     },
     archive: {
       platformTarget,
-      url: "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode.zip",
+      url: APPROVED_SIDECAR.archives[platformTarget].url,
       sizeBytes: 123456,
       sha256: DIGEST_B,
     },
@@ -1538,7 +1521,7 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
   const licenseSha256 = digestBuffer(readFileSync(join(sourceRoot, "LICENSE.txt")));
   const archive = {
     platformTarget,
-    url: "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-fixture.zip",
+    url: APPROVED_SIDECAR.archives[platformTarget].url,
     sizeBytes: 123456,
     sha256: DIGEST_B,
   };
@@ -1547,14 +1530,18 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     `${JSON.stringify({
       bomFormat: "CycloneDX",
       metadata: {
-        component: { type: "application", name: "opencode-compatible", version: "1.18.30" },
+        component: {
+          type: "application",
+          name: "opencode-compatible",
+          version: APPROVED_SIDECAR.upstream.version,
+        },
       },
       components: [
         {
           type: "application",
           name: "opencode",
-          version: "1.18.30",
-          purl: "pkg:github/anomalyco/opencode@v1.18.30",
+          version: APPROVED_SIDECAR.upstream.version,
+          purl: `pkg:github/anomalyco/opencode@${APPROVED_SIDECAR.upstream.tag}`,
           licenses: [{ license: { id: "MIT" } }],
           hashes: [{ alg: "SHA-256", content: executableSha256 }],
           externalReferences: [
@@ -1572,28 +1559,9 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     approvalSchemaVersion: 2,
     name: "opencode-compatible",
     kind: "coding-runtime",
-    upstream: {
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.18.30",
-      tag: "v1.18.30",
-      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
-    },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      transport: "http-sse",
-    },
-    protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
-      sha256: DIGEST_A,
-      hashAlgorithm: "sha256",
-      hashEncoding: "lowercase-hex",
-      digestInput: "upstream-raw-bytes",
-      transport: "http-sse",
-    },
+    upstream: { ...APPROVED_SIDECAR.upstream },
+    adapterCompatibility: { ...APPROVED_SIDECAR.adapterCompatibility },
+    protocolSchema: { ...APPROVED_SIDECAR.protocolSchema, sha256: DIGEST_A },
     releaseApproval: {
       redistribution: {
         status: "approved",
@@ -1606,7 +1574,7 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     },
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
+      url: APPROVED_SIDECAR.license.url,
       sha256: licenseSha256,
     },
     archive,
@@ -2044,6 +2012,57 @@ describe("validatePortableManifest", () => {
 
     const failures = validatePortableManifest(candidate).join("\n");
     expect(failures).toContain("sidecarRuntimes[0].signing: is required");
+  });
+
+  it.each([
+    [
+      "adapter-v1",
+      (runtime) => {
+        runtime.adapterCompatibility = { ...runtime.adapterCompatibility, adapterVersion: "1" };
+      },
+    ],
+    [
+      "foreign-host",
+      (runtime) => {
+        runtime.archive.url = runtime.archive.url.replace("opencode.ai", "example.com");
+      },
+    ],
+    [
+      "wrong-target",
+      (runtime) => {
+        runtime.archive.url = APPROVED_SIDECAR.archives["linux-x64"].url;
+      },
+    ],
+    [
+      "query",
+      (runtime) => {
+        runtime.archive.url += "?download=1";
+      },
+    ],
+    [
+      "path-traversal",
+      (runtime) => {
+        runtime.upstream = { ...runtime.upstream, version: "../2.0.10", tag: "v../2.0.10" };
+        runtime.archive.url = "https://opencode.ai/files/bin/../2.0.10/opencode-windows-x64.zip";
+      },
+    ],
+    [
+      "tag-drift",
+      (runtime) => {
+        runtime.upstream = { ...runtime.upstream, tag: "v2.0.0" };
+      },
+    ],
+  ])("rejects an invalid OpenCode V2 manifest identity: %s", (_name, mutate) => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    expect(validatePortableManifest(candidate)).toEqual([]);
+    mutate(candidate.sidecarRuntimes[0]);
+    syncReviewedBinding(candidate);
+    expect(
+      validatePortableManifest(candidate).some((failure) =>
+        failure.startsWith("sidecarRuntimes[0]."),
+      ),
+    ).toBe(true);
   });
 
   it("rejects sidecar path traversal and release-impact binding drift", () => {
@@ -3458,8 +3477,8 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       upstream: {
         owner: "anomalyco",
         repository: "opencode",
-        version: "1.18.30",
-        commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
+        version: APPROVED_SIDECAR.upstream.version,
+        commit: APPROVED_SIDECAR.upstream.commit,
       },
       protocolSchema: {
         hashAlgorithm: "sha256",

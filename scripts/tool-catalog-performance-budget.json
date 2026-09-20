@@ -2,11 +2,15 @@
   "schemaVersion": 2,
   "target": "tool-catalog",
   "policy": "reviewed-non-widening-ceilings-v1",
-  "calibrationSha256": "e4f176d9cae545870268568f4a39614194e552ab4c23286f728d7d39a0f81901",
+  "calibrationSha256": "6748ca8899bf47d81c1c608dcea5c8ce34dda299f95aaa21e5030289268f2133",
   "ceilingP95Ms": {
     "legacy-native-6-tool": {
       "coldCompileMs": 10.366624999999658,
       "lookupBatchMs": 4.114791000000196
+    },
+    "managed-opencode-v2": {
+      "coldCompileMs": 31.994877000000088,
+      "lookupBatchMs": 2.601790999999139
     },
     "synthetic-300-tool": {
       "coldCompileMs": 138.49695699999847,
@@ -17,6 +21,10 @@
     "legacy-native-6-tool": {
       "coldCompileMs": 10.366624999999658,
       "lookupBatchMs": 4.114791000000196
+    },
+    "managed-opencode-v2": {
+      "coldCompileMs": 31.994877000000088,
+      "lookupBatchMs": 2.601790999999139
     },
     "synthetic-300-tool": {
       "coldCompileMs": 138.49695699999847,

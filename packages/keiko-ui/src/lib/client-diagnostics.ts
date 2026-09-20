@@ -49,6 +49,7 @@ import {
   type ClientVoiceCaptureReason,
   type ClientVoiceCaptureError,
   type ClientDiagnosticWorkspaceTrustBinding,
+  type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -116,6 +117,8 @@ export interface ClientDiagnosticMeta {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly codingIssueOutcome?: "multiple-issues" | undefined;
+  readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
   readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
   readonly sessionRepairReport?: ClientDiagnosticSessionRepairReport | undefined;

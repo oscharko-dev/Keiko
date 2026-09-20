@@ -909,3 +909,59 @@ it("preserves the closed native DOMException class for browser error events", ()
     "NotReadableError",
   );
 });
+
+describe("coding history scope diagnostic contract", () => {
+  const scope = {
+    reason: "repository-mismatch",
+    taskId: "chat-one",
+    requestedScopeId: "scope-one",
+    currentScopeId: "scope-two",
+  };
+  const request = (codingHistoryScope: unknown): unknown => ({
+    message: "history scope outcome",
+    clientTs: "2026-09-20T00:00:00.000Z",
+    correlationId: "ui_history-load-0001",
+    codingHistoryScope,
+  });
+  it("accepts opaque identities and optional workspace references", () => {
+    expect(isClientDiagnosticIngestRequest(request(scope))).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest(
+        request({
+          ...scope,
+          requestedWorkspaceId: "ws-one",
+          currentWorkspaceId: "ws-two",
+          targetWorkspaceId: "ws-target",
+        }),
+      ),
+    ).toBe(true);
+  });
+  it.each([
+    null,
+    { ...scope, reason: "unknown" },
+    { ...scope, taskId: undefined },
+    { ...scope, requestedScopeId: "/private/repo" },
+    { ...scope, currentWorkspaceId: "secret key" },
+    { ...scope, content: "private" },
+  ])("rejects invalid scope data: %s", (invalid) => {
+    expect(isClientDiagnosticIngestRequest(request(invalid))).toBe(false);
+  });
+});
+
+describe("coding issue diagnostic outcome", () => {
+  it.each([
+    [undefined, true],
+    ["multiple-issues", true],
+    ["unknown", false],
+    ["https://github.com/private/repo/issues/1", false],
+    [null, false],
+  ])("validates the closed outcome %s", (codingIssueOutcome, expected) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        message: "issue outcome",
+        clientTs: "2026-09-20T00:00:00.000Z",
+        codingIssueOutcome,
+      }),
+    ).toBe(expected);
+  });
+});

@@ -2973,12 +2973,6 @@
     },
     {
       "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
-      "owner": "createQuestionRunPort",
-      "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
       "owner": "handshake",
       "kind": "unregistered-catch",
       "count": 1
@@ -3058,12 +3052,6 @@
     {
       "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts",
       "owner": "replaceRuntimeTask",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimeQuestionPort.ts",
-      "owner": "listRuntimeQuestions",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -8390,12 +8378,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/lib/coding-workbench-provider-api.ts",
-      "owner": "recoverUnverifiedGatewayProfile",
-      "kind": "unregistered-catch",
-      "count": 3
-    },
-    {
       "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
       "owner": "execute",
       "kind": "unregistered-catch",
@@ -8541,19 +8523,7 @@
     },
     {
       "path": "packages/keiko-verification/src/dependencies.ts",
-      "owner": "installBehindProxy",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-verification/src/dependencies.ts",
       "owner": "parsedJsonObject",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-verification/src/dependencies.ts",
-      "owner": "runDependencyBootstrap",
       "kind": "unregistered-catch",
       "count": 1
     },

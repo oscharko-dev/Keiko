@@ -15,7 +15,7 @@
 // visible source line (mirroring editor-baseline-1377.spec.ts's F12/Shift+F12 verification pattern) —
 // not merely that some editor surface remained visible, which would pass even if the jump were broken.
 
-import { readFileSync, symlinkSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
@@ -92,11 +92,13 @@ function workspace(): { readonly root: string } {
     { path: SOURCE, content: BROKEN_SOURCE },
     { path: FAILING_TEST, content: FAILING_TEST_BODY },
   ]);
-  // `npx vitest` resolves from the target workspace, not from Playwright's process PATH. Link the
-  // repository's lockfile-pinned installation into the disposable fixture so the real sandboxed run
-  // is deterministic and never attempts a registry download. The sandbox inherits the host
-  // filesystem policy for verification and separately enforces network:none.
-  symlinkSync(join(process.cwd(), "node_modules"), join(fixture.root, "node_modules"), "dir");
+  // The fixture deliberately ships NO node_modules: the orchestrator's own dependency bootstrap
+  // (ADR-0043 D17) installs the two devDependencies declared above, confined to the approved registry
+  // by its egress proxy, and the scripts then run against that tree with network:none. Seeding the
+  // repository's own installation instead — as a symlink or a copy — cannot work: the install
+  // directory check fails closed on a node_modules whose real path leaves the workspace, and a copied
+  // tree carries workspace packages that `installedTreeRefusal` cannot prove came from the registry,
+  // which refuses the bootstrap after an otherwise successful install.
   return fixture;
 }
 

@@ -7,6 +7,7 @@ import { PORTABLE_TARGET_NAMES, portableTargetByName } from "./portable-runtime.
 export const PORTABLE_RUNTIME_APPROVALS_FILE = "portable-runtime-approvals.json";
 export const APPROVED_NODE_ARCHIVE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);
 export const APPROVED_SIDECAR_ARCHIVE_HOSTS = Object.freeze([
+  "opencode.ai",
   "github.com",
   "release-assets.githubusercontent.com",
   "objects.githubusercontent.com",
@@ -26,11 +27,11 @@ const OPENCODE_PIN = Object.freeze({
   owner: "anomalyco",
   repository: "opencode",
   name: "opencode",
-  version: "1.18.30",
-  tag: "v1.18.30",
-  commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
-  schemaPath: "packages/sdk/openapi.json",
-  schemaSha256: "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
+  version: "2.0.10",
+  tag: "v2.0.10",
+  commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
+  schemaPath: "packages/protocol/openapi.json",
+  schemaSha256: "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
 });
 
 class ApprovalsError extends Error {}
@@ -232,7 +233,7 @@ function validateAdapter(adapter, context) {
       "keiko-coding-sidecar",
       `${context}.adapterName`,
     ),
-    adapterVersion: validateLiteral(adapter.adapterVersion, "1", `${context}.adapterVersion`),
+    adapterVersion: validateLiteral(adapter.adapterVersion, "2", `${context}.adapterVersion`),
     transport: validateLiteral(adapter.transport, "http-sse", `${context}.transport`),
   };
 }
@@ -277,7 +278,7 @@ function validateSidecarArchives(rawArchives, context) {
     const asset = portableTargetByName(target).sidecarArchiveName;
     validateLiteral(
       archives[target].url,
-      `https://github.com/anomalyco/opencode/releases/download/${OPENCODE_PIN.tag}/${asset}`,
+      `https://opencode.ai/files/bin/${OPENCODE_PIN.version}/${asset}`,
       `${context}.${target}.url`,
     );
   }

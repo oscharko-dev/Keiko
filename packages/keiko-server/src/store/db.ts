@@ -1,8 +1,11 @@
+import { withImmediateTransaction } from "./transaction.js";
+import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
 // `node:sqlite` DatabaseSync drives both factories; the node adapter adds directory creation,
 // 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
 
 import { DatabaseSync } from "node:sqlite";
+import { createCodingHistoryStore } from "./codingHistory.js";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -304,16 +307,11 @@ function createProjectRecord(
   const normalized = validateProjectPath(path, { mustExist: true });
   const resolvedName = deriveProjectName(name, normalized);
   const now = options.now();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return withImmediateTransaction(db, () => {
     const project = sqlUpsertProject(db, normalized, resolvedName, name !== undefined, now);
     ensureProjectWorkspaceManifest(db, project.path, project.name, now);
-    db.exec("COMMIT");
     return project;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 function reconnectProjectRecord(
@@ -398,18 +396,6 @@ function clientTurnContentMatches(
   return turn.contentDigest === undefined
     ? turn.userMessage?.content === legacyContent
     : turn.contentDigest === expectedDigest;
-}
-
-function withImmediateTransaction<T>(db: DatabaseSync, operation: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = operation();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
 }
 
 function existingTurnAdmission(
@@ -672,7 +658,7 @@ function createMessageBatch(
 // eslint-disable-next-line max-lines-per-function
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
-  return {
+  const store: UiStore = {
     listProjects: () => sqlListProjects(db),
     createProject: (path: string, name?: string): Project =>
       createProjectRecord(db, options, path, name),
@@ -820,6 +806,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       db.close();
     },
   };
+  return isolateCodingHistory(store, createCodingHistoryStore(db, store, options.now));
 }
 
 function assertQuickCheckOk(db: DatabaseSync): void {
@@ -883,6 +870,9 @@ export const UI_STORE_FINGERPRINT_TABLES = [
   "relationship_audit_entries",
   "task_workspace_instances",
   "task_workspace_active_pointer",
+  "coding_history_tasks",
+  "coding_history_runs",
+  "coding_history_message_bindings",
   "coding_runtime_snapshots",
   "coding_runtime_ci_repair_budgets",
   "git_journey_outcomes",

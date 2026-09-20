@@ -1,3 +1,4 @@
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingWorkbenchBudget } from "@oscharko-dev/keiko-contracts";
 
 export type CiRepairLimits = Pick<
@@ -126,4 +127,20 @@ export function validCiRepairLimits(value: CiRepairLimits): boolean {
       (limit) => ciRepairCount(limit) && limit > 0,
     )
   );
+}
+
+export function ciRepairBudgetErrorKind(reason: CiRepairBudgetBlockReason): ActivityLogErrorKind {
+  if (reason === "authority-denied") return "authority-denied";
+  if (reason === "deadline-exhausted") return "timeout";
+  if (reason === "storage-unavailable") return "unavailable";
+  if (reason === "invalid-binding" || reason === "invalid-input") return "validation-failed";
+  if (
+    reason === "tool-budget-exhausted" ||
+    reason === "prompt-budget-exhausted" ||
+    reason === "attempt-budget-exhausted" ||
+    reason === "storage-capacity"
+  ) {
+    return "rate-limited";
+  }
+  return "conflict";
 }

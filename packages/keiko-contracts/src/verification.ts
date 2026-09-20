@@ -87,6 +87,9 @@ export interface VerificationDependencyEgress {
 
 /** Body-free record of the dependency bootstrap on a report: never output, never a path. */
 export interface VerificationDependencySummary {
+  /** Private process receipt; workspace files never establish completion provenance. */
+  readonly completionReceipt?: "missing" | "changed" | "current";
+  readonly completionRecorded?: boolean;
   readonly state: VerificationDependencyState;
   readonly lockfile: VerificationLockfileState;
   readonly exitCode: number | null;
@@ -539,12 +542,32 @@ function isVerificationDependencyEgress(value: unknown): value is VerificationDe
   );
 }
 
+const COMPLETION_RECEIPTS: ReadonlySet<unknown> = new Set(["missing", "changed", "current"]);
+
+function hasDependencyCompletion(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.completionReceipt === undefined && value.completionRecorded === undefined) return true;
+  return (
+    COMPLETION_RECEIPTS.has(value.completionReceipt) &&
+    typeof value.completionRecorded === "boolean"
+  );
+}
+
 export function isVerificationDependencySummary(
   value: unknown,
 ): value is VerificationDependencySummary {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["state", "lockfile", "exitCode", "durationMs", "detail", "egress"]) &&
+    hasOnlyKeys(value, [
+      "state",
+      "lockfile",
+      "exitCode",
+      "durationMs",
+      "detail",
+      "egress",
+      "completionReceipt",
+      "completionRecorded",
+    ]) &&
+    hasDependencyCompletion(value) &&
     hasDependencySummaryStates(value) &&
     hasDependencySummaryExecution(value) &&
     (value.egress === undefined || isVerificationDependencyEgress(value.egress))

@@ -17,9 +17,11 @@ const CALIBRATION_FILES = [
   "scripts/tool-catalog-performance-budget.json",
 ];
 
-function migrationCommandFor({ recalibrate, rebindCaseIdentity }) {
-  if (recalibrate && rebindCaseIdentity)
+function migrationCommandFor({ recalibrate, rebindCaseIdentity, extendManagedRuntime }) {
+  if ([recalibrate, rebindCaseIdentity, extendManagedRuntime].filter(Boolean).length > 1)
     throw new TypeError("choose one tool-catalog performance evidence migration");
+  if (extendManagedRuntime)
+    return "node scripts/check-tool-catalog-performance.mjs --extend-managed-runtime";
   if (rebindCaseIdentity)
     return "node scripts/check-tool-catalog-performance.mjs --rebind-case-identity";
   if (recalibrate) return "node scripts/check-tool-catalog-performance.mjs --recalibrate";
@@ -43,7 +45,12 @@ function containerScript(options) {
 
 export function regenerateArguments(
   clone,
-  { image = TOOL_CATALOG_REFERENCE_IMAGE, recalibrate = false, rebindCaseIdentity = false } = {},
+  {
+    image = TOOL_CATALOG_REFERENCE_IMAGE,
+    recalibrate = false,
+    rebindCaseIdentity = false,
+    extendManagedRuntime = false,
+  } = {},
 ) {
   return [
     "run",
@@ -61,7 +68,7 @@ export function regenerateArguments(
     image,
     "bash",
     "-lc",
-    containerScript({ recalibrate, rebindCaseIdentity }),
+    containerScript({ recalibrate, rebindCaseIdentity, extendManagedRuntime }),
   ];
 }
 
@@ -84,29 +91,48 @@ function defaultDependencies() {
 }
 
 export function regenerateToolCatalogPerformanceEvidence(options = {}) {
-  const { recalibrate = false, rebindCaseIdentity = false } = options;
+  const { recalibrate, rebindCaseIdentity, extendManagedRuntime } = {
+    recalibrate: false,
+    rebindCaseIdentity: false,
+    extendManagedRuntime: false,
+    ...options,
+  };
   const deps = { ...defaultDependencies(), ...options };
   if (deps.status() !== "") {
     throw new TypeError("tool-catalog measurement requires a clean working tree");
   }
   const clone = join(deps.makeWorkdir(), "repo.noindex");
   deps.run("git", ["clone", "--no-local", "--quiet", repoRoot, clone]);
-  deps.run("docker", regenerateArguments(clone, { recalibrate, rebindCaseIdentity }));
+  deps.run(
+    "docker",
+    regenerateArguments(clone, { recalibrate, rebindCaseIdentity, extendManagedRuntime }),
+  );
   const files =
-    recalibrate || rebindCaseIdentity
+    recalibrate || rebindCaseIdentity || extendManagedRuntime
       ? [...CALIBRATION_FILES, MEASUREMENT_FILE]
       : [MEASUREMENT_FILE];
   for (const file of files) deps.copyFile(join(clone, file), join(repoRoot, file));
-  return { clone, files, recalibrate, rebindCaseIdentity };
+  return {
+    clone,
+    files,
+    recalibrate,
+    rebindCaseIdentity,
+    ...(extendManagedRuntime ? { extendManagedRuntime } : {}),
+  };
 }
 
 export function regenerationOptions(arguments_) {
-  const acceptedArguments = new Set(["--recalibrate", "--rebind-case-identity"]);
+  const acceptedArguments = new Set([
+    "--recalibrate",
+    "--rebind-case-identity",
+    "--extend-managed-runtime",
+  ]);
   const unknown = arguments_.filter((argument) => !acceptedArguments.has(argument));
   if (unknown.length > 0) throw new TypeError(`unknown argument: ${unknown.join(", ")}`);
   return {
     recalibrate: arguments_.includes("--recalibrate"),
     rebindCaseIdentity: arguments_.includes("--rebind-case-identity"),
+    ...(arguments_.includes("--extend-managed-runtime") ? { extendManagedRuntime: true } : {}),
   };
 }
 

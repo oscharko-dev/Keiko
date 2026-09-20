@@ -14,6 +14,10 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { DraftDeliveryDependencies } from "../gitDelivery/draftDeliveryTypes.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { redactLogFields } from "../observability/log-redaction.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { createCodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessStore.js";
 import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
 import type {
@@ -175,6 +179,7 @@ function fixture(
   options: {
     readonly predecessorReadiness?: ReadinessSnapshot;
     readonly seedExhaustedBudget?: boolean;
+    readonly starting?: boolean;
   } = {},
 ): {
   readonly snapshots: CodingRuntimeSnapshotStore;
@@ -187,6 +192,11 @@ function fixture(
   const db = new DatabaseSync(":memory:");
   databases.push(db);
   const snapshots = createDraftRun(db);
+  if (options.starting)
+    db.prepare("UPDATE coding_runtime_snapshots SET state = ? WHERE run_id = ?").run(
+      "starting",
+      "run-1",
+    );
   const initial = snapshots.get("run-1");
   if (initial?.draftDelivery === undefined) throw new Error("Missing initial draft");
   if (options.predecessorReadiness !== undefined) {
@@ -272,6 +282,80 @@ const editRequest = {
   idempotencyKey: "edit-next",
 } as const;
 describe("production CI repair accounting availability", () => {
+  it("admits a model prompt while the runtime authority is live and the snapshot is starting", () => {
+    const test = fixture(false, { seedExhaustedBudget: false, starting: true });
+    expect(test.snapshots.get("run-1")?.state).toBe("starting");
+    const budget = createProductionCiRepairBudget(test.deps, test.verified, test.current);
+    expect(budget?.canChargePrompt(1)).toBe(true);
+    expect(budget?.chargePrompt(1)).toBe(true);
+    expect(test.events.filter((event) => event.extra?.phase === "prompt-admission")).toMatchObject([
+      {
+        op: "git.ci-repair.budget",
+        extra: {
+          phase: "prompt-admission",
+          status: "available",
+          requestedPromptTokenCount: 1,
+          runId: "run-1",
+        },
+      },
+    ]);
+    const event = test.events.find((entry) => entry.extra?.phase === "prompt-admission");
+    if (event === undefined) throw new Error("Missing prompt admission evidence");
+    const line = formatActivityLogProofLine(event);
+    const persisted: unknown = JSON.parse(line);
+    expect(persisted).toMatchObject({
+      op: "git.ci-repair.budget",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      runId: "run-1",
+      phase: "prompt-admission",
+      requestedPromptTokenCount: 1,
+      status: "available",
+    });
+  });
+  it.each(["prompt-budget-exhausted", "authority-denied", "storage-unavailable"] as const)(
+    "records the exact %s refusal after a successful prompt precheck",
+    (reason) => {
+      const test = fixture(false, { starting: true });
+      let authorized = true;
+      const current = { ...test.current, stillAuthorized: (): boolean => authorized };
+      const deps = {
+        ...test.deps,
+        snapshots: { ...test.snapshots, ciRepairBudget: test.ciRepairBudget },
+      };
+      const budget = createProductionCiRepairBudget(deps, test.verified, current);
+      expect(budget?.canChargePrompt(500)).toBe(true);
+      if (reason === "prompt-budget-exhausted") expect(budget?.chargePrompt(600)).toBe(true);
+      else if (reason === "authority-denied") authorized = false;
+      else {
+        const db = databases.at(-1);
+        if (db === undefined) throw new Error("Missing budget database");
+        db.exec(
+          "CREATE TEMP TRIGGER reject_budget_charge BEFORE UPDATE ON coding_runtime_ci_repair_budgets BEGIN SELECT RAISE(ABORT, 'PRIVATE_BUDGET_WRITE'); END",
+        );
+      }
+      expect(budget?.chargePrompt(500)).toBe(false);
+      const event = test.events.filter((entry) => entry.extra?.phase === "prompt-admission").at(-1);
+      if (event === undefined) throw new Error("Missing refused prompt evidence");
+      const line = formatActivityLogProofLine(event);
+      expect(expectActivityLogProof("git.ci-repair.budget.emitted-line", line)).toMatchObject({
+        op: "git.ci-repair.budget",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        runId: "run-1",
+        phase: "prompt-admission",
+        status: "blocked",
+        reason,
+        requestedPromptTokenCount: 500,
+        errorKind:
+          reason === "authority-denied"
+            ? "authority-denied"
+            : reason === "storage-unavailable"
+              ? "unavailable"
+              : "rate-limited",
+      });
+      expect(line).not.toContain("PRIVATE_");
+    },
+  );
+
   it.each([
     [false, "ciRepairBudget"],
     [true, "ciRepairBudget"],

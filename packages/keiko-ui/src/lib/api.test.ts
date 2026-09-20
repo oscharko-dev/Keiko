@@ -3290,6 +3290,7 @@ describe("Coding Workbench issue intake API (#3385)", () => {
     const result = await previewCodingWorkbenchIssue(
       { repositoryPath: "/repos/keiko", issueRef: "#3385" },
       controller.signal,
+      "ui_issue-preview-0001",
     );
 
     expect(result).toEqual(previewResponse());
@@ -3301,6 +3302,9 @@ describe("Coding Workbench issue intake API (#3385)", () => {
       repositoryPath: "/repos/keiko",
       issueRef: "#3385",
     });
+    expect((init.headers as Record<string, string>)["X-Keiko-Correlation-Id"]).toBe(
+      "ui_issue-preview-0001",
+    );
     expect(init.signal).toBeInstanceOf(AbortSignal);
     expect((init.headers as Record<string, string>)["X-Keiko-CSRF"]).toBe("1");
   });

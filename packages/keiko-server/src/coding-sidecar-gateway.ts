@@ -172,10 +172,11 @@ const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLo
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["model-context-window-insufficient"],
+      values: ["model-context-window-insufficient", "no-tool-calling", "tool-calling-unverified"],
     },
-    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
-    minimumRequiredPromptTokens: { type: "integer", dataClass: "count", required: true },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: false },
+    minimumRequiredPromptTokens: { type: "integer", dataClass: "count", required: false },
+    probeMode: { type: "string", dataClass: "closed-enum", required: true, values: ["passive"] },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -696,7 +697,12 @@ function parseMessageBase(
   ) {
     return { kind: "invalid" };
   }
-  const content = parseMessageContent(value.content);
+  const content =
+    value.content === null &&
+    value.role === "assistant" &&
+    parseContinuationToolCalls(value.tool_calls) !== undefined
+      ? { kind: "ok" as const, value: "" }
+      : parseMessageContent(value.content);
   if (content.kind !== "ok") return content;
   return { kind: "ok", value: { role: value.role, content: content.value } };
 }
@@ -2304,11 +2310,18 @@ function gatewayReadinessProjection(
 ): CodingWorkbenchSidecarGatewayResult {
   const result = resolveGatewayProfile(deps).result;
   if (
-    result.status !== "available" ||
+    result.status === "available" &&
     result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
-  ) {
+  )
     return result;
-  }
+  const reason =
+    result.status === "available" ? "model-context-window-insufficient" : result.reason;
+  if (
+    reason !== "model-context-window-insufficient" &&
+    reason !== "no-tool-calling" &&
+    reason !== "tool-calling-unverified"
+  )
+    return result;
   getServerLogger().warn(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION,
@@ -2317,15 +2330,22 @@ function gatewayReadinessProjection(
         errorKind: "unavailable",
       },
       {
-        reason: "model-context-window-insufficient",
-        maxPromptTokens: result.runMetadata.maxPromptTokens,
-        minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
+        reason,
+        probeMode: "passive",
+        ...(result.status === "available"
+          ? {
+              maxPromptTokens: result.runMetadata.maxPromptTokens,
+              minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
+            }
+          : {}),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
-  return { status: "unavailable", reason: "model-context-window-insufficient" };
+  return result.status === "available"
+    ? { status: "unavailable", reason: "model-context-window-insufficient" }
+    : result;
 }
 
 export function handleCodingSidecarGatewayProfile(

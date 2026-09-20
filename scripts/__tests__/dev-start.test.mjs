@@ -1,9 +1,19 @@
 import { Buffer } from "node:buffer";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import {
+// Default seams must never observe or stop the developer's running application.
+const stateDirectory = mkdtempSync(join(tmpdir(), "keiko-dev-start-test-"));
+vi.stubEnv("KEIKO_STATE_DIR", stateDirectory);
+afterAll(() => {
+  vi.unstubAllEnvs();
+  rmSync(stateDirectory, { recursive: true, force: true });
+});
+
+const {
   codingRuntimeHealth,
   codingRuntimeRequired,
   DEV_START_LOCK_FILE,
@@ -21,7 +31,7 @@ import {
   run,
   shouldShellNpmCommand,
   withDevStartLock,
-} from "../dev-start.mjs";
+} = await import("../dev-start.mjs");
 
 describe("dev-start paired-browser default", () => {
   it("opens by default, preserves --open, and fails closed for CI or --no-open", () => {
@@ -691,10 +701,8 @@ describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
   });
 
   it("falls through to the default seams when none are provided", async () => {
-    // On a fresh checkout the pidFile does not exist, so the default `restartExistingRunnerIfNeeded`
-    // returns immediately and the default `removePidFile` is a no-op force-remove. This exercise
-    // covers the nullish-coalescing default paths and asserts the helper accepts an empty seams
-    // object (or none at all) without throwing.
+    expect(DEV_START_LOCK_FILE).toBe(join(stateDirectory, "dev-start.lock"));
+    expect(existsSync(join(stateDirectory, "dev-ui.pid.json"))).toBe(false);
     await expect(prepareRunnerCriticalSection({})).resolves.toBeUndefined();
     await expect(prepareRunnerCriticalSection()).resolves.toBeUndefined();
   });

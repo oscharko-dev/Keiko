@@ -1,10 +1,8 @@
+import { ciRepairBudgetErrorKind } from "./codingRuntimeCiRepairBudgetTypes.js";
 import type { DatabaseSync } from "node:sqlite";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
-import {
-  activityLogEvent,
-  type ActivityLogErrorKind,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
@@ -56,21 +54,6 @@ interface Scope {
   readonly current: CiRepairBudgetRecord | undefined;
 }
 type Phase = "read" | "accept" | "begin" | "charge" | "settle";
-function budgetErrorKind(reason: CiRepairBudgetBlockReason): ActivityLogErrorKind {
-  if (reason === "authority-denied") return "authority-denied";
-  if (reason === "deadline-exhausted") return "timeout";
-  if (reason === "storage-unavailable") return "unavailable";
-  if (reason === "invalid-binding" || reason === "invalid-input") return "validation-failed";
-  if (
-    reason === "tool-budget-exhausted" ||
-    reason === "prompt-budget-exhausted" ||
-    reason === "attempt-budget-exhausted" ||
-    reason === "storage-capacity"
-  ) {
-    return "rate-limited";
-  }
-  return "conflict";
-}
 function blocked(
   reason: CiRepairBudgetBlockReason,
   record?: CiRepairBudgetRecord,
@@ -177,7 +160,7 @@ function liveDraft(
   if (draft === undefined) return undefined;
   return [
     snapshot.terminalAt === undefined,
-    new Set(["ready", "running", "awaiting-approval"]).has(snapshot.state),
+    new Set(["starting", "ready", "running", "awaiting-approval"]).has(snapshot.state),
     snapshot.issueBinding?.remoteDigest === context.remoteDigest,
     draft.binding.remoteDigest === context.remoteDigest,
     draft.binding.issueBindingDigest === snapshot.issueBinding?.bindingDigest,
@@ -476,7 +459,7 @@ class SqliteCiRepairBudgetStore implements CodingRuntimeCiRepairBudgetStore {
         {
           correlationId: correlationIdOrUnknown(context.correlationId),
           ...(result.status === "blocked"
-            ? { level: "warn", errorKind: budgetErrorKind(result.reason) }
+            ? { level: "warn", errorKind: ciRepairBudgetErrorKind(result.reason) }
             : {}),
         },
         {

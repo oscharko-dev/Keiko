@@ -928,7 +928,13 @@ function buildEmitAction(
     return {
       ...browserAction,
       requiresReview,
-      changeset: { ...action.changeset, prepared: changesetInspection.prepared },
+      changeset: {
+        ...action.changeset,
+        // Review the same validated spelling the write path applies. Raw model hunk counts
+        // can otherwise make the browser consume a subsequent file header as source text.
+        patch: changesetInspection.validation.normalizedDiff ?? action.changeset.patch,
+        prepared: changesetInspection.prepared,
+      },
     };
   }
   if (action.type !== "applyPatch") return browserAction;

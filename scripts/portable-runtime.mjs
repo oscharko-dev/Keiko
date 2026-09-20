@@ -1236,8 +1236,11 @@ function validateSidecarUpstream(runtime, path, failures) {
   stringAt(upstream, "owner", `${path}.upstream`, failures);
   stringAt(upstream, "repository", `${path}.upstream`, failures);
   stringAt(upstream, "name", `${path}.upstream`, failures);
-  stringAt(upstream, "version", `${path}.upstream`, failures);
-  stringAt(upstream, "tag", `${path}.upstream`, failures);
+  const version = stringAt(upstream, "version", `${path}.upstream`, failures);
+  if (!/^2\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(version)) {
+    push(failures, `${path}.upstream.version`, "must be an OpenCode V2 release version");
+  }
+  literalAt(upstream, "tag", `v${version}`, `${path}.upstream`, failures);
   const commit = stringAt(upstream, "commit", `${path}.upstream`, failures);
   if (!STRICT_COMMIT_PATTERN.test(commit)) {
     push(failures, `${path}.upstream.commit`, "must be a 40-hex commit SHA");
@@ -1259,7 +1262,7 @@ function validateSidecarAdapter(runtime, path, failures) {
     `${path}.adapterCompatibility`,
     failures,
   );
-  literalAt(adapter, "adapterVersion", "1", `${path}.adapterCompatibility`, failures);
+  literalAt(adapter, "adapterVersion", "2", `${path}.adapterCompatibility`, failures);
   literalAt(adapter, "transport", "http-sse", `${path}.adapterCompatibility`, failures);
 }
 
@@ -1336,9 +1339,14 @@ function validateSidecarArchive(runtime, path, failures, options) {
   }
   const url = stringAt(archive, "url", archivePath, failures);
   const upstream = runtime.upstream ?? {};
-  const expectedPrefix = `https://github.com/${upstream.owner}/${upstream.repository}/releases/download/${upstream.tag}/`;
-  if (!url.startsWith(expectedPrefix)) {
-    push(failures, `${archivePath}.url`, "must bind the upstream repository and tag");
+  const target = portableTargetByName(runtime.platformTarget);
+  const expectedUrl = `https://opencode.ai/files/bin/${upstream.version}/${target?.sidecarArchiveName}`;
+  if (url !== expectedUrl) {
+    push(
+      failures,
+      `${archivePath}.url`,
+      "must bind the OpenCode release version and platform archive",
+    );
   }
   positiveNumberAt(archive, "sizeBytes", archivePath, failures);
   digestAt(archive, "sha256", archivePath, failures, options);

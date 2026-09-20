@@ -241,51 +241,10 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
     expect(refreshSource).toHaveBeenCalledTimes(3);
   });
 
-  it("does not recursively refresh the runtime when automatic tool verification fails", async () => {
+  it("keeps an unverified source read-only without recursive runtime refresh", async () => {
     window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
     const unavailable = { status: "unavailable", reason: "no-tool-calling" };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(unavailable))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          models: [
-            {
-              id: "coding-chat-unsupported",
-              kind: "chat",
-              contextWindow: 128_000,
-              maxOutputTokens: 4_096,
-              toolCalling: false,
-              structuredOutput: true,
-              streaming: true,
-              supportsImageInput: false,
-              supportsDocumentInput: false,
-              workflowEligible: true,
-              costClass: "medium",
-              latencyClass: "standard",
-              throughputHint: "configured gateway",
-              preferredUseCases: ["Coding"],
-              knownLimitations: [],
-            },
-          ],
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          modelId: "coding-chat-unsupported",
-          checkedAt: "2026-09-15T05:30:00.000Z",
-          overallStatus: "failed",
-          probes: [
-            {
-              name: "tool_calling",
-              status: "unsupported",
-              latencyMs: 12,
-              evidence: "Tool calling was not accepted.",
-            },
-          ],
-          verifiedCapabilities: { toolCalling: false },
-        }),
-      );
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(unavailable));
     vi.stubGlobal("fetch", fetchMock);
     const refreshSource = vi.fn(async (): Promise<void> => {
       await fetchCodingWorkbenchSidecarGatewayProfile();
@@ -299,10 +258,14 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
       });
     });
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(refreshSource).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/coding-sidecar/gateway/profile",
+      expect.objectContaining({ cache: "no-store" }),
+    );
     expect(fetchMock.mock.calls.filter(([path]) => path === "/api/gateway/readiness")).toHaveLength(
-      1,
+      0,
     );
     unmount();
     vi.unstubAllGlobals();

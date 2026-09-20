@@ -259,6 +259,27 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it("attaches a prompt-linked issue as context without requiring delivery", async () => {
+    const result = await admitCodingRuntimeIssue({
+      request: {
+        ...REQUEST,
+        issueRef: "#3390",
+        expectedIssueBindingDigest: ISSUE_BINDING.bindingDigest,
+        issuePurpose: "context",
+      },
+      active: ACTIVE,
+      runId: "run-context",
+      intake: intake(),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      contextBinding: ISSUE_BINDING,
+      attachment: ISSUE_ATTACHMENT,
+    });
+    expect(result).not.toHaveProperty("binding");
+  });
+
   it("happy path unchanged: a freshly pasted reference still resolves and attaches normally", async () => {
     const port = intake();
 

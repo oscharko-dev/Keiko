@@ -41,6 +41,8 @@ import {
   measureToolCatalogPerformance,
   measureToolCatalogPerformanceInFreshProcess,
   recalibrateToolCatalogPerformance,
+  extendManagedToolCatalogPerformance,
+  sealToolCatalogPerformanceDocument,
   rebindToolCatalogPerformanceCaseIdentity,
   ratchetToolCatalogPerformanceBudgets,
   toolCatalogPerformanceBudgets,
@@ -344,6 +346,11 @@ describe("compiler measurements reuse the existing sample and percentile convent
       recalibrate: false,
       rebindCaseIdentity: true,
     });
+    expect(regenerationOptions(["--extend-managed-runtime"])).toEqual({
+      recalibrate: false,
+      rebindCaseIdentity: false,
+      extendManagedRuntime: true,
+    });
     expect(() => regenerationOptions(["--unknown", "--another"])).toThrow(
       "unknown argument: --unknown, --another",
     );
@@ -386,6 +393,7 @@ describe("compiler measurements reuse the existing sample and percentile convent
     const evidence = await measureToolCatalogPerformance(ROOT, () => ++now);
     expect(Object.keys(evidence.cases)).toEqual([
       "legacy-native-6-tool",
+      "managed-opencode-v2",
       `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`,
     ]);
     expect(evidence.overflow).toEqual({
@@ -408,6 +416,15 @@ describe("compiler measurements reuse the existing sample and percentile convent
     const legacyCase = evidence.cases["legacy-native-6-tool"];
     const syntheticCase =
       evidence.cases[`synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`];
+    const producer = await loadToolCatalogProducer(ROOT);
+    const managed = producer.compileToolProjection(
+      producer.createKeikoToolCatalog([producer.opencodeRegistrationSet()]),
+      { id: "opencode", version: 1 },
+    );
+    expect(evidence.cases["managed-opencode-v2"].toolCount).toBe(managed.tools.length);
+    expect(evidence.cases["managed-opencode-v2"].samples[0].projectionDigest).toBe(
+      managed.projectionDigest,
+    );
     expect(legacyCase.toolCount).toBe(6);
     expect(syntheticCase.toolCount).toBe(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT);
     expect(syntheticCase.toolCount).toBeGreaterThan(legacyCase.toolCount * 10);
@@ -502,6 +519,8 @@ describe("compiler measurements reuse the existing sample and percentile convent
       verdicts: [
         "legacy-native-6-tool coldCompileMs exceeds the calibrated p95 budget",
         "legacy-native-6-tool lookupBatchMs exceeds the calibrated p95 budget",
+        "managed-opencode-v2 coldCompileMs exceeds the calibrated p95 budget",
+        "managed-opencode-v2 lookupBatchMs exceeds the calibrated p95 budget",
         `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool coldCompileMs exceeds the calibrated p95 budget`,
         `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool lookupBatchMs exceeds the calibrated p95 budget`,
       ],
@@ -629,6 +648,64 @@ describe("compiler measurements reuse the existing sample and percentile convent
       ],
       verdicts: [],
     });
+  }, 45_000);
+
+  it("extends only the managed case while preserving all prior numeric ceilings", async () => {
+    let clock = 0;
+    const raw = await measureToolCatalogPerformance(ROOT, () => ++clock);
+    const environment = {
+      platform: "linux",
+      architecture: "arm64",
+      nodeVersion: "v24.18.0",
+      logicalCores: 16,
+      totalMemoryBytes: 24_000_000_000,
+      containerImage: TOOL_CATALOG_REFERENCE_IMAGE,
+    };
+    const current = buildToolCatalogPerformanceDocument(raw, {
+      role: "calibration",
+      measuredAtIso: "2026-09-20T00:00:00.000Z",
+      measurementHarnessSha256: "a".repeat(64),
+      environment,
+    });
+    const legacy = structuredClone(current);
+    delete legacy.cases["managed-opencode-v2"];
+    const previous = sealToolCatalogPerformanceDocument(legacy);
+    const oldBudget = toolCatalogPerformanceBudgets(current);
+    delete oldBudget.maximumP95Ms["managed-opencode-v2"];
+    delete oldBudget.ceilingP95Ms["managed-opencode-v2"];
+    oldBudget.calibrationSha256 = previous.documentSha256;
+    const files = new Map([
+      [TOOL_CATALOG_PERFORMANCE_FILES.calibration, previous],
+      [TOOL_CATALOG_PERFORMANCE_FILES.budget, oldBudget],
+    ]);
+    const deps = {
+      read: (_root, path) => files.get(path),
+      write: (_root, path, value) => files.set(path, value),
+      environment: () => environment,
+      measure: async () => raw,
+      now: () => "2026-09-20T00:01:00.000Z",
+      rulerDigest: () => "b".repeat(64),
+    };
+    const result = await extendManagedToolCatalogPerformance(ROOT, deps);
+    for (const id of Object.keys(oldBudget.maximumP95Ms)) {
+      expect(result.budget.maximumP95Ms[id]).toEqual(oldBudget.maximumP95Ms[id]);
+      expect(result.budget.ceilingP95Ms[id]).toEqual(oldBudget.ceilingP95Ms[id]);
+    }
+    expect(result.budget.maximumP95Ms["managed-opencode-v2"]).toEqual(
+      toolCatalogPerformanceBudgets(result.calibration).maximumP95Ms["managed-opencode-v2"],
+    );
+    expect(
+      evaluateToolCatalogPerformanceEvidence(previous, previous, oldBudget).defects.length,
+    ).toBeGreaterThan(0);
+    await expect(extendManagedToolCatalogPerformance(ROOT, deps)).rejects.toThrow(
+      "catalog performance budget cases",
+    );
+    expect(regenerateArguments("/repo", { extendManagedRuntime: true }).at(-1)).toContain(
+      "--extend-managed-runtime",
+    );
+    expect(() =>
+      regenerateArguments("/repo", { extendManagedRuntime: true, recalibrate: true }),
+    ).toThrow("choose one");
   }, 45_000);
 
   it("writes, ratchets, and validates governed reference artifacts through hermetic dependencies", async () => {

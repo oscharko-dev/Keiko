@@ -154,6 +154,8 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   // provenance (codingRuntimeVerifiedCommitAuthorityStore.ts). IDs, digests, shas, a status/reason
   // enum and a timestamp — no commit message, diff, or path.
   "last_successful_verified_commit",
+  // V36 distinguishes context from delivery using a closed SQL vocabulary, never issue text.
+  "issue_purpose",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque
@@ -185,6 +187,9 @@ const ALLOWED_GITHUB_ISSUE_READER_AUTHORIZATION_COLUMNS = new Set([
 const EXPECTED_TABLES = new Set([
   "chat_messages",
   "chats",
+  "coding_history_tasks",
+  "coding_history_runs",
+  "coding_history_message_bindings",
   "coding_runtime_snapshots",
   "coding_runtime_ci_repair_budgets",
   "coding_runtime_description_jobs",
@@ -521,6 +526,10 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
     store.close();
     const inspector = new DatabaseSync(dbPath, { readOnly: true });
     const cols = columnNames(inspector, "coding_runtime_snapshots");
+    const schema = inspector
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'coding_runtime_snapshots'")
+      .get();
+    expect(schema?.sql).toContain("CHECK (issue_purpose IN ('context', 'delivery'))");
     inspector.close();
     expect(new Set(cols)).toEqual(ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS);
     for (const col of cols) {
@@ -585,6 +594,21 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
       for (const forbidden of [...FORBIDDEN_SUBSTRINGS, "path", "url", "remote", "owner"]) {
         expect(lower).not.toContain(forbidden);
       }
+    }
+  });
+});
+
+describe("forbidden-fields — coding history identity tables", () => {
+  it.each([
+    ["coding_history_tasks", ["chat_id", "workspace_id", "task_id", "operator_digest", "status"]],
+    ["coding_history_runs", ["run_id", "chat_id", "sequence"]],
+    ["coding_history_message_bindings", ["run_id", "source_id", "message_id"]],
+  ] as const)("keeps %s free of conversation bodies and credentials", (table, expected) => {
+    const inspector = openMigratedSchema(join(tmpDir, "coding-history-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, table))).toEqual(new Set(expected));
+    } finally {
+      inspector.close();
     }
   });
 });

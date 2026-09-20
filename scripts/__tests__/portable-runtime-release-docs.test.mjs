@@ -70,10 +70,31 @@ describe("portable runtime release documentation", () => {
     expect(releaseDocs).not.toContain("coding-sidecar-v1");
     expect(releaseDocs).toContain("http-sse");
     expect(releaseDocs).toContain("upstream-raw-bytes");
-    expect(releaseDocs).toContain(
-      "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
-    );
-    expect(releaseDocs).toContain("3104c1428ec91f809e5ab86631300de41eb6952e");
+    expect(releaseDocs).toContain(approvals.sidecarRuntimes[0].protocolSchema.sha256);
+    expect(releaseDocs).toContain(approvals.sidecarRuntimes[0].upstream.commit);
+  });
+
+  it("keeps every embedded OpenCode identity on the approved V2 pin", () => {
+    const approved = approvals.sidecarRuntimes[0];
+    const declarations = [...contract.matchAll(/"upstream": (\{[\s\S]*?\})/gu)];
+    expect(declarations).toHaveLength(2);
+    for (const declaration of declarations) {
+      expect(JSON.parse(declaration[1])).toEqual(approved.upstream);
+    }
+    const subscriptions = [...contract.matchAll(/"subscriptionAuth": (\{[\s\S]*?\})/gu)];
+    expect(subscriptions).toHaveLength(2);
+    for (const subscription of subscriptions) {
+      expect(JSON.parse(subscription[1])).toEqual(approved.releaseApproval.subscriptionAuth);
+    }
+    for (const document of [contract, workflow]) {
+      expect(document).toContain(approved.upstream.version);
+      expect(document).toContain(approved.upstream.commit);
+      expect(document).toContain(approved.protocolSchema.path);
+      expect(document).toContain(approved.protocolSchema.sha256);
+      expect(document).not.toContain("1.18.30");
+      expect(document).not.toContain("packages/sdk/openapi.json");
+      expect(document).not.toContain('"adapterVersion": "1"');
+    }
   });
 
   it("distinguishes immutable upstream evidence from signed shipped evidence", () => {

@@ -137,9 +137,7 @@ describe("profile compilation", () => {
     const { descriptor, catalog, projection } = fixture(dialect);
     expect(projection.tools[0]?.inputSchema.properties).toEqual(descriptor.inputSchema.properties);
     expect(projection.tools[0]?.inputSchema.required).toEqual(descriptor.inputSchema.required);
-    expect(projection.tools[0]?.inputSchema.additionalProperties).toBe(
-      dialect === "managed-runtime-json-schema" ? undefined : false,
-    );
+    expect(projection.tools[0]?.inputSchema).toEqual(descriptor.inputSchema);
     expect(projection.tools[0]?.resultSchema).toEqual(descriptor.resultSchema);
     expect(projection.tools[0]?.effects).toEqual(descriptor.effects);
     expect(

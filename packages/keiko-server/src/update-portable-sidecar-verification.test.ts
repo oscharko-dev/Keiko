@@ -8,11 +8,11 @@ import {
   type PortableSidecarRuntimeVerification,
 } from "./update-portable-sidecar-verification.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
 } from "./coding-runtime/opencodeProtocolSurface.js";
 
-const OPENCODE_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
+const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 
 function verifiedSidecar(): PortableSidecarRuntimeVerification {
   return {
@@ -25,15 +25,15 @@ function verifiedSidecar(): PortableSidecarRuntimeVerification {
     sbomEvidencePath: "runtime/sidecars/opencode-compatible/sbom.cdx.json",
     sbomEvidenceSha256: "b".repeat(64),
     protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
-    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-    protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+    protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolHandshakeAlgorithm: OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
     summary: {
       name: "opencode-compatible",
       kind: "coding-runtime",
       upstreamName: "opencode",
-      upstreamVersion: "1.18.30",
+      upstreamVersion: "2.0.10",
       adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
+      adapterVersion: "2",
       protocolVersion: "http-sse",
       platformTarget: "macos-arm64",
       payloadSha256: "c".repeat(64),
@@ -159,17 +159,17 @@ function sidecarRuntime(signing: Record<string, unknown>): Record<string, unknow
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "1.18.30",
-      tag: "v1.18.30",
-      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
+      version: "2.0.10",
+      tag: "v2.0.10",
+      commit: "b8cedc1a7a5e2916bbb65dc1d4b620729c261638",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
+      adapterVersion: "2",
       transport: "http-sse",
     },
     protocolSchema: {
-      path: "packages/sdk/openapi.json",
+      path: "packages/protocol/openapi.json",
       sha256: OPENCODE_SCHEMA_SHA256,
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",

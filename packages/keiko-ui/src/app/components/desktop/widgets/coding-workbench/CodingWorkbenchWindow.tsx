@@ -1,5 +1,8 @@
 "use client";
 
+import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
+import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSession";
+import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import {
   CodingWorkbenchDeliveryReview,
   approvalHelpKey,
@@ -144,11 +147,8 @@ import {
   visibleAlert,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
-import {
-  codingWorkbenchIssueTaskId,
-  type AcceptedWorkbenchIssue,
-} from "./useCodingWorkbenchIssueIntake";
-import { CodingWorkbenchIssueChip } from "./CodingWorkbenchIssueChip";
+import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
+import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
 
 const EMPTY_WORKSPACE = {
@@ -630,16 +630,66 @@ function useRunChannels(run: WorkbenchRunValue): WorkbenchRunChannels {
   return { research, skills };
 }
 
+function historyRuntimeState(
+  state: CodingWorkbenchRuntimeState,
+  history: CodingTaskSession,
+): CodingWorkbenchRuntimeState {
+  const canStart = state.canStart && !history.pending && !history.error;
+  if (history.visibleRun) return { ...state, canStart };
+  return {
+    ...state,
+    run: { ...state.run, value: null },
+    stream: { status: "idle", value: null, error: null },
+    events: [],
+    canRetry: false,
+    canStart,
+  };
+}
+
+function welcomeEligible(
+  history: CodingTaskSession,
+  state: CodingWorkbenchRuntimeState,
+  content: Readonly<Record<"activity" | "questions" | "review" | "research", boolean>>,
+): boolean {
+  return (
+    history.detail === null &&
+    welcomeEligibleState(state.run.value?.state) &&
+    state.run.value?.verifiedCommitResult === undefined &&
+    state.run.value?.draftDelivery === undefined &&
+    state.events.length === 0 &&
+    !Object.values(content).some(Boolean)
+  );
+}
+
 export function CodingWorkbenchWindow({
   selectedRoot,
   onOpenGit = noopOpenGit,
+  historySelection,
+  onHistorySelectionHandled,
+  onOpenHistory = (): void => undefined,
 }: {
   readonly selectedRoot?: string | undefined;
+  readonly historySelection?: string | undefined;
+  readonly onHistorySelectionHandled?: (() => void) | undefined;
+  readonly onOpenHistory?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
 }): ReactNode {
-  const activeWorkspace = useOptionalActiveWorkspace() ?? EMPTY_WORKSPACE;
+  const workspaceContext = useOptionalActiveWorkspace();
+  const activeWorkspace = workspaceContext ?? EMPTY_WORKSPACE;
   const chatCatalog = useOptionalChatSessionCatalog();
-  const { state, actions } = useCodingWorkbenchRuntime({ workspace: activeWorkspace });
+  const { state: runtimeState, actions } = useCodingWorkbenchRuntime({
+    workspace: activeWorkspace,
+  });
+  const history = useCodingTaskSession({
+    snapshot: runtimeState.run.value,
+    active: activeRunState(runtimeState.run.value?.state),
+    workspace: workspaceContext,
+    root: selectedRoot,
+    selection: historySelection,
+    onSelectionHandled: onHistorySelectionHandled,
+  });
+  const state = historyRuntimeState(runtimeState, history);
+
   const codingModels = useMemo(
     () => chatCatalog?.models.filter(isCodingWorkbenchModel) ?? [],
     [chatCatalog?.models],
@@ -681,6 +731,8 @@ export function CodingWorkbenchWindow({
   };
   return (
     <WorkbenchContent
+      history={history}
+      onOpenHistory={onOpenHistory}
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
@@ -727,6 +779,8 @@ function useCodingModelSelection(
 }
 
 interface WorkbenchContentProps {
+  readonly history: CodingTaskSession;
+  readonly onOpenHistory: () => void;
   readonly state: CodingWorkbenchRuntimeState;
   readonly actions: CodingWorkbenchRuntimeActions;
   readonly activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"];
@@ -802,7 +856,7 @@ function WorkbenchContent({
   workbenchLabel,
   ...columns
 }: WorkbenchContentProps): ReactNode {
-  const { research, repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
+  const { research, state } = columns;
   return (
     <section
       className={styles.shell}
@@ -811,20 +865,14 @@ function WorkbenchContent({
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <header className={styles["cmp-workbench-header"]}>
-        <SessionContextBar
-          state={state}
-          workspace={sessionWorkspaceProjection(state, runWorkspace)}
-          repositoryRoot={repositoryRoot}
-          runIsActive={runIsActive}
-        />
-        <CodingWorkbenchTrustAffordance
-          binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
-          runRevision={state.run.value?.revision}
-          pauseReason={state.run.value?.pauseReason}
-        />
-      </header>
-      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      <WorkbenchHeader columns={columns} />
+      <p
+        className="sr-only"
+        role="status"
+        data-testid="coding-runtime-announcement"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
       <div className={styles.body}>
@@ -832,6 +880,36 @@ function WorkbenchContent({
         <WorkbenchColumns {...columns} />
       </div>
     </section>
+  );
+}
+
+function WorkbenchHeader({
+  columns,
+}: {
+  readonly columns: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">;
+}): ReactNode {
+  const { repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
+  return (
+    <header className={styles["cmp-workbench-header"]}>
+      <div className={styles.cmpHeaderRow}>
+        <SessionContextBar
+          state={state}
+          workspace={sessionWorkspaceProjection(state, runWorkspace)}
+          repositoryRoot={repositoryRoot}
+          runIsActive={runIsActive}
+        />
+        <CodingTaskSessionBar
+          session={columns.history}
+          active={runIsActive}
+          onHistory={columns.onOpenHistory}
+        />
+      </div>
+      <CodingWorkbenchTrustAffordance
+        binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
+        runRevision={state.run.value?.revision}
+        pauseReason={state.run.value?.pauseReason}
+      />
+    </header>
   );
 }
 
@@ -850,6 +928,7 @@ function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => vo
 }
 
 function WorkbenchColumns({
+  history,
   state,
   actions,
   activeWorkspace,
@@ -867,46 +946,23 @@ function WorkbenchColumns({
   runIsActive,
 }: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const [issueSetup, setIssueSetup] = useState(false);
-  const [acceptedIssue, setAcceptedIssue] = useState<AcceptedWorkbenchIssue | null>(null);
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
   // #3452 F52: the setup card is unmounted whenever a binding or a run workspace arrives, so the
   // path the operator is typing is held HERE -- this component keeps its instance across that flip
   // (WorkbenchContent renders it unconditionally and without a key).
   const [repositoryPathDraft, setRepositoryPathDraft] = useState<string | null>(null);
-  const activeIssueRepository = activeWorkspace.activeInstance?.repositoryId;
-  const activeIssueTask = activeWorkspace.activeBinding?.taskId;
-  const observedTerminalRunIdRef = useRef<string | undefined>(terminalRunId(state.run.value));
-  useEffect(() => {
-    const currentTerminalRunId = terminalRunId(state.run.value);
-    if (
-      currentTerminalRunId !== undefined &&
-      observedTerminalRunIdRef.current !== currentTerminalRunId
-    ) {
-      observedTerminalRunIdRef.current = currentTerminalRunId;
-      if (!runMatchesAcceptedIssue(state.run.value, acceptedIssue)) return;
-      reportClientDiagnostic(
-        "[keiko] coding workbench issue selection released after terminal run",
-      );
-      setAcceptedIssue(null);
-      return;
-    }
-    if (
-      acceptedIssue !== null &&
-      !issueSetup &&
-      activeIssueTask !== undefined &&
-      (activeIssueTask !== codingWorkbenchIssueTaskId(acceptedIssue.binding.issueNumber) ||
-        activeIssueRepository !== acceptedIssue.binding.repositoryId)
-    )
-      setAcceptedIssue(null);
-  }, [acceptedIssue, activeIssueTask, activeIssueRepository, issueSetup, state.run.value]);
+  const issueIntake = useCodingWorkbenchIssueIntake(
+    repositoryRoot ?? "",
+    `${activeWorkspace.activeBinding?.workspaceId ?? ""}:${history.conversationId ?? ""}`,
+  );
+  const issuePending = issueIntake.state.kind === "loading";
   const [resumeSelection, setResumeSelection] = useState<ResumeModeSelection | null>(null);
   // The bootstrap Code setup (#2385) renders whenever no active task-workspace binding exists, so a
   // hand-bound repository can be bound → verified → started entirely from the UI (#2476). It no longer
   // hides behind runtime availability: on an unactivated install it stays reachable and honestly
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
-  const showSetup = issueSetup || bootstrapSetupVisible(state, activeWorkspace);
+  const showSetup = bootstrapSetupVisible(state, activeWorkspace);
   const startBlocker = startBlockedReason(state, t, showSetup, authority.errorMessage);
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
@@ -999,27 +1055,23 @@ function WorkbenchColumns({
     setProjectMemoryEnabled(true);
   }, [repositoryRoot]);
   const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
+  const startTask = (): void =>
+    void issueIntake.submit(taskIntent.trim(), async (issue): Promise<void> => {
+      runWorkspace.captureSubmission();
+      await actions.start(taskIntent.trim(), {
+        projectMemoryEnabled,
+        conversationId: history.conversationId,
+        issue,
+      });
+    });
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
       onTaskIntentChange={onTaskIntentChange}
       actions={{
-        onStart: () => {
-          // Capture the workspace identity the Start is submitted against BEFORE the request goes
-          // out: the run id only arrives with the response, by which time the pointer may have moved.
-          runWorkspace.captureSubmission();
-          const projectMemory = { projectMemoryEnabled };
-          if (acceptedIssue === null) void actions.start(taskIntent.trim(), projectMemory);
-          else
-            void actions.start(taskIntent.trim(), {
-              ...projectMemory,
-              issue: {
-                issueRef: acceptedIssue.issueRef,
-                expectedIssueBindingDigest: acceptedIssue.binding.bindingDigest,
-              },
-            });
-        },
+        onStart: startTask,
         onPause: () => void actions.pause(),
+        onStop: () => void actions.stop(),
         onResume: () => {
           if (resumeMode !== null) void actions.resume(resumeMode);
         },
@@ -1028,16 +1080,21 @@ function WorkbenchColumns({
       canStart={state.canStart}
       runState={state.run.value?.state}
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
-      mutationPending={state.mutation.status === "pending"}
-      startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
+      mutationPending={issuePending || state.mutation.status === "pending"}
+      startBusy={
+        issuePending || (state.mutation.kind === "start" && state.mutation.status === "pending")
+      }
       startBlockedReason={startBlocker}
       repositoryLabel={repositoryLabel(repositoryRoot)}
       branchLabel={
-        runIsActive
-          ? (runWorkspace.bound?.taskBranch ?? activeWorkspace.activeInstance?.taskBranch ?? null)
+        runIsActive || history.detail !== null
+          ? (history.detail?.task.branch ??
+            runWorkspace.bound?.taskBranch ??
+            activeWorkspace.activeInstance?.taskBranch ??
+            null)
           : repositoryBranch.currentBranch
       }
-      branchContext={runIsActive ? "task" : "repository"}
+      branchContext={runIsActive || history.detail !== null ? "task" : "repository"}
       onOpenGit={() =>
         onOpenGit({
           root: repositoryRoot,
@@ -1053,7 +1110,8 @@ function WorkbenchColumns({
       configurationLocked={
         activeRunState(state.run.value?.state) ||
         state.mutation.status === "pending" ||
-        authority.pending
+        authority.pending ||
+        issuePending
       }
       onRequestedModeChange={authority.onChange}
       onRuntimePreferenceChange={actions.setRuntimePreference}
@@ -1070,32 +1128,20 @@ function WorkbenchColumns({
         <CodingWorkbenchSetup
           selectedRoot={repositoryRoot ?? undefined}
           selectedBaseBranch={boundBaseBranch(activeWorkspace, repositoryRoot)}
-          refreshWorkspace={async (): Promise<boolean> => {
-            const refreshed = await activeWorkspace.refresh();
-            if (refreshed) setIssueSetup(false);
-            return refreshed;
-          }}
+          refreshWorkspace={activeWorkspace.refresh}
           runtimePosture={runtimePosture}
-          acceptedIssue={acceptedIssue}
-          onAcceptedIssue={setAcceptedIssue}
           repositoryPathDraft={repositoryPathDraft}
           onRepositoryPathDraftChange={setRepositoryPathDraft}
-          onOpenGit={() =>
-            onOpenGit({ root: null, binding: "repository", repositoryDialog: "clone" })
-          }
         />
       </div>
     );
   }
-  const showWelcome =
-    welcomeEligibleState(state.run.value?.state) &&
-    state.run.value?.verifiedCommitResult === undefined &&
-    state.run.value?.draftDelivery === undefined &&
-    state.events.length === 0 &&
-    activity.feed === null &&
-    questions.questions.length === 0 &&
-    editorBridge.pendingReview === null &&
-    research.grant === null;
+  const showWelcome = welcomeEligible(history, state, {
+    activity: activity.feed !== null,
+    questions: questions.questions.length > 0,
+    review: editorBridge.pendingReview !== null,
+    research: research.grant !== null,
+  });
   return (
     <div className={styles.session}>
       {showWelcome ? (
@@ -1110,6 +1156,12 @@ function WorkbenchColumns({
           // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
           tabIndex={0}
         >
+          <CodingTaskTranscript
+            session={history}
+            liveRunId={
+              activity.feed?.availability === "available" ? state.run.value?.runId : undefined
+            }
+          />
           <PermissionPrompt state={state} research={research} onDecision={onDecision} />
           <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
           <CodingWorkbenchDraftDelivery
@@ -1160,6 +1212,7 @@ function WorkbenchColumns({
             retry={skills.retry}
           />
           <Timeline
+            active={runIsActive}
             events={state.events}
             activity={activity}
             questions={questions}
@@ -1176,43 +1229,36 @@ function WorkbenchColumns({
         </div>
       )}
       <div className={styles.composerDock}>
-        <div className={styles.composerContext}>
-          <CodingWorkbenchIssueChip
-            accepted={acceptedIssue}
-            snapshot={state.run.value}
-            onRemove={() => setAcceptedIssue(null)}
-          />
-          {welcomeEligibleState(state.run.value?.state) && acceptedIssue === null ? (
-            <button
-              type="button"
-              className={styles.button}
-              disabled={state.mutation.status === "pending"}
-              onClick={() => {
-                reportClientDiagnostic("[keiko] coding workbench issue intake opened");
-                setIssueSetup(true);
-              }}
-            >
-              {t("codingWorkbench.issue.title")}
-            </button>
-          ) : null}
-        </div>
+        <CodingWorkbenchIssueIntake
+          state={issueIntake.state}
+          onCancel={issueIntake.cancel}
+          onRetry={startTask}
+          repositoryPath={repositoryRoot ?? ""}
+        />
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
         <EditorBridgeUnavailableNotice visible={editorBridge.bridgeUnavailable} />
-        <RuntimeControls
-          state={state}
-          actions={actions}
-          resumeMode={resumeMode}
-          resumeModes={resumeModes}
-          onResumeModeChange={(mode): void => {
-            if (pausedRun?.runId === undefined || pausedRun.effectiveMode === undefined) return;
-            setResumeSelection({
-              runId: pausedRun.runId,
-              currentMode: pausedRun.effectiveMode,
-              value: mode,
-            });
-          }}
-        />
+        <div className={styles.cmpRunActions}>
+          <CodingWorkbenchProgress
+            state={state.run.value?.state}
+            review={editorBridge.pendingReview !== null}
+            questions={questions.questions.length}
+            starting={state.mutation.kind === "start" && state.mutation.status === "pending"}
+          />
+          <RuntimeControls
+            state={state}
+            resumeMode={resumeMode}
+            resumeModes={resumeModes}
+            onResumeModeChange={(mode): void => {
+              if (pausedRun?.runId === undefined || pausedRun.effectiveMode === undefined) return;
+              setResumeSelection({
+                runId: pausedRun.runId,
+                currentMode: pausedRun.effectiveMode,
+                value: mode,
+              });
+            }}
+          />
+        </div>
         {taskComposer}
       </div>
     </div>
@@ -1227,26 +1273,6 @@ function welcomeEligibleState(state: CodingWorkbenchRuntimeStateName | undefined
     state === "failed" ||
     state === "cancelled" ||
     state === "taken-over"
-  );
-}
-
-function terminalRunState(state: CodingWorkbenchRuntimeStateName): boolean {
-  return (
-    state === "succeeded" || state === "failed" || state === "cancelled" || state === "taken-over"
-  );
-}
-
-function terminalRunId(run: CodingWorkbenchRuntimeState["run"]["value"]): string | undefined {
-  return run?.runId !== undefined && terminalRunState(run.state) ? run.runId : undefined;
-}
-
-function runMatchesAcceptedIssue(
-  run: CodingWorkbenchRuntimeState["run"]["value"],
-  acceptedIssue: AcceptedWorkbenchIssue | null,
-): boolean {
-  return (
-    acceptedIssue !== null &&
-    run?.issueBinding?.bindingDigest === acceptedIssue.binding.bindingDigest
   );
 }
 
@@ -1341,6 +1367,7 @@ function sessionInfoFacts(input: SessionInfoSources): readonly CodingWorkbenchIn
   const { activeWorkspace, mode, posture, projectName, repository, state, t, workspace } = input;
   const none = t("codingWorkbench.info.none");
   return [
+    ...sessionRunFacts(state, t),
     { label: t("codingWorkbench.info.project"), value: valueOrNone(projectName, none) },
     {
       label: t("codingWorkbench.info.repositoryStatus"),
@@ -1363,19 +1390,11 @@ function sessionInfoFacts(input: SessionInfoSources): readonly CodingWorkbenchIn
       value: workspaceContextValue(workspace, t),
     },
     {
-      label: t("codingWorkbench.info.runState"),
-      value: valueOrNone(state.run.value?.state, "idle"),
-    },
-    {
       label: t("codingWorkbench.readiness.modelSource.label"),
       value: sessionSourceValue(state.source.value, t),
     },
-    { label: t("codingWorkbench.info.model"), value: valueOrNone(state.selectedModelId, none) },
     {
-      label: t("codingWorkbench.info.modelReadiness"),
-      value: valueOrNone(state.source.value?.verification, t("codingWorkbench.info.notReported")),
-    },
-    {
+      primary: true,
       label: t("codingWorkbench.mode.eyebrow"),
       value: confirmedModeValue(mode, state, t),
       ...(mode === null ? {} : { mode }),
@@ -1386,6 +1405,48 @@ function sessionInfoFacts(input: SessionInfoSources): readonly CodingWorkbenchIn
       tone: NEUTRAL_RUNTIME_ASSURANCE_POSTURES.has(posture) ? "default" : "warning",
     },
   ];
+}
+
+function sessionRunFacts(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): readonly CodingWorkbenchInfoFact[] {
+  const snapshot = state.run.value;
+  const issue = snapshot?.issueBinding;
+  const none = t("codingWorkbench.info.none");
+  const facts: CodingWorkbenchInfoFact[] = [
+    {
+      label: t("codingWorkbench.info.runState"),
+      value: valueOrNone(state.run.value?.state, "idle"),
+    },
+    {
+      label: t("codingWorkbench.info.model"),
+      value: valueOrNone(state.selectedModelId, none),
+      primary: true,
+    },
+    {
+      label: t("codingWorkbench.info.modelReadiness"),
+      value: valueOrNone(state.source.value?.verification, t("codingWorkbench.info.notReported")),
+    },
+  ];
+  if (issue !== undefined) {
+    facts.push({
+      primary: true,
+      label: t("codingWorkbench.info.issue"),
+      value: t("codingWorkbench.issue.accepted", {
+        issue: `#${String(issue.issueNumber)}`,
+        baseRef: issue.defaultBaseRef,
+      }),
+    });
+  }
+  if (snapshot?.failureCode !== undefined) {
+    facts.push({
+      label: t("codingWorkbench.info.failure"),
+      value: snapshot.failureCode,
+      tone: "warning",
+    });
+  }
+  return facts;
 }
 
 function SessionContextBar({
@@ -1426,7 +1487,8 @@ interface LiveSectionProps {
   readonly actions: CodingWorkbenchRuntimeActions;
 }
 
-interface RuntimeControlsProps extends LiveSectionProps {
+interface RuntimeControlsProps {
+  readonly state: CodingWorkbenchRuntimeState;
   readonly resumeMode: CodingWorkbenchMode | null;
   readonly resumeModes: readonly CodingWorkbenchMode[];
   readonly onResumeModeChange: (mode: CodingWorkbenchMode) => void;
@@ -1434,64 +1496,45 @@ interface RuntimeControlsProps extends LiveSectionProps {
 
 function RuntimeControls({
   state,
-  actions,
   resumeMode,
   resumeModes,
   onResumeModeChange,
 }: RuntimeControlsProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const running = activeRunState(state.run.value?.state);
   const busy = state.mutation.status === "pending";
-  if (!running) return null;
+  if (
+    state.run.value?.state !== "paused" ||
+    !operatorResumeAvailable(resumeMode, state.run.value.pauseReason)
+  ) {
+    return null;
+  }
   return (
-    <div className={styles.runtimeControls} aria-label={t("codingWorkbench.controls.title")}>
-      <span>{t("codingWorkbench.controls.help")}</span>
-      {state.run.value?.state === "paused" &&
-      operatorResumeAvailable(resumeMode, state.run.value.pauseReason) ? (
-        <div className={styles.resumeModeControl}>
-          <label className={styles.resumeModeLabel} htmlFor="coding-workbench-resume-mode">
-            {t("codingWorkbench.controls.resumeMode.label")}
-          </label>
-          <select
-            className={styles.resumeModeSelect}
-            id="coding-workbench-resume-mode"
-            value={resumeMode}
-            disabled={busy}
-            aria-describedby="coding-workbench-resume-mode-help"
-            onChange={(event): void => {
-              if (isCodingWorkbenchMode(event.target.value)) {
-                onResumeModeChange(event.target.value);
-              }
-            }}
-          >
-            {resumeModes.map((mode) => (
-              <option key={mode} value={mode}>
-                {modeLabel(mode, t)}
-              </option>
-            ))}
-          </select>
-          <span className="sr-only" id="coding-workbench-resume-mode-help">
-            {t("codingWorkbench.controls.resumeMode.help")}
-          </span>
-        </div>
-      ) : null}
-      <div className={styles.inlineActions}>
-        <button
-          className={cx(styles.button, styles.buttonDanger)}
-          type="button"
-          disabled={!running || busy}
-          onClick={() => void actions.stop()}
+    <div className={styles.runtimeControls}>
+      <div className={styles.resumeModeControl}>
+        <label className={styles.resumeModeLabel} htmlFor="coding-workbench-resume-mode">
+          {t("codingWorkbench.controls.resumeMode.label")}
+        </label>
+        <select
+          className={styles.resumeModeSelect}
+          id="coding-workbench-resume-mode"
+          value={resumeMode ?? undefined}
+          disabled={busy}
+          aria-describedby="coding-workbench-resume-mode-help"
+          onChange={(event): void => {
+            if (isCodingWorkbenchMode(event.target.value)) {
+              onResumeModeChange(event.target.value);
+            }
+          }}
         >
-          {t("codingWorkbench.controls.stop")}
-        </button>
-        <button
-          className={styles.button}
-          type="button"
-          disabled={!running || busy}
-          onClick={() => void actions.takeover()}
-        >
-          {t("codingWorkbench.controls.takeover")}
-        </button>
+          {resumeModes.map((mode) => (
+            <option key={mode} value={mode}>
+              {modeLabel(mode, t)}
+            </option>
+          ))}
+        </select>
+        <span className="sr-only" id="coding-workbench-resume-mode-help">
+          {t("codingWorkbench.controls.resumeMode.help")}
+        </span>
       </div>
     </div>
   );

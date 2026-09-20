@@ -1,3 +1,5 @@
+import { createInMemoryUiStore } from "../store/index.js";
+import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -208,6 +210,7 @@ function fixture(
   newRunId?: () => string,
   snapshotStore?: CodingRuntimeSnapshotStore,
   projectMemory?: CodingRuntimeProjectMemoryPort,
+  history?: CodingRuntimeHistory,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -433,6 +436,7 @@ function fixture(
       pendingResearchApprovals,
       approvedSkills: () => APPROVED_SKILLS,
       ...optionalOrchestratorDeps({ diagnostics, activityLog, issueIntake, projectMemory }),
+      ...(history === undefined ? {} : { history }),
       now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
       newRunId: newRunId ?? ((): string => `run-${String(rows.size + 1)}`),
     },
@@ -4140,6 +4144,84 @@ describe("issue-bound runs (#3385)", () => {
     expect(JSON.stringify(captured.records)).not.toContain(ISSUE_REF);
   });
 
+  it.each(["throw", "refuse"])(
+    "records durable issue admission before a runtime can %s",
+    async (failure) => {
+      const captured = captureActivityLog();
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        captured.activityLog,
+        issueIntake(),
+        undefined,
+        undefined,
+        () => "early-context-run",
+      );
+      if (failure === "throw") f.manager.start.mockRejectedValueOnce(new Error("PRIVATE_RUNTIME"));
+      else
+        f.manager.start.mockResolvedValueOnce({
+          ok: false,
+          retryable: false,
+          failureCode: "runtime-state-unavailable",
+        });
+      await f.orchestrator.start({ ...start, issueRef: ISSUE_REF, issuePurpose: "context" });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(f.rows.get("early-context-run")?.issueContextBinding).toEqual(ISSUE_BINDING);
+      const attached = captured.records.filter(
+        (event) => event.op === "coding-runtime.run.issue-context-attached",
+      );
+      expect(attached).toHaveLength(1);
+      if (attached[0] === undefined) throw new Error("Missing admitted context evidence");
+      const line = formatActivityLogProofLine(attached[0]);
+      expect(
+        expectActivityLogProof("coding-runtime.run.issue-context-attached.emitted-line", line),
+      ).toMatchObject({
+        correlationId: "early-context-run",
+        runId: "early-context-run",
+        issuePurpose: "context",
+        issueNumber: 3385,
+      });
+      for (const body of [ISSUE_REF, ISSUE_TITLE, ISSUE_BODY, "PRIVATE_RUNTIME"])
+        expect(line).not.toContain(body);
+    },
+  );
+
+  it("records context-only issue purpose on the emitted attachment line", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      issueIntake(),
+      undefined,
+      undefined,
+      () => "context-issue-run",
+    );
+    const result = await f.orchestrator.start({
+      ...start,
+      issueRef: ISSUE_REF,
+      issuePurpose: "context",
+    });
+    expect(successfulSnapshot(result).state).toBe("running");
+    const attached = captured.records.find(
+      (event) => event.op === "coding-runtime.run.issue-context-attached",
+    );
+    if (attached === undefined) throw new Error("Missing context attachment");
+    const line = formatActivityLogProofLine(attached);
+    expect(JSON.parse(line)).toMatchObject({
+      op: "coding-runtime.run.issue-context-attached",
+      correlationId: "context-issue-run",
+      runId: "context-issue-run",
+      issuePurpose: "context",
+      issueNumber: 3385,
+    });
+    expect(line).not.toContain(ISSUE_REF);
+  });
+
   it("binds the run to the resolved issue, persists the content-free binding and attaches the context once", async () => {
     const captured = captureActivityLog();
     const intake = issueIntake();
@@ -4192,6 +4274,7 @@ describe("issue-bound runs (#3385)", () => {
         itemCount: 1,
         linkedIssueCount: 0,
         byteCount: 96,
+        issuePurpose: "delivery",
       },
     });
     if (attached === undefined) throw new Error("expected issue-context-attached line");
@@ -4438,6 +4521,39 @@ describe("issue-bound runs (#3385)", () => {
     await f.orchestrator.acknowledgeRecovery("run-1", { requestId: "run-1", acknowledged: true });
     return f;
   }
+
+  it("reattaches context-only issues after recovery without imposing delivery", async () => {
+    const captured = captureActivityLog();
+    const intake = issueIntake();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog, intake);
+    await f.orchestrator.start({ ...start, issueRef: ISSUE_REF, issuePurpose: "context" });
+    await f.orchestrator.startupReconcile();
+    await f.orchestrator.acknowledgeRecovery("run-1", { requestId: "run-1", acknowledged: true });
+    intake.resolve.mockClear();
+    intake.buildContext.mockClear();
+    const retried = successfulSnapshot(
+      await f.orchestrator.retry("run-1", { ...start, requestId: "request-2" }),
+    );
+    expect(retried.runId).toBe("run-2");
+    expect(retried.issueBinding).toBeUndefined();
+    expect(intake.resolve).not.toHaveBeenCalled();
+    expect(intake.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-2", binding: ISSUE_BINDING }),
+    );
+    expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "run-2",
+        initialContext: renderInitialTurnContext(ISSUE_ATTACHMENT),
+      }),
+    );
+    const attached = captured.records
+      .filter((event) => event.op === "coding-runtime.run.issue-context-attached")
+      .at(-1);
+    expect(JSON.parse(formatActivityLogProofLine(attached ?? {}))).toMatchObject({
+      runId: "run-2",
+      issuePurpose: "context",
+    });
+  });
 
   it("revalidates the exact binding on retry and carries it onto the fresh run", async () => {
     const intake = issueIntake();
@@ -5316,5 +5432,50 @@ describe("CodingRuntimeOrchestrator approved skills (#3417)", () => {
     expect(f.orchestrator.approvedSkills("")).toBeUndefined();
     expect(f.orchestrator.approvedSkills("../run-1")).toBeUndefined();
     expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("skl_repo-structure-summary");
+  });
+});
+
+describe("history initialization diagnostics", () => {
+  it("retains a persistence cause under the history diagnostic owner", async () => {
+    const store = createInMemoryUiStore();
+    try {
+      const history = new CodingRuntimeHistory(store, () => "operator", undefined);
+      const error = new TypeError("PRIVATE_HISTORY", { cause: new RangeError("PRIVATE_CAUSE") });
+      error.stack =
+        "TypeError: PRIVATE_HISTORY\n    at begin (/app/packages/keiko-server/dist/store/codingHistory.js:22:4)";
+      vi.spyOn(history, "begin").mockImplementation(() => {
+        throw error;
+      });
+      const captured = captureDiagnostics();
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        captured.diagnostics,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        () => "history-start-run",
+        undefined,
+        undefined,
+        history,
+      );
+      await f.orchestrator.start(start);
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          correlationId: "history-start-run",
+          operation: "coding-runtime.history",
+          message: "runtime-history-failed",
+          errorClass: "TypeError",
+          frames: ["packages/keiko-server/dist/store/codingHistory.js:22:4"],
+          causeChain: ["RangeError"],
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_");
+      expect(f.manager.start).not.toHaveBeenCalled();
+    } finally {
+      store.close();
+    }
   });
 });

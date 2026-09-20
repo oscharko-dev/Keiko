@@ -2,26 +2,26 @@
 // sixteen managed-OpenCode canonical identities below (the original seven workspace/verification
 // tools, the eight Git status/diff/stage/commit, push/pull-request and CI-observation tools, plus
 // #3386's H1 local repository-search handler projected as `keiko.repo.search@1` / alias
-// `keiko_repository_search` -- see `repositorySearchSpec` below) plus the two exhaustively-declared
-// native extensions (`question`, `todowrite` -- adapter-native, never Keiko tool descriptors, per
+// `keiko_repository_search` -- see `repositorySearchSpec` below) plus the exhaustively-declared
+// native extension (`question` -- adapter-native, never a Keiko tool descriptor, per
 // D2's explicit "not Keiko tools or compatibility exceptions").
 // packages/keiko-server/src/coding-sidecar-gateway.ts uses this set to build the `toolCatalog`
 // advertisement it forwards to the real model provider (the schema shown to the underlying LLM as
 // a function-calling interface -- advisory only; the provider performs no server-side schema
 // enforcement of its own).
 //
-// `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` below is the single source for the two native
+// `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` below is the single source for the native
 // extensions' exact pinned wire schemas. Unlike the sixteen managed tools, a native extension is
 // never compiled through the catalog dialect (no descriptor, no `pattern`-keyword gap: these are
 // plain literal JSON Schema objects, carried verbatim). packages/keiko-server/src/coding-runtime/
 // opencodeToolSchemas.ts imports them back to build `OPENCODE_MODEL_VISIBLE_TOOLS`, and
-// packages/keiko-model-gateway/src/toolCatalogBridge.ts imports them to append the two native
+// packages/keiko-model-gateway/src/toolCatalogBridge.ts imports it to append the native
 // extensions to a bound advertisement's model-visible tool list -- one copy, two consumers
 // (#3414 follow-up: the model-gateway bridge no longer drops a profile's native extensions).
 //
 // This set is intentionally NOT the source for
 // packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts's `OPENCODE_MODEL_VISIBLE_TOOLS`/
-// `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 1.18.30 runtime
+// `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 2.0.10 runtime
 // itself generates and enforces BEFORE a call ever reaches Keiko (owned by the concurrently-worked
 // opencodeRuntimeAdapter.ts) and must keep matching that generated adapter source exactly, pattern
 // keyword included, or the sidecar-gateway's incoming exact-set trust check
@@ -66,30 +66,33 @@ const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
-const OPENCODE_RUNTIME = { id: "opencode", version: "1.18.30" } as const;
+const OPENCODE_RUNTIME = { id: "opencode", version: "2.0.10" } as const;
 
 export interface OpenCodeNativeExtensionDefinition {
-  readonly alias: "question" | "todowrite";
+  readonly alias: "question";
   readonly contractVersion: 1;
   readonly description: string;
   readonly inputSchema: CatalogJsonObject;
 }
 
-// Exact v1.18.30 built-in `question` wire schema (pinned digest input; byte-identical to the
+// Exact v2.0.10 built-in `question` wire schema (pinned digest input; byte-identical to the
 // projection packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts pins for the
 // INCOMING sidecar trust check -- see this file's header comment for why this is the one source).
 const QUESTION_EXTENSION_SCHEMA: CatalogJsonObject = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
+  additionalProperties: false,
   properties: {
     questions: {
       description: "Questions to ask",
+      minItems: 1,
       items: {
+        additionalProperties: false,
         properties: {
           header: { description: "Very short label (max 30 chars)", type: "string" },
-          multiple: { description: "Allow selecting multiple choices", type: "boolean" },
+          multiple: { type: "boolean" },
           options: {
             description: "Available choices",
             items: {
+              additionalProperties: false,
               properties: {
                 description: { description: "Explanation of choice", type: "string" },
                 label: { description: "Display text (1-5 words, concise)", type: "string" },
@@ -111,36 +114,8 @@ const QUESTION_EXTENSION_SCHEMA: CatalogJsonObject = {
   type: "object",
 };
 
-// Exact v1.18.30 built-in `todowrite` wire schema (#2480); byte-identical to its source schema.
-const TODO_WRITE_EXTENSION_SCHEMA: CatalogJsonObject = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "object",
-  properties: {
-    todos: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          content: { type: "string", description: "Brief description of the task" },
-          status: {
-            type: "string",
-            description: "Current status of the task: pending, in_progress, completed, cancelled",
-          },
-          priority: {
-            type: "string",
-            description: "Priority level of the task: high, medium, low",
-          },
-        },
-        required: ["content", "status", "priority"],
-      },
-      description: "The updated todo list",
-    },
-  },
-  required: ["todos"],
-};
-
 /**
- * The two OpenCode-native extensions (ADR-0175 D2), exhaustively declared: never Keiko tool
+ * The OpenCode-native question extension (ADR-0175 D2), exhaustively declared: never a Keiko tool
  * descriptors, never compiled through the catalog dialect. This is the single source for their
  * pinned wire schemas -- packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts and
  * packages/keiko-model-gateway/src/toolCatalogBridge.ts both import this constant rather than
@@ -153,30 +128,21 @@ export const OPENCODE_NATIVE_EXTENSION_DEFINITIONS: readonly OpenCodeNativeExten
     description: "Ask the operator one or more structured clarifying questions before proceeding.",
     inputSchema: QUESTION_EXTENSION_SCHEMA,
   },
-  {
-    alias: "todowrite",
-    contractVersion: 1,
-    description: "Record or update the governed run's todo list.",
-    inputSchema: TODO_WRITE_EXTENSION_SCHEMA,
-  },
 ];
 
 function managedObjectSchema(
   properties: CatalogJsonObject,
   required: readonly string[],
 ): CatalogJsonObject {
-  // The managed-runtime dialect (dialect.ts `managedInputSchema`) requires every object-typed
-  // schema in the tree to declare `additionalProperties: true` (stripped on projection, since the
-  // pinned OpenCode runtime does not support declaring it restrictively) and every property to be
-  // required (the runtime declares every custom-tool argument required in its provider
-  // projection). `required` is intentionally alphabetical: `compileCatalogSchema` (schema.ts)
-  // re-sorts it, so an unsorted literal here would silently diverge from the compiled descriptor.
+  // V2 custom tools use closed object boundaries and require every declared argument.
+  // The descriptor already owns those constraints; projection must not rewrite them.
+  // Canonical compilation sorts required keys, so declare them in that order here too.
   const sortedRequired = [...required].sort(compareStrings);
   return {
     type: "object",
     properties,
     required: sortedRequired,
-    additionalProperties: true,
+    additionalProperties: false,
   };
 }
 
@@ -367,16 +333,9 @@ function repositorySearchSpec(): OpenCodeToolSpec {
 }
 
 function changesetEditSpec(): OpenCodeToolSpec {
-  // The real wire form (opencodeToolSchemas.ts CHANGESET_EDIT_SCHEMA) declares `selectedFiles`
-  // optional and `additionalProperties: false` at two nested levels; the managed-runtime dialect
-  // requires every property required and every object's additionalProperties stripped-as-true, so
-  // this projected schema is a strictly LOOSER, structurally-equivalent shape (every file must now
-  // be listed under `selectedFiles`, unknown extra keys are ignored rather than rejected). This is
-  // safe here: this schema is only ever advisory input to the underlying LLM's function-calling
-  // interface (packages/keiko-model-gateway forwards it to the provider, which performs no
-  // server-side schema enforcement of its own), never the dispatch-time enforcement boundary --
-  // the OpenCode-generated adapter source (OPENCODE_TOOL_SOURCE_DEFINITIONS, unchanged) and the
-  // real changeset handler keep their own independent, stricter validation.
+  // The provider descriptor requires selectedFiles explicitly; the runtime source also accepts
+  // omission. Both preserve the closed nested objects. Dispatch-time changeset validation
+  // remains authoritative and never gains permissions from this advisory model projection.
   const fileEntry = managedObjectSchema(
     {
       file: { type: "string", minLength: 1, maxLength: 512 },
@@ -432,15 +391,15 @@ function verificationSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.verification.run",
     alias: "keiko_verification",
     description:
-      "Run one named verification gate (test, typecheck, lint or build). Ordinary working-tree " +
-      "tests use an empty targetPath and may pass without commit proof; targeted-test requires " +
-      "one workspace-relative test path. For a commit, execute a ready stage proposal, or an " +
-      "approval-required stage proposal after approval, then rerun verification and proceed only " +
-      'when the result reports verification: { commitProof: "recorded" }. A ' +
-      "candidate-not-staged result with nextAction stage-then-verify names, under blocking, the " +
-      "unstaged and untracked paths that keep the proof from forming (a lockfile the dependency " +
-      "install created, build output no .gitignore covers): stage exactly those paths, or ignore " +
-      "them deliberately, then run the verification again.",
+      "Run one named verification gate (test, targeted-test, typecheck, lint or build). " +
+      "Ordinary working-tree checks use an empty targetPath; targeted-test requires one " +
+      "workspace-relative test path. verification.status passed and verification.completed " +
+      "confirm which checks ran successfully. The optional verification.commit describes " +
+      "commit eligibility separately: candidate-not-staged never means checks did not run. " +
+      "Only when the accepted task requests a commit, stage the intended changes and rerun " +
+      'verification until verification.commit.commitProof is "recorded". For that workflow, ' +
+      "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
+      "the intended paths or ignore generated output deliberately before verifying again.",
     inputSchema: managedObjectSchema(
       {
         verifierId: {
@@ -632,7 +591,7 @@ function gitCommitSpec(): OpenCodeToolSpec {
     description:
       "Create a commit proposal over the staged changes. This call does not " +
       "create a commit. First complete staging and rerun verification until it reports " +
-      'verification: { commitProof: "recorded" }.' +
+      'verification: { status: "passed", commit: { commitProof: "recorded" } }.' +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       { message: { type: "string", minLength: 1, maxLength: 8_192 } },

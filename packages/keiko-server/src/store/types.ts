@@ -9,6 +9,7 @@
 // import+export split so UiStore interface can reference these types in its own field signatures.
 // Drop .js extension: the package.json exports key is ./bff-wire (no extension), NodeNext matches
 // the literal specifier so the extension must match exactly.
+import type { CodingHistoryStore } from "./codingHistory.js";
 import type {
   Project,
   Chat,
@@ -106,6 +107,7 @@ export type ChatTurnCompletion =
   | { readonly kind: "conflict" };
 
 export interface UiStore {
+  readonly codingHistory?: CodingHistoryStore | undefined;
   readonly listProjects: () => readonly Project[];
   readonly createProject: (path: string, name?: string) => Project;
   readonly reconnectProject: (path: string) => Project;

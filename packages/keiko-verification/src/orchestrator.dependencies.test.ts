@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -145,6 +145,38 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     expect(report.dependencies?.state).toBe("installed");
     expect(report.results[0]?.status).toBe("passed");
     expect(report.overallStatus).toBe("passed");
+  });
+
+  it("never runs scripts when npm leaves node_modules linked outside the workspace", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run", lint: "eslint ." });
+    const outside = makeDependencyWorkspace({});
+    writeInstalledTree(outside.root);
+    const scripts = { test: "vitest run", lint: "eslint ." };
+    const plan = buildVerificationPlan(
+      workspace,
+      { scripts, mapping: classifyScripts(scripts) },
+      { only: ["lint", "test"] },
+    );
+    const spawned = sequencedSpawn([{ exitCode: 0 }, { exitCode: 0 }, { exitCode: 0 }]);
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install")
+        symlinkSync(
+          join(outside.root, "node_modules"),
+          join(workspace.root, "node_modules"),
+          "junction",
+        );
+      return spawned.fn(command, args, options);
+    };
+    const report = await runVerification(
+      plan,
+      testDeps(workspace, npm, { dependencyBootstrap: "auto" }),
+    );
+    expect(spawned.calls()).toHaveLength(1);
+    expect(report.dependencies?.state).toBe("failed");
+    expect(report.dependencies?.completionRecorded).toBe(false);
+    expect(report.overallStatus).toBe("failed");
+    expectSkippedForMissingDependencies(report.results[0], "lint");
+    expectSkippedForMissingDependencies(report.results[1], "test");
   });
 
   it("skips every planned step and never spawns a script when the dependency install fails", async () => {

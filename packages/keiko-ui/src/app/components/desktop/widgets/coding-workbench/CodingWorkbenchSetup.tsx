@@ -22,6 +22,11 @@
 // exit in the product (2026-09-03 dev log). The target branch defaults to the repository's
 // checked-out branch: a checkout whose integration branch is `dev` must not be offered `main`.
 
+import { CodingWorkbenchBranchField } from "./CodingWorkbenchBranchField";
+import {
+  useRepositoryBranchState,
+  type RepositoryBranchState,
+} from "../../hooks/useRepositoryBranchState";
 import {
   useCallback,
   useEffect,
@@ -39,12 +44,14 @@ import {
   bindVerifiedTaskWorkspace,
   repairAndBindVerifiedTaskWorkspace,
   type VerifiedTaskWorkspaceBindFailure,
+  type VerifiedTaskWorkspaceBindInput,
   type VerifiedTaskWorkspaceRepairOffer,
 } from "@/lib/verified-task-workspace-binding";
 import { fetchRepositoryBaseBranch } from "@/lib/task-workspace-api";
 import { TASK_WORKSPACE_MARKER_MESSAGE_KEYS } from "@/lib/task-workspace-marker-labels";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { secureRandomId } from "@/lib/secure-random";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
   useCodingWorkbenchTranslate,
@@ -54,15 +61,6 @@ import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
 import { cx } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
-import { CodingWorkbenchIssueIntake, IssueBaseRef } from "./CodingWorkbenchIssueIntake";
-import {
-  codingWorkbenchIssueTaskId,
-  useCodingWorkbenchIssueIntake,
-  type AcceptedWorkbenchIssue,
-  type IssueIntakeController,
-} from "./useCodingWorkbenchIssueIntake";
-export { codingWorkbenchIssueTaskId } from "./useCodingWorkbenchIssueIntake";
-
 // The opaque single-operator actor identity, mirroring useActiveWorkspaceState. The server treats
 // it as an opaque id only — never a credential.
 const STUDIO_OPERATOR = "studio-operator";
@@ -113,9 +111,6 @@ export interface CodingWorkbenchSetupProps {
   // during the initial load. The bootstrap section is the FIRST screen a fresh evaluation install
   // shows, so a clean form here would imply a verified runtime (ADR-0163 D9).
   readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
-  readonly acceptedIssue: AcceptedWorkbenchIssue | null | undefined;
-  readonly onAcceptedIssue: ((issue: AcceptedWorkbenchIssue | null) => void) | undefined;
-  readonly onOpenGit: (() => void) | undefined;
   // The typed repository path lives in the PARENT (#3452 F52). This card is unmounted the moment a
   // binding or a run workspace arrives -- a sub-second flip on a fresh load -- and a card-owned
   // draft goes with it, so the operator watched what they were typing replaced by the selection
@@ -227,39 +222,42 @@ async function settleBoundWorkspace(
 interface BindInput {
   readonly root: string;
   readonly baseBranch: string;
-  readonly issue?: AcceptedWorkbenchIssue | null | undefined;
   readonly refreshWorkspace: () => Promise<boolean>;
   readonly onPhase: (phase: SetupPhase) => void;
+  readonly collisionSuffix: string;
 }
 
 // Drive provision → reconcile → activate as one operator action. `onPhase` advances the surfaced
 // pending phase from binding to verifying; every server error maps to a bounded outcome.
 async function executeBind(input: BindInput): Promise<SetupStatus> {
-  const result = await bindVerifiedTaskWorkspace({
-    root: input.root,
-    taskId:
-      input.issue === null || input.issue === undefined
-        ? codingWorkbenchSetupTaskId(input.baseBranch)
-        : codingWorkbenchIssueTaskId(input.issue.binding.issueNumber),
-    ...(input.issue === null || input.issue === undefined
-      ? { baseBranch: input.baseBranch }
-      : {
-          source: {
-            kind: "github-issue" as const,
-            issueRef: input.issue.issueRef,
-            expectedBindingDigest: input.issue.binding.bindingDigest,
-          },
-        }),
-    requestedBy: STUDIO_OPERATOR,
-    onProvisioned: () => {
-      input.onPhase("verifying");
-    },
-  });
+  const request = setupBindRequest(input);
+  let result = await bindVerifiedTaskWorkspace(request);
+  if (!result.ok && result.stage === "provision" && result.code === "BRANCH_CONFLICT") {
+    reportClientDiagnostic(
+      "[keiko] coding workbench task branch collision; creating separate task",
+    );
+    result = await bindVerifiedTaskWorkspace({
+      ...request,
+      taskId: `${request.taskId.slice(0, 80)}-${input.collisionSuffix}`,
+    });
+  }
   if (!result.ok) return failureStatus(result);
   return settleBoundWorkspace(input.refreshWorkspace);
 }
 
-interface RepairInput extends Omit<BindInput, "baseBranch"> {
+function setupBindRequest(input: BindInput): VerifiedTaskWorkspaceBindInput {
+  return {
+    root: input.root,
+    taskId: codingWorkbenchSetupTaskId(input.baseBranch),
+    baseBranch: input.baseBranch,
+    requestedBy: STUDIO_OPERATOR,
+    onProvisioned: (): void => {
+      input.onPhase("verifying");
+    },
+  };
+}
+
+interface RepairInput extends Omit<BindInput, "baseBranch" | "collisionSuffix"> {
   readonly workspaceId: string;
   readonly strategy: NonNullable<VerifiedTaskWorkspaceRepairOffer["strategy"]>;
 }
@@ -352,41 +350,23 @@ function useSetupAttempt(params: {
   return { start };
 }
 
-function useSetupActions(params: {
+interface SetupActionsInput {
   readonly repositoryPath: string;
   readonly branch: TargetBranchState;
-  readonly issue: AcceptedWorkbenchIssue | null | undefined;
-  readonly unresolvedIssue: boolean;
   readonly refreshWorkspace: () => Promise<boolean>;
   readonly status: SetupStatus;
   readonly setStatus: Dispatch<SetStateAction<SetupStatus>>;
-}): SetupActions {
-  const { repositoryPath, branch, refreshWorkspace, status, setStatus, issue, unresolvedIssue } =
-    params;
-  const targetBranch = issue?.binding.defaultBaseRef ?? branch.targetBranch;
+  readonly branchAvailable: boolean;
+}
+
+function useSetupActions(params: SetupActionsInput): SetupActions {
+  const { repositoryPath, branch, refreshWorkspace, status, setStatus } = params;
+  const targetBranch = branch.targetBranch;
   const root = repositoryPath.trim();
-  const baseBranch = targetBranch.trim();
   const pending = status.kind === "pending";
+  const [collisionSuffix] = useState(() => secureRandomId("task"));
   const attempt = useSetupAttempt({ repositoryPath, targetBranch, setStatus });
-  const onSubmit = (event: { preventDefault: () => void }): void => {
-    event.preventDefault();
-    if (pending || unresolvedIssue || root === "" || baseBranch === "") return;
-    // The task id is derived from the target branch, so a branch that is not authoritative for
-    // THIS path would provision and activate the previous repository's workspace (CodeRabbit
-    // review of #3381). `lookupFor` runs on blur, and Enter submits without ever blurring the
-    // field, so this is also the only place that can arm the missing lookup: the bind is refused
-    // and re-armed until the answer for the path in the field has settled.
-    if (!issue && !branch.settled) {
-      if (!branch.resolving) branch.lookupFor(root);
-      return;
-    }
-    const publish = attempt.start();
-    publish({ kind: "pending", phase: "binding" });
-    settleOutcome(
-      executeBind({ root, baseBranch, issue, refreshWorkspace, onPhase: phaseReporter(publish) }),
-      publish,
-    );
-  };
+  const onSubmit = setupSubmitAction(params, attempt.start, collisionSuffix);
   const onRepair = (): void => {
     const offer = status.kind === "error" ? status.repair : undefined;
     const strategy = offer?.strategy ?? null;
@@ -405,6 +385,46 @@ function useSetupActions(params: {
     );
   };
   return { onSubmit, onRepair };
+}
+
+function setupSubmitAction(
+  params: SetupActionsInput,
+  start: () => SetupPublish,
+  collisionSuffix: string,
+): SetupActions["onSubmit"] {
+  const { repositoryPath, branch, refreshWorkspace, status } = params;
+  const root = repositoryPath.trim();
+  const baseBranch = branch.targetBranch.trim();
+  const pending = status.kind === "pending";
+  return (event): void => {
+    event.preventDefault();
+    if (pending || root === "" || baseBranch === "") return;
+    // The task id is derived from the target branch, so a branch that is not authoritative for
+    // THIS path would provision and activate the previous repository's workspace (CodeRabbit
+    // review of #3381). `lookupFor` runs on blur, and Enter submits without ever blurring the
+    // field, so this is also the only place that can arm the missing lookup: the bind is refused
+    // and re-armed until the answer for the path in the field has settled.
+    if (!settleSubmitBranch(branch, root)) return;
+    if (!params.branchAvailable) return;
+    const publish = start();
+    publish({ kind: "pending", phase: "binding" });
+    settleOutcome(
+      executeBind({
+        root,
+        baseBranch,
+        refreshWorkspace,
+        collisionSuffix,
+        onPhase: phaseReporter(publish),
+      }),
+      publish,
+    );
+  };
+}
+
+function settleSubmitBranch(branch: TargetBranchState, root: string): boolean {
+  if (branch.settled) return true;
+  if (!branch.resolving) branch.lookupFor(root);
+  return false;
 }
 
 // The phase of an abandoned attempt is as stale as its outcome: it would re-disable the fields and
@@ -780,27 +800,6 @@ function useRepositoryPathDefault(
   return [repositoryPath, onDraftChange];
 }
 
-function submitBlocked(
-  pending: boolean,
-  unresolvedIssue: boolean,
-  issue: AcceptedWorkbenchIssue | null,
-  branch: TargetBranchState,
-  repositoryPath: string,
-): boolean {
-  return pending || unresolvedIssue || setupInputsUnavailable(issue, branch, repositoryPath);
-}
-
-function setupInputsUnavailable(
-  issue: AcceptedWorkbenchIssue | null,
-  branch: TargetBranchState,
-  repositoryPath: string,
-): boolean {
-  return (
-    repositoryPath.trim() === "" ||
-    (issue === null && (branch.resolving || branch.targetBranch.trim() === ""))
-  );
-}
-
 // Named beside this file's other wiring hooks (`useRepositoryPathDefault`, `useTargetBranchDefault`,
 // `useSetupActions`), so the card states the release rule rather than spelling out an effect -- and
 // keeps AGENTS.md section 6's 50-line ceiling after taking the parent-held draft (#3452 F52).
@@ -811,14 +810,12 @@ function useSetupStatus(): readonly [SetupStatus, Dispatch<SetStateAction<SetupS
   return [status, setStatus, status.kind === "pending"];
 }
 
-function useReleaseAcceptedIssue(
-  acceptedIssue: AcceptedWorkbenchIssue | null | undefined,
-  issue: AcceptedWorkbenchIssue | null,
-  onAcceptedIssue: (issue: AcceptedWorkbenchIssue | null) => void,
-): void {
-  useEffect(() => {
-    if (acceptedIssue !== null && issue === null) onAcceptedIssue(null);
-  }, [acceptedIssue, issue, onAcceptedIssue]);
+function targetBranchAvailable(branches: RepositoryBranchState, value: string): boolean {
+  return (
+    !branches.loading &&
+    branches.error === null &&
+    branches.branches.some((branch) => branch.name === value)
+  );
 }
 
 export function CodingWorkbenchSetup({
@@ -826,9 +823,6 @@ export function CodingWorkbenchSetup({
   selectedBaseBranch,
   refreshWorkspace,
   runtimePosture,
-  acceptedIssue = null,
-  onAcceptedIssue = (): void => undefined,
-  onOpenGit,
   repositoryPathDraft,
   onRepositoryPathDraftChange,
 }: CodingWorkbenchSetupProps): ReactNode {
@@ -838,38 +832,30 @@ export function CodingWorkbenchSetup({
     onRepositoryPathDraftChange,
   );
   const branch = useTargetBranchDefault(selectedRoot, repositoryPath, selectedBaseBranch);
-  const intake = useCodingWorkbenchIssueIntake(repositoryPath);
-  const issue = acceptedIssue?.repositoryPath === repositoryPath.trim() ? acceptedIssue : null;
-  const unresolvedIssue = intake.issueRef.trim() !== "" && issue === null;
-  useReleaseAcceptedIssue(acceptedIssue, issue, onAcceptedIssue);
+  const branches = useRepositoryBranchState(repositoryPath.trim() || null);
+  const branchAvailable = targetBranchAvailable(branches, branch.targetBranch);
   const [status, setStatus, pending] = useSetupStatus();
   // A branch lookup in flight is the one wait this card imposes on the operator: until it settles,
   // the field's branch belongs to another path (or to nothing), and binding it would derive the
   // task id from the wrong repository's default.
-  const submitDisabled = submitBlocked(pending, unresolvedIssue, issue, branch, repositoryPath);
   const actions = useSetupActions({
     repositoryPath,
     branch,
-    issue,
-    unresolvedIssue,
     refreshWorkspace,
     status,
     setStatus,
+    branchAvailable,
   });
 
   return (
     <SetupCard
       repositoryPath={repositoryPath}
       branch={branch}
-      issue={issue}
+      branches={branches}
       pending={pending}
       setRepositoryPath={setRepositoryPath}
-      intake={intake}
       runtimePosture={runtimePosture}
-      onAcceptedIssue={onAcceptedIssue}
-      onOpenGit={onOpenGit}
       status={status}
-      submitDisabled={submitDisabled}
       actions={actions}
     />
   );
@@ -878,15 +864,11 @@ export function CodingWorkbenchSetup({
 interface SetupCardProps {
   readonly repositoryPath: string;
   readonly branch: TargetBranchState;
-  readonly issue: AcceptedWorkbenchIssue | null;
+  readonly branches: RepositoryBranchState;
   readonly pending: boolean;
   readonly setRepositoryPath: (value: string) => void;
-  readonly intake: IssueIntakeController;
   readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
-  readonly onAcceptedIssue: (issue: AcceptedWorkbenchIssue | null) => void;
-  readonly onOpenGit: (() => void) | undefined;
   readonly status: SetupStatus;
-  readonly submitDisabled: boolean;
   readonly actions: SetupActions;
 }
 
@@ -902,27 +884,18 @@ function SetupCard(props: SetupCardProps): ReactNode {
         <SetupFields
           repositoryPath={props.repositoryPath}
           targetBranch={props.branch.targetBranch}
-          issue={props.issue}
+          branches={props.branches}
           pending={props.pending}
           onRepositoryPathChange={props.setRepositoryPath}
           onRepositoryPathSettled={props.branch.lookupFor}
           onTargetBranchChange={props.branch.chooseTargetBranch}
-        />
-        <CodingWorkbenchIssueIntake
-          intake={props.intake}
-          accepted={props.issue}
-          repositoryPath={props.repositoryPath}
-          runtimePosture={props.runtimePosture}
-          pending={props.pending}
-          onAccepted={props.onAcceptedIssue}
-          onOpenGit={props.onOpenGit}
         />
         <p id="coding-workbench-setup-help" className={styles.helpText}>
           {t("codingWorkbench.setup.help")}
         </p>
         <SetupActionRow
           status={props.status}
-          submitDisabled={props.submitDisabled}
+          submitDisabled={setupCardSubmitBlocked(props)}
           onRepair={props.actions.onRepair}
           t={t}
         />
@@ -931,10 +904,19 @@ function SetupCard(props: SetupCardProps): ReactNode {
   );
 }
 
+function setupCardSubmitBlocked(props: SetupCardProps): boolean {
+  return (
+    props.pending ||
+    props.repositoryPath.trim() === "" ||
+    props.branch.resolving ||
+    !targetBranchAvailable(props.branches, props.branch.targetBranch)
+  );
+}
+
 function SetupFields({
   repositoryPath,
   targetBranch,
-  issue,
+  branches,
   pending,
   onRepositoryPathChange,
   onRepositoryPathSettled,
@@ -942,7 +924,7 @@ function SetupFields({
 }: {
   readonly repositoryPath: string;
   readonly targetBranch: string;
-  readonly issue: AcceptedWorkbenchIssue | null;
+  readonly branches: RepositoryBranchState;
   readonly pending: boolean;
   readonly onRepositoryPathChange: (value: string) => void;
   // Fired when the operator leaves the path field, so the branch default follows a typed path
@@ -958,11 +940,12 @@ function SetupFields({
         onChange={onRepositoryPathChange}
         onSettled={onRepositoryPathSettled}
       />
-      {issue === null ? (
-        <TargetBranchField value={targetBranch} pending={pending} onChange={onTargetBranchChange} />
-      ) : (
-        <IssueBaseRef issue={issue} />
-      )}
+      <CodingWorkbenchBranchField
+        branches={branches}
+        value={targetBranch}
+        pending={pending}
+        onChange={onTargetBranchChange}
+      />
     </>
   );
 }
@@ -996,36 +979,6 @@ function RepositoryPathField({
         }}
         onBlur={(event) => {
           onSettled(event.target.value);
-        }}
-      />
-    </>
-  );
-}
-
-function TargetBranchField({
-  value,
-  pending,
-  onChange,
-}: {
-  readonly value: string;
-  readonly pending: boolean;
-  readonly onChange: (value: string) => void;
-}): ReactNode {
-  const t = useCodingWorkbenchTranslate();
-  return (
-    <>
-      <label className={styles.fieldLabel} htmlFor="coding-workbench-setup-branch">
-        {t("codingWorkbench.setup.targetBranch")}
-      </label>
-      <input
-        id="coding-workbench-setup-branch"
-        className={styles.setupInput}
-        type="text"
-        value={value}
-        disabled={pending}
-        placeholder={t("codingWorkbench.setup.targetBranchPlaceholder")}
-        onChange={(event) => {
-          onChange(event.target.value);
         }}
       />
     </>

@@ -81,7 +81,7 @@ export interface CatalogProfileToolRef {
   readonly alias: string;
 }
 export interface CatalogNativeExtension {
-  readonly alias: "question" | "todowrite";
+  readonly alias: "question";
   readonly contractVersion: 1;
 }
 export interface CatalogCompatibilityEndpoint {

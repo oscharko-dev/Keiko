@@ -10,20 +10,16 @@ describe("functional OpenCode prompt parsing", () => {
     expect(
       functionalPromptText(
         JSON.stringify({
-          parts: [
-            { type: "text", text: intent },
-            { type: "text", text: context, synthetic: true },
-          ],
+          text: `${intent}\n\n${context}`,
         }),
       ),
     ).toBe(`${intent}\n\n${context}`);
   });
 
-  it.each([
-    { parts: [{ type: "image", text: "not-text" }] },
-    { parts: [{ type: "text", text: 7 }] },
-    { parts: [] },
-  ])("refuses malformed or non-text prompt parts", (body) => {
-    expect(functionalPromptText(JSON.stringify(body))).toBe("");
-  });
+  it.each([{ parts: [{ type: "image", text: "not-text" }] }, { text: 7 }, {}])(
+    "refuses malformed or non-text V2 prompt bodies",
+    (body) => {
+      expect(functionalPromptText(JSON.stringify(body))).toBe("");
+    },
+  );
 });

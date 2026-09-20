@@ -25,7 +25,11 @@ import type { VerificationReport } from "@oscharko-dev/keiko-verification";
 import type { NetworkIsolationProbe } from "./editor/verificationExecution.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
 import { writeToolCatalogQualificationObservation } from "../../../scripts/lib/tool-catalog-qualification-observation.mjs";
-import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -169,9 +173,40 @@ describe("startRun verify dispatch", () => {
 
     expect(verificationExecutor).toHaveBeenCalledOnce();
     expect(verificationExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({ probeCwd: workspaceRoot }),
+      expect.objectContaining({ probeCwd: workspaceRoot, correlationId: result.runId }),
     );
     expect(registry.get(result.runId)?.report).toBe(report);
+  });
+
+  it("persists workspace lifecycle with the harness run correlation", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-harness-verify-log-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    try {
+      const request = ok(
+        parseRunRequest(
+          JSON.stringify({
+            taskType: "verify",
+            modelId: "m",
+            input: { workspaceRoot },
+          }),
+        ),
+      );
+      const result = startRun({ request, model: REJECT_MODEL, registry }, (value) => value);
+      await waitForTerminal(result.runId);
+      const events = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "editor.verification.workspace",
+      ).map((line) => expectActivityLogProof("editor.verification.workspace.emitted-line", line));
+      expect(events.map((event) => [event.correlationId, event.state])).toEqual([
+        [result.runId, "waiting"],
+        [result.runId, "acquired"],
+        [result.runId, "released"],
+      ]);
+    } finally {
+      closeFileServerLogSinks();
+      vi.unstubAllEnvs();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("returns a synchronous {runId, fingerprint} and registers the run", () => {

@@ -22,6 +22,8 @@ vi.mock("node:fs", async (importOriginal) => {
 import type { ProductionCodingRuntimeResolverInput } from "../productionCodingRuntimeResolver.js";
 import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import {
+  FUNCTIONAL_PLAN_STEP_READ,
+  FUNCTIONAL_PLAN_STEP_VERIFY,
   functionalWorkspaceRead,
   resolveFunctionalChildModelInput,
   scriptedResponse,
@@ -89,18 +91,25 @@ describe("functional browser cancellation hold", () => {
       next: "after",
       holdAfterVerification: true,
     };
-    const tools = Array.from({ length: 7 }, () => scriptedResponse(script).toolCalls[0]?.name);
+    const initial = Array.from({ length: 3 }, () => scriptedResponse(script));
+    expect(script.verificationIssued).not.toBe(true);
+    expect(initial[0]?.content).toBe(FUNCTIONAL_PLAN_STEP_READ);
+    expect(initial[2]?.content).toBe(FUNCTIONAL_PLAN_STEP_VERIFY);
+    const verification = scriptedResponse(script);
+    expect(script.verificationIssued).toBe(true);
+    const held = Array.from({ length: 3 }, () => scriptedResponse(script));
 
-    expect(tools).toEqual([
-      "todowrite",
+    expect(
+      [...initial, verification, ...held].map((response) => response.toolCalls[0]?.name),
+    ).toEqual([
       "keiko_workspace_read",
       "question",
       "keiko_changeset_edit",
-      "todowrite",
       "keiko_verification",
       "question",
+      "question",
+      "question",
     ]);
-    expect(script.verificationIssued).toBe(true);
   });
 });
 

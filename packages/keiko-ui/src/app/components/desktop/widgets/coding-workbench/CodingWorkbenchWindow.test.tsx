@@ -85,6 +85,20 @@ vi.mock("@/lib/api", async (importOriginal) => {
   };
 });
 
+// Task selection/persistence is exercised at its owning hook in useCodingTaskSession.test.tsx.
+// These regression pins continue to exercise the existing runtime controls for the selected run.
+vi.mock("./useCodingTaskSession", () => ({
+  useCodingTaskSession: (): unknown => ({
+    detail: null,
+    conversationId: undefined,
+    visibleRun: true,
+    pending: false,
+    error: false,
+    newTask: vi.fn(),
+    finish: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
 }));
@@ -131,7 +145,7 @@ vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../context/ChatSessionContext")>();
   return {
     ...actual,
-    useOptionalChatSessionCatalog: () => ({
+    useOptionalChatSessionCatalog: (): unknown => ({
       activeProject: chatCatalogMock.activeProject,
       projects: chatCatalogMock.projects,
       models: [],
@@ -430,31 +444,22 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
+  // The composer is the sole issue entry point after every terminal outcome. End-to-end issue
+  // resolution/authority pins live in CodingWorkbenchSetup.issue-intake.test.tsx.
   it.each(["succeeded", "failed", "cancelled", "taken-over"] as const)(
-    "can reopen issue intake after a %s run with retained activity",
-    async (state) => {
-      const diagnostic = vi.fn();
-      setClientDiagnosticWriter(diagnostic);
-      try {
-        renderWorkbench(
-          liveState({
-            run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
-            events: [event(1)],
-          }),
-        );
-        await userEvent.setup().click(
-          screen.getByRole("button", {
-            name: "Start from a GitHub issue",
-          }),
-        );
-        expect(screen.getByRole("region", { name: "Code setup" })).toBeVisible();
-        expect(diagnostic).toHaveBeenCalledWith(
-          "[keiko] coding workbench issue intake opened",
-          undefined,
-        );
-      } finally {
-        resetClientDiagnosticWriter();
-      }
+    "keeps the composer available after a %s run without reopening setup",
+    (state) => {
+      renderWorkbench(
+        liveState({
+          run: { status: "ready", error: null, value: snapshot({ state, runId: "run-1" }) },
+          events: [event(1)],
+        }),
+      );
+      expect(screen.getByRole("textbox", { name: "Task instructions" })).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: "Start from a GitHub issue" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Code setup" })).not.toBeInTheDocument();
     },
   );
 
@@ -1026,7 +1031,9 @@ describe("CodingWorkbenchWindow", () => {
     expect(
       screen.queryByText(/Browser window not paired|keiko start --open/u),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      "Not ready to start",
+    );
     expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -1077,7 +1084,9 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      "Not ready to start",
+    );
     openWorkbenchInformation();
     expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
   });
@@ -1107,7 +1116,7 @@ describe("CodingWorkbenchWindow", () => {
     it("never renders the plain Ready to start label over an evaluation runtime", (): void => {
       renderWorkbench(evaluationState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByRole("status")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
@@ -1116,7 +1125,7 @@ describe("CodingWorkbenchWindow", () => {
       renderWorkbench(evaluationState());
 
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
-      expect(screen.getByRole("status")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
@@ -1129,7 +1138,7 @@ describe("CodingWorkbenchWindow", () => {
       expect(
         screen.getByText("Unverified evaluation runtime — no platform signature"),
       ).toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent(
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
         "Runtime available as an unverified evaluation runtime",
       );
     });
@@ -1151,7 +1160,7 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps a platform-qualified runtime rendering exactly as before", (): void => {
       renderWorkbench(liveState({ run: { status: "ready", value: null, error: null } }));
 
-      expect(screen.getByRole("status")).toHaveTextContent("Runtime ready");
+      expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent("Runtime ready");
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
       openWorkbenchInformation();
       expect(
@@ -1413,7 +1422,9 @@ describe("CodingWorkbenchWindow", () => {
         },
       }),
     );
-    expect(screen.getByRole("status")).toHaveTextContent("Workspace unavailable");
+    expect(screen.getByTestId("coding-runtime-announcement")).toHaveTextContent(
+      "Workspace unavailable",
+    );
     openWorkbenchInformation();
     expect(screen.getByText("task-1 · issue/2257 · drifted")).toBeInTheDocument();
   });
@@ -2254,11 +2265,9 @@ describe("CodingWorkbenchWindow", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
-  // 0.3.0 release audit: `RuntimeControls` rendered nothing for a paused run, and these two
-  // buttons are the ONLY call sites of `actions.stop` and `actions.takeover` in the whole UI — so
-  // a paused run offered no way to end it at all, while the server admits stop and takeover from
-  // `paused`. Pausing must not remove the operator's exits.
-  it("keeps stop and takeover reachable while a run is paused", async () => {
+  // Owner decision in #3561: retain the paused-run exit through Composer Stop; remove the
+  // duplicate action bar. The same server stop action still revokes the paused run authority.
+  it("keeps stop reachable in the composer while a run is paused", async () => {
     const user = userEvent.setup();
     const liveActions = renderWorkbench(
       liveState({
@@ -2273,8 +2282,7 @@ describe("CodingWorkbenchWindow", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop run" }));
     expect(liveActions.stop).toHaveBeenCalledOnce();
-    await user.click(screen.getByRole("button", { name: "Take over manually" }));
-    expect(liveActions.takeover).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Take over manually" })).toBeNull();
   });
 
   // A run paused FOR the operator's package-script decision offers no Resume and no resume-mode
@@ -2460,10 +2468,11 @@ describe("CodingWorkbenchWindow", () => {
     ).toBeInTheDocument();
   });
 
-  it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", () => {
+  it("virtualizes a 1,000-event timeline to at most 96 rendered event rows", async () => {
     const events = Array.from({ length: 1_000 }, (_, index) => event(index + 1));
     runtimeHookMock.mockReturnValue({ state: liveState({ events }), actions: actions() });
     const { container } = render(<CodingWorkbenchWindow />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Run details" }));
 
     expect(
       container.querySelectorAll(

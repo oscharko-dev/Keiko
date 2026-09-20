@@ -23,6 +23,7 @@
 // package below the workspace's own manifests names. After npm exits, the tree it installed is
 // still held to the same rule.
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
@@ -35,7 +36,12 @@ import {
   type RunCommandDeps,
   type SpawnFn,
 } from "@oscharko-dev/keiko-tools";
-import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import {
+  isWithinWorkspace,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+  type WorkspaceStat,
+} from "@oscharko-dev/keiko-workspace";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   DEPENDENCY_INSTALL_LIMITS,
@@ -87,6 +93,11 @@ const LOCKFILE_MAX_BYTES = 64 * 1_048_576;
 const MANIFEST = "package.json";
 const LOCKFILES: readonly string[] = ["package-lock.json", "npm-shrinkwrap.json"];
 const INSTALLED_TREE_MARKER = join("node_modules", ".package-lock.json");
+// Process-owned receipt: repository files cannot create or extend installation authority.
+// Restarts discard receipts and require a fresh successful bootstrap.
+const completedInstalls = new Map<string, string>();
+const MAX_INSTALL_RECEIPTS = 32;
+const MAX_INSTALL_ENTRIES = 100_000;
 // Every lockfile npm reads a source from: the root lockfiles and the tree it already installed.
 const SOURCE_LOCKFILES: readonly string[] = [...LOCKFILES, INSTALLED_TREE_MARKER];
 const LOCKFILE_VERSIONS: ReadonlySet<unknown> = new Set<unknown>([2, 3]);
@@ -116,7 +127,8 @@ export type DependencyBootstrapRefusal =
   | "manifest-unreadable"
   | "lockfile-unreadable"
   | "unapproved-source"
-  | "workspaces-unresolved";
+  | "workspaces-unresolved"
+  | "install-inspection-unavailable";
 
 export type DependencyBootstrapPlan =
   | { readonly kind: "none" }
@@ -141,6 +153,20 @@ export interface DependencyBootstrapDeps {
   readonly platform?: RunCommandDeps["platform"] | undefined;
   // Starts the registry egress proxy the install runs behind; tests inject their own.
   readonly startEgressProxy?: (() => Promise<RegistryEgressProxy>) | undefined;
+  readonly onFailure?:
+    | ((failure: {
+        readonly stage: "proxy-start" | "post-proxy" | "command" | "inspection";
+        readonly error: unknown;
+      }) => void)
+    | undefined;
+}
+
+function reportDependencyBootstrapFailure(
+  deps: Pick<DependencyBootstrapDeps, "onFailure">,
+  stage: "proxy-start" | "post-proxy" | "command" | "inspection",
+  error: unknown,
+): void {
+  deps.onFailure?.({ stage, error });
 }
 
 export interface DependencyBootstrapOutcome {
@@ -361,21 +387,165 @@ function lockfileState(root: string, fs: WorkspaceFs): VerificationLockfileState
     : "absent";
 }
 
-// npm's own currency heuristic, read rather than re-derived: the hidden lockfile it writes into
-// node_modules describes the installed tree, and it is current while nothing it was derived from
-// (the manifest, a lockfile) has been written since.
+function completedInstallCurrent(root: string, fs: WorkspaceFs): boolean {
+  const receipt = completedInstalls.get(root);
+  return receipt !== undefined && receipt === installationFingerprint(root, fs);
+}
+
+type InstallInspectionCode =
+  | "DEPENDENCY_TREE_UNREADABLE"
+  | "DEPENDENCY_TREE_LIMIT"
+  | "DEPENDENCY_TREE_IDENTITY_UNAVAILABLE"
+  | "DEPENDENCY_TREE_DIRECTORY_UNSAFE";
+class InstallInspectionError extends Error {
+  public constructor(
+    public readonly code: InstallInspectionCode,
+    cause?: unknown,
+  ) {
+    super("Dependency installation identity inspection failed", { cause });
+  }
+}
+
+function optionalInspectionStat(fs: WorkspaceFs, path: string): WorkspaceStat | undefined {
+  try {
+    return fs.stat(path);
+  } catch (cause) {
+    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return undefined;
+    throw new InstallInspectionError("DEPENDENCY_TREE_UNREADABLE", cause);
+  }
+}
+
+function inspectionPath(root: string, fs: WorkspaceFs, path: string): string {
+  let canonical: string;
+  try {
+    canonical = fs.realPath(path);
+  } catch (cause) {
+    throw new InstallInspectionError("DEPENDENCY_TREE_UNREADABLE", cause);
+  }
+  if (!isWithinWorkspace(root, canonical))
+    throw new InstallInspectionError("DEPENDENCY_TREE_DIRECTORY_UNSAFE");
+  return canonical;
+}
+
+function inspectionStat(fs: WorkspaceFs, path: string): WorkspaceStat {
+  try {
+    return fs.stat(path);
+  } catch (cause) {
+    throw new InstallInspectionError("DEPENDENCY_TREE_UNREADABLE", cause);
+  }
+}
+
+// A receipt is usable only when every contained entry has current identity evidence.
+function installationFingerprint(root: string, fs: WorkspaceFs): string {
+  const hash = createHash("sha256");
+  const canonicalRoot = fs.realPath(root);
+  const pending = [join(canonicalRoot, "node_modules")];
+  const visited = new Set<string>();
+  let entries = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (directory === undefined) break;
+    if (visited.has(directory)) continue;
+    visited.add(directory);
+    const stat = inspectionStat(fs, directory);
+    if (!stat.isDirectory || stat.isSymbolicLink)
+      throw new InstallInspectionError("DEPENDENCY_TREE_DIRECTORY_UNSAFE");
+    fingerprintStat(hash, directory, stat);
+    const children = inspectionChildren(fs, directory, MAX_INSTALL_ENTRIES - entries);
+    entries += children.length;
+    if (entries >= MAX_INSTALL_ENTRIES) throw new InstallInspectionError("DEPENDENCY_TREE_LIMIT");
+    fingerprintChildren(canonicalRoot, directory, children, fs, hash, pending);
+  }
+  fingerprintInputs(root, fs, hash);
+  return hash.digest("hex");
+}
+
+function inspectionChildren(
+  fs: WorkspaceFs,
+  directory: string,
+  limit: number,
+): ReturnType<WorkspaceFs["readDir"]> {
+  try {
+    return fs.readDir(directory, limit);
+  } catch (cause) {
+    throw new InstallInspectionError("DEPENDENCY_TREE_UNREADABLE", cause);
+  }
+}
+
+function fingerprintChildren(
+  root: string,
+  directory: string,
+  children: ReturnType<WorkspaceFs["readDir"]>,
+  fs: WorkspaceFs,
+  hash: ReturnType<typeof createHash>,
+  pending: string[],
+): void {
+  for (const child of children) {
+    const path = join(directory, child.name);
+    const stat = inspectionStat(fs, path);
+    fingerprintStat(hash, path, stat);
+    const target = inspectionPath(root, fs, path);
+    const targetStat = stat.isSymbolicLink ? inspectionStat(fs, target) : stat;
+    if (stat.isSymbolicLink) fingerprintStat(hash, target, targetStat);
+    if (targetStat.isDirectory) pending.push(target);
+  }
+}
+
+function fingerprintInputs(
+  root: string,
+  fs: WorkspaceFs,
+  hash: ReturnType<typeof createHash>,
+): void {
+  for (const name of [MANIFEST, ...LOCKFILES]) {
+    const path = join(root, name);
+    if (!fs.exists(path)) hash.update(JSON.stringify([name, "absent"]));
+    else fingerprintStat(hash, name, inspectionStat(fs, path));
+  }
+}
+
+function fingerprintStat(
+  hash: ReturnType<typeof createHash>,
+  name: string,
+  stat: WorkspaceStat,
+): void {
+  if (stat.fileIdentity === undefined || stat.ctimeNs === undefined)
+    throw new InstallInspectionError("DEPENDENCY_TREE_IDENTITY_UNAVAILABLE");
+  hash.update(
+    JSON.stringify([name, stat.fileIdentity, stat.ctimeNs, stat.size, stat.isSymbolicLink]),
+  );
+}
+
+// npm may write its hidden lockfile before an install fails, leaving packages only partly unpacked.
+// Trust its currency heuristic only after this bootstrap has observed a successful, confined install.
 function installedTreeCurrent(root: string, fs: WorkspaceFs): boolean {
-  const installed = statOrUndefined(fs, join(root, INSTALLED_TREE_MARKER))?.mtimeMs;
-  if (installed === undefined) return false;
+  const installed = optionalInspectionStat(fs, join(root, INSTALLED_TREE_MARKER))?.mtimeMs;
+  if (installed === undefined || !completedInstallCurrent(root, fs)) return false;
   const inputs = [MANIFEST, ...LOCKFILES]
-    .map((name) => statOrUndefined(fs, join(root, name))?.mtimeMs)
+    .map((name) => optionalInspectionStat(fs, join(root, name))?.mtimeMs)
     .filter((mtime): mtime is number => mtime !== undefined);
   return inputs.every((mtime) => mtime <= installed);
+}
+
+function recordCompletedInstall(root: string, fs: WorkspaceFs): void {
+  const fingerprint = installationFingerprint(root, fs);
+  completedInstalls.delete(root);
+  if (completedInstalls.size >= MAX_INSTALL_RECEIPTS) {
+    const oldest = completedInstalls.keys().next().value;
+    if (oldest !== undefined) completedInstalls.delete(oldest);
+  }
+  completedInstalls.set(root, fingerprint);
+}
+
+function assertInstallDirectory(root: string, fs: WorkspaceFs): void {
+  const stat = optionalInspectionStat(fs, join(root, "node_modules"));
+  if (stat !== undefined && (!stat.isDirectory || stat.isSymbolicLink))
+    throw new InstallInspectionError("DEPENDENCY_TREE_DIRECTORY_UNSAFE");
 }
 
 export function planDependencyBootstrap(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
+  onFailure?: DependencyBootstrapDeps["onFailure"],
 ): DependencyBootstrapPlan {
   const root = workspace.root;
   const manifest = readManifest(root, fs);
@@ -390,12 +560,19 @@ export function planDependencyBootstrap(
   }
   const refusal = sourceRefusal(root, manifest, fs);
   if (refusal !== undefined) return { kind: "refused", reason: refusal, lockfile };
-  return installedTreeCurrent(root, fs)
-    ? { kind: "current", lockfile }
-    : { kind: "install", lockfile };
+  try {
+    return installedTreeCurrent(root, fs)
+      ? { kind: "current", lockfile }
+      : { kind: "install", lockfile };
+  } catch (error) {
+    reportDependencyBootstrapFailure({ onFailure }, "inspection", error);
+    return { kind: "refused", reason: "install-inspection-unavailable", lockfile };
+  }
 }
 
 const REFUSAL_DETAIL: Readonly<Record<DependencyBootstrapRefusal, string>> = {
+  "install-inspection-unavailable":
+    "installed dependency identity unavailable; verification refused",
   "project-npm-config": "project npm config present; dependency installation refused",
   "manifest-unreadable": "package.json unreadable; dependency installation refused",
   "lockfile-unreadable":
@@ -470,7 +647,13 @@ function installDeps(deps: DependencyBootstrapDeps, egressProxyUrl: string): Run
       },
     },
     commandRules: DEPENDENCY_INSTALL_COMMAND_RULES,
-    spawn: deps.spawn,
+    spawn: (command, args, options): ReturnType<SpawnFn> => {
+      // Recheck after executable/cwd resolution, immediately before handing paths to npm.
+      assertInstallDirectory(deps.workspace.root, deps.fs);
+      if (optionalInspectionStat(deps.fs, join(deps.workspace.root, "node_modules")) !== undefined)
+        installationFingerprint(deps.workspace.root, deps.fs);
+      return deps.spawn(command, args, options);
+    },
     processEnv: deps.processEnv,
     now: deps.now,
     fs: deps.fs,
@@ -516,7 +699,7 @@ function installOutcome(
   return state === "installed" ? { summary } : { summary, excerpt: outputExcerpt(result) };
 }
 
-export async function runDependencyBootstrap(
+async function executeDependencyBootstrap(
   plan: DependencyBootstrapPlan,
   deps: DependencyBootstrapDeps,
 ): Promise<DependencyBootstrapOutcome> {
@@ -525,11 +708,13 @@ export async function runDependencyBootstrap(
   if (plan.kind === "refused")
     return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason]);
   const startedAt = deps.now();
+  completedInstalls.delete(deps.workspace.root);
   let proxy: RegistryEgressProxy;
   try {
     proxy = await (deps.startEgressProxy ?? startApprovedRegistryProxy)();
-  } catch {
+  } catch (error) {
     // No proxy, no install: npm never runs with an unconfined network.
+    reportDependencyBootstrapFailure(deps, "proxy-start", error);
     return {
       summary: {
         state: "failed",
@@ -541,8 +726,23 @@ export async function runDependencyBootstrap(
     };
   }
   try {
+    assertInstallDirectory(deps.workspace.root, deps.fs);
     const outcome = await installBehindProxy(plan.lockfile, deps, proxy.url, startedAt);
-    return withEgress(outcome, proxy.counts(), proxy.fault());
+    const checked = withEgress(outcome, proxy.counts(), proxy.fault());
+    if (checked.summary.state === "installed") recordCompletedInstall(deps.workspace.root, deps.fs);
+    return checked;
+  } catch (error) {
+    reportDependencyBootstrapFailure(deps, "post-proxy", error);
+    return {
+      summary: {
+        state: "failed",
+        lockfile: plan.lockfile,
+        exitCode: null,
+        durationMs: deps.now() - startedAt,
+        detail: "dependency install completion could not be recorded",
+        egress: proxy.counts(),
+      },
+    };
   } finally {
     await proxy.close();
   }
@@ -606,6 +806,7 @@ async function installBehindProxy(
       deps,
     );
   } catch (error) {
+    reportDependencyBootstrapFailure(deps, "command", error);
     // A refusal by the command boundary (rule, containment, host) is a failed bootstrap with its
     // already-redacted reason; the report never carries the raw error.
     const detail =
@@ -620,4 +821,26 @@ async function installBehindProxy(
       },
     };
   }
+}
+
+export async function runDependencyBootstrap(
+  plan: DependencyBootstrapPlan,
+  deps: DependencyBootstrapDeps,
+): Promise<DependencyBootstrapOutcome> {
+  const admitted =
+    plan.kind === "current"
+      ? planDependencyBootstrap(deps.workspace, deps.fs, deps.onFailure)
+      : plan;
+  const priorReceipt = completedInstalls.has(deps.workspace.root) ? "changed" : "missing";
+  const receipt = admitted.kind === "current" ? "current" : priorReceipt;
+  const outcome = await executeDependencyBootstrap(admitted, deps);
+  if (admitted.kind === "none" || admitted.kind === "refused") return outcome;
+  return {
+    ...outcome,
+    summary: {
+      ...outcome.summary,
+      completionReceipt: receipt,
+      completionRecorded: completedInstalls.has(deps.workspace.root),
+    },
+  };
 }

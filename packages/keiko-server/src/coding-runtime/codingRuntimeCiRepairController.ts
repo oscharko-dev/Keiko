@@ -7,11 +7,18 @@ import type { CodingRuntimeCiReadinessStore } from "./codingRuntimeCiReadinessSt
 import type {
   CiRepairAttemptKind,
   CiRepairBudgetContext,
+  CiRepairBudgetBlockReason,
   CiRepairBudgetRecord,
   CiRepairBudgetResult,
   CiRepairCharge,
   CodingRuntimeCiRepairBudgetStore,
 } from "./codingRuntimeCiRepairBudgetTypes.js";
+
+export type CiRepairPromptAdmission =
+  | { readonly accepted: true }
+  | { readonly accepted: false; readonly reason: CiRepairBudgetBlockReason };
+type ChargeOutcome =
+  { readonly record: CiRepairBudgetRecord } | { readonly reason: CiRepairBudgetBlockReason };
 
 export interface CiRepairExecutionLease {
   readonly check: () => boolean;
@@ -131,12 +138,19 @@ function admittedCredit(result: CiRepairBudgetResult): boolean {
 }
 
 function chargeFits(record: CiRepairBudgetRecord, charge: CiRepairCharge): boolean {
-  return (
-    Number.isSafeInteger(charge.promptTokens) &&
-    charge.promptTokens >= 0 &&
-    record.toolCalls + charge.toolCalls <= record.limits.maxToolCalls &&
-    record.promptTokens + charge.promptTokens <= record.limits.maxPromptTokens
-  );
+  return chargeLimitFailure(record, charge) === undefined;
+}
+
+function chargeLimitFailure(
+  record: CiRepairBudgetRecord,
+  charge: CiRepairCharge,
+): CiRepairBudgetBlockReason | undefined {
+  if (!Number.isSafeInteger(charge.promptTokens) || charge.promptTokens < 0) return "invalid-input";
+  if (record.toolCalls + charge.toolCalls > record.limits.maxToolCalls)
+    return "tool-budget-exhausted";
+  if (record.promptTokens + charge.promptTokens > record.limits.maxPromptTokens)
+    return "prompt-budget-exhausted";
+  return undefined;
 }
 
 /** Accounting around the existing tool loop; observation never starts or consumes a repair attempt. */
@@ -169,19 +183,25 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
     };
   }
   public chargePrompt(promptTokens: number): boolean {
+    return this.chargePromptOutcome(promptTokens).accepted;
+  }
+  public chargePromptOutcome(promptTokens: number): CiRepairPromptAdmission {
     const context = this.deps.context();
-    if (context === undefined) return true;
-    if (!context.stillAuthorized()) return false;
+    if (context === undefined) return { accepted: true };
+    if (!context.stillAuthorized()) return { accepted: false, reason: "authority-denied" };
     const result = this.accepted(context);
-    if (active(result.record) === undefined) return result.status !== "blocked";
-    return (
-      (result.status !== "blocked" || result.reason === "tool-budget-exhausted") &&
-      this.charge(context, result.record, {
-        chargeId: `prompt-${randomUUID()}`,
-        toolCalls: 0,
-        promptTokens,
-      }) !== undefined
-    );
+    if (result.status === "blocked" && result.reason !== "tool-budget-exhausted")
+      return { accepted: false, reason: result.reason };
+    if (active(result.record) === undefined)
+      return result.status === "blocked"
+        ? { accepted: false, reason: result.reason }
+        : { accepted: true };
+    const outcome = this.chargeOutcome(context, result.record, {
+      chargeId: `prompt-${randomUUID()}`,
+      toolCalls: 0,
+      promptTokens,
+    });
+    return "reason" in outcome ? { accepted: false, reason: outcome.reason } : { accepted: true };
   }
   public canChargePrompt(promptTokens: number): boolean {
     const context = this.deps.context();
@@ -323,19 +343,31 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
     record: CiRepairBudgetRecord | undefined,
     charge: CiRepairCharge,
   ): CiRepairBudgetRecord | undefined {
+    const outcome = this.chargeOutcome(context, record, charge);
+    return "record" in outcome ? outcome.record : undefined;
+  }
+  private chargeOutcome(
+    context: CiRepairBudgetContext,
+    record: CiRepairBudgetRecord | undefined,
+    charge: CiRepairCharge,
+  ): ChargeOutcome {
     const attempt = active(record);
-    if (record === undefined || attempt?.runId !== context.runId) return undefined;
-    if (!chargeFits(record, charge)) return undefined;
+    if (record === undefined || attempt?.runId !== context.runId)
+      return { reason: "invalid-binding" };
+    const failure = chargeLimitFailure(record, charge);
+    if (failure !== undefined) return { reason: failure };
     const result = this.deps.store.charge(context, {
       ...charge,
       attemptId: attempt.attemptId,
       expectedRevision: record.revision,
     });
-    return admittedCredit(result) &&
+    if (
+      admittedCredit(result) &&
       result.record !== undefined &&
       this.receiptWithinBudget(result.record, attempt.attemptId, charge)
-      ? result.record
-      : undefined;
+    )
+      return { record: result.record };
+    return { reason: result.status === "blocked" ? result.reason : "invalid-binding" };
   }
   private chargeIsCurrent(
     context: CiRepairBudgetContext,

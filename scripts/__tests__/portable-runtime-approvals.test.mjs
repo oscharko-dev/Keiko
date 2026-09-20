@@ -137,38 +137,7 @@ function committedFixture(overrides = {}) {
 
 function schemaV2Fixture() {
   const approvals = committedFixture();
-  approvals.schemaVersion = 2;
   const runtime = approvals.sidecarRuntimes[0];
-  runtime.upstream = {
-    owner: "anomalyco",
-    repository: "opencode",
-    name: "opencode",
-    version: "1.18.30",
-    tag: "v1.18.30",
-    commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
-  };
-  runtime.protocolSchema = {
-    path: "packages/sdk/openapi.json",
-    url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
-    sha256: "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
-    hashAlgorithm: "sha256",
-    hashEncoding: "lowercase-hex",
-    digestInput: "upstream-raw-bytes",
-    transport: "http-sse",
-  };
-  runtime.releaseApproval = {
-    redistribution: {
-      status: "approved",
-      reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-    },
-    subscriptionAuth: {
-      status: "not-applicable",
-      reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-    },
-  };
-  runtime.executableTreeAlgorithm = "keiko-directory-tree-sha256-v1";
-  delete runtime.adapterCompatibility.protocolVersion;
-  runtime.adapterCompatibility.transport = "http-sse";
   for (const archive of Object.values(runtime.archives)) {
     archive.executableTreeSha256 = "a".repeat(64);
     archive.sbomSha256 = "b".repeat(64);
@@ -205,7 +174,7 @@ describe("portable runtime approvals validation", () => {
     const approvals = validatePortableRuntimeApprovals(schemaV2Fixture());
     const runtime = approvals.sidecarRuntimes[0];
     expect(approvals.schemaVersion).toBe(2);
-    expect(runtime.upstream.commit).toBe("3104c1428ec91f809e5ab86631300de41eb6952e");
+    expect(runtime.upstream.commit).toBe(committedFixture().sidecarRuntimes[0].upstream.commit);
     expect(runtime.protocolSchema.digestInput).toBe("upstream-raw-bytes");
     expect(runtime.releaseApproval.redistribution.status).toBe("approved");
     expect(runtime.releaseApproval.subscriptionAuth.status).toBe("not-applicable");
@@ -808,7 +777,9 @@ describe("update portable runtime approvals", () => {
         },
         fakeRepoRoot,
       ),
-    ).rejects.toThrow(/only the independently approved OpenCode version 1\.18\.30/u);
+    ).rejects.toThrow(
+      `only the independently approved OpenCode version ${schemaV2Fixture().sidecarRuntimes[0].upstream.version}`,
+    );
     expect(fetchCalled).toBe(false);
   });
 
@@ -875,12 +846,17 @@ describe("update portable runtime approvals", () => {
       });
     };
     const summary = await updatePortableRuntimeApprovals(
-      ["--node-version", "23.1.0", "--opencode-version", "1.18.30"],
+      [
+        "--node-version",
+        "23.1.0",
+        "--opencode-version",
+        schemaV2Fixture().sidecarRuntimes[0].upstream.version,
+      ],
       { fetchFn },
       fakeRepoRoot,
     );
     expect(summary.nodeVersion).toBe("23.1.0");
-    expect(summary.opencodeVersion).toBe("1.18.30");
+    expect(summary.opencodeVersion).toBe(schemaV2Fixture().sidecarRuntimes[0].upstream.version);
     const updated = loadPortableRuntimeApprovals(fakeRepoRoot);
     expect(updated.node.archives["windows-x64"].sha256).toBe("1".repeat(64));
     expect(updated.sidecarRuntimes[0].archives["windows-x64"].sha256).toBe(
@@ -897,7 +873,7 @@ describe("update portable runtime approvals", () => {
   });
 
   it("fails closed when the OpenCode archive bytes changed under an unchanged version", async () => {
-    // Same approved version 1.18.30, so the version-provenance guard does not short-circuit first;
+    // Same approved version, so the version-provenance guard does not short-circuit first;
     // the archive contents differ from what is pinned. Before KEIKO-0157 this wrote a file pairing
     // the NEW sha256 with the OLD executableTreeSha256 and reported success — check:portable-
     // approvals validates JSON shape only, so review saw a clean diff and the mismatch surfaced at
@@ -947,7 +923,12 @@ describe("update portable runtime approvals", () => {
     const before = readFileSync(join(fakeRepoRoot, "portable-runtime-approvals.json"), "utf8");
     await expect(
       updatePortableRuntimeApprovals(
-        ["--node-version", "23.1.0", "--opencode-version", "1.18.30"],
+        [
+          "--node-version",
+          "23.1.0",
+          "--opencode-version",
+          schemaV2Fixture().sidecarRuntimes[0].upstream.version,
+        ],
         { fetchFn },
         fakeRepoRoot,
       ),
@@ -965,7 +946,7 @@ describe("update portable runtime approvals", () => {
   // never a second copy of their formulas.
   it("regenerates both archive digests and every commit-bound fact on a version lift", async () => {
     const existing = schemaV2Fixture().sidecarRuntimes[0];
-    existing.upstream = { ...existing.upstream, version: "1.17.17", tag: "v1.17.17" };
+    existing.upstream = { ...existing.upstream, version: "2.0.9", tag: "v2.0.9" };
     const schemaBytes = Buffer.from('{"openapi":"3.1.0"}');
     const license = Buffer.from("MIT License\n");
     const fetchFn = (url) => {
@@ -988,30 +969,22 @@ describe("update portable runtime approvals", () => {
       });
     };
 
-    const lifted = await updatedOpencodeRuntime(existing, "1.18.30", { fetchFn });
+    const lifted = await updatedOpencodeRuntime(
+      existing,
+      schemaV2Fixture().sidecarRuntimes[0].upstream.version,
+      { fetchFn },
+    );
 
-    expect(lifted.upstream).toEqual({
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.18.30",
-      tag: "v1.18.30",
-      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
-    });
-    expect(lifted.protocolSchema.url).toBe(
-      "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
-    );
+    const approved = schemaV2Fixture().sidecarRuntimes[0];
+    expect(lifted.upstream).toEqual(approved.upstream);
+    expect(lifted.protocolSchema.url).toBe(approved.protocolSchema.url);
     expect(lifted.protocolSchema.sha256).toBe(sha256Hex(schemaBytes));
-    expect(lifted.license.url).toBe(
-      "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
-    );
+    expect(lifted.license.url).toBe(approved.license.url);
 
     for (const target of Object.keys(lifted.archives)) {
       const archive = lifted.archives[target];
       const payload = OPENCODE_ARCHIVES.get(ARCHIVE_NAME_BY_TARGET[target]);
-      expect(archive.url).toBe(
-        `https://github.com/anomalyco/opencode/releases/download/v1.18.30/${ARCHIVE_NAME_BY_TARGET[target]}`,
-      );
+      expect(archive.url).toBe(approved.archives[target].url);
       expect(archive.sha256).toBe(sha256Hex(payload));
       expect(archive.sizeBytes).toBe(payload.byteLength);
       // Neither digest may survive the lift: the fixture pins them to "a"/"b" repeated.

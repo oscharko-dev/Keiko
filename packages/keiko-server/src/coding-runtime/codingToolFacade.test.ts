@@ -1219,8 +1219,20 @@ describe("CodingToolFacade", () => {
 
   it.each([
     { commitProof: "recorded", unexpected: true },
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "stage-then-verify",
+    },
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "verify-again",
+      extra: true,
+    },
     { commitProof: "unavailable", reasonCode: "candidate-not-staged", nextAction: "verify-again" },
-  ])("strips a malformed verification proof payload", async (verification) => {
+  ])("strips a malformed verification proof payload", async (commit) => {
+    const verification = { status: "passed", completed: ["test"], commit };
     const ports = facade();
     ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", verification }));
     const subject = createCodingToolFacade(ports);
@@ -1236,6 +1248,54 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  it.each([
+    null,
+    { status: "completed", completed: ["test"] },
+    { status: "passed", completed: "test" },
+    { status: "passed", completed: [] },
+    { status: "passed", completed: ["unknown"] },
+    { status: "passed", completed: ["test", "test"] },
+    { status: "passed", completed: new Array<unknown>(1) },
+    { status: "passed", completed: ["test"], unexpected: true },
+    { status: "passed", completed: ["test"], commit: undefined },
+    { status: "passed", completed: ["test"], commit: null },
+  ])("rejects an invalid executed-check summary", async (verification) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", verification }));
+    await expect(
+      createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "verification", verifierId: "test" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+    });
+  });
+
+  it.each([
+    { status: "passed", completed: ["test", "build"] },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "unavailable",
+        reasonCode: "proof-unavailable",
+        nextAction: "verify-again",
+      },
+    },
+    { status: "passed", completed: ["test"], commit: { commitProof: "recorded" } },
+  ])("preserves executed checks independently of commit proof", async (verification) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", verification }));
+    await expect(
+      createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "verification", verifierId: "test" }),
+        capability,
+      }),
+    ).resolves.toMatchObject({ status: "completed", verification });
+  });
+
   // isVerifiedCommitBlockingPaths/isBlockingPathList: bounded, workspace-relative, exact-keyed.
   const validBlocking = {
     unstagedCount: 1,
@@ -1247,10 +1307,14 @@ describe("CodingToolFacade", () => {
     blocking: Readonly<Record<string, unknown>>,
   ): Readonly<Record<string, unknown>> {
     return {
-      commitProof: "unavailable",
-      reasonCode: "candidate-not-staged",
-      nextAction: "stage-then-verify",
-      blocking,
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "unavailable",
+        reasonCode: "candidate-not-staged",
+        nextAction: "stage-then-verify",
+        blocking,
+      },
     };
   }
 

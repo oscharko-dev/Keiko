@@ -82,6 +82,7 @@ export interface VerificationDeps {
   // keiko-tools exec.ts): wired once by the composing server so a timed-out or aborted step's
   // Windows tree-kill disposition is reconstructable (PR #3354 review, comment 3887021650).
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
+  readonly onDependencyBootstrapFailure?: DependencyBootstrapDeps["onFailure"];
   // ADR-0043 D17: "auto" installs the manifest's declared dependencies before the first script step
   // when the installed tree is not current (dependencies.ts). Default "off" keeps every SDK caller's
   // behaviour unchanged; the server's verification runner turns it on.
@@ -591,9 +592,10 @@ async function bootstrapDependencies(
 ): Promise<DependencyBootstrapOutcome | undefined> {
   if (plan.steps.every((step) => step.skipReason !== undefined)) return undefined;
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const bootstrapPlan = planDependencyBootstrap(deps.workspace, fs);
+  const bootstrap = bootstrapDeps(deps, fs, baseSpawn);
+  const bootstrapPlan = planDependencyBootstrap(deps.workspace, fs, bootstrap.onFailure);
   if (bootstrapPlan.kind === "none") return undefined;
-  const outcome = await runDependencyBootstrap(bootstrapPlan, bootstrapDeps(deps, fs, baseSpawn));
+  const outcome = await runDependencyBootstrap(bootstrapPlan, bootstrap);
   if (outcome.excerpt !== undefined) {
     deps.onStepOutput?.({ step: "dependencies", scriptName: undefined, excerpt: outcome.excerpt });
   }
@@ -614,6 +616,9 @@ function bootstrapDeps(
     ...(deps.signal === undefined ? {} : { signal: deps.signal }),
     ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
     ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
+    ...(deps.onDependencyBootstrapFailure === undefined
+      ? {}
+      : { onFailure: deps.onDependencyBootstrapFailure }),
     ...(deps.sandboxAvailability === undefined
       ? {}
       : { sandboxAvailability: deps.sandboxAvailability }),

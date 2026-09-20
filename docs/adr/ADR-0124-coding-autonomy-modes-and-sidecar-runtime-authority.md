@@ -136,6 +136,12 @@ Delivery-substrate authority is modeled as its own action class and stays separa
 Issue #1983 owns the D10 implementation split for that substrate. This ADR fixes the contract
 boundary now so later children do not blur coding assistance with delivery execution.
 
+Successful workspace verification is independent of commit eligibility. The model-facing result
+reports `verification.status: passed` and the completed check kinds. Optional `verification.commit`
+evidence may still refuse a commit because the candidate is unstaged or has drifted. That refusal
+never reclassifies executed checks as unrun and never requires staging for ordinary coding work.
+Staging and fresh commit proof remain mandatory only for an accepted commit/delivery action.
+
 Runtime event contracts are content-free and closed. The shared event family includes:
 
 - runtime start/stop/health,
@@ -173,6 +179,11 @@ The shared model-source vocabulary is:
 
 This separation is load-bearing. ChatGPT/Codex subscription credentials are not modeled as OpenAI
 Platform API keys or generic provider credentials. They remain a distinct subscription/profile path.
+
+Opening the Workbench only reads the selected provider profile and model catalog. A missing or
+expired tool-call proof stays unavailable until the operator runs the existing Gateway Settings
+readiness check. Mounting or refreshing the Workbench never starts paid provider probes, including
+when a subscription source is selected. The same gateway capability evidence gates all models.
 
 ### D6 — Permission requests are typed, explicit, and content-free
 

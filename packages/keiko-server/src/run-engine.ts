@@ -458,7 +458,7 @@ function dispatchVerify(ctx: EngineContext, sink: QueueEventSink, runId: string)
   const fingerprint = workflowFingerprint(ctx.request, ctx.governance);
   const root = workspaceRoot(ctx.request);
   emitVerifyStart(sink, runId, fingerprint, ctx.request.modelId);
-  const result = runVerify(ctx, controller.signal, root).then((report): DispatchOutcome => {
+  const result = runVerify(ctx, controller.signal, root, runId).then((report): DispatchOutcome => {
     emitVerifyComplete(sink, runId, fingerprint, report);
     return {
       status: verifyStatusToRun(report.overallStatus),
@@ -478,6 +478,7 @@ async function runVerify(
   ctx: EngineContext,
   signal: AbortSignal,
   root: string,
+  correlationId: string,
 ): Promise<VerificationReport> {
   const workspace = detectWorkspace(root);
   const catalog = detectScripts(workspace);
@@ -486,7 +487,7 @@ async function runVerify(
     ...(targetFiles === undefined ? {} : { changedFiles: targetFiles }),
   });
   const execute = ctx.verificationExecutor ?? executeVerificationEnforced;
-  const { report } = await execute({ plan, workspace, signal, probeCwd: root });
+  const { report } = await execute({ plan, workspace, signal, probeCwd: root, correlationId });
   return report;
 }
 

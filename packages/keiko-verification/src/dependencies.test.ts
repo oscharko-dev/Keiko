@@ -1,4 +1,16 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +39,7 @@ afterEach(() => {
 });
 
 function tempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-deps-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-deps-")));
   roots.push(root);
   return root;
 }
@@ -130,6 +142,14 @@ function bootstrapDepsFor(
 }
 
 describe("planDependencyBootstrap", () => {
+  it("never accepts a workspace-written completion marker as install evidence", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeLockfile(root);
+    writeInstalledTree(root);
+    writeFileSync(join(root, "node_modules", ".keiko-install-complete"), "", "utf8");
+    expect(planFor(root).kind).toBe("install");
+  });
   it("plans 'none' when the workspace has no package.json", () => {
     const root = tempRoot();
     expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({ kind: "none" });
@@ -208,7 +228,7 @@ describe("planDependencyBootstrap", () => {
     });
   });
 
-  it("plans 'current' when the hidden installed-tree marker is newer than the manifest and lockfile", () => {
+  it("reuses only a completed bootstrap bound to unchanged installed entries and inputs", async () => {
     const root = tempRoot();
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
     writeLockfile(root);
@@ -219,6 +239,13 @@ describe("planDependencyBootstrap", () => {
     utimesSync(join(root, "package.json"), base, base);
     utimesSync(join(root, "package-lock.json"), base, base);
     utimesSync(join(root, "node_modules", ".package-lock.json"), installedAt, installedAt);
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const outcome = await runDependencyBootstrap(
+      { kind: "install", lockfile: "present" },
+      bootstrapDepsFor(root, rec.fn),
+    );
+    expect(outcome.summary.completionRecorded).toBe(true);
 
     expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({
       kind: "current",
@@ -526,14 +553,25 @@ describe("runDependencyBootstrap — settled plans (no spawn)", () => {
     expect(rec.calls()).toHaveLength(0);
   });
 
-  it("settles 'current' without spawning", async () => {
+  it("settles an authenticated current receipt without spawning again", async () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    writeLockfile(root);
+    writeInstalledTree(root);
+    const installed = recordingSpawn();
+    scriptChildClose(installed.child, { exitCode: 0 });
+    await runDependencyBootstrap(planFor(root), bootstrapDepsFor(root, installed.fn));
     const rec = recordingSpawn();
-    const outcome = await runDependencyBootstrap(
-      { kind: "current", lockfile: "present" },
-      bootstrapDepsFor(tempRoot(), rec.fn),
-    );
+    const outcome = await runDependencyBootstrap(planFor(root), bootstrapDepsFor(root, rec.fn));
     expect(outcome).toEqual({
-      summary: { state: "current", lockfile: "present", exitCode: null, durationMs: 0 },
+      summary: {
+        state: "current",
+        lockfile: "present",
+        exitCode: null,
+        durationMs: 0,
+        completionReceipt: "current",
+        completionRecorded: true,
+      },
     });
     expect(rec.calls()).toHaveLength(0);
   });
@@ -600,6 +638,8 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     expect(DEPENDENCY_INSTALL_ARGS).toContain("--ignore-scripts");
     expect(outcome.summary).toEqual({
       state: "installed",
+      completionReceipt: "missing",
+      completionRecorded: true,
       lockfile: "absent",
       exitCode: 0,
       durationMs: expect.any(Number) as number,
@@ -647,6 +687,8 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
 
     expect(outcome.summary).toEqual({
       state: "refused",
+      completionReceipt: "missing",
+      completionRecorded: false,
       lockfile: "absent",
       exitCode: 0,
       durationMs: expect.any(Number) as number,
@@ -683,6 +725,20 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     expect(outcome.summary.lockfile).toBe("absent");
     expect(outcome.summary.detail).toBe("npm install failed (exit 1)");
     expect(outcome.excerpt).toBe("npm ERR! network failure");
+  });
+
+  it("retries after npm leaves a current-looking hidden lockfile but exits unsuccessfully", async () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    const plan = planFor(root);
+    writeInstalledTree(root);
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stderr: "npm ERR! incomplete install\n", exitCode: 1 });
+
+    const outcome = await runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
+
+    expect(outcome.summary.state).toBe("failed");
+    expect(planFor(root)).toEqual({ kind: "install", lockfile: "absent" });
   });
 
   it("never lets a failed summary carry the raw child output beyond the redacted excerpt", async () => {
@@ -808,6 +864,234 @@ describe("runDependencyBootstrap — registry egress", () => {
     return planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
   }
 
+  async function completedFixture(root: string): Promise<void> {
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    mkdirSync(join(root, "node_modules", "left-pad"));
+    writeFileSync(join(root, "node_modules", "left-pad", "index.js"), "original");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(outcome.summary.completionRecorded).toBe(true);
+    expect(planFor(root).kind).toBe("current");
+    expect(existsSync(join(root, "node_modules", ".keiko-install-complete"))).toBe(false);
+  }
+
+  it.each(["stat", "marker-stat", "read-directory", "identity", "timestamp", "limit"])(
+    "refuses inconclusive %s inspection without reinstalling",
+    async (fault) => {
+      const root = tempRoot();
+      await completedFixture(root);
+      const onFailure = vi.fn();
+      const target =
+        fault === "marker-stat"
+          ? join(root, "node_modules", ".package-lock.json")
+          : join(root, "node_modules", "left-pad", "index.js");
+      const fs = {
+        ...nodeWorkspaceFs,
+        stat: (path: string): ReturnType<typeof nodeWorkspaceFs.stat> => {
+          const value = nodeWorkspaceFs.stat(path);
+          if (path !== target) return value;
+          if (fault === "stat" || fault === "marker-stat")
+            throw Object.assign(new Error("PRIVATE_ENTRY"), { code: "EACCES" });
+          if (fault === "identity") {
+            const { fileIdentity: _identity, ...rest } = value;
+            return rest;
+          }
+          if (fault === "timestamp") {
+            const { ctimeNs: _time, ...rest } = value;
+            return rest;
+          }
+          return value;
+        },
+        readDir: (path: string, limit?: number): ReturnType<typeof nodeWorkspaceFs.readDir> => {
+          if (fault === "read-directory") throw new Error("PRIVATE_DIRECTORY");
+          const entries = nodeWorkspaceFs.readDir(path, limit);
+          return fault === "limit"
+            ? Array.from({ length: 100_000 }, () => ({
+                name: "entry",
+                isDirectory: false,
+                isFile: true,
+                isSymbolicLink: false,
+              }))
+            : entries;
+        },
+      };
+      const plan = planDependencyBootstrap(workspaceAt(root), fs, onFailure);
+      expect(plan).toMatchObject({ kind: "refused", reason: "install-inspection-unavailable" });
+      const code =
+        fault === "limit"
+          ? "DEPENDENCY_TREE_LIMIT"
+          : fault === "identity" || fault === "timestamp"
+            ? "DEPENDENCY_TREE_IDENTITY_UNAVAILABLE"
+            : "DEPENDENCY_TREE_UNREADABLE";
+      expect(onFailure).toHaveBeenCalledWith({
+        stage: "inspection",
+        error: expect.objectContaining({ code }) as unknown,
+      });
+      const rec = recordingSpawn();
+      const result = await runDependencyBootstrap(plan, { ...bootstrapDepsFor(root, rec.fn), fs });
+      expect(result.summary.state).toBe("refused");
+      expect(rec.calls()).toHaveLength(0);
+    },
+  );
+
+  it.each(["modify", "delete", "manifest", "lockfile"])(
+    "invalidates a private receipt after %s even with restored mtime",
+    async (mutation) => {
+      const root = tempRoot();
+      await completedFixture(root);
+      const file = join(root, "node_modules", "left-pad", "index.js");
+      const prior = statSync(file);
+      if (mutation === "modify") {
+        writeFileSync(file, "modified");
+        utimesSync(file, prior.atime, prior.mtime);
+      } else if (mutation === "delete") rmSync(file);
+      else if (mutation === "manifest")
+        writeManifest(root, { dependencies: { "left-pad": "1.1.0" } });
+      else writeLockfile(root);
+      expect(planFor(root).kind).toBe("install");
+    },
+  );
+
+  it.each(["directory", "file"])("rejects a post-install outside %s link", async (kind) => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    mkdirSync(join(root, "node_modules", "left-pad"));
+    writeFileSync(join(outside, "index.js"), "PRIVATE_EXTERNAL_CODE");
+    const rec = recordingSpawn();
+    const onFailure = vi.fn();
+    const result = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, (...args) => {
+        const pkg = join(root, "node_modules", "left-pad");
+        if (kind === "directory") rmSync(pkg, { recursive: true });
+        symlinkSync(
+          kind === "directory" ? outside : join(outside, "index.js"),
+          kind === "directory" ? pkg : join(pkg, "index.js"),
+          kind === "directory" ? "junction" : "file",
+        );
+        scriptChildClose(rec.child, { exitCode: 0 });
+        return rec.fn(...args);
+      }),
+      onFailure,
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(result.summary).toMatchObject({ state: "failed", completionRecorded: false });
+    expect(onFailure).toHaveBeenCalledWith({
+      stage: "post-proxy",
+      error: expect.objectContaining({ code: "DEPENDENCY_TREE_DIRECTORY_UNSAFE" }) as unknown,
+    });
+  });
+
+  it("fingerprints contained workspace and executable links, including their target changes", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    const member = join(root, "packages", "member");
+    mkdirSync(member, { recursive: true });
+    writeFileSync(join(member, "index.js"), "original");
+    symlinkSync(member, join(root, "node_modules", "left-pad"), "junction");
+    mkdirSync(join(root, "node_modules", ".bin"));
+    symlinkSync(join(member, "index.js"), join(root, "node_modules", ".bin", "tool"), "file");
+    symlinkSync(join(root, "node_modules"), join(member, "cycle"), "junction");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const result = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(result.summary.completionRecorded).toBe(true);
+    expect(planFor(root).kind).toBe("current");
+    const target = join(member, "index.js");
+    const prior = statSync(target);
+    writeFileSync(target, "modified");
+    utimesSync(target, prior.atime, prior.mtime);
+    expect(planFor(root).kind).toBe("install");
+  });
+
+  it("rechecks a previously current plan before consumption and records why it reinstalls", async () => {
+    const root = tempRoot();
+    await completedFixture(root);
+    const stale = planFor(root);
+    rmSync(join(root, "node_modules", "left-pad", "index.js"));
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 1 });
+    const outcome = await runDependencyBootstrap(stale, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(rec.calls()).toHaveLength(1);
+    expect(outcome.summary).toMatchObject({
+      state: "failed",
+      completionReceipt: "changed",
+      completionRecorded: false,
+    });
+    expect(planFor(root).kind).toBe("install");
+  });
+
+  it("prevents an actual outside write after a pre-spawn directory symlink swap", async () => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    writeInstalledTree(outside);
+    const external = join(outside, "node_modules", ".keiko-install-complete");
+    writeFileSync(external, "untouched");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    let swapped = false;
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, (...args) => {
+        writeFileSync(join(root, "node_modules", ".keiko-install-complete"), "escaped write");
+        return rec.fn(...args);
+      }),
+      fs: {
+        ...nodeWorkspaceFs,
+        stat: (path) => {
+          const result = nodeWorkspaceFs.stat(path);
+          if (!swapped && path === join(root, "node_modules")) {
+            swapped = true;
+            renameSync(path, join(root, "old_modules"));
+            symlinkSync(join(outside, "node_modules"), path, "junction");
+          }
+          return result;
+        },
+      },
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(swapped).toBe(true);
+    expect(rec.calls()).toHaveLength(0);
+    expect(readFileSync(external, "utf8")).toBe("untouched");
+    expect(outcome.summary.state).toBe("failed");
+    expect(outcome.summary.completionRecorded).toBe(false);
+    expect(planFor(root).kind).toBe("install");
+  });
+
+  it("reports a command-boundary rejection through the structured failure port", async () => {
+    const root = tempRoot();
+    const error = new TypeError("executable unavailable", {
+      cause: new Error("resolution failed"),
+    });
+    const onFailure = vi.fn();
+    const rec = recordingSpawn();
+    const outcome = await runDependencyBootstrap(installPlan(root), {
+      ...bootstrapDepsFor(root, rec.fn),
+      resolveExecutable: () => {
+        throw error;
+      },
+      onFailure,
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy()),
+    });
+    expect(outcome.summary.state).toBe("failed");
+    expect(onFailure).toHaveBeenCalledWith({ stage: "command", error });
+    expect(rec.calls()).toHaveLength(0);
+  });
+
   it("runs npm behind the egress proxy, records its tunnels and closes it", async () => {
     const root = tempRoot();
     const plan = installPlan(root);
@@ -915,10 +1199,12 @@ describe("runDependencyBootstrap — registry egress", () => {
     const root = tempRoot();
     const plan = installPlan(root);
     const rec = recordingSpawn();
+    const onFailure = vi.fn();
 
     const outcome = await runDependencyBootstrap(plan, {
       ...bootstrapDepsFor(root, rec.fn),
       startEgressProxy: () => Promise.reject(new Error("listen EADDRINUSE")),
+      onFailure,
     });
 
     expect(rec.calls()).toHaveLength(0);
@@ -928,6 +1214,10 @@ describe("runDependencyBootstrap — registry egress", () => {
       detail: expect.stringContaining("egress proxy could not start") as string,
     });
     expect(outcome.summary).not.toHaveProperty("egress");
+    expect(onFailure).toHaveBeenCalledWith({
+      stage: "proxy-start",
+      error: expect.any(Error) as Error,
+    });
   });
 
   it("cancels an install whose run went away before npm started, without spawning it", async () => {

@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -230,12 +230,43 @@ function paintRowHeights(container: HTMLElement, heightFor: (li: HTMLLIElement) 
 }
 
 describe("CodingWorkbenchTimeline", () => {
+  it.each([false, true])(
+    "retains terminal activity recovery with existing content: %s",
+    (hasContent) => {
+      const activity = {
+        ...activityLike(hasContent ? feedWithBlankAgentMessage() : bareFeed()),
+        status: "disconnected" as const,
+      };
+      render(
+        <Timeline active={false} events={[]} activity={activity} questions={IDLE_QUESTIONS} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Reconnect activity" }));
+      expect(activity.retry).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    [{ truncated: true }, "Activity truncated."],
+    [{ droppedEventCount: 2 }, "2 update(s) omitted."],
+  ])("retains terminal reconstruction warnings for an empty feed: %s", (loss, warning) => {
+    render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({ ...bareFeed(), ...loss })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(screen.getByText(warning)).toBeVisible();
+  });
+
   it("uses per-kind default heights for the pre-measurement virtualized window", () => {
     // 101 events forces the virtual mode; only 96 rows render and the tail sits behind a spacer.
     const events = Array.from({ length: 101 }, (_, index) => event(index + 1));
     const { container } = render(
       <Timeline events={events} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
     );
+    fireEvent.click(screen.getByText("Run details"));
 
     const [tailSpacer] = spacers(container);
     // Pre-fix behaviour was `(items - end) * 64` = 5 * 64 = 320. The event default is 88, so the
@@ -261,6 +292,7 @@ describe("CodingWorkbenchTimeline", () => {
     const view = render(
       <Timeline events={events} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
     );
+    fireEvent.click(screen.getByText("Run details"));
     paintRowHeights(view.container, () => 240);
     view.rerender(
       <Timeline events={events} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
@@ -285,6 +317,7 @@ describe("CodingWorkbenchTimeline", () => {
     const { container } = render(
       <Timeline events={events} activity={activityLike(bareFeed())} questions={IDLE_QUESTIONS} />,
     );
+    fireEvent.click(screen.getByText("Run details"));
 
     const rows = container.querySelectorAll(`.${styles.timeline} > li:not([aria-hidden])`);
     expect(rows).toHaveLength(96);
@@ -367,6 +400,34 @@ describe("CodingWorkbenchTimeline", () => {
     expect(rows[1]).toHaveTextContent("Failed");
   });
 
+  it("groups completed work between answers and keeps failures outside the disclosure", () => {
+    const repeated = feedWithRepeatedTools();
+    const turn = repeated.turns[0];
+    if (turn === undefined) throw new Error("expected a fixture turn");
+    const feed = {
+      ...repeated,
+      turns: [
+        {
+          ...turn,
+          tools: turn.tools.map((tool, index) =>
+            index === 1 ? { ...tool, tool: "keiko_git_status" } : tool,
+          ),
+        },
+      ],
+    };
+    const { container, getByText } = render(
+      <Timeline events={[event(1)]} activity={activityLike(feed)} questions={IDLE_QUESTIONS} />,
+    );
+    const group = container.querySelector('[data-timeline-kind="group"] details');
+    expect(group).not.toHaveAttribute("open");
+    expect(group).toHaveTextContent("2 actions completed");
+    expect(group).not.toHaveTextContent("Failed");
+    expect(container.querySelector('[data-tool-state="failed"]')).toBeVisible();
+    expect(container.querySelector('[data-event-tone="routine"]')).toBeNull();
+    fireEvent.click(getByText("Run details"));
+    expect(container.querySelector('[data-event-tone="routine"]')).toBeVisible();
+  });
+
   it("marks routine, success, and attention events for quieter visual treatment", () => {
     const failed = { ...event(2), failureCode: "runtime-failed" as const };
     const succeeded = { ...event(3), state: "succeeded" as const };
@@ -377,10 +438,29 @@ describe("CodingWorkbenchTimeline", () => {
         questions={IDLE_QUESTIONS}
       />,
     );
+    fireEvent.click(screen.getByText("Run details"));
 
     expect(container.querySelector('[data-event-tone="routine"]')).not.toBeNull();
     expect(container.querySelector('[data-event-tone="attention"]')).not.toBeNull();
     expect(container.querySelector('[data-event-tone="success"]')).not.toBeNull();
+  });
+
+  it("collapses successful tool details while leaving failed work expanded", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithRepeatedTools())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const rows = container.querySelectorAll('[data-timeline-kind="tool"] details');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).not.toHaveAttribute("open");
+    expect(rows[1]).toHaveAttribute("open");
+    const detail = rows[0] as HTMLDetailsElement;
+    detail.open = true;
+    fireEvent(detail, new Event("toggle"));
+    expect(detail).toHaveTextContent("keiko_workspace_discover");
   });
 
   // The tool-call card (`.toolCard`) and plan card rows are otherwise exercised only indirectly

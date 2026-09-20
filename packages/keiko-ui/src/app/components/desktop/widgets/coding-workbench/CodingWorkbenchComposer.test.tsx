@@ -16,7 +16,13 @@ import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSec
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
 
 function composerActions(): TaskComposerActions {
-  return { onStart: vi.fn(), onPause: vi.fn(), onResume: vi.fn(), onSend: vi.fn() };
+  return {
+    onStart: vi.fn(),
+    onPause: vi.fn(),
+    onResume: vi.fn(),
+    onSend: vi.fn(),
+    onStop: vi.fn(),
+  };
 }
 
 const CODING_MODEL: ModelCapability = {
@@ -189,13 +195,15 @@ describe("Coding Workbench composer", () => {
     expect(actions.onStart).toHaveBeenCalledOnce();
   });
 
-  it("replaces Send with Pause while the run is active", async () => {
+  it("offers pause and stop in the composer while the run is active", async () => {
     const user = userEvent.setup();
     const actions = composerActions();
     renderComposer("running", actions);
     expect(screen.queryByRole("button", { name: "Send follow-up" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Pause run" }));
     expect(actions.onPause).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(actions.onStop).toHaveBeenCalledOnce();
   });
 
   it("admits a follow-up only while paused and offers a resume control", async () => {

@@ -291,12 +291,7 @@ describe("portable manual review harness", () => {
       }),
     ).toEqual([]);
     expect(sidecar.approvalSchemaVersion).toBe(2);
-    expect(sidecar.upstream).toMatchObject({
-      owner: "anomalyco",
-      repository: "opencode",
-      version: "1.18.30",
-      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
-    });
+    expect(sidecar.upstream).toEqual(committedApprovals().sidecarRuntimes[0].upstream);
     expect(sidecar.protocolSchema.digestInput).toBe("upstream-raw-bytes");
     expect(sidecar.adapterCompatibility.protocolVersion).toBeUndefined();
     expect(sidecar.signing.shippedExecutableTreeSha256).not.toBe(sidecar.executableTreeSha256);

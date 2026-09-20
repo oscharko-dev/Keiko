@@ -15,7 +15,7 @@ import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
-import { PanelTitle } from "./CodingWorkbenchPanelTitle";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const VIRTUAL_THRESHOLD = 80;
@@ -46,17 +46,21 @@ export interface CodingWorkbenchChangesProps {
 export function CodingWorkbenchChanges(props: CodingWorkbenchChangesProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const changes = useCodingWorkbenchChanges(props);
+  if (changes.status === "idle" || changes.status === "loading") return null;
   return (
-    <section className={styles.card} aria-labelledby="coding-workbench-changes-title">
-      <PanelTitle
-        eyebrow={t("codingWorkbench.changes.eyebrow")}
-        id="coding-workbench-changes-title"
-      >
-        {t("codingWorkbench.changes.title")}
-      </PanelTitle>
-      <p className={styles.helpText}>{t("codingWorkbench.changes.help")}</p>
-      <ChangesContent changes={changes} pairing={props.pairing} t={t} />
-    </section>
+    <details
+      className={styles.cmpChangesDisclosure}
+      onToggle={() => reportClientDiagnostic("[keiko] coding workbench changes disclosure toggled")}
+    >
+      <summary className={styles.cmpActivitySummary}>
+        {changes.status === "ready"
+          ? t("codingWorkbench.changes.changedFiles", { count: changes.files.length })
+          : t("codingWorkbench.changes.title")}
+      </summary>
+      <div className={styles.cmpChangesContent}>
+        <ChangesContent changes={changes} pairing={props.pairing} t={t} />
+      </div>
+    </details>
   );
 }
 

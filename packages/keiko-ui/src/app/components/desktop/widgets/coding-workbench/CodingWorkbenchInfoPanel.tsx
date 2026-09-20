@@ -16,6 +16,7 @@ import type {
 import { TaskWorkspaceManager } from "../../TaskWorkspaceManager";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { Icons } from "../../Icons";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import styles from "./CodingWorkbenchWindow.module.css";
 
@@ -24,6 +25,7 @@ const InfoIcon = Icons.info;
 export interface CodingWorkbenchInfoFact {
   readonly label: string;
   readonly value: string;
+  readonly primary?: boolean;
   readonly tone?: "default" | "warning" | undefined;
   readonly mode?: string | undefined;
 }
@@ -79,6 +81,32 @@ function InformationFacts({
 
 function OptionalTaskWorkspaceManager(): ReactNode {
   return useOptionalActiveWorkspace() === null ? null : <TaskWorkspaceManager />;
+}
+
+function TaskWorkspaceLocation(): ReactNode {
+  const workspace = useOptionalActiveWorkspace();
+  const t = useCodingWorkbenchTranslate();
+  const [visible, setVisible] = useState(false);
+  const id = useId();
+  const path = workspace?.activeBinding?.activeRoot;
+  if (path === undefined) return null;
+  return (
+    <div className={styles.cmpWorkspaceLocation}>
+      <button
+        type="button"
+        className={styles.cmpInfoTrigger}
+        aria-expanded={visible}
+        aria-controls={visible ? id : undefined}
+        onClick={() => {
+          setVisible(!visible);
+          reportClientDiagnostic("[keiko] coding workbench workspace location toggled");
+        }}
+      >
+        {t("codingWorkbench.history.location")}
+      </button>
+      {visible ? <code id={id}>{path}</code> : null}
+    </div>
+  );
 }
 
 interface ContextSegment {
@@ -263,10 +291,12 @@ function ContextUsagePanel(props: {
   );
 }
 
-export function CodingWorkbenchInfoPanel(props: {
+interface InfoPanelProps {
   readonly facts: readonly CodingWorkbenchInfoFact[];
   readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
-}): ReactNode {
+}
+
+export function CodingWorkbenchInfoPanel(props: InfoPanelProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const popover = useInformationPopover();
   return (
@@ -285,13 +315,31 @@ export function CodingWorkbenchInfoPanel(props: {
       {popover.open ? (
         <dialog open aria-label={t("codingWorkbench.info.title")} className={styles.cmpInfoPopover}>
           <header className={styles.cmpInfoHeader}>
-            <h3>{t("codingWorkbench.info.title")}</h3>
-            <OptionalTaskWorkspaceManager />
+            <h3>{t("codingWorkbench.info.label")}</h3>
           </header>
-          <InformationFacts facts={props.facts} />
-          <ContextUsagePanel usage={props.contextUsage} />
+          <InformationFacts facts={props.facts.filter((fact) => fact.primary)} />
+          <InformationDetails {...props} />
         </dialog>
       ) : null}
     </div>
+  );
+}
+
+function InformationDetails(props: InfoPanelProps): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <details
+      className={styles.cmpInfoDetails}
+      onToggle={() =>
+        reportClientDiagnostic("[keiko] coding workbench information details toggled")
+      }
+    >
+      <summary className={styles.cmpActivitySummary}>{t("codingWorkbench.info.details")}</summary>
+      <InformationFacts facts={props.facts.filter((fact) => !fact.primary)} />
+      <p className={styles.helpText}>{t("codingWorkbench.controls.help")}</p>
+      <TaskWorkspaceLocation />
+      <OptionalTaskWorkspaceManager />
+      <ContextUsagePanel usage={props.contextUsage} />
+    </details>
   );
 }

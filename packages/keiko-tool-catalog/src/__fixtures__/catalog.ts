@@ -5,6 +5,7 @@ import {
   createToolDescriptor,
   createToolCatalog,
   compileToolProjection,
+  opencodeRegistrationSet,
 } from "../index.js";
 export function declaration(version = 1, openInput = false): object {
   return {
@@ -49,7 +50,7 @@ export function profile(
     adapterDialect: { id: dialect, version: 1 },
     adapterRuntime:
       dialect === "managed-runtime-json-schema"
-        ? { id: "opencode", version: "1.18.30" }
+        ? opencodeRegistrationSet().adapterRuntime
         : { id: "keiko", version: KEIKO_PRODUCT_VERSION },
     compatibility: [],
   };
@@ -63,9 +64,7 @@ export function fixture(
   readonly catalog: ReturnType<typeof createToolCatalog>;
   readonly projection: ReturnType<typeof compileToolProjection>;
 } {
-  const descriptor = createToolDescriptor(
-    declaration(1, dialect === "managed-runtime-json-schema"),
-  );
+  const descriptor = createToolDescriptor(declaration());
   const catalog = createToolCatalog(
     {
       descriptors: [descriptor],

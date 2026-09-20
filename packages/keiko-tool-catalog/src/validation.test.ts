@@ -109,8 +109,8 @@ describe("bounded hostile declaration capture", () => {
 });
 
 describe("closed lossless schema core", () => {
-  it("rejects OpenCode stripping a closed object boundary", () => {
-    const descriptor = createToolDescriptor(declaration());
+  it("rejects V2 silently closing a declared open object boundary", () => {
+    const descriptor = createToolDescriptor(declaration(1, true));
     const catalog = createToolCatalog(
       {
         descriptors: [descriptor],
@@ -186,7 +186,7 @@ describe("closed lossless schema core", () => {
     expect(matchesCatalogSchema(compiled, copyCatalogJson(valid))).toBe(true);
     expect(matchesCatalogSchema(compiled, copyCatalogJson(invalid))).toBe(false);
   });
-  it("accepts an explicitly open nested managed schema without silently changing declared constraints", () => {
+  it("preserves nested closed boundaries in the V2 projection", () => {
     const nested = {
       type: "object",
       properties: {
@@ -196,12 +196,12 @@ describe("closed lossless schema core", () => {
             type: "object",
             properties: { flag: { type: "boolean" } },
             required: ["flag"],
-            additionalProperties: true,
+            additionalProperties: false,
           },
         },
       },
       required: ["entries"],
-      additionalProperties: true,
+      additionalProperties: false,
     };
     const descriptor = createToolDescriptor({ ...declaration(), inputSchema: nested });
     const catalog = createToolCatalog(
@@ -213,19 +213,36 @@ describe("closed lossless schema core", () => {
       { referenceTimeMs: 0 },
     );
     const projection = compileToolProjection(catalog, { id: "fixture", version: 1 });
-    expect(projection.tools[0]?.inputSchema).toEqual({
-      type: "object",
-      properties: {
-        entries: {
-          type: "array",
-          items: { type: "object", properties: { flag: { type: "boolean" } }, required: ["flag"] },
-        },
-      },
-      required: ["entries"],
-    });
+    expect(projection.tools[0]?.inputSchema).toEqual(descriptor.inputSchema);
     const schema = compileCatalogSchema(nested);
-    expect(matchesCatalogSchema(schema, { entries: [], extra: "bounded" })).toBe(true);
+    expect(matchesCatalogSchema(schema, { entries: [{ flag: true }] })).toBe(true);
+    expect(matchesCatalogSchema(schema, { entries: [], extra: "bounded" })).toBe(false);
+    expect(matchesCatalogSchema(schema, { entries: [{ flag: true, extra: 1 }] })).toBe(false);
     expect(matchesCatalogSchema(schema, {})).toBe(false);
+  });
+  it("rejects lossy V2 projection of an open nested object", () => {
+    const descriptor = createToolDescriptor({
+      ...declaration(),
+      inputSchema: {
+        type: "object",
+        properties: {
+          nested: { type: "object", properties: {}, required: [], additionalProperties: true },
+        },
+        required: ["nested"],
+        additionalProperties: false,
+      },
+    });
+    const catalog = createToolCatalog(
+      {
+        descriptors: [descriptor],
+        profiles: [profile(descriptor, "managed-runtime-json-schema")],
+        compatibility: [],
+      },
+      { referenceTimeMs: 0 },
+    );
+    expect(() => compileToolProjection(catalog, { id: "fixture", version: 1 })).toThrow(
+      "unrepresentable-projection",
+    );
   });
   it("normalizes source insertion order throughout repeated property permutations", () => {
     const fields = Object.entries(declaration());

@@ -22,22 +22,21 @@ import {
 } from "./codingToolIpc.js";
 import { proposalIdPattern } from "../gitDelivery/proposalId.js";
 
-export const OPENCODE_PINNED_VERSION = "1.18.30";
+export const OPENCODE_PINNED_VERSION = "2.0.10";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
 /**
- * The two native extensions' exact pinned wire schemas live in
+ * The native extension's exact pinned wire schema lives in
  * `@oscharko-dev/keiko-tool-catalog`'s `OPENCODE_NATIVE_EXTENSION_DEFINITIONS` (one source,
  * imported back here); see that package's opencode.ts header comment for why.
  */
-function nativeExtensionSchema(alias: "question" | "todowrite"): Readonly<Record<string, unknown>> {
-  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS.find((entry) => entry.alias === alias);
-  if (definition === undefined)
-    throw new TypeError(`Missing native extension definition: ${alias}`);
+function nativeExtensionSchema(): Readonly<Record<string, unknown>> {
+  const definition = OPENCODE_NATIVE_EXTENSION_DEFINITIONS[0];
+  if (definition === undefined) throw new TypeError("Missing native extension definition");
   return definition.inputSchema;
 }
 
-const QUESTION_SCHEMA = nativeExtensionSchema("question");
+const QUESTION_SCHEMA = nativeExtensionSchema();
 
 const WORKSPACE_READ_SCHEMA = {
   type: "object",
@@ -237,13 +236,6 @@ const VERIFICATION_PROJECTED_SCHEMA = {
   required: ["verifierId", "targetPath"],
 } as const;
 
-/**
- * Exact v1.18.30 built-in `todowrite` projection (#2480). Status/priority are deliberately plain
- * strings upstream; Keiko enforces the closed status vocabulary at the safe-activity normalizer,
- * never here, or the gateway digest comparison would reject the child's declared contract.
- */
-const TODO_WRITE_SCHEMA = nativeExtensionSchema("todowrite");
-
 // #2387 read-only public research: one exact https URL per call. The server side enforces the real
 // policy (grant, host allowlist, request-line binding, budgets); this schema only bounds the shape.
 const RESEARCH_FETCH_SCHEMA = {
@@ -408,7 +400,6 @@ export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_pull_request", parameters: GIT_PULL_REQUEST_SCHEMA },
   { name: "keiko_git_execute", parameters: GIT_EXECUTE_SCHEMA },
   { name: "keiko_ci_status", parameters: GIT_CI_STATUS_SCHEMA },
-  { name: "todowrite", parameters: TODO_WRITE_SCHEMA },
 ] as const;
 
 export const OPENCODE_MODEL_VISIBLE_TOOL_NAMES = OPENCODE_MODEL_VISIBLE_TOOLS.map(
@@ -514,7 +505,7 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   },
 ] as const;
 
-// `todowrite` left this deny list for OPENCODE_MODEL_VISIBLE_TOOLS (#2480 plan projection).
+// OpenCode V2 no longer advertises `todowrite`; keep it blocked if it reappears.
 export const OPENCODE_PINNED_BUILT_IN_TOOLS = [
   "invalid",
   "bash",
@@ -532,6 +523,7 @@ export const OPENCODE_PINNED_BUILT_IN_TOOLS = [
   "plan",
   "execute",
   "git",
+  "todowrite",
 ] as const;
 
 interface OpenCodeToolInput {
@@ -563,46 +555,19 @@ function schemaDigest(schema: Readonly<Record<string, unknown>>): string {
 }
 
 /**
- * OpenCode v1.17.17 drops an empty `required: []` array and adds a `$schema` marker for a
- * zero-argument tool's parameters (live-run evidence: #3390 real OpenCode 1.17.17 on macOS,
- * captured in `opencodeToolSchemas.opencode-1.17.17-advertised.fixture.json`).
- */
-const OPENCODE_EMPTY_PARAMETER_PROJECTED_SCHEMA = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "object",
-  properties: {},
-} as const;
-
-function isEmptyParameterSourceSchema(schema: Readonly<Record<string, unknown>>): boolean {
-  const { properties, required } = schema;
-  return (
-    isRecord(properties) &&
-    Object.keys(properties).length === 0 &&
-    Array.isArray(required) &&
-    required.length === 0
-  );
-}
-
-/**
- * Gateway requests contain OpenCode's v1.18.30 projection of a tool's schema, not the generated
- * source schema: it strips the unsupported `additionalProperties` keyword from
- * `keiko_verification` (`VERIFICATION_PROJECTED_SCHEMA`), and, for a zero-argument tool such as
- * `keiko_git_status`/`keiko_git_push`, drops the empty `required: []` array and adds a `$schema`
- * marker instead (`OPENCODE_EMPTY_PARAMETER_PROJECTED_SCHEMA`). Exported so the incoming trust
- * check's expected digests, the scripted `FakeOpenCodeChild` advertisement, and this module's own
- * tests all derive the projection from this one formula rather than each restating it.
+ * V2 adds a closed top-level object boundary to custom tools. The verification schema retains
+ * its established keyword projection. The native question schema is already exact.
  */
 export function projectedGatewaySchema(
   name: string,
   parameters: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  if (name === "keiko_verification") return VERIFICATION_PROJECTED_SCHEMA;
-  return isEmptyParameterSourceSchema(parameters)
-    ? OPENCODE_EMPTY_PARAMETER_PROJECTED_SCHEMA
-    : parameters;
+  if (name === "question") return parameters;
+  const projected = name === "keiko_verification" ? VERIFICATION_PROJECTED_SCHEMA : parameters;
+  return { ...projected, additionalProperties: false };
 }
 
-/** Gateway requests contain OpenCode's v1.18.30 projection, not the generated source schema. */
+/** Gateway requests contain OpenCode's V2 provider projection, not the generated source schema. */
 const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => [
     name,

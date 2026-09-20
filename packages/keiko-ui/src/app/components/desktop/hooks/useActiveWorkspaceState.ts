@@ -187,6 +187,7 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   const t = useTranslate();
   const operationSeqRef = useRef(0);
   const mutationSeqRef = useRef(0);
+  const switchTail = useRef<Promise<boolean> | null>(null);
   // How many mutations have reached the server and not yet answered. Zero at the moment one
   // answers means that mutation is the last applied request of the burst — the one whose effect
   // the server ends on, and therefore the one that owns the authoritative re-read.
@@ -311,8 +312,15 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   );
 
   const switchTo = useCallback(
-    (workspaceId: string): Promise<boolean> =>
-      mutate(() => setActiveTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR })),
+    (workspaceId: string): Promise<boolean> => {
+      // Serialize server mutations, not merely UI responses: the latest selection must be
+      // the final applied pointer. Other mutation outcomes still reconcile with server truth.
+      const run = (): Promise<boolean> =>
+        mutate(() => setActiveTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR }));
+      const pending = switchTail.current?.then(run, run) ?? run();
+      switchTail.current = pending;
+      return pending;
+    },
     [mutate],
   );
 

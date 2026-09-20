@@ -8,6 +8,7 @@ import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   OPENCODE_PINNED_BUILT_IN_TOOLS,
+  OPENCODE_TOOL_SOURCE_DEFINITIONS,
 } from "./opencodeToolSchemas.js";
 
 const OPENCODE_WIRE_ENVELOPE_RESERVE_BYTES = 64 * 1_024;
@@ -69,13 +70,18 @@ Governed workflow, in order:
 2. Discover: keiko_workspace_discover returns only bounded, allowed workspace-relative file paths matching a short query. Use it when the task does not already identify the files; use * only for a bounded repository overview. keiko_repository_search searches repository CONTENTS (mode lexical, literal, regex or symbol) and returns bounded, allowed workspace-relative hits with continuation cursors; use its matches to locate call sites, definitions and strings, then read the relevant window before editing.
 3. Read: keiko_workspace_read returns one file as a bounded line window (relativePath, startLine, maxLines). The result reports totalLines, nextStartLine when the window is truncated, and the SHA-256 digest of the whole file. Read every file before you edit it.
 4. Edit: keiko_changeset_edit is the only way to change files. Submit one strict unified diff covering every listed file and bind each file to the expectedContentHash digest returned by its most recent keiko_workspace_read. On a digest mismatch, re-read the file and rebuild the patch instead of retrying it unchanged.
-5. Verify: keiko_verification runs exactly one vetted verifier — test, targeted-test, typecheck, lint, or build. Verify after your edits and repair failures until verification passes; never report success without it. Preserve existing regression expectations and required CI checks. If targeted-test has no configured runnable steps, use the configured full test verifier; an unavailable verifier is not a failing regression. Passing tests on unstaged files do not yet supply commit proof: execute staging, verify that staged candidate, then propose the commit.
+5. Verify: keiko_verification runs exactly one vetted verifier — test, targeted-test, typecheck, lint, or build. Verify after your edits and repair failures until verification passes; never report success without it. Preserve existing regression expectations and required CI checks. If targeted-test has no configured runnable steps, use the configured full test verifier; an unavailable verifier is not a failing regression. A verification result with status passed lists the completed checks, even when its optional commit proof is unavailable. Missing commit proof does not mean the checks failed or did not run. Stage files and verify a staged candidate only when the accepted task requests commit or delivery; ordinary test generation, refactoring, and feature work can finish with verified workspace changes.
 
 Additional governed capabilities: keiko_research_fetch (one exact public https URL), keiko_skill_discover (lists the approved read-only skills this run may invoke now), keiko_skill (runs one of them by the skillId keiko_skill_discover lists), and keiko_child_agent (one bounded read-only child agent) may be granted for some tasks; a denied result is a policy decision, not a transient error. Use question only when you are blocked on a decision that belongs to the operator.
 
 Delivering your work, when granted: keiko_git_status and keiko_git_diff read the current Git state; keiko_git_stage proposes staging paths. keiko_git_commit proposes a commit message, keiko_git_push proposes pushing the last verified commit, and keiko_pull_request proposes a draft pull request title -- each of these three only PROPOSES, returning a proposalId; you never commit, push or open a pull request directly. When keiko_git_commit is blocked by the message policy, its result carries a violations array of exact codes (for example missing-conventional-prefix or subject-too-long); read it and fix the message yourself, then call keiko_git_commit again -- never ask the operator which commit format to use. Follow each proposal's actual disposition: proposal tools wait for any required operator decision. If the result carries approvalDisposition: "ready", approval has ALREADY been granted even if its immutable receipt still says approval-required. Continue immediately; do not stop or ask for the same approval again. When the stage status is ready or approvalDisposition is ready, call keiko_git_execute with its matching kind (stage, commit, push or pull-request) and proposalId without asking a redundant question. Only a proposal without a ready disposition that still requires approval must wait for the operator's own approval channel before execution. Creating or approving a proposal does not execute it. A denied result authorizes no effect; do not retry a denial blindly or widen authority. keiko_ci_status observes the run's CI readiness (set forceFresh to bypass the cached snapshot) -- use it after a push or pull-request to decide whether to keep repairing before handing off.
 
 Work in small read/edit/verify cycles, keep patches minimal, and never describe an edit in prose instead of submitting it through keiko_changeset_edit. Progress happens only through tool calls.`;
+
+export const OPENCODE_GOVERNED_V2_SYSTEM_PROMPT = OPENCODE_GOVERNED_SYSTEM_PROMPT.replace(
+  "1. Plan: keep a short plan up to date with todowrite so the operator can follow your progress.",
+  "1. Plan: keep a short plan in your responses so the operator can follow your progress.",
+);
 export type OpenCodeLaunchProfileResult =
   | {
       readonly ok: true;
@@ -83,7 +89,7 @@ export type OpenCodeLaunchProfileResult =
       readonly args: readonly string[];
       readonly env: Readonly<Record<string, string>>;
       readonly config: string;
-      readonly configValue: ReturnType<typeof createFixedOpenCodeConfig>;
+      readonly configValue: ReturnType<typeof createFixedOpenCodeV2Config>;
     }
   | { readonly ok: false; readonly reason: "invalid-launch-input" | "secret-generation-failed" };
 
@@ -99,14 +105,14 @@ export function buildOpenCodeLaunchProfile(
   const secret = (input.randomBytes ?? nodeRandomBytes)(32);
   if (secret.length < 32) return { ok: false, reason: "secret-generation-failed" };
   const home = join(input.stateRoot, "home");
-  const configValue = createFixedOpenCodeConfig(
+  const configValue = createFixedOpenCodeV2Config(
     input.contextGeometry,
     input.unavailableOptionalTools,
   );
   return {
     ok: true,
     executable: input.executable,
-    args: ["serve", "--hostname", "127.0.0.1", "--port", "0", "--no-mdns"],
+    args: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
     env: Object.freeze({
       HOME: home,
       USERPROFILE: home,
@@ -276,5 +282,71 @@ export function createFixedOpenCodeConfig(
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
     tools: fixedOpenCodeTools(unavailable),
     permission: fixedOpenCodePermission(unavailable),
+  };
+}
+
+/** OpenCode V2's native configuration: all direct tools denied, only Keiko's bridge exposed. */
+export function createFixedOpenCodeV2Config(
+  contextGeometry: OpenCodeContextGeometry,
+  unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
+): Readonly<Record<string, unknown>> {
+  const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
+  const reserved = Math.min(
+    OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
+    contextGeometry.maxOutputTokens,
+  );
+  const recent = Math.min(
+    OPENCODE_COMPACTION_MAX_RECENT_TOKENS,
+    Math.max(OPENCODE_COMPACTION_MIN_RECENT_TOKENS, contextGeometry.maxInputTokens - reserved),
+  );
+  const permissions = [
+    { action: "*", resource: "*", effect: "deny" },
+    { action: "question", resource: "*", effect: "allow" },
+    ...OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(
+      ({ name }) => !unavailable.has(name as OpenCodeOptionalToolName),
+    ).map(({ name: action }) => ({ action, resource: "*", effect: "allow" })),
+  ];
+  return {
+    update: "disable",
+    share: "disabled",
+    snapshots: false,
+    model: `keiko-runtime/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
+    default_agent: "build",
+    agents: {
+      build: { system: OPENCODE_GOVERNED_V2_SYSTEM_PROMPT },
+      compaction: { system: OPENCODE_GOVERNED_COMPACTION_PROMPT },
+    },
+    providers: fixedOpenCodeV2Provider(contextGeometry),
+    compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
+    tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    permissions,
+  };
+}
+
+function fixedOpenCodeV2Provider(
+  geometry: OpenCodeContextGeometry,
+): Readonly<Record<string, unknown>> {
+  return {
+    "keiko-runtime": {
+      name: "Keiko Governed Coding Gateway",
+      package: "@opencode/ai/providers/openai-compatible",
+      models: {
+        [OPENCODE_RUNTIME_MODEL_ALIAS]: {
+          name: "Keiko Governed Coding",
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          limit: {
+            context: geometry.contextWindowTokens,
+            input: geometry.maxInputTokens,
+            output: geometry.maxOutputTokens,
+          },
+          cost: { input: 0, output: 0 },
+        },
+      },
+      settings: {
+        baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
+        chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
+      },
+      headers: { Authorization: "Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}" },
+    },
   };
 }

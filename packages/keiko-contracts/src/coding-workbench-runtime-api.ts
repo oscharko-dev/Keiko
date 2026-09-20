@@ -126,6 +126,8 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
   readonly taskIntent: string;
+  /** Durable conversation identity; never grants execution authority. */
+  readonly conversationId?: string | undefined;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
@@ -141,6 +143,8 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly issueRef?: string | undefined;
   /** Optimistic precondition from the accepted preview; never authority. */
   readonly expectedIssueBindingDigest?: string | undefined;
+  /** A prompt link supplies context; only an explicit delivery request binds the run to delivery. */
+  readonly issuePurpose?: "context" | "delivery" | undefined;
   /**
    * Operator preference only. The browser can turn project memory context on/off for this run, but
    * it cannot choose scopes, paths, user memory, or credentials. The server derives those from the
@@ -314,6 +318,7 @@ export interface CodingWorkbenchRuntimeSnapshot {
    * still uses #3399's existing PR preview, policy and one-use approval.
    */
   readonly descriptionStatus?: WorkbenchDescriptionStatus | undefined;
+  readonly conversationId?: string | undefined;
 }
 
 export type CodingWorkbenchRuntimeStatus = CodingWorkbenchRuntimeSnapshot;
@@ -417,6 +422,13 @@ function validateIssueRef(value: unknown, errors: string[]): void {
   }
 }
 
+function validateIssuePurpose(value: unknown, issueRef: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (issueRef === undefined || (value !== "context" && value !== "delivery")) {
+    errors.push("issuePurpose requires an issue reference and a supported purpose");
+  }
+}
+
 function validateProjectMemoryRequest(value: unknown, errors: string[]): void {
   if (value === undefined) return;
   if (!isRecord(value)) {
@@ -436,18 +448,22 @@ export function parseCodingWorkbenchRuntimeStartRequest(
     [
       "requestId",
       "taskIntent",
+      "conversationId",
       "requestedMode",
       "runtimePreference",
       "modelId",
       "reasoningEffort",
       "issueRef",
       "expectedIssueBindingDigest",
+      "issuePurpose",
       "projectMemory",
     ],
     "startRequest",
   );
   validateRequestId(value.requestId, errors);
   validateTaskIntent(value.taskIntent, errors);
+  if (value.conversationId !== undefined)
+    validateSafeId(value.conversationId, "conversationId", errors, 128);
   if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
     errors.push("requestedMode is invalid");
   }
@@ -455,6 +471,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
   validateIssueRef(value.issueRef, errors);
+  validateIssuePurpose(value.issuePurpose, value.issueRef, errors);
   validateProjectMemoryRequest(value.projectMemory, errors);
   if (
     value.expectedIssueBindingDigest !== undefined &&
@@ -631,10 +648,13 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "draftDelivery",
       "ciReadiness",
       "descriptionStatus",
+      "conversationId",
     ],
     "runtimeSnapshot",
   );
   validateSnapshotFields(value, errors);
+  if (value.conversationId !== undefined)
+    validateSafeId(value.conversationId, "conversationId", errors, 128);
   validateContextUsage(value.contextUsage, errors);
   validateIssueBinding(value.issueBinding, errors);
   validateSnapshotVerifiedCommit(value, errors);

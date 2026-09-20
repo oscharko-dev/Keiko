@@ -1,14 +1,12 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-09-19 for PR #3557 (Epic #3527 Wave 1
-follow-ups). Its sources change three pinned files: `api.ts` (a chat list load now carries its own
-correlation id), and the English and German i18n messages (the Figma snapshot window's strings
-moved to the optional widget catalog that loads with the window). No updater string changed.
-Current-branch verification passed all eight Chromium checks, including the real-BFF outage
-journey, and refreshed the tracked updater artifacts. It proves the startup notice
-yields only while a visible, foreground **ready** Update window owns the same critical context and
-actions; the notice returns when that window is backgrounded or minimized, and remains available
-while the foreground updater is loading or contains only a load error.
+The current repair evidence was regenerated on 2026-09-20 for PR #3561 after the Coding Workbench
+changed the shared English and German message catalogs. No updater string changed. All eight
+Chromium checks passed, including the real-BFF outage journey, and refreshed the tracked updater
+artifacts. The tests prove the startup notice yields only while a visible, foreground **ready**
+Update window owns the same critical context and actions; the notice returns when that window is
+backgrounded or minimized, and remains available while the foreground updater is loading or
+contains only a load error.
 
 The current suite includes the real-BFF outage journey. Both the main server and the outage
 harness use isolated copies of the fake-key gateway fixture, preserving the tracked source
