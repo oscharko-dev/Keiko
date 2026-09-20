@@ -34,7 +34,7 @@
   ·
   <a href="#install-with-npm">npm</a>
   ·
-  <a href="#whats-in-10">What's in 1.0</a>
+  <a href="#whats-in-11">What's in 1.1</a>
   ·
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md">Contributing</a>
   ·
@@ -86,6 +86,16 @@ Run it inside a project with a `package.json`. The UI opens at `http://127.0.0.1
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's in 1.1
+
+1.1 folds every reviewed customer-facing change since 1.0.5 into one minor bump. The published surface is unchanged from 1.0 — nothing was added, removed or renamed — so `1.x` remains the supported line under the same promise.
+
+- The activity log is now a strict machine-reconstruction contract: every record is validated against a versioned registry, support exports refuse unsafe filesystem targets and never silently overwrite, and support analysis explicitly classifies legacy, corrupt, truncated or incomplete evidence.
+- The Coding Workbench moves to OpenCode 2 and keeps per-conversation task history so a run's steps stay visible across restarts.
+- Voice conversations with the Digital Twin are turn-based, with a simpler audio setup.
+- Publishing a stable release is a single unattended button: when the current `dev` version is already published, the release automation prepares and requests the next reviewed version by itself instead of asking for a manual bump step.
+- Chat and workbench polish: the Chat History **New** button no longer flashes enabled during load, and the workbench composer chip row is removed.
 
 ## What's in 1.0
 

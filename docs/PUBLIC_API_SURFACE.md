@@ -1,4 +1,4 @@
-# Public API surface — 1.0.5
+# Public API surface — 1.1.0
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -88,6 +88,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   reliability, update/install hardening and build-tool maintenance changed without adding, removing
   or renaming a root export, CLI flag or package entry point. The approved external surface remains
   the 1.0.1 surface described above.
+- 1.1.0 (2026-09-20): Activity Log Wave 1 (machine-reconstruction contract, segments,
+  readiness, loss, proofs, incidents, quality gate and queries), Workbench migration to
+  OpenCode 2 with per-conversation task history, turn-based Digital Twin voice, one-button
+  release automation, and various chat/workbench UX polish changed without adding, removing or
+  renaming a root export, CLI top-level command, or package entry point. The approved external
+  surface remains the 1.0.1 surface described above.
 - 0.3.17 (2026-09-10, PR #3452): the root barrel gains `boundWorkspaceFs` from
   `@oscharko-dev/keiko-workspace` — the filesystem port a consumer should resolve paths through for a
   `WorkspaceInfo` (the owned-root port the managed-worktree prover bound to it, else the caller's

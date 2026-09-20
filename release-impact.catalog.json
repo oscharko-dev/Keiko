@@ -2227,10 +2227,10 @@
     },
     {
       "packageName": "@oscharko-dev/keiko",
-      "packageVersion": "1.0.6",
+      "packageVersion": "1.1.0",
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
-      "releaseTag": "v1.0.6",
+      "releaseTag": "v1.1.0",
       "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
@@ -2245,37 +2245,46 @@
         "qi-supply-chain",
         "install-smoke"
       ],
-      "id": "2026-09-18-keiko-1.0.6-activity-log-contract-hardening",
-      "releaseNoteCategory": "fixes",
+      "id": "2026-09-20-keiko-1.1.0-activity-log-wave-1-workbench-opencode-2-one-button-release",
+      "releaseNoteCategory": "new-additions",
       "releaseNotePriority": "high",
-      "userVisibleChange": "security",
-      "userVisibleSummary": "Activity Log persistence and support artifact publication now fail closed on unsafe filesystem targets while preserving bounded daily retention. New Activity Log records use the strict versioned registry contract, and support analysis explicitly classifies legacy, unsupported, corrupt, truncated and incomplete evidence without rewriting existing records.",
-      "affectedStateStores": ["activity-log", "support-artifacts"],
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Version 1.1.0 hardens Activity Log persistence and support analysis into a strict, versioned machine-reconstruction contract; ships Workbench with OpenCode 2 and per-conversation task history; enables turn-based Digital Twin voice; and turns release delivery into a single unattended button that prepares the next reviewed version by itself. It also removes CI re-measurement of dev merges by reusing the proven tree evidence from the merged pull request, and irons out several small chat and workbench UX rough edges.",
+      "affectedStateStores": ["activity-log", "support-artifacts", "workbench-task-history"],
       "stateImpact": [
         {
           "store": "activity-log",
-          "description": "New records use the strict versioned contract. Existing records remain readable through bounded compatibility readers, are never rewritten, and continue under normal age-based retention.",
+          "description": "Records emitted from 1.1.0 use the strict versioned registry contract and are stamped with schema and identity metadata. Existing records remain readable through bounded compatibility readers, are never rewritten, and continue under normal age-based retention. New segment, readiness, loss and incident evidence is added without touching prior files.",
           "userActionRequired": false,
           "remediation": "no-action-required"
         },
         {
           "store": "support-artifacts",
-          "description": "New support artifacts use fail-closed exclusive publication. Existing artifacts remain untouched and rollback must not restore unsafe overwrite behavior.",
+          "description": "New support exports use fail-closed exclusive publication that refuses unsafe filesystem targets (such as symbolic links) and never silently overwrites an existing artifact. Existing artifacts remain untouched and rollback must not restore unsafe overwrite behavior.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "workbench-task-history",
+          "description": "Workbench migrates to OpenCode 2 and now retains per-conversation task history. History is stored inside the existing workspace state directory; no new privileged surface or external destination is added.",
           "userActionRequired": false,
           "remediation": "no-action-required"
         }
       ],
       "releaseNoteBullets": [
-        "Activity Log files and support exports refuse unsafe targets such as symbolic links and never silently overwrite an existing artifact.",
-        "Activity Log records are strictly validated and versioned, and support analysis says explicitly when evidence is legacy, corrupt or incomplete."
+        "Activity Log persistence and support analysis are now a strict, versioned machine-reconstruction contract: records are validated against a registry, unsafe filesystem targets are refused, and support analysis explicitly classifies legacy, corrupt, truncated and incomplete evidence.",
+        "Workbench migrates to OpenCode 2 and gains persistent per-conversation task history.",
+        "Voice conversations with the Digital Twin are now turn-based, with a simpler audio setup.",
+        "Publishing a stable release is now a single unattended button: when the current dev version is already published, the release automation prepares and requests the next reviewed version on its own.",
+        "Several chat and workbench UI rough edges are ironed out (Chat History's New button no longer flashes enabled during load; the workbench composer chip row is removed)."
       ],
       "review": {
         "status": "reviewed",
         "reviewer": "release-owner",
-        "reviewedAt": "2026-09-18",
+        "reviewedAt": "2026-09-20",
         "humanApproved": true,
-        "approvalReference": "github-pr-comment:oscharko-dev/Keiko#3542#discussion_r4044624494",
-        "rationale": "The release owner required PR #3542 to deliver the current structured Update Impact from issues #3528 and #3529 in the matching release-impact catalog entry. The work preserves existing logs and bounded retention, requires no user action, and records the two approved customer-facing bullets without expanding scope beyond those issues.",
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#3555#4066283441",
+        "rationale": "The 1.1.0 minor bump bundles the reviewed and merged customer-facing changes since 1.0.5: Activity Log Wave 1 (#3542, #3554, #3557), Workbench OpenCode 2 with task history (#3561), turn-based Digital Twin voice (#3559), the one-button release automation (#3555), Chat History load-state fix (#3553), and the workbench chip row removal (#3563). 1.0.6 was never cut; its Activity Log hardening notes are folded into 1.1.0's first bullet so the reviewed customer-facing text is preserved without publishing an intermediate patch.",
         "traceability": null
       },
       "userActionRequired": false,
