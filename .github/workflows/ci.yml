@@ -1096,7 +1096,8 @@ jobs:
               echo "Tree reuse claimed by a resolver that did not succeed (${VERIFIED_TREE_RESULT:-unset})."
               exit 1
             fi
-            if [ -z "${TREE_EVIDENCE_RUN_ID:-}" ] || [ -z "${TREE_EVIDENCE_TREE_SHA:-}" ]; then
+            if [ -z "${TREE_EVIDENCE_RUN_ID:-}" ] || [ -z "${TREE_EVIDENCE_TREE_SHA:-}" ] ||
+              [ -z "${TREE_EVIDENCE_HEAD_SHA:-}" ]; then
               echo "Tree reuse claimed without complete evidence identity."
               exit 1
             fi

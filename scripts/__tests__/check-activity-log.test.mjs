@@ -53,6 +53,13 @@ const GATE_COMMAND = "npm run check:activity-log";
 // ADR-0178: the one condition the gate's host job may carry (matched exactly, see ciFindings).
 const ACTIVITY_LOG_REUSE_GUARD =
   "${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}";
+
+/**
+ * The gate's hosting job header, anchored by its own `name:`. The guard line alone appears on all
+ * ten gated jobs, so a bare-line mutation would rewrite the first of those instead of this host.
+ */
+const GATE_HOST_HEADER = "    name: Core quality\n    needs: verified-tree\n";
+const GATE_HOST_GUARDED = `${GATE_HOST_HEADER}    if: ${ACTIVITY_LOG_REUSE_GUARD}\n`;
 const STEP_COUNT = ACTIVITY_LOG_GATE_STEPS.length;
 const REQUIRED_CONSTITUENTS = [
   "check:op-catalog",
@@ -481,8 +488,45 @@ describe("required wiring of the Activity Log gate", () => {
       (w) => ({ ...w, agents: `${w.agents}\nRun \`npm run check:activity-log-lite\`.\n` }),
       "agents-unknown-command:check:activity-log-lite",
     ],
+    // ADR-0178 narrowed this pin from "no condition at all" to "exactly the reuse guard". These
+    // mutations prove the narrowing is not a hole: the condition class the pin exists to reject —
+    // a changed-file scope — must still fail, and so must any broadened form of the guard itself.
+    [
+      "the hosting job takes a changed-file condition instead of the reuse guard",
+      (w) => ({
+        ...w,
+        workflow: replaced(
+          w.workflow,
+          GATE_HOST_GUARDED,
+          `${GATE_HOST_HEADER}    if: \${{ needs.change-scope.outputs.documentation-only != 'true' }}\n`,
+        ),
+      }),
+      "ci-job-conditional",
+    ],
+    [
+      "the hosting job broadens the reuse guard",
+      (w) => ({
+        ...w,
+        workflow: replaced(
+          w.workflow,
+          GATE_HOST_GUARDED,
+          `${GATE_HOST_HEADER}    if: \${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || github.event_name == 'push') }}\n`,
+        ),
+      }),
+      "ci-job-conditional",
+    ],
   ])("fails when %s", (_label, mutate, finding) => {
     expect(gateWiringFindings(mutate(current))).toContain(finding);
+  });
+
+  // The other half of the narrowing: an absent condition is still accepted, so the pin does not
+  // drift into demanding the guard it merely tolerates.
+  it("still accepts a hosting job that carries no condition at all", () => {
+    const withoutCondition = {
+      ...current,
+      workflow: replaced(current.workflow, GATE_HOST_GUARDED, GATE_HOST_HEADER),
+    };
+    expect(gateWiringFindings(withoutCondition)).not.toContain("ci-job-conditional");
   });
 });
 

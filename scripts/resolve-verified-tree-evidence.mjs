@@ -23,17 +23,22 @@
 // full run by construction. There is no path by which reuse can outlive the evidence it cites.
 
 import { appendFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 /** Jobs whose verdict this run reuses. A candidate that skipped one of them is not evidence. */
 const REUSED_JOB_NAMES = Object.freeze([
-  "Core quality",
-  "ui",
-  "Node 26 compatibility",
   "Semantic duplication",
+  "Core quality",
+  "Coverage suite (keiko-ui)",
+  "Coverage suite (scripts)",
+  "Coverage and SonarCloud",
+  "Build, scan, SBOM, smoke",
+  "Node 26 compatibility",
+  "ui",
 ]);
 
 /** Job-name prefixes whose verdict this run reuses (matrix legs carry a suffix). */
-const REUSED_JOB_PREFIXES = Object.freeze(["Cross-platform smoke"]);
+const REUSED_JOB_PREFIXES = Object.freeze(["Cross-platform smoke", "Coverage shard (packages"]);
 
 const API_ROOT = "https://api.github.com";
 
@@ -103,22 +108,45 @@ async function resolveMergedPullRequest(repo, sha, token) {
     return null;
   }
   for (const pull of pulls) {
-    const candidate =
-      /** @type {{ number?: unknown, merged_at?: unknown, merge_commit_sha?: unknown, head?: { sha?: unknown } }} */ (
-        pull
-      );
-    // `merge_commit_sha` must be THIS commit: the association endpoint also returns pull requests
-    // that merely contain the commit, which would let an unrelated green run stand in as evidence.
-    if (candidate.merged_at === null || candidate.merge_commit_sha !== sha) {
-      continue;
-    }
-    const number = candidate.number;
-    const headSha = candidate.head?.sha;
-    if (typeof number === "number" && typeof headSha === "string") {
-      return { number, headSha };
+    const accepted = acceptMergedPullCandidate(pull, sha);
+    if (accepted !== null) {
+      return accepted;
     }
   }
   return null;
+}
+
+/**
+ * Decide whether ONE candidate from the commit-association endpoint is the merged pull request this
+ * exact integration commit came from. Pure, so every rejection is directly provable.
+ *
+ * Each condition closes a specific way a non-candidate could pass:
+ *   * `merged_at` must be a non-empty STRING — a `=== null` test alone admits an absent or
+ *     non-string field, letting an unmerged pull request satisfy it;
+ *   * `merge_commit_sha` must be THIS commit — the endpoint also returns pull requests that merely
+ *     CONTAIN the commit, whose green run would then stand in as evidence for a different tree;
+ *   * `number` and `head.sha` must be usable, or there is nothing to look evidence up with.
+ * @param {unknown} pull
+ * @param {string} sha
+ * @returns {{ number: number, headSha: string } | null}
+ */
+export function acceptMergedPullCandidate(pull, sha) {
+  const candidate =
+    /** @type {{ number?: unknown, merged_at?: unknown, merge_commit_sha?: unknown, head?: { sha?: unknown } }} */ (
+      pull
+    );
+  if (typeof candidate?.merged_at !== "string" || candidate.merged_at.length === 0) {
+    return null;
+  }
+  if (typeof candidate.merge_commit_sha !== "string" || candidate.merge_commit_sha !== sha) {
+    return null;
+  }
+  const number = candidate.number;
+  const headSha = candidate.head?.sha;
+  if (typeof number !== "number" || typeof headSha !== "string" || headSha.length === 0) {
+    return null;
+  }
+  return { number, headSha };
 }
 
 /**
@@ -244,12 +272,19 @@ async function publish(evidence) {
   console.log(`full matrix required: ${evidence.reason}`);
 }
 
-try {
-  await publish(await resolveEvidence());
-} catch (error) {
-  // Fail closed: an unreadable answer is never a reason to skip a gate.
-  console.log(
-    `full matrix required: evidence could not be resolved (${error instanceof Error ? error.message : "unknown error"})`,
-  );
-  await publish({ verified: false, reason: "unresolved" });
+// Only resolve when RUN as the workflow step. Importing this module — as the regression suite does
+// to prove `acceptMergedPullCandidate` — must not perform lookups or publish a verdict.
+const invokedDirectly =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  try {
+    await publish(await resolveEvidence());
+  } catch (error) {
+    // Fail closed: an unreadable answer is never a reason to skip a gate.
+    console.log(
+      `full matrix required: evidence could not be resolved (${error instanceof Error ? error.message : "unknown error"})`,
+    );
+    await publish({ verified: false, reason: "unresolved" });
+  }
 }
