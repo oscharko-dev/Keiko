@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 35;
+export const SCHEMA_VERSION = 36;
 
 interface Migration {
   readonly version: number;
@@ -1248,6 +1248,12 @@ CREATE TABLE coding_history_message_bindings (
 ) STRICT;
 `;
 
+// The same content-free identity columns can bind context without requiring delivery receipts.
+const V36_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_purpose TEXT NOT NULL DEFAULT 'delivery'
+  CHECK (issue_purpose IN ('context', 'delivery'));
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -1287,6 +1293,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 33, sql: V33_SQL },
   { version: 34, sql: V34_SQL },
   { version: 35, sql: V35_SQL },
+  { version: 36, sql: V36_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

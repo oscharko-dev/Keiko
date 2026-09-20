@@ -154,6 +154,8 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   // provenance (codingRuntimeVerifiedCommitAuthorityStore.ts). IDs, digests, shas, a status/reason
   // enum and a timestamp — no commit message, diff, or path.
   "last_successful_verified_commit",
+  // V36 distinguishes context from delivery using a closed SQL vocabulary, never issue text.
+  "issue_purpose",
 ]);
 
 // V11 (issue #2521) persisted workspace-trust records. Content-free by construction: an opaque
@@ -524,6 +526,10 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
     store.close();
     const inspector = new DatabaseSync(dbPath, { readOnly: true });
     const cols = columnNames(inspector, "coding_runtime_snapshots");
+    const schema = inspector
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'coding_runtime_snapshots'")
+      .get();
+    expect(schema?.sql).toContain("CHECK (issue_purpose IN ('context', 'delivery'))");
     inspector.close();
     expect(new Set(cols)).toEqual(ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS);
     for (const col of cols) {

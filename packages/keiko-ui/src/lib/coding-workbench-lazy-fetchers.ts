@@ -79,6 +79,7 @@ export type ApiFetchJson = <T>(
   path: string,
   init?: RequestInit,
   validator?: (value: unknown) => GitRepositoryValidation,
+  correlationId?: string,
 ) => Promise<T>;
 
 // ---------------------------------------------------------------------------
@@ -221,6 +222,7 @@ export async function previewCodingWorkbenchIssue(
   fetchJson: ApiFetchJson,
   input: CodingWorkbenchIssuePreviewRequest,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GitHubIssuePreviewResponseWire> {
   return fetchJson<GitHubIssuePreviewResponseWire>(
     "/api/coding-workbench/issue/preview",
@@ -230,6 +232,7 @@ export async function previewCodingWorkbenchIssue(
       ...(signal === undefined ? {} : { signal }),
     },
     validateGitHubIssuePreviewResponse,
+    correlationId,
   );
 }
 

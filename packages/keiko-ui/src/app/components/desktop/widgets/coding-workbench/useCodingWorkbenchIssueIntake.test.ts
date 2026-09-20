@@ -44,6 +44,7 @@ describe("prompt-driven issue intake", () => {
     expect(preview).toHaveBeenCalledWith(
       { repositoryPath: "/repo", issueRef: "https://github.com/acme/repo/issues/13" },
       expect.any(AbortSignal),
+      expect.any(String),
     );
     expect(start).toHaveBeenCalledWith({
       issueRef: "https://github.com/acme/repo/issues/13",
@@ -73,6 +74,7 @@ describe("prompt-driven issue intake", () => {
     expect(preview).toHaveBeenCalledWith(
       expect.objectContaining({ issueRef: prompt.includes("verify #13") ? "#13" : issueRef }),
       expect.any(AbortSignal),
+      expect.any(String),
     );
   });
 
@@ -88,6 +90,13 @@ describe("prompt-driven issue intake", () => {
     );
     expect(result.current.state).toMatchObject({ kind: "failed", failure: "multiple-issues" });
     expect(start).not.toHaveBeenCalled();
+    const correlationId = preview.mock.calls.at(-1)?.[2];
+    expect(correlationId).toEqual(expect.any(String));
+    expect(result.current.state).toMatchObject({ correlationId });
+    expect(log).toHaveBeenCalledWith(
+      "[keiko] coding workbench prompt issue refused: multiple-issues",
+      { correlationId, errorKind: "validation-failed", codingIssueOutcome: "multiple-issues" },
+    );
     expect(JSON.stringify(log.mock.calls)).not.toContain("acme/");
   });
 

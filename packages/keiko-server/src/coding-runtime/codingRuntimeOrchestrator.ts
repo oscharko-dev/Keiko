@@ -2818,10 +2818,12 @@ export class CodingRuntimeOrchestrator {
     // start cannot resolve right now — fail closed, never launch against an unproven workspace.
     const scope = this.historyStartScope(parsed.value);
     if (scope === undefined) return this.fail("authority-resolution-failed");
-    const { active, principal, request } = scope;
+    const { active, principal } = scope;
+    let { request } = scope;
     const runId = this.newRunId();
     const issue = await this.admitIssue(request, active, runId, predecessorRunId);
     if (!issue.ok) return { ...issue, runId };
+    request = this.requestWithContextPurpose(request, issue.contextBinding);
     const resolved = await this.resolveLaunch(
       request,
       active,
@@ -2839,16 +2841,12 @@ export class CodingRuntimeOrchestrator {
       runId,
       launch,
       predecessorRunId,
-      issue.binding,
+      { issueBinding: issue.binding, issueContextBinding: issue.contextBinding },
     );
     const selection = this.selectStartPredecessor(initialSnapshot, predecessorRunId);
     const snapshot = selection.snapshot;
     this.deps.snapshots.create(snapshot);
-    this.activeRunId = runId;
-    this.settledRunId = undefined;
-    this.activeEffectiveMode = launch.effectiveMode;
-    const { activityLog } = this.deps;
-    recordRuntimeRunStarted(activityLog, snapshot, launch.effectiveMode, selection.reason);
+    this.activateStartedRun(runId, launch, selection);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
     this.projection.publish(snapshot);
     if (!this.beginHistory(request, active, runId))
@@ -2856,6 +2854,29 @@ export class CodingRuntimeOrchestrator {
     const started = await this.startManagedRuntime(request, active, runId, launch);
     if (started !== undefined) return started;
     return this.runInitialTurn(request, active, runId, issue.attachment);
+  }
+
+  private activateStartedRun(
+    runId: string,
+    launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
+    selection: PredecessorSelection,
+  ): void {
+    this.activeRunId = runId;
+    this.settledRunId = undefined;
+    this.activeEffectiveMode = launch.effectiveMode;
+    recordRuntimeRunStarted(
+      this.deps.activityLog,
+      selection.snapshot,
+      launch.effectiveMode,
+      selection.reason,
+    );
+  }
+
+  private requestWithContextPurpose(
+    request: CodingWorkbenchRuntimeStartRequest,
+    binding: CodingWorkbenchIssueBinding | undefined,
+  ): CodingWorkbenchRuntimeStartRequest {
+    return binding === undefined ? request : { ...request, issuePurpose: "context" };
   }
 
   private captureHistory(runId: string): void {
@@ -2891,16 +2912,21 @@ export class CodingRuntimeOrchestrator {
     const priorId = this.deps.history.previousRunId(request.conversationId);
     const prior = priorId === undefined ? undefined : this.deps.snapshots.get(priorId);
     if (prior === undefined) return undefined;
-    const issue = prior.issueBinding;
-    const continued =
-      issue === undefined
-        ? request
-        : {
-            ...request,
-            issueRef: `#${String(issue.issueNumber)}`,
-            expectedIssueBindingDigest: issue.bindingDigest,
-          };
-    return { active, principal, request: continued };
+    return { active, principal, request: this.continuedIssueRequest(request, prior) };
+  }
+
+  private continuedIssueRequest(
+    request: CodingWorkbenchRuntimeStartRequest,
+    prior: CodingRuntimeSnapshot,
+  ): CodingWorkbenchRuntimeStartRequest {
+    const issue = prior.issueBinding ?? prior.issueContextBinding;
+    if (issue === undefined) return request;
+    return {
+      ...request,
+      issueRef: `#${String(issue.issueNumber)}`,
+      expectedIssueBindingDigest: issue.bindingDigest,
+      issuePurpose: prior.issueContextBinding === undefined ? "delivery" : "context",
+    };
   }
 
   private selectStartPredecessor(
@@ -2975,6 +3001,10 @@ export class CodingRuntimeOrchestrator {
         predecessorRunId === undefined
           ? undefined
           : this.deps.snapshots.get(predecessorRunId)?.issueBinding,
+      priorContextBinding:
+        predecessorRunId === undefined
+          ? undefined
+          : this.deps.snapshots.get(predecessorRunId)?.issueContextBinding,
       intake: this.deps.issueIntake,
       activityLog: this.deps.activityLog,
       deploymentCeiling: this.deps.deploymentCeiling,
@@ -3152,7 +3182,7 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]>,
     predecessorRunId?: string,
-    issueBinding?: CodingWorkbenchIssueBinding,
+    issue: Pick<CodingRuntimeSnapshot, "issueBinding" | "issueContextBinding"> = {},
   ): CodingRuntimeSnapshot {
     const now = this.now().toISOString();
     return {
@@ -3175,7 +3205,10 @@ export class CodingRuntimeOrchestrator {
       patchByteCount: 0,
       modelRequestCount: 0,
       ...(predecessorRunId ? { predecessorRunId } : {}),
-      ...(issueBinding === undefined ? {} : { issueBinding }),
+      ...(issue.issueBinding === undefined ? {} : { issueBinding: issue.issueBinding }),
+      ...(issue.issueContextBinding === undefined
+        ? {}
+        : { issueContextBinding: issue.issueContextBinding }),
     };
   }
 

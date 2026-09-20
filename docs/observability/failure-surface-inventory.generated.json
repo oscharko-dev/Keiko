@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c09574611c628c3979a25198eec22dfd2ae5def90d567c9022d2e5c4ed6a3bca"
+    "catalogDigest": "4eca5178f12e9ef3cf0a41b49740c4dc95b9b231692f41d1aa0ef0ced0a75d64"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1519,7 +1519,8 @@
       "packages/keiko-server/src/gitDelivery/ciObservationService.test.ts"
     ],
     "git.ci-repair.budget.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingRuntimeCiRepairBudgetStore.test.ts",
+      "packages/keiko-server/src/coding-runtime/productionCiRepairRuntime.test.ts"
     ],
     "git.commit.draft.completed.emitted-line": [
       "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts"

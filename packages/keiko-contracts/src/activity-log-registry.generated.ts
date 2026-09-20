@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c09574611c628c3979a25198eec22dfd2ae5def90d567c9022d2e5c4ed6a3bca" as const;
+  "4eca5178f12e9ef3cf0a41b49740c4dc95b9b231692f41d1aa0ef0ced0a75d64" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2102,6 +2102,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "loss-state",
         required: true,
+      },
+      codingIssueOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["multiple-issues"],
       },
       errorClass: {
         type: "string",
@@ -29709,6 +29715,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "clientRejectionsSuppressed",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "codingIssueOutcome",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {

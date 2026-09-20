@@ -3507,9 +3507,10 @@ export type CodingWorkbenchIssuePreviewRequest = CodingWorkbenchIssuePreviewRequ
 export async function previewCodingWorkbenchIssue(
   input: CodingWorkbenchIssuePreviewRequest,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GitHubIssuePreviewResponseWire> {
   const adapter = await import("./coding-workbench-lazy-fetchers");
-  return adapter.previewCodingWorkbenchIssue(fetchJson, input, signal);
+  return adapter.previewCodingWorkbenchIssue(fetchJson, input, signal, correlationId);
 }
 
 export function validateGitHubIssueReaderAuthorization(value: unknown): GitRepositoryValidation {

@@ -123,8 +123,13 @@ failure rather than a silent success.
 **An issue-bound delivery run may not report a delivery it cannot evidence.** A GitHub issue linked
 in a Workbench prompt supplies validated, untrusted task context but does not itself request a
 commit, push, or pull request. The server still checks the preview digest and active repository,
-then attaches the issue text without persisting a delivery binding. An explicitly requested issue
-delivery run retains the binding and settles `succeeded` only when durable server-owned evidence
+then attaches the issue text and retains its content-free context identity for retries and history
+continuations, without creating a delivery obligation. Workbench prompts use this general agent
+conversation path, including natural-language requests to commit or open a PR: native OpenCode
+executes the requested tools under the same authority; commit, push, and PR tool outcomes retain
+their existing receipt checks. Turn completion is not a commit/push/PR claim. The browser does not infer a
+structured workflow from free text. A caller explicitly selecting the structured API
+`issuePurpose: "delivery"` retains the delivery binding and settles `succeeded` only when durable server-owned evidence
 says something was delivered — a successful verified-commit receipt, or a draft delivery record in a
 phase that means an artifact exists. The record of an ATTEMPT is not evidence: a commit proposal
 refused for want of verification, a push still awaiting approval, and a delivery in recovery all

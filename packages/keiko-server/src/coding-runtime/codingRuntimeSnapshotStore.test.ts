@@ -659,6 +659,30 @@ describe("issue-bound snapshots (#3385, schema v22)", () => {
     expect(s.get("run-1")?.issueBinding).toEqual(ISSUE_BINDING);
   });
 
+  it("retains context identity across store reconstruction without a delivery binding", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    createCodingRuntimeSnapshotStore(db).create({
+      ...snapshot(),
+      issueContextBinding: ISSUE_BINDING,
+    });
+    const restored = createCodingRuntimeSnapshotStore(db).get("run-1");
+    expect(restored?.issueContextBinding).toEqual(ISSUE_BINDING);
+    expect(restored?.issueBinding).toBeUndefined();
+    expect(() =>
+      createCodingRuntimeSnapshotStore(db).create({
+        ...snapshot(),
+        runId: "conflicting",
+        issueBinding: ISSUE_BINDING,
+        issueContextBinding: ISSUE_BINDING,
+      }),
+    ).toThrow("mutually exclusive");
+    expect(() => {
+      db.exec("UPDATE coding_runtime_snapshots SET issue_purpose = 'unknown'");
+    }).toThrow(/CHECK/u);
+    db.close();
+  });
+
   it("holds the SQL bounds on every issue column, not only the store's own validation", () => {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);

@@ -4478,6 +4478,39 @@ describe("issue-bound runs (#3385)", () => {
     return f;
   }
 
+  it("reattaches context-only issues after recovery without imposing delivery", async () => {
+    const captured = captureActivityLog();
+    const intake = issueIntake();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog, intake);
+    await f.orchestrator.start({ ...start, issueRef: ISSUE_REF, issuePurpose: "context" });
+    await f.orchestrator.startupReconcile();
+    await f.orchestrator.acknowledgeRecovery("run-1", { requestId: "run-1", acknowledged: true });
+    intake.resolve.mockClear();
+    intake.buildContext.mockClear();
+    const retried = successfulSnapshot(
+      await f.orchestrator.retry("run-1", { ...start, requestId: "request-2" }),
+    );
+    expect(retried.runId).toBe("run-2");
+    expect(retried.issueBinding).toBeUndefined();
+    expect(intake.resolve).not.toHaveBeenCalled();
+    expect(intake.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-2", binding: ISSUE_BINDING }),
+    );
+    expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "run-2",
+        initialContext: renderInitialTurnContext(ISSUE_ATTACHMENT),
+      }),
+    );
+    const attached = captured.records
+      .filter((event) => event.op === "coding-runtime.run.issue-context-attached")
+      .at(-1);
+    expect(JSON.parse(formatActivityLogProofLine(attached ?? {}))).toMatchObject({
+      runId: "run-2",
+      issuePurpose: "context",
+    });
+  });
+
   it("revalidates the exact binding on retry and carries it onto the fresh run", async () => {
     const intake = issueIntake();
     const f = await acknowledgedIssueBoundRecovery(intake);

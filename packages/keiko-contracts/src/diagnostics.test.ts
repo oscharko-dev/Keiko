@@ -947,3 +947,21 @@ describe("coding history scope diagnostic contract", () => {
     expect(isClientDiagnosticIngestRequest(request(invalid))).toBe(false);
   });
 });
+
+describe("coding issue diagnostic outcome", () => {
+  it.each([
+    [undefined, true],
+    ["multiple-issues", true],
+    ["unknown", false],
+    ["https://github.com/private/repo/issues/1", false],
+    [null, false],
+  ])("validates the closed outcome %s", (codingIssueOutcome, expected) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        message: "issue outcome",
+        clientTs: "2026-09-20T00:00:00.000Z",
+        codingIssueOutcome,
+      }),
+    ).toBe(expected);
+  });
+});

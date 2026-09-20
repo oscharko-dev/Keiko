@@ -69,6 +69,28 @@ describe("client diagnostics loss evidence", () => {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
   }
 
+  it("persists issue-provenance refusal linked to the successful preview request", async () => {
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private issue body",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_issue-preview-0001",
+          errorKind: "validation-failed",
+          codingIssueOutcome: "multiple-issues",
+        }),
+      ),
+    );
+    expect(result.status).toBe(204);
+    const [persisted] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", persisted ?? "")).toMatchObject({
+      correlationId: "ui_issue-preview-0001",
+      errorKind: "validation-failed",
+      codingIssueOutcome: "multiple-issues",
+    });
+    expect(readPersistedActivityLog(stateDir)).not.toContain("private issue body");
+  });
+
   it.each([
     "repository-mismatch",
     "workspace-mismatch",

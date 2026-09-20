@@ -290,6 +290,32 @@ describe("POST /api/diagnostics/client", () => {
     },
   );
 
+  it("writes the preview correlation and closed issue-provenance refusal without content", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private issue content",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_issue-preview-0001",
+          errorKind: "validation-failed",
+          codingIssueOutcome: "multiple-issues",
+        }),
+      ),
+    );
+    const lines: unknown[] = sink.lines().map((line): unknown => JSON.parse(line));
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        op: "client.diagnostic",
+        correlationId: "ui_issue-preview-0001",
+        errorKind: "validation-failed",
+        codingIssueOutcome: "multiple-issues",
+      }),
+    );
+    expect(sink.lines().join("")).not.toContain("private issue content");
+    expect(sink.lines().join("")).not.toContain("server-log.write-failed");
+  });
+
   it.each(["voice-dialogue", "markdown-layout"])(
     "keeps history fields off the incompatible %s operation",
     async (kind) => {
@@ -301,6 +327,7 @@ describe("POST /api/diagnostics/client", () => {
             clientTs: CLIENT_TS,
             kind,
             correlationId: "mixed-fields",
+            codingIssueOutcome: "multiple-issues",
             ...(kind === "voice-dialogue" ? { voiceDialogueStage: "started" } : {}),
             codingHistoryScope: {
               reason: "activation-cancelled",
@@ -318,6 +345,7 @@ describe("POST /api/diagnostics/client", () => {
       expect(lines).toContainEqual(expect.objectContaining({ op, correlationId: "mixed-fields" }));
       expect(lines.some((line) => line.op === "server-log.write-failed")).toBe(false);
       expect(lines.find((line) => line.op === op)).not.toHaveProperty("historyScopeReason");
+      expect(lines.find((line) => line.op === op)).not.toHaveProperty("codingIssueOutcome");
     },
   );
 

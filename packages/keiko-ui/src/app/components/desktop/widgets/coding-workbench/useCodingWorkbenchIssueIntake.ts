@@ -8,6 +8,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { previewCodingWorkbenchIssue } from "@/lib/api";
 import { codingWorkbenchIssueFailure } from "@/lib/coding-workbench-issue-errors";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -90,10 +91,12 @@ async function resolvePromptIssue(
   publish: (state: IssueIntakeState) => void,
   start: StartIssue,
 ): Promise<void> {
+  const previewCorrelationId = newClientCorrelationId();
   try {
     const response = await previewCodingWorkbenchIssue(
       { repositoryPath: root.trim(), issueRef: reference.issueRef },
       controller.signal,
+      previewCorrelationId,
     );
     if (controller.signal.aborted) return;
     const qualified = reference.qualifiedRef;
@@ -102,8 +105,12 @@ async function resolvePromptIssue(
       qualified !==
         `https://github.com/${response.preview.provenance.ownerAndRepo.toLowerCase()}/issues/${String(response.preview.provenance.issueNumber)}`
     ) {
-      reportClientDiagnostic("[keiko] coding workbench prompt issue refused: multiple-issues");
-      publish({ kind: "failed", failure: "multiple-issues", correlationId: undefined });
+      reportClientDiagnostic("[keiko] coding workbench prompt issue refused: multiple-issues", {
+        correlationId: previewCorrelationId,
+        errorKind: "validation-failed",
+        codingIssueOutcome: "multiple-issues",
+      });
+      publish({ kind: "failed", failure: "multiple-issues", correlationId: previewCorrelationId });
       return;
     }
     reportClientDiagnostic("[keiko] coding workbench prompt issue resolved");
@@ -115,7 +122,7 @@ async function resolvePromptIssue(
   } catch (error) {
     if (controller.signal.aborted) return;
     const failure = issueFailure(error);
-    const correlationId = correlationIdOf(error);
+    const correlationId = correlationIdOf(error) ?? previewCorrelationId;
     reportClientDiagnostic(`[keiko] coding workbench prompt issue failed: ${failure}`, {
       correlationId,
     });

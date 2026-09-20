@@ -128,6 +128,8 @@ export interface CodingRuntimeSnapshot {
    * revision the run was accepted against, never the issue's text.
    */
   readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
+  /** Verified issue context retained for retry without imposing a delivery obligation. */
+  readonly issueContextBinding?: CodingWorkbenchIssueBinding | undefined;
 }
 
 export interface CodingRuntimeSnapshotTransition {
@@ -239,6 +241,7 @@ interface Row {
   readonly stderr_line_count: number | null;
   readonly stderr_sha256: string | null;
   readonly stderr_truncated: number | null;
+  readonly issue_purpose: string;
   readonly issue_repository_id: string | null;
   readonly issue_remote_digest: string | null;
   readonly issue_number: number | null;
@@ -249,7 +252,7 @@ interface Row {
 }
 
 const COLUMNS =
-  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, pause_reason, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt";
+  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, pause_reason, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt, issue_purpose";
 
 // Prepared statements must remain co-located with the closed store operations they support.
 // eslint-disable-next-line max-lines-per-function
@@ -263,7 +266,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
     `SELECT ${readColumns} FROM coding_runtime_snapshots ORDER BY updated_at DESC, run_id LIMIT ?`,
   );
   const insert = db.prepare(
-    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
     `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, pause_reason=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
@@ -495,7 +498,7 @@ function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
     ...(row.predecessor_run_id ? { predecessorRunId: row.predecessor_run_id } : {}),
     ...(row.recovery_handle ? { recoveryHandle: row.recovery_handle } : {}),
     ...(runtimeResult(row) === undefined ? {} : { result: runtimeResult(row) }),
-    ...(issueBindingFromRow(row) === undefined ? {} : { issueBinding: issueBindingFromRow(row) }),
+    ...persistedIssue(row),
     ...verifiedCommitFromRow(row.verified_commit_result),
     ...draftDeliveryFromRow(row.draft_delivery_record),
   };
@@ -581,6 +584,17 @@ function recordVerifiedCommit(
 // All seven columns present, or none: a row with some of them is not a generic run and not a
 // bound one, and projecting it as either would let a run silently lose or invent its issue. It is
 // refused as the corruption it is.
+function persistedIssue(
+  row: Row,
+): Pick<CodingRuntimeSnapshot, "issueBinding" | "issueContextBinding"> {
+  if (row.issue_purpose !== "context" && row.issue_purpose !== "delivery")
+    throw new TypeError("Invalid stored issue purpose");
+  const binding = issueBindingFromRow(row);
+  if (binding === undefined) return {};
+  return row.issue_purpose === "context"
+    ? { issueContextBinding: binding }
+    : { issueBinding: binding };
+}
 function issueBindingFromRow(row: Row): CodingWorkbenchIssueBinding | undefined {
   const columns = [
     row.issue_repository_id,
@@ -640,11 +654,16 @@ function values(v: CodingRuntimeSnapshot): readonly SnapshotSqlValue[] {
     v.modelRequestCount,
     v.recoveryHandle ?? null,
     ...runtimeResultValues(v.result),
-    ...issueBindingValues(v.issueBinding),
+    ...snapshotIssueValues(v),
     v.verifiedCommitResult === undefined ? null : JSON.stringify(v.verifiedCommitResult),
     v.draftDelivery === undefined ? null : JSON.stringify(v.draftDelivery),
     null, // Only the draft operation can create its internal verified source receipt.
+    v.issueContextBinding === undefined ? "delivery" : "context",
   ];
+}
+
+function snapshotIssueValues(snapshot: CodingRuntimeSnapshot): readonly SnapshotSqlValue[] {
+  return issueBindingValues(snapshot.issueBinding ?? snapshot.issueContextBinding);
 }
 
 function issueBindingValues(
@@ -693,10 +712,17 @@ function assertSnapshot(v: CodingRuntimeSnapshot): void {
   assertSnapshotDigests(v);
   assertSnapshotCounts(v);
   if (v.result !== undefined) assertRuntimeResult(v.result);
-  assertIssueBinding(v.issueBinding);
+  assertSnapshotIssue(v);
   assertOptionalVerifiedCommit(v);
   assertOptionalDraftDelivery(v);
   assertPauseReason(v);
+}
+
+function assertSnapshotIssue(v: CodingRuntimeSnapshot): void {
+  assertIssueBinding(v.issueBinding);
+  assertIssueBinding(v.issueContextBinding);
+  if (v.issueBinding !== undefined && v.issueContextBinding !== undefined)
+    throw new TypeError("Issue context and delivery bindings are mutually exclusive");
 }
 
 // A pause reason on any other state would describe a wait the run is not in, and the row would then

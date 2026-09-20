@@ -280,6 +280,12 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
+    codingIssueOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["multiple-issues"],
+    },
     errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     frames: {
       type: "string-array",
@@ -1111,10 +1117,12 @@ function projectClientFailure(
     extra.voiceCaptureReason = request.voiceCaptureReason;
 }
 
-function projectHistoryScope(
+function projectCodingContext(
   request: ClientDiagnosticIngestRequest,
   extra: Record<string, unknown>,
 ): void {
+  if (request.codingIssueOutcome !== undefined)
+    extra.codingIssueOutcome = request.codingIssueOutcome;
   const scope = request.codingHistoryScope;
   if (scope === undefined) return;
   extra.historyScopeReason = scope.reason;
@@ -1158,7 +1166,7 @@ function logClientDiagnostic(
     extra.repositoryId = request.workspaceTrustBinding.repositoryId;
     extra.workspaceId = request.workspaceTrustBinding.workspaceId;
   }
-  projectHistoryScope(request, extra);
+  projectCodingContext(request, extra);
   projectClientLoss(request.loss, extra);
   extra.completeness = "complete";
   extra.loss = "none";

@@ -56,6 +56,7 @@ export type CodingRuntimeIssueAdmission =
   | {
       readonly ok: true;
       readonly binding?: CodingWorkbenchIssueBinding;
+      readonly contextBinding?: CodingWorkbenchIssueBinding;
       readonly attachment?: CodingRuntimeIssueAttachment;
     }
   | {
@@ -70,6 +71,7 @@ interface AdmissionInput {
   readonly active: ActiveWorkspaceView;
   readonly runId: string;
   readonly priorBinding?: CodingWorkbenchIssueBinding | undefined;
+  readonly priorContextBinding?: CodingWorkbenchIssueBinding | undefined;
   readonly intake?: CodingRuntimeIssueIntake | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
@@ -223,9 +225,9 @@ function bindingFailure(
   ) {
     return refused(input, "base-branch", "repository-mismatch");
   }
+  const priorBinding = input.priorBinding ?? input.priorContextBinding;
   if (
-    (input.priorBinding !== undefined &&
-      canonicalise(input.priorBinding) !== canonicalise(binding)) ||
+    (priorBinding !== undefined && canonicalise(priorBinding) !== canonicalise(binding)) ||
     (input.request.expectedIssueBindingDigest !== undefined &&
       input.request.expectedIssueBindingDigest !== binding.bindingDigest)
   ) {
@@ -274,7 +276,11 @@ async function reattachDurableIssue(
   try {
     const context = await buildAttachment(input.intake, input, binding);
     if (!context.ok) return refused(input, "reattach", context.failure);
-    return { ok: true, binding, attachment: context.attachment };
+    return {
+      ok: true,
+      ...(input.priorContextBinding === undefined ? { binding } : { contextBinding: binding }),
+      attachment: context.attachment,
+    };
   } catch (error) {
     return refused(input, "reattach", "issue-unavailable", error);
   }
@@ -284,8 +290,9 @@ export async function admitCodingRuntimeIssue(
   input: AdmissionInput,
 ): Promise<CodingRuntimeIssueAdmission> {
   if (input.request.issueRef === undefined) {
-    if (input.priorBinding === undefined) return { ok: true };
-    return reattachDurableIssue(input, input.priorBinding);
+    const prior = input.priorBinding ?? input.priorContextBinding;
+    if (prior === undefined) return { ok: true };
+    return reattachDurableIssue(input, prior);
   }
   if (input.intake === undefined) return refused(input, "admission");
   let stage: Stage = "resolution";
@@ -303,7 +310,9 @@ export async function admitCodingRuntimeIssue(
     if (!context.ok) return refused(input, stage, context.failure);
     return {
       ok: true,
-      ...(input.request.issuePurpose === "context" ? {} : { binding: resolution.binding }),
+      ...(input.request.issuePurpose === "context"
+        ? { contextBinding: resolution.binding }
+        : { binding: resolution.binding }),
       attachment: context.attachment,
     };
   } catch (error) {

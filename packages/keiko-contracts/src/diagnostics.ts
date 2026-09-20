@@ -380,6 +380,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
 }
@@ -534,6 +535,13 @@ function isClientModuleLoadFailure(value: unknown): boolean {
   return value === "git-sync" || value === "git-history";
 }
 
+function hasValidCodingContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.codingHistoryScope, isCodingHistoryScope) &&
+    isOptional(value.codingIssueOutcome, (outcome) => outcome === "multiple-issues")
+  );
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
   const { errorKind, gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } =
     value;
@@ -545,10 +553,7 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
   if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
-  return (
-    isOptional(value.codingHistoryScope, isCodingHistoryScope) &&
-    isOptional(loss, isClientDiagnosticLossCounts)
-  );
+  return hasValidCodingContext(value) && isOptional(loss, isClientDiagnosticLossCounts);
 }
 
 export function isClientDiagnosticIngestRequest(

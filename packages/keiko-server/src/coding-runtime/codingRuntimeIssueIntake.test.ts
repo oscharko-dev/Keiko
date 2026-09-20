@@ -272,7 +272,12 @@ describe("admitCodingRuntimeIssue — durable-binding reattach (#3390)", () => {
       intake: intake(),
     });
 
-    expect(result).toEqual({ ok: true, attachment: ISSUE_ATTACHMENT });
+    expect(result).toEqual({
+      ok: true,
+      contextBinding: ISSUE_BINDING,
+      attachment: ISSUE_ATTACHMENT,
+    });
+    expect(result).not.toHaveProperty("binding");
   });
 
   it("happy path unchanged: a freshly pasted reference still resolves and attaches normally", async () => {

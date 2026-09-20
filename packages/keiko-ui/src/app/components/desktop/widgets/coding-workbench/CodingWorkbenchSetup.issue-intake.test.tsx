@@ -327,6 +327,7 @@ describe("Coding Workbench prompt issue intake", () => {
     expect(previewMock).toHaveBeenCalledWith(
       { repositoryPath: REPOSITORY_PATH, issueRef: ISSUE_URL.toLowerCase() },
       expect.any(AbortSignal),
+      expect.any(String),
     );
     expect(provisionMock).not.toHaveBeenCalled();
     expect(container).not.toHaveTextContent(HOSTILE_TITLE);
