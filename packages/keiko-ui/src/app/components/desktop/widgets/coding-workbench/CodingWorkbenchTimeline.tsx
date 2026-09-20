@@ -126,11 +126,17 @@ export function Timeline({
     [allItems, showEvents],
   );
   const timeline = useTimelineWindow(items);
-  if (!active && allItems.length === 0 && questions.questions.length === 0) return null;
+  if (
+    !active &&
+    allItems.length === 0 &&
+    questions.questions.length === 0 &&
+    !activityNeedsAttention(activity)
+  )
+    return null;
   return (
     <section className={styles.cmpConversation} aria-labelledby="timeline-title">
       <TimelineHeading titleRef={titleRef} t={t} />
-      {active ? <ActivityStatus activity={activity} t={t} /> : null}
+      <ActivityStatus activity={activity} t={t} />
       <RunDetailsToggle
         visible={events.length > 0}
         expanded={showEvents}
@@ -430,6 +436,15 @@ function useTimelineWindow(items: readonly TimelineItem[]): TimelineWindow {
   };
 }
 
+function activityNeedsAttention(activity: UseCodingWorkbenchSafeActivityResult): boolean {
+  return (
+    retryableActivity(activity.status) ||
+    activity.feed?.truncated === true ||
+    activity.feed?.turns.some((turn) => turn.truncated) === true ||
+    (activity.feed?.droppedEventCount ?? 0) > 0
+  );
+}
+
 function ActivityStatus({
   activity,
   t,
@@ -440,12 +455,7 @@ function ActivityStatus({
   const truncated =
     activity.feed?.truncated === true ||
     activity.feed?.turns.some((turn) => turn.truncated) === true;
-  if (
-    !truncated &&
-    !retryableActivity(activity.status) &&
-    (activity.feed?.droppedEventCount ?? 0) === 0
-  )
-    return null;
+  if (!activityNeedsAttention(activity)) return null;
   return (
     <div className={styles.activityStatus} data-activity-state={activity.status}>
       <p role="status" aria-live="polite" aria-atomic="true">

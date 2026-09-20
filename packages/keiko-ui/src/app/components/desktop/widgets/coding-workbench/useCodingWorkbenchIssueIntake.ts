@@ -65,10 +65,9 @@ function promptReference(prompt: string): PromptReference {
     refs.add(
       `https://github.com/${reference.ownerAndRepo.toLowerCase()}/issues/${String(reference.issueNumber)}`,
     );
-  if (refs.size === 0) {
-    for (const [, number] of prompt.matchAll(/(?:^|\s)#(\d{1,10})(?=$|[\s.,:;!?])/gu)) {
-      refs.add(`#${number}`);
-    }
+  const qualifiedNumbers = new Set([...refs].map((reference) => reference.split("/").at(-1)));
+  for (const [, number] of prompt.matchAll(/(?:^|\s)#(\d{1,10})(?=$|[\s.,:;!?])/gu)) {
+    if (!qualifiedNumbers.has(number)) refs.add(`#${number}`);
   }
   if (refs.size > 1) return { failure: "multiple-issues" };
   const issueRef = [...refs][0];

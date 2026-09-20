@@ -20,7 +20,6 @@ import {
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import { fetchCodingWorkbenchJourneyRefresh } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { verifyConfiguredCodingModels } from "@/lib/coding-workbench-provider-api";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import type {
   CodingWorkbenchActionClass,
@@ -696,10 +695,6 @@ export function CodingWorkbenchWindow({
     [chatCatalog?.models],
   );
   useEffect(() => requestGatewayModelCatalogRefresh(), []);
-  useEffect(() => {
-    if (chatCatalog?.models === undefined) return;
-    void verifyConfiguredCodingModels(chatCatalog.models);
-  }, [chatCatalog?.models]);
   useCodingModelSelection(state, actions, codingModels);
   const { research, skills } = useRunChannels(state.run.value);
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
@@ -1076,10 +1071,7 @@ function WorkbenchColumns({
       actions={{
         onStart: startTask,
         onPause: () => void actions.pause(),
-        onStop: () => {
-          reportClientDiagnostic("[keiko] coding workbench composer stop requested");
-          void actions.stop();
-        },
+        onStop: () => void actions.stop(),
         onResume: () => {
           if (resumeMode !== null) void actions.resume(resumeMode);
         },

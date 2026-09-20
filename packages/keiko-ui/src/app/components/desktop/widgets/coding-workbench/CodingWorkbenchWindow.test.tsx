@@ -2265,8 +2265,8 @@ describe("CodingWorkbenchWindow", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
-  // 0.3.0 release audit: a paused run must retain an operator stop control. Keep it in the
-  // composer alongside Resume so the exit remains reachable without a second action bar.
+  // Owner decision in #3561: retain the paused-run exit through Composer Stop; remove the
+  // duplicate action bar. The same server stop action still revokes the paused run authority.
   it("keeps stop reachable in the composer while a run is paused", async () => {
     const user = userEvent.setup();
     const liveActions = renderWorkbench(

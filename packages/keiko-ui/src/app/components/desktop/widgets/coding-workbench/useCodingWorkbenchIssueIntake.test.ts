@@ -52,6 +52,10 @@ describe("prompt-driven issue intake", () => {
 
   it.each([
     ["Implement #13", "#13"],
+    [
+      "Implement https://github.com/acme/repo/issues/13 and verify #13",
+      "https://github.com/acme/repo/issues/13",
+    ],
     ["Implement acme/repo#13", "https://github.com/acme/repo/issues/13"],
     [
       "[Issue](https://github.com/acme/repo/issues/13). See https://github.com/acme/repo/issues/13",
@@ -72,6 +76,8 @@ describe("prompt-driven issue intake", () => {
       "Compare https://github.com/acme/repo/issues/1 and https://github.com/acme/repo/issues/2",
       "multiple-issues",
     ],
+    ["Implement https://github.com/acme/repo/issues/13 and #14", "multiple-issues"],
+    ["Implement #14 with acme/repo#13", "multiple-issues"],
     ["Implement https://github.com/acme/repo/pull/13", "invalid-reference"],
     ["Implement https://github.com/acme/repo/issues/0", "invalid-reference"],
   ])("does not guess a binding for %s", async (prompt, failure) => {

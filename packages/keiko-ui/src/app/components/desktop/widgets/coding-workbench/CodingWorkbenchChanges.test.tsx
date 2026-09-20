@@ -162,8 +162,9 @@ describe("CodingWorkbenchChanges", () => {
     renderChanges(changesClient);
 
     await waitFor(() => expect(changesClient.getHistory).toHaveBeenCalledOnce());
-    expect(screen.queryByText("This run has no workspace changes at this revision.")).toBeNull();
-    expect(screen.queryByText("As of aaaaaaaa")).toBeNull();
+    await expandChanges();
+    expect(screen.getByText("This run has no workspace changes at this revision.")).toBeVisible();
+    expect(screen.getByText("As of aaaaaaaa")).toBeVisible();
     expect(changesClient.getDiff).not.toHaveBeenCalled();
   });
 

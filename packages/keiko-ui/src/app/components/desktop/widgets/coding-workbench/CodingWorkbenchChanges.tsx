@@ -47,7 +47,6 @@ export function CodingWorkbenchChanges(props: CodingWorkbenchChangesProps): Reac
   const t = useCodingWorkbenchTranslate();
   const changes = useCodingWorkbenchChanges(props);
   if (changes.status === "idle" || changes.status === "loading") return null;
-  if (changes.status === "ready" && changes.files.length === 0) return null;
   return (
     <details
       className={styles.cmpChangesDisclosure}

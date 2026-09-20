@@ -180,6 +180,11 @@ The shared model-source vocabulary is:
 This separation is load-bearing. ChatGPT/Codex subscription credentials are not modeled as OpenAI
 Platform API keys or generic provider credentials. They remain a distinct subscription/profile path.
 
+Opening the Workbench only reads the selected provider profile and model catalog. A missing or
+expired tool-call proof stays unavailable until the operator runs the existing Gateway Settings
+readiness check. Mounting or refreshing the Workbench never starts paid provider probes, including
+when a subscription source is selected. The same gateway capability evidence gates all models.
+
 ### D6 — Permission requests are typed, explicit, and content-free
 
 The sidecar runtime may request additional approval only through the shared permission-request

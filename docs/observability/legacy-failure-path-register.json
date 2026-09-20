@@ -8378,12 +8378,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/lib/coding-workbench-provider-api.ts",
-      "owner": "recoverUnverifiedGatewayProfile",
-      "kind": "unregistered-catch",
-      "count": 3
-    },
-    {
       "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
       "owner": "execute",
       "kind": "unregistered-catch",

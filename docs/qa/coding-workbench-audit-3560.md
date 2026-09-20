@@ -1,6 +1,6 @@
 # Coding Workbench audit — #3560
 
-Date: 2026-09-19. Delivery: draft PR #3561. This is an incremental audit record, not a
+Date: 2026-09-19. Delivery: PR #3561. This is an incremental audit record, not a
 production-readiness sign-off. Product changes are developed in an isolated Keiko worktree;
 live coding exercises target the owner's disposable `oscharko/Wegwerf-Repo-Final` repository.
 
@@ -243,3 +243,29 @@ review conversations still block merging.
 - Canonical multi-file patch review, effective autonomy presentation, and a real edit/build/PR run.
 - Full affected release checks and review resolution. Per-run outcomes belong in the PR verification
   section; a passing local Sonar rule scan does not replace hosted coverage or required CI.
+
+## Merge review: read-only provider selection and recovery
+
+The Workbench no longer launches a duplicate automatic readiness workflow when opened or when
+its provider profile is unavailable. Explicit checks remain in Gateway Settings, and the shared
+verified tool-calling capability gate is unchanged. The deleted fallback's legacy failure-register
+entry was pruned with the repository generator.
+
+A successful empty change read retains its revision inside a compact disclosure. Terminal runs
+retain the stale-activity warning and reconnect action. Mixed qualified and bare issue references
+are checked together; repeated references to the same issue are deduplicated. Seven assertions
+failed before these fixes. The focused UI suites pass (226 tests), and the runtime refresh/voice
+reproduction passes (72 tests). The Chromium stop/recovery/retry journey passes (2 tests).
+
+The owner explicitly requested removal of the separate Stop/Take over action bar. Composer Stop
+remains available for paused runs and invokes the existing correlated server stop mutation, which
+revokes the run's authority. The duplicate unstructured Stop-click diagnostic was removed; the
+server lifecycle remains the authoritative stop evidence. The paused-run exit assertion is retained
+under this product decision rather than attributed to the older two-button UI requirement.
+
+Final UI coverage: 8,582 passed, one existing skip; 93.10% line coverage. The initial broad run
+also exposed a transient voice-fixture timing failure, which passed in the focused reproduction
+and the complete rerun without changing that test. Combined incremental coverage is 85.7% across
+2,587 new lines/conditions. Typecheck, strict UI lint, formatting, real local Sonar, and the Node
+24.18.0 editor bundle gate pass. The initial Node 26 bundle check differed by compression
+fingerprint; remeasuring the same export with the pinned Node version matches committed evidence.

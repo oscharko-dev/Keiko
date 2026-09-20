@@ -230,6 +230,21 @@ function paintRowHeights(container: HTMLElement, heightFor: (li: HTMLLIElement) 
 }
 
 describe("CodingWorkbenchTimeline", () => {
+  it.each([false, true])(
+    "retains terminal activity recovery with existing content: %s",
+    (hasContent) => {
+      const activity = {
+        ...activityLike(hasContent ? feedWithBlankAgentMessage() : bareFeed()),
+        status: "disconnected" as const,
+      };
+      render(
+        <Timeline active={false} events={[]} activity={activity} questions={IDLE_QUESTIONS} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Reconnect activity" }));
+      expect(activity.retry).toHaveBeenCalledOnce();
+    },
+  );
+
   it("uses per-kind default heights for the pre-measurement virtualized window", () => {
     // 101 events forces the virtual mode; only 96 rows render and the tail sits behind a spacer.
     const events = Array.from({ length: 101 }, (_, index) => event(index + 1));
