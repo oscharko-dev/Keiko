@@ -110,6 +110,31 @@ describe("parseGatewayConfigUpload", () => {
     });
   });
 
+  // #3563 CodeRabbit follow-up: guard the schema-version check with malformed and boundary values.
+  // Everything except the literal number `2` (Test & Save writes exactly that) must refuse — a bare
+  // absence stays accepted for compatibility with hand-written files (covered above).
+  it.each([
+    ["null", null],
+    ['empty string ""', ""],
+    ['string "2"', "2"],
+    ["empty object {}", {}],
+    ["empty array []", []],
+    ["zero", 0],
+    ["one", 1],
+    ["three", 3],
+    ["negative", -1],
+    ["fractional", 2.5],
+    ["boolean true", true],
+  ] as const)("rejects schemaVersion %s as an unsupported value", (_label, schemaVersion) => {
+    const file = { schemaVersion, providers: [providerFixture()] };
+    expect(parseGatewayConfigUpload(JSON.stringify(file))).toEqual({ outcome: "invalid" });
+  });
+
+  it("accepts a file that omits schemaVersion entirely (hand-written compatibility)", () => {
+    const file = { providers: [providerFixture()] };
+    expect(parseGatewayConfigUpload(JSON.stringify(file)).outcome).toBe("fields");
+  });
+
   it("loads the persisted product configuration shape: chat, embedding, and voice together", () => {
     // THE file this feature exists for: the owner's persisted keiko.config.json — two chat
     // models, one embedding, an STT/TTS pair on a dedicated speech endpoint, and a realtime

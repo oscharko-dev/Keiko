@@ -569,7 +569,10 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.queryByText("task-1")).not.toBeInTheDocument();
     openWorkbenchInformation();
     expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
-    expect(screen.getAllByText("Keiko Gateway")).toHaveLength(2);
+    // #3563: the composer's Model source dropdown is hidden (Keiko Gateway is the sole source);
+    // only the information panel now spells the label out, so exactly one occurrence is expected.
+    expect(screen.getAllByText("Keiko Gateway")).toHaveLength(1);
+    expect(screen.queryByRole("combobox", { name: "Model source" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
       "Supervised workspace",
     );

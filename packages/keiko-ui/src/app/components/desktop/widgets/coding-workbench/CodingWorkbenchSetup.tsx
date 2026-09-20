@@ -50,10 +50,7 @@ import {
 import { fetchRepositoryBaseBranch } from "@/lib/task-workspace-api";
 import { TASK_WORKSPACE_MARKER_MESSAGE_KEYS } from "@/lib/task-workspace-marker-labels";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import {
-  pickWithNativeDialog,
-  type NativeDialogPickOutcome,
-} from "@/lib/native-file-dialog";
+import { pickWithNativeDialog, type NativeDialogPickOutcome } from "@/lib/native-file-dialog";
 import { useNativeFileDialogCapability } from "../../hooks/useNativeFileDialogCapability";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { secureRandomId } from "@/lib/secure-random";

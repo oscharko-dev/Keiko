@@ -87,9 +87,7 @@ function renderComposer(
   onReasoningEffortChange = vi.fn(),
 ): void {
   render(
-    <TaskStartSection
-      {...composerProps(runState, actions, taskIntent, onReasoningEffortChange)}
-    />,
+    <TaskStartSection {...composerProps(runState, actions, taskIntent, onReasoningEffortChange)} />,
   );
 }
 

@@ -460,11 +460,14 @@ function idleRepositoryRoot(
   activeWorkspace: WorkbenchWorkspaceApi,
   selectedRoot: string | undefined,
 ): string | null {
-  const selectedRepositoryRoot = repositoryRootOrNull(selectedRoot);
-  if (selectedRepositoryRoot !== null) return selectedRepositoryRoot;
+  // Bound instance wins: with #3563 the composer no longer carries its own repository chooser, so
+  // preferring `selectedRoot` first (as the Codex handoff briefly did) would let a stale shell
+  // selection silently discard a validly bound idle session.
   const activeInstance = activeWorkspace.activeInstance;
   const activeRoot = repositoryRootOrNull(activeInstance?.repositoryRoot);
   if (activeRoot !== null) return activeRoot;
+  const selectedRepositoryRoot = repositoryRootOrNull(selectedRoot);
+  if (selectedRepositoryRoot !== null) return selectedRepositoryRoot;
   const activeBinding = activeWorkspace.activeBinding;
   return repositoryRootOrNull(activeBinding?.activeRoot);
 }
