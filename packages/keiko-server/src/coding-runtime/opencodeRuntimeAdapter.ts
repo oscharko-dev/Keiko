@@ -125,6 +125,13 @@ const CODING_RUNTIME_READINESS_PHASE_OPERATION = defineActivityLogOperation({
   emitter: "coding-runtime.opencodeRuntimeAdapter.recordReadinessPhase",
   fields: {
     phase: OPEN_CODE_READINESS_PHASE_FIELD,
+    planningMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["conversation-text"],
+    },
+    configDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     dependencyInstallPolicy: {
       type: "string",
       dataClass: "closed-enum",
@@ -740,6 +747,8 @@ function recordReadinessPhase(
         ...(phase === "config-materialization"
           ? {
               dependencyInstallPolicy: "offline",
+              planningMode: "conversation-text",
+              configDigest: ports.readiness.configDigest,
               ...(ports.contextGeometry === undefined
                 ? {}
                 : {

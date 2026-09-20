@@ -30,7 +30,10 @@ import {
 } from "./devLanePortableCodingRuntime.js";
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
-import type { ResolvedPortableOpenCodeRuntime } from "./productionOpenCodeBackend.js";
+import type {
+  ProductionOpenCodeBackendInput,
+  ResolvedPortableOpenCodeRuntime,
+} from "./productionOpenCodeBackend.js";
 import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
@@ -122,6 +125,7 @@ const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
 });
 
 export interface ProductionOpenCodeActivationInput {
+  readonly historyCapture?: ProductionOpenCodeBackendInput["historyCapture"];
   readonly env: NodeJS.ProcessEnv;
   /** Host identity injection for deterministic tests; production omits both. */
   readonly platform?: NodeJS.Platform | undefined;
@@ -186,6 +190,7 @@ function activatedPorts(
 ): ProductionOpenCodePorts {
   return {
     backend: createProductionOpenCodeBackend({
+      historyCapture: input.historyCapture,
       portable,
       runtimeStateRoot: input.runtimeStateDir,
       gatewayUrl: endpoints.gatewayUrl,

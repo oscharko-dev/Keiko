@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "85e6eeac6f0a8ffaa723f972cf61a110d4e71b9d60e1b0cce7217c1aca64c565" as const;
+  "0c925f00560d06a6bb817cbce9c9aa5e5ecfc14ffb745c34963c88d83eb40f4e" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4304,6 +4304,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      captureSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["native-history", "display-projection"],
+      },
       projectRegistered: {
         type: "boolean",
         dataClass: "closed-enum",
@@ -4519,6 +4525,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["coding-runtime-initial-turn-stop"],
     proofIds: ["coding-runtime.initial-turn.stop-failed.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-runtime.native-question.observed",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.opencodeV2History.recordNativeQuestions",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      callDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["pending", "running", "succeeded", "failed", "cancelled", "denied"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-safe-activity-projection"],
+    proofIds: ["coding-runtime.native-question.observed.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -5093,6 +5137,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "sse-history-reconciliation",
           "session-echo",
         ],
+      },
+      planningMode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["conversation-text"],
+      },
+      configDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
       },
       dependencyInstallPolicy: {
         type: "string",
@@ -30704,6 +30760,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "captureSource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
@@ -33190,6 +33252,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "configDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "contextWindowTokens",
               type: "integer",
               dataClass: "count",
@@ -33219,8 +33287,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "planningMode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -34339,7 +34413,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["loss", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.history-projection"],
+        state: ["coding-runtime.history-projection", "coding-runtime.native-question.observed"],
         end: [],
         failure: [],
         loss: ["coding-runtime.safe-activity"],
@@ -34350,12 +34424,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "coding-runtime.native-question.observed",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.safe-activity",
           mode: "correlation",
         },
       ],
       lossSignals: ["coding-runtime.safe-activity"],
-      resourceSignals: ["coding-runtime.history-projection"],
+      resourceSignals: [
+        "coding-runtime.history-projection",
+        "coding-runtime.native-question.observed",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -34391,6 +34472,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-runtime.history-projection.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-runtime.native-question.observed",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "callDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "state",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.native-question.observed.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -59657,6 +59768,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.history-projection": "tools-workflows",
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
+    "coding-runtime.native-question.observed": "tools-workflows",
     "coding-runtime.operation.refused": "tools-workflows",
     "coding-runtime.operator-decision": "tools-workflows",
     "coding-runtime.project-memory.context": "tools-workflows",

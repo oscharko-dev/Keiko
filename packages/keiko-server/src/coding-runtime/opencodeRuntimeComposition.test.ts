@@ -50,6 +50,7 @@ import {
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import type { OpenCodeGovernedSinkReceipt } from "./opencodeRuntimeAdapter.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import {
@@ -167,6 +168,7 @@ interface OpenCodeRuntimeCompositionModule {
       readonly arm: () => void;
       readonly clear: () => void;
       readonly ingest: (signal: CodingSafeActivitySignal) => boolean;
+      readonly captureMessages?: (messages: readonly CodingHistoryMessage[]) => boolean;
       readonly recordDrops: (count: number) => void;
       readonly settleTool: (input: {
         readonly actionId: string;
@@ -1883,6 +1885,53 @@ describe("private OpenCode tool bridge", () => {
     expect(recordDrops).toHaveBeenCalledOnce();
     expect(recordDrops).toHaveBeenCalledWith(512);
     await fixture.stop();
+  });
+
+  it("forwards validated canonical history to durable capture even when display signals are rejected", async () => {
+    const captureMessages = vi.fn().mockReturnValue(true);
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        historyResponseFactory: () =>
+          Promise.resolve(
+            v2Envelope([
+              {
+                id: "msg_durable_assistant",
+                type: "assistant",
+                time: { created: 2 },
+                content: [{ type: "text", text: "Retained native answer" }],
+              },
+              {
+                id: "msg_durable_user",
+                type: "user",
+                time: { created: 1 },
+                text: "Visible intent",
+              },
+            ]),
+          ),
+        safeActivity: {
+          arm: vi.fn(),
+          clear: vi.fn(),
+          ingest: () => false,
+          recordDrops: vi.fn(),
+          settleTool: vi.fn(),
+          captureMessages,
+        },
+      },
+    );
+    try {
+      expect(captureMessages).toHaveBeenCalledWith([
+        { messageId: "msg_durable_user", role: "user", content: "Visible intent" },
+        {
+          messageId: "msg_durable_assistant",
+          role: "assistant",
+          content: "Retained native answer",
+        },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
   });
 
   it("records a correlated reconciliation failure when live text is rewritten", async () => {

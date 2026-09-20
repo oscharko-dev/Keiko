@@ -135,6 +135,11 @@ export interface OpenCodeRuntimeCompositionInput {
   };
   readonly safeActivity?:
     | {
+        readonly captureMessages?:
+          | ((
+              messages: readonly import("./codingRuntimeHistory.js").CodingHistoryMessage[],
+            ) => boolean)
+          | undefined;
         readonly arm: () => void;
         readonly clear: () => void;
         readonly ingest: (
@@ -848,6 +853,7 @@ function readinessV2Ports(
   const history = createOpenCodeV2HistoryProjection({
     runId: run.runId,
     activityLog: input.activityLog,
+    captureMessages: input.safeActivity?.captureMessages,
   });
   const staged = new Map<
     string,

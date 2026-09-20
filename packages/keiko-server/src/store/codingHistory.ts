@@ -18,7 +18,14 @@ export interface CodingHistoryCreateInput {
   readonly operatorDigest: string;
 }
 
+export interface CodingHistoryBeginInput extends CodingHistoryCreateInput {
+  readonly conversationId?: string;
+  readonly runId: string;
+  readonly intent: string;
+}
+
 export interface CodingHistoryStore {
+  readonly begin: (input: CodingHistoryBeginInput) => CodingHistoryTask;
   readonly create: (input: CodingHistoryCreateInput) => CodingHistoryTask;
   readonly get: (id: string, operatorDigest?: string) => CodingHistoryTask | undefined;
   readonly list: (operatorDigest: string) => readonly CodingHistoryTask[];
@@ -30,6 +37,13 @@ export interface CodingHistoryStore {
     id: string,
     patch: { readonly title?: string; readonly status?: "active" | "completed" },
   ) => CodingHistoryTask;
+  readonly upsert: (
+    id: string,
+    runId: string,
+    sourceId: string,
+    role: "user" | "assistant",
+    content: string,
+  ) => boolean;
   readonly append: (
     id: string,
     runId: string,
@@ -48,7 +62,7 @@ interface HistoryRow {
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
-const MAX_MESSAGE_CHARS = 65_536;
+export const CODING_HISTORY_MESSAGE_MAX_CHARS = 65_536;
 
 function assertId(value: string): void {
   if (!SAFE_ID.test(value)) throw invalidRequest("Invalid Coding History identity.");
@@ -118,6 +132,30 @@ function createTask(
   });
 }
 
+function beginTask(
+  db: DatabaseSync,
+  store: UiStore,
+  now: () => number,
+  input: CodingHistoryBeginInput,
+): CodingHistoryTask {
+  return withImmediateTransaction(db, () => {
+    const task =
+      input.conversationId === undefined
+        ? createTask(db, store, input)
+        : readTask(db, store, input.conversationId, input.operatorDigest);
+    if (task === undefined) throw notFound("Coding task");
+    bindRun(db, store, task.id, input.runId, now);
+    appendMessage(db, store, now, {
+      id: task.id,
+      runId: input.runId,
+      sourceId: "intent",
+      role: "user",
+      content: input.intent,
+    });
+    return requireTask(db, store, task.id);
+  });
+}
+
 function bindRun(
   db: DatabaseSync,
   store: UiStore,
@@ -155,7 +193,7 @@ function appendMessage(
 ): void {
   const { id, runId, sourceId, role, content } = input;
   assertId(sourceId);
-  if (content.length === 0 || content.length > MAX_MESSAGE_CHARS)
+  if (content.length === 0 || content.length > CODING_HISTORY_MESSAGE_MAX_CHARS)
     throw invalidRequest("Invalid coding message size.");
   const binding = db.prepare("SELECT chat_id FROM coding_history_runs WHERE run_id = ?").get(runId);
   if (binding?.chat_id !== id) throw invalidRequest("Coding task run binding mismatch.");
@@ -182,6 +220,37 @@ function appendMessage(
       sourceId,
       message.id,
     );
+  });
+}
+
+function upsertMessage(
+  db: DatabaseSync,
+  store: UiStore,
+  now: () => number,
+  input: Parameters<typeof appendMessage>[3],
+): boolean {
+  return withImmediateTransaction(db, () => {
+    const binding = db
+      .prepare(
+        "SELECT message_id FROM coding_history_message_bindings WHERE run_id = ? AND source_id = ?",
+      )
+      .get(input.runId, input.sourceId);
+    if (typeof binding?.message_id !== "string") {
+      appendMessage(db, store, now, input);
+      return true;
+    }
+    const message = store.findMessageById(binding.message_id);
+    if (message?.chatId !== input.id || message.role !== input.role)
+      throw invalidRequest("Coding message binding mismatch.");
+    if (message.content === input.content) return false;
+    if (
+      !input.content.startsWith(message.content) ||
+      input.content.length > CODING_HISTORY_MESSAGE_MAX_CHARS
+    )
+      throw invalidRequest("Coding message prefix changed.");
+    db.prepare("UPDATE chat_messages SET content = ? WHERE id = ?").run(input.content, message.id);
+    db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?").run(now(), input.id);
+    return true;
   });
 }
 
@@ -229,6 +298,7 @@ export function createCodingHistoryStore(
   now: () => number,
 ): CodingHistoryStore {
   return {
+    begin: (input) => beginTask(db, store, now, input),
     create: (input) => createTask(db, store, input),
     get: (id, operator) => readTask(db, store, id, operator),
     list: (operator) =>
@@ -256,6 +326,8 @@ export function createCodingHistoryStore(
       bindRun(db, store, id, runId, now);
     },
     update: (id, patch) => updateTask(db, store, now, id, patch),
+    upsert: (id, runId, sourceId, role, content) =>
+      upsertMessage(db, store, now, { id, runId, sourceId, role, content }),
     append: (id, runId, sourceId, role, content): void => {
       appendMessage(db, store, now, { id, runId, sourceId, role, content });
     },

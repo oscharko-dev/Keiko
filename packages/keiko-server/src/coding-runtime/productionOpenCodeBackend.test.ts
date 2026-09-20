@@ -1,3 +1,4 @@
+import * as composition from "./opencodeRuntimeComposition.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +40,33 @@ import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 
 describe("production OpenCode backend composition", () => {
+  it("captures durable native messages only after readiness is armed, independently of display acceptance", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-history-port-"));
+    const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+    const historyCapture = vi.fn().mockReturnValue(true);
+    try {
+      const backend = createProductionOpenCodeBackend({
+        ...backendInput(root, windowsDevLaneRuntime(root)),
+        historyCapture,
+      });
+      const run = backend.createRun(runInput(root));
+      const activity = compose.mock.calls[0]?.[0].safeActivity;
+      if (activity?.captureMessages === undefined) throw new Error("Missing history capture port");
+      const messages = [{ messageId: "msg_user", role: "user" as const, content: "Task" }];
+      expect(activity.captureMessages(messages)).toBe(false);
+      expect(historyCapture).not.toHaveBeenCalled();
+      activity.arm();
+      expect(activity.captureMessages(messages)).toBe(true);
+      expect(historyCapture).toHaveBeenCalledWith("run-windows", messages);
+      activity.clear();
+      expect(activity.captureMessages(messages)).toBe(false);
+      expect(historyCapture).toHaveBeenCalledOnce();
+      await run.dispose?.();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("constructs a resolver without launching the qualified runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-production-opencode-backend-"));
     try {

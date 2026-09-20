@@ -1,3 +1,4 @@
+import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
 // Wave 2 BFF handler dependencies (ADR-0011 D5/D8/D9). The Wave 1 skeleton's `UiServerDeps` carried
 // only the static-serving + CSP + port fields; the JSON/SSE handlers additionally need the resolved
 // gateway config (for the config inspector and for building a ModelPort), an evidence store, a live
@@ -5342,6 +5343,7 @@ function resolveProductionRuntimePorts(
     };
   }
   const activation = resolveProductionOpenCodeActivation({
+    historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,

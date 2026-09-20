@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { OPENCODE_MODEL_VISIBLE_TOOL_NAMES } from "./opencodeToolSchemas.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
@@ -33,6 +33,67 @@ function toolHistory(name: string, status = "completed"): readonly Record<string
 }
 
 describe("OpenCode V2 native tool history", () => {
+  it("retries durable capture until accepted and skips unchanged acknowledged content", () => {
+    const captureMessages = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "durable-history-run",
+      activityLog: undefined,
+      captureMessages,
+    });
+    const messages = toolHistory("question");
+    const first = projection.project("ses_capture", messages, undefined);
+    const checkpoint = first.at(-1)?.sequence;
+    projection.project("ses_capture", messages, checkpoint);
+    projection.project("ses_capture", messages, checkpoint);
+    expect(captureMessages).toHaveBeenCalledTimes(2);
+    expect(captureMessages).toHaveBeenLastCalledWith([
+      { messageId: "msg_user", role: "user", content: "Ask me a question." },
+      { messageId: "msg_assistant", role: "assistant", content: "" },
+    ]);
+  });
+
+  it("records each native question transition once with body-free call identity", () => {
+    const sink = createBufferedServerLogSink();
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "question-history-run",
+      activityLog: sink,
+    });
+    let checkpoint: number | undefined;
+    for (const state of ["streaming", "running", "completed", "error"]) {
+      const messages = toolHistory("question", state);
+      const events = projection.project("ses_question", messages, checkpoint);
+      // An unacknowledged page is replayed but must not double-log its transition.
+      projection.project("ses_question", messages, checkpoint);
+      checkpoint = events.at(-1)?.sequence;
+    }
+    const events = sink.events.filter(
+      (event) => event.op === "coding-runtime.native-question.observed",
+    );
+    expect(events).toHaveLength(4);
+    const records = events.map((event) =>
+      expectActivityLogProof(
+        "coding-runtime.native-question.observed.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    );
+    expect(records.map((event) => event.state)).toEqual([
+      "pending",
+      "running",
+      "succeeded",
+      "failed",
+    ]);
+    expect(new Set(records.map((event) => event.callDigest)).size).toBe(1);
+    for (const event of records) {
+      expect(event).toMatchObject({
+        op: "coding-runtime.native-question.observed",
+        correlationId: "question-history-run",
+        callDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
+      });
+    }
+    expect(JSON.stringify(records)).not.toContain("PRIVATE_");
+    expect(JSON.stringify(records)).not.toContain("call_question");
+  });
+
   it("classifies a missing tool identity before malformed arguments", () => {
     const projection = createOpenCodeV2HistoryProjection();
     const history = [

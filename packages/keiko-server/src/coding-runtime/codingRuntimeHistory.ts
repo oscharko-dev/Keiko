@@ -1,3 +1,5 @@
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { CODING_HISTORY_MESSAGE_MAX_CHARS } from "../store/codingHistory.js";
 import { contentFreeErrorClass } from "../diagnostics-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { createHash } from "node:crypto";
@@ -46,6 +48,12 @@ const HISTORY_OPERATION = defineActivityLogOperation({
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     messageCount: { type: "integer", dataClass: "count", required: true },
     truncated: { type: "boolean", dataClass: "closed-enum", required: true },
+    captureSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["native-history", "display-projection"],
+    },
     projectRegistered: { type: "boolean", dataClass: "closed-enum", required: false },
     projectDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     sourceMessageCount: { type: "integer", dataClass: "count", required: false },
@@ -107,6 +115,7 @@ interface HistoryLogInput {
   readonly runId?: string;
   readonly messageCount?: number;
   readonly truncated?: boolean;
+  readonly captureSource?: "native-history" | "display-projection";
   readonly projectRegistered?: boolean;
   readonly projectDigest?: string;
   readonly sourceMessageCount?: number;
@@ -195,7 +204,23 @@ function boundedContext(messages: readonly { readonly role: string; readonly con
   return { text: JSON.stringify(selected), truncated, count: selected.length };
 }
 
-/** Local conversation content uses the existing redacting UI store, never the runtime ledger. */
+export interface CodingHistoryMessage {
+  readonly messageId: string;
+  readonly role: "user" | "assistant";
+  readonly content: string;
+}
+
+/** Native history and the bounded display feed share the same local conversation store. */
+export function createNativeHistoryCapture(
+  store: UiStore,
+  log: ServerLogSink | undefined,
+): CodingRuntimeHistory["captureNative"] {
+  // Capture resolves only an already-authorized run binding. It cannot list or open another operator's task.
+  const history = new CodingRuntimeHistory(store, () => undefined, log);
+  return (runId, messages) => history.captureNative(runId, messages);
+}
+
+/** Visible conversation content uses the local UI store, never the runtime ledger or activity log. */
 export class CodingRuntimeHistory {
   public constructor(
     private readonly store: UiStore,
@@ -264,21 +289,18 @@ export class CodingRuntimeHistory {
     const projectRegistered = !this.store
       .listProjects()
       .some((project) => project.path === active.instance.repositoryRoot);
-    const task =
-      request.conversationId === undefined
-        ? history.create({
-            projectPath: active.instance.repositoryRoot,
-            title: request.taskIntent.trim().slice(0, 100),
-            modelId: request.modelId ?? "coding",
-            workspaceId: active.instance.workspaceId,
-            taskId: active.instance.taskId,
-            branch: active.instance.taskBranch,
-            operatorDigest,
-          })
-        : history.get(request.conversationId, operatorDigest);
-    if (task === undefined) throw new Error("Coding task unavailable.");
-    history.bindRun(task.id, runId);
-    history.append(task.id, runId, "intent", "user", request.taskIntent);
+    const task = history.begin({
+      ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
+      projectPath: active.instance.repositoryRoot,
+      title: request.taskIntent.trim().slice(0, 100),
+      modelId: request.modelId ?? "coding",
+      workspaceId: active.instance.workspaceId,
+      taskId: active.instance.taskId,
+      branch: active.instance.taskBranch,
+      operatorDigest,
+      runId,
+      intent: request.taskIntent,
+    });
     recordHistory(this.log, request.conversationId === undefined ? "created" : "continued", {
       correlationId: runId,
       conversationId: task.id,
@@ -315,6 +337,65 @@ export class CodingRuntimeHistory {
     ].join("\n");
   }
 
+  public captureNative(runId: string, messages: readonly CodingHistoryMessage[]): boolean {
+    let messageCount = 0;
+    try {
+      const task = this.forRun(runId);
+      if (task === undefined) {
+        recordHistory(this.log, "unavailable", {
+          correlationId: runId,
+          runId,
+          captureSource: "native-history",
+        });
+        return false;
+      }
+      const firstUser = messages.find((message) => message.role === "user");
+      for (const message of messages) {
+        if (message === firstUser) continue;
+        messageCount += this.captureNativeMessage(task.id, runId, message);
+      }
+      if (messageCount > 0)
+        recordHistory(this.log, "captured", {
+          correlationId: runId,
+          runId,
+          conversationId: task.id,
+          messageCount,
+          sourceMessageCount: messages.length,
+          captureSource: "native-history",
+        });
+      return true;
+    } catch (error) {
+      recordHistory(this.log, "failed", {
+        correlationId: runId,
+        runId,
+        error,
+        messageCount,
+        captureSource: "native-history",
+      });
+      return false;
+    }
+  }
+
+  private captureNativeMessage(id: string, runId: string, message: CodingHistoryMessage): number {
+    const content = stripUnsafeFormatChars(message.content);
+    let written = 0;
+    for (let offset = 0; offset < content.length; offset += CODING_HISTORY_MESSAGE_MAX_CHARS) {
+      const sourceId =
+        offset === 0 ? message.messageId : `${digest(message.messageId)}:${String(offset)}`;
+      if (
+        this.store.codingHistory?.upsert(
+          id,
+          runId,
+          sourceId,
+          message.role,
+          content.slice(offset, offset + CODING_HISTORY_MESSAGE_MAX_CHARS),
+        )
+      )
+        written += 1;
+    }
+    return written;
+  }
+
   public capture(runId: string, content: CodingSafeActivityContent | null | undefined): void {
     try {
       this.captureAvailable(runId, content);
@@ -346,6 +427,7 @@ export class CodingRuntimeHistory {
       runId,
       messageCount: messages.length,
       truncated: feed.truncated,
+      captureSource: "display-projection",
     });
   }
 

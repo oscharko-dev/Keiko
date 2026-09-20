@@ -171,16 +171,18 @@ Content-bearing live prompt, response, diff, and diagnostic events are transient
 access-controlled. Durable operational events and evidence are a separate content-free projection;
 they carry only ids, digests, counts, booleans, closed states/codes, and safe labels.
 
-The owner-requested Coding History workflow (#3560) retains user intent and the redacted
-user/assistant safe projection in the existing local UI conversation store. Dedicated relation
-tables bind those messages to coding tasks, runs, workspaces, and the local operator. This is
-conversation content, never runtime evidence or a durable bearer/session credential. Ordinary
-chat routes exclude these records; the dedicated History routes authenticate the paired app
-session before lookup and return a bounded transcript. Tool payloads, raw diagnostics, hidden
-reasoning, and authority credentials are not captured. History cannot reconstruct already-purged
-legacy transcripts. A resumed task supplies bounded, explicitly untrusted historical context to a
-fresh runtime launch, which revalidates current workspace identity and authority. Completing a task
-retains its conversation; New task provisions a distinct managed task workspace.
+The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
+in the existing local UI conversation store. Native V2 history is validated and captured continuously
+through the armed runtime's capture port, independently of the live display projection's TTL, turn
+and byte limits. Replayed messages update the same source binding idempotently; growing responses
+preserve their prefix and are chunked at the store's message bound. Display expiry cannot erase
+already captured history. Task creation, run binding and the initial intent commit atomically;
+a failed continuation preserves the existing task and messages. Dedicated relation tables associate
+conversation, task workspace, operator and run. Generic chat routes exclude these records; dedicated
+History routes authenticate the paired app session and scope access to the operator. Tool arguments,
+results, hidden context, reasoning and authority credentials are not captured. Reads and model
+context restoration remain bounded and report truncation explicitly. The existing body-free History
+operation records capture source, counts and persistence failures; it never contains conversation text.
 
 Delivery approval, one rule for D3 and D4. In `governed-assist` and `supervised-coding`, commit,
 push and pull-request create/update each require their own action-bound, one-use human approval in

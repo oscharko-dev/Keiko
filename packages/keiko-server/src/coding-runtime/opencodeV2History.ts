@@ -1,3 +1,4 @@
+import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import { createHash } from "node:crypto";
 
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -33,7 +34,32 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const NATIVE_QUESTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-question.observed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeV2History.recordNativeQuestions",
+  fields: {
+    callDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["pending", "running", "succeeded", "failed", "cancelled", "denied"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-safe-activity-projection"],
+  proofIds: ["coding-runtime.native-question.observed.emitted-line"],
+  releaseImpact: "patch",
+});
+
 interface HistoryActivity {
+  readonly captureMessages?: ((messages: readonly CodingHistoryMessage[]) => boolean) | undefined;
   readonly runId: string;
   readonly activityLog: ServerLogSink | undefined;
 }
@@ -354,6 +380,23 @@ function allCandidates(
   return result;
 }
 
+function conversationMessages(candidates: readonly Candidate[]): readonly CodingHistoryMessage[] {
+  const messages = new Map<string, CodingHistoryMessage>();
+  for (const { signal } of candidates) {
+    if (signal?.kind === "message")
+      messages.set(signal.messageId, {
+        messageId: signal.messageId,
+        role: signal.role,
+        content: "",
+      });
+    if (signal?.kind !== "text") continue;
+    const message = messages.get(signal.messageId);
+    if (message !== undefined)
+      messages.set(signal.messageId, { ...message, content: message.content + signal.text });
+  }
+  return [...messages.values()];
+}
+
 function makePending(
   sessionId: string,
   checkpoint: number,
@@ -401,6 +444,23 @@ function incrementalSignal(
   return item.signal?.kind === "text" ? { ...item.signal, text: text.slice(offset) } : item.signal;
 }
 
+function recordNativeQuestions(
+  activity: HistoryActivity | undefined,
+  pending: PendingProjection,
+): void {
+  if (activity?.activityLog === undefined) return;
+  for (const signal of pending.signals.values()) {
+    if (signal.kind !== "tool" || signal.tool !== "question") continue;
+    activity.activityLog.write(
+      activityLogEvent(
+        NATIVE_QUESTION_OPERATION,
+        { correlationId: activity.runId },
+        { callDigest: digest(signal.callId), state: signal.state },
+      ),
+    );
+  }
+}
+
 function recordHistoryProjection(
   activity: HistoryActivity | undefined,
   pending: PendingProjection,
@@ -419,6 +479,19 @@ function recordHistoryProjection(
   );
 }
 
+function conversationCapture(
+  activity: HistoryActivity | undefined,
+): (candidates: readonly Candidate[]) => void {
+  let capturedDigest: string | undefined;
+  return (candidates): void => {
+    if (activity?.captureMessages === undefined) return;
+    const conversation = conversationMessages(candidates);
+    const currentDigest = digest(conversation);
+    if (currentDigest !== capturedDigest && activity.captureMessages(conversation))
+      capturedDigest = currentDigest;
+  };
+}
+
 /** A pull repeats unchanged candidates until the adapter commits its checkpoint. */
 export function createOpenCodeV2HistoryProjection(
   activity?: HistoryActivity,
@@ -426,6 +499,7 @@ export function createOpenCodeV2HistoryProjection(
   let known = new Map<string, KnownCandidate>();
   let pending: PendingProjection | undefined;
   let pendingStart = -1;
+  const capture = conversationCapture(activity);
   const activeSignals = new Map<string, CodingSafeActivitySignal>();
   return {
     project(sessionId, messages, checkpoint): readonly OpenCodeReconciliationEvent[] {
@@ -438,8 +512,11 @@ export function createOpenCodeV2HistoryProjection(
         throw new Error("opencode-v2-checkpoint-invalid");
       }
       if (pending === undefined) {
-        pending = makePending(sessionId, position, known, allCandidates(sessionId, messages));
+        const candidates = allCandidates(sessionId, messages);
+        pending = makePending(sessionId, position, known, candidates);
+        capture(candidates);
         recordHistoryProjection(activity, pending);
+        recordNativeQuestions(activity, pending);
       }
       pendingStart = position;
       for (const [key, signal] of pending.signals) activeSignals.set(key, signal);
