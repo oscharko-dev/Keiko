@@ -299,10 +299,15 @@ describe("production CI repair accounting availability", () => {
     const event = test.events.find((entry) => entry.extra?.phase === "prompt-admission");
     if (event === undefined) throw new Error("Missing prompt admission evidence");
     const line = formatActivityLogProofLine(event);
-    expect(line).toContain("op=git.ci-repair.budget");
-    expect(line).toContain("runId=run-1");
-    expect(line).toContain("phase=prompt-admission");
-    expect(line).toContain("requestedPromptTokenCount=1");
+    const persisted: unknown = JSON.parse(line);
+    expect(persisted).toMatchObject({
+      op: "git.ci-repair.budget",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      runId: "run-1",
+      phase: "prompt-admission",
+      requestedPromptTokenCount: 1,
+      status: "available",
+    });
   });
   it.each([
     [false, "ciRepairBudget"],
