@@ -288,6 +288,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Run authority could not be saved. The previous authority remains active.",
   "codingWorkbench.composer.context.label": "Coding context",
   "codingWorkbench.composer.repository.open": "Manage repository {repository}",
+  "codingWorkbench.composer.repository.select": "Choose repository",
   "codingWorkbench.composer.branch.open": "Manage branch {branch}",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":

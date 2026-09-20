@@ -307,6 +307,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Rechte konnten nicht gespeichert werden. Die vorherige Auswahl bleibt aktiv.",
   "codingWorkbench.composer.context.label": "Coding-Kontext",
   "codingWorkbench.composer.repository.open": "Repository {repository} in Git verwalten",
+  "codingWorkbench.composer.repository.select": "Repository auswählen",
   "codingWorkbench.composer.branch.open": "Branch {branch} in Git verwalten",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":

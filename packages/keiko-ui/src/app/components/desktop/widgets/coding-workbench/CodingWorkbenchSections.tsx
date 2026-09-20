@@ -105,6 +105,9 @@ interface TaskStartSectionProps {
   readonly startBusy: boolean;
   readonly startBlockedReason: string | null;
   readonly repositoryLabel: string | null;
+  readonly repositoryRoot: string | null;
+  readonly repositories: readonly { readonly root: string; readonly label: string }[];
+  readonly onSelectRepository: (root: string) => void;
   readonly branchLabel: string | null;
   readonly branchContext: "repository" | "task";
   readonly onOpenGit: () => void;
@@ -251,26 +254,42 @@ function branchContextLabel(input: TaskStartSectionProps, t: CodingWorkbenchTran
 }
 
 function ComposerContext({ input, t }: ControlProps): ReactNode {
-  if (input.repositoryLabel === null && input.branchLabel === null) return null;
+  if (
+    input.repositoryLabel === null &&
+    input.branchLabel === null &&
+    input.repositories.length === 0
+  )
+    return null;
   const branchLabel = branchContextLabel(input, t);
+  const repositories = input.repositories.map(({ root, label }) => ({ value: root, label }));
+  if (
+    input.repositoryRoot !== null &&
+    !repositories.some(({ value }) => value === input.repositoryRoot)
+  )
+    repositories.unshift({
+      value: input.repositoryRoot,
+      label: input.repositoryLabel ?? input.repositoryRoot,
+    });
   return (
     <div
       className={styles.composerContext}
       aria-label={t("codingWorkbench.composer.context.label")}
     >
-      {input.repositoryLabel === null ? null : (
-        <button
-          className={`${styles.composerContextChip} ${styles.composerContextButton}`}
-          type="button"
-          title={input.repositoryLabel}
-          aria-label={t("codingWorkbench.composer.repository.open", {
-            repository: input.repositoryLabel,
-          })}
-          onClick={input.onOpenGit}
-        >
-          <FolderIcon size={14} />
-          <span>{input.repositoryLabel}</span>
-        </button>
+      {repositories.length === 0 ? null : (
+        <KeikoSelect
+          triggerClassName={`${styles.composerContextChip} ${styles.composerContextButton}`}
+          value={input.repositoryRoot ?? ""}
+          placeholder={t("codingWorkbench.composer.repository.select")}
+          ariaLabel={t("codingWorkbench.composer.repository.select")}
+          menuTitle={t("codingWorkbench.composer.repository.select")}
+          menuMinWidth={220}
+          disabled={input.configurationLocked}
+          leadingVisual={<FolderIcon size={14} />}
+          sections={[{ options: repositories }]}
+          onValueChange={(root): void => {
+            if (repositories.some(({ value }) => value === root)) input.onSelectRepository(root);
+          }}
+        />
       )}
       {input.branchLabel === null ? null : (
         <button

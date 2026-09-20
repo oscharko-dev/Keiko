@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 
@@ -47,6 +48,10 @@ export function CodingWorkbenchWindowHost({
       }
       onOpenHistory={() => context.openWindow("codingHistory")}
       selectedRoot={root ?? undefined}
+      onSelectRepository={(repositoryPath) => {
+        context.updateCfg({ repositoryPath });
+        reportClientDiagnostic("[keiko] coding workbench repository selection requested");
+      }}
       onOpenGit={(target) => openGit(context, target)}
     />
   );

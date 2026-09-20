@@ -687,7 +687,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(taskInput).toHaveValue("");
   });
 
-  it("opens Git for the selected repository from the composer context", async (): Promise<void> => {
+  it("offers the selected repository in the composer chooser", async (): Promise<void> => {
     const user = userEvent.setup();
     const selectedProject: ProjectWithAvailability = {
       path: "/repos/keiko",
@@ -704,11 +704,9 @@ describe("CodingWorkbenchWindow", () => {
 
     renderWorkbench(liveState(), actions(), onOpenGit);
 
-    await user.click(screen.getByRole("button", { name: "Manage repository keiko" }));
-    expect(onOpenGit).toHaveBeenCalledWith({
-      root: selectedProject.path,
-      binding: "repository",
-    });
+    await user.click(screen.getByRole("combobox", { name: "Choose repository" }));
+    expect(screen.getByRole("option", { name: "Keiko" })).toBeInTheDocument();
+    expect(onOpenGit).not.toHaveBeenCalled();
   });
 
   it("uses the selected repository outside an active run despite a prior task worktree", async () => {
@@ -732,11 +730,8 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/prior-task"),
     );
 
-    await user.click(screen.getByRole("button", { name: "Manage repository keiko" }));
-    expect(onOpenGit).toHaveBeenCalledWith({
-      root: selectedProject.path,
-      binding: "repository",
-    });
+    expect(screen.getByRole("combobox", { name: "Choose repository" })).toHaveTextContent("keiko");
+    expect(onOpenGit).not.toHaveBeenCalled();
   });
 
   it("opens Git on the repository root while a coding run is in progress", async (): Promise<void> => {
@@ -767,14 +762,15 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(screen.getByRole("button", { name: "Manage branch task-1" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Manage branch dev" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Manage repository keiko" }));
+    expect(screen.getByRole("combobox", { name: "Choose repository" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Manage branch task-1" }));
     expect(onOpenGit).toHaveBeenCalledWith({
       root: "/repos/keiko",
       binding: "repository",
     });
   });
 
-  it("uses one bound repository root for the composer and information panel", () => {
+  it("offers setup for a newly selected repository instead of starting in the old binding", () => {
     chatCatalogMock.activeProject = {
       path: "/repos/selected-elsewhere",
       name: "Selected elsewhere",
@@ -791,11 +787,9 @@ describe("CodingWorkbenchWindow", () => {
       undefined,
       activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
     );
-    openWorkbenchInformation();
-
-    expect(repositoryBranchHookMock).toHaveBeenCalledWith("/repos/bound");
-    expect(repositoryBranchHookMock).not.toHaveBeenCalledWith("/repos/selected-elsewhere");
-    expect(screen.getByRole("button", { name: "Manage repository bound" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/selected-elsewhere");
+    expect(repositoryBranchHookMock).toHaveBeenCalledWith("/repos/selected-elsewhere");
+    expect(screen.queryByRole("button", { name: "Start coding run" })).not.toBeInTheDocument();
   });
 
   // Epic #3384 live-flow defect (#3401 "Review description"): after a settled run the Workbench
@@ -3032,8 +3026,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     const onOpenGit = vi.fn();
     await startInAThenSwitchToB(actions(), onOpenGit);
 
-    expect(screen.getByRole("button", { name: "Manage repository a" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Manage repository b" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Choose repository" })).toHaveTextContent("a");
     expect(
       screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }),
     ).toBeInTheDocument();
@@ -3043,7 +3036,10 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(facts).not.toBeNull();
     expect(facts).not.toHaveTextContent(WORKSPACE_B.branch);
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "Manage repository a" }));
+    expect(screen.getByRole("combobox", { name: "Choose repository" })).toBeDisabled();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }));
     expect(onOpenGit).toHaveBeenCalledWith({
       root: WORKSPACE_A.repositoryRoot,
       binding: "repository",
@@ -3134,7 +3130,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(
       screen.queryByText(/This run keeps the authority of the workspace it started in/u),
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Manage repository a" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Choose repository" })).toBeDisabled();
   });
 
   it("binds the editor bridge to the root the run was submitted against", async () => {

@@ -70,6 +70,12 @@ function composerProps(
     startBusy: false,
     startBlockedReason: null,
     repositoryLabel: "Keiko",
+    repositoryRoot: "/repos/keiko",
+    repositories: [
+      { root: "/repos/keiko", label: "Keiko" },
+      { root: "/repos/another", label: "Another" },
+    ],
+    onSelectRepository: vi.fn(),
     branchLabel: "dev",
     branchContext: "repository",
     onOpenGit,
@@ -124,16 +130,19 @@ describe("Coding Workbench composer", () => {
     expect(authority.querySelector('path[d*="M13.5 5.5"]')).not.toBeInTheDocument();
   });
 
-  it("opens Git from the active repository and branch controls", async () => {
+  it("selects a repository in the Workbench while keeping branch management in Git", async () => {
     const user = userEvent.setup();
     const onOpenGit = vi.fn();
-    renderComposer("idle", composerActions(), undefined, undefined, onOpenGit);
+    const onSelectRepository = vi.fn();
+    renderComposerWithOverrides({ onOpenGit, onSelectRepository });
 
     const context = screen.getByLabelText("Coding context");
-    await user.click(within(context).getByRole("button", { name: "Manage repository Keiko" }));
+    await user.click(within(context).getByRole("combobox", { name: "Choose repository" }));
+    await user.click(screen.getByRole("option", { name: "Another" }));
     await user.click(within(context).getByRole("button", { name: "Manage branch dev" }));
 
-    expect(onOpenGit).toHaveBeenCalledTimes(2);
+    expect(onSelectRepository).toHaveBeenCalledWith("/repos/another");
+    expect(onOpenGit).toHaveBeenCalledTimes(1);
     expect(within(context).queryByText("Repository branch")).toBeNull();
     expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
   });
@@ -317,6 +326,8 @@ describe("Coding Workbench composer", () => {
       taskIntent: "",
       canStart: false,
       repositoryLabel: null,
+      repositoryRoot: null,
+      repositories: [],
       branchLabel: null,
       autonomyMode: null,
       onTaskIntentChange,

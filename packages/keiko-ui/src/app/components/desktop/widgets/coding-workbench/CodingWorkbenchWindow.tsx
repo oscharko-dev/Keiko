@@ -459,11 +459,11 @@ function idleRepositoryRoot(
   activeWorkspace: WorkbenchWorkspaceApi,
   selectedRoot: string | undefined,
 ): string | null {
+  const selectedRepositoryRoot = repositoryRootOrNull(selectedRoot);
+  if (selectedRepositoryRoot !== null) return selectedRepositoryRoot;
   const activeInstance = activeWorkspace.activeInstance;
   const activeRoot = repositoryRootOrNull(activeInstance?.repositoryRoot);
   if (activeRoot !== null) return activeRoot;
-  const selectedRepositoryRoot = repositoryRootOrNull(selectedRoot);
-  if (selectedRepositoryRoot !== null) return selectedRepositoryRoot;
   const activeBinding = activeWorkspace.activeBinding;
   return repositoryRootOrNull(activeBinding?.activeRoot);
 }
@@ -664,6 +664,7 @@ function welcomeEligible(
 export function CodingWorkbenchWindow({
   selectedRoot,
   onOpenGit = noopOpenGit,
+  onSelectRepository = () => {},
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
@@ -673,6 +674,7 @@ export function CodingWorkbenchWindow({
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
+  readonly onSelectRepository?: ((root: string) => void) | undefined;
 }): ReactNode {
   const workspaceContext = useOptionalActiveWorkspace();
   const activeWorkspace = workspaceContext ?? EMPTY_WORKSPACE;
@@ -711,7 +713,7 @@ export function CodingWorkbenchWindow({
   const alert = visibleAlert(
     state,
     t,
-    bootstrapSetupVisible(state, activeWorkspace),
+    bootstrapSetupVisible(state, activeWorkspace, selectedRoot, historySelection),
     authority.errorMessage,
   );
   const runIsActive = activeRunState(state.run.value?.state);
@@ -747,8 +749,14 @@ export function CodingWorkbenchWindow({
       research={research}
       skills={skills}
       codingModels={codingModels}
+      repositories={
+        chatCatalog?.projects
+          .filter((project) => project.available)
+          .map((project) => ({ root: project.path, label: project.name })) ?? []
+      }
       authority={authority}
       onOpenGit={onOpenGit}
+      onSelectRepository={onSelectRepository}
       runWorkspace={runWorkspace}
       repositoryRoot={repositoryRoot}
       runIsActive={runIsActive}
@@ -795,8 +803,10 @@ interface WorkbenchContentProps {
   readonly research: UseCodingWorkbenchResearchResult;
   readonly skills: UseCodingWorkbenchSkillsResult;
   readonly codingModels: readonly ModelCapability[];
+  readonly repositories: readonly { readonly root: string; readonly label: string }[];
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
+  readonly onSelectRepository: (root: string) => void;
   /** The run's own workspace attribution, independent of the live pointer (#3381 review). */
   readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;
   /** One repository projection shared by the information panel and composer. */
@@ -932,6 +942,7 @@ function WorkbenchColumns({
   state,
   actions,
   activeWorkspace,
+  selectedRoot,
   taskIntent,
   onTaskIntentChange,
   focusRef,
@@ -939,8 +950,10 @@ function WorkbenchColumns({
   research,
   skills,
   codingModels,
+  repositories,
   authority,
   onOpenGit,
+  onSelectRepository,
   runWorkspace,
   repositoryRoot,
   runIsActive,
@@ -962,7 +975,7 @@ function WorkbenchColumns({
   // hides behind runtime availability: on an unactivated install it stays reachable and honestly
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
-  const showSetup = bootstrapSetupVisible(state, activeWorkspace);
+  const showSetup = bootstrapSetupVisible(state, activeWorkspace, selectedRoot);
   const startBlocker = startBlockedReason(state, t, showSetup, authority.errorMessage);
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
@@ -1086,6 +1099,9 @@ function WorkbenchColumns({
       }
       startBlockedReason={startBlocker}
       repositoryLabel={repositoryLabel(repositoryRoot)}
+      repositoryRoot={repositoryRoot}
+      repositories={repositories}
+      onSelectRepository={onSelectRepository}
       branchLabel={
         runIsActive || history.detail !== null
           ? (history.detail?.task.branch ??
@@ -1308,8 +1324,19 @@ function confirmedMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode 
 function bootstrapSetupVisible(
   state: CodingWorkbenchRuntimeState,
   activeWorkspace: UseCodingWorkbenchRuntimeInput["workspace"],
+  selectedRoot: string | undefined,
+  historySelection?: string,
 ): boolean {
-  return activeWorkspace.activeBinding === null && state.workspace.value === null;
+  if (activeWorkspace.activeBinding === null && state.workspace.value === null) return true;
+  const selected = repositoryRootOrNull(selectedRoot);
+  const bound = repositoryRootOrNull(activeWorkspace.activeInstance?.repositoryRoot);
+  return (
+    historySelection === undefined &&
+    !activeRunState(state.run.value?.state) &&
+    selected !== null &&
+    bound !== null &&
+    selected !== bound
+  );
 }
 
 function workspaceContextValue(

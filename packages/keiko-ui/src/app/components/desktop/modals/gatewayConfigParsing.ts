@@ -84,7 +84,13 @@ function unknownGenericEndpointStyle(value: unknown): boolean {
  * saving must never silently change retrieval, reranking, or egress behavior (review finding on
  * #3031).
  */
-const REPRESENTABLE_ROOT_KEYS = new Set(["providers", "capabilities", "circuitBreaker", "figma"]);
+const REPRESENTABLE_ROOT_KEYS = new Set([
+  "schemaVersion",
+  "providers",
+  "capabilities",
+  "circuitBreaker",
+  "figma",
+]);
 const KNOWN_KINDS = new Set(["chat", "embedding", "ocr-vision", "voice"]);
 const VOICE_PERSONAS = new Set(["male", "female", "neutral"]);
 /** The provider kinds SOME setup field can represent; `ocr-vision` has none. */
@@ -1182,6 +1188,11 @@ export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploa
   if (exceedsByteCeiling(serialized)) return { outcome: "invalid" };
   const root = uploadRoot(serialized);
   if (root === undefined) return { outcome: "invalid" };
+  // Test & Save writes schemaVersion: 2. It is metadata, not a setup field, and must survive
+  // a round trip through this parser. Refuse unknown versions rather than misreading their shape.
+  if (root.schemaVersion !== undefined && root.schemaVersion !== 2) {
+    return { outcome: "invalid" };
+  }
   if (!Object.keys(root).every((key) => REPRESENTABLE_ROOT_KEYS.has(key))) {
     return { outcome: "unsupportedSetting" };
   }

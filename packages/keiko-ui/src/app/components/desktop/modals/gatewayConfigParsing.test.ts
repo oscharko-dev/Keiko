@@ -76,6 +76,7 @@ describe("parseGatewayConfigUpload", () => {
   it("maps the documented keiko.config.json shape onto the form fields", () => {
     const fields = fieldsOf(
       JSON.stringify({
+        schemaVersion: 2,
         providers: [
           providerFixture(),
           providerFixture({
@@ -98,6 +99,14 @@ describe("parseGatewayConfigUpload", () => {
       embeddingModelIds: ["text-embed"],
       figmaAccessToken: undefined,
       ...NO_VOICE_FIELDS,
+    });
+  });
+
+  it("accepts the persisted schema version and rejects unknown versions", () => {
+    const file = { schemaVersion: 2, providers: [providerFixture()] };
+    expect(parseGatewayConfigUpload(JSON.stringify(file)).outcome).toBe("fields");
+    expect(parseGatewayConfigUpload(JSON.stringify({ ...file, schemaVersion: 3 }))).toEqual({
+      outcome: "invalid",
     });
   });
 
