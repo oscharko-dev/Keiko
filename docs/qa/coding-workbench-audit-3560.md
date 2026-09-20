@@ -362,3 +362,26 @@ Root/UI typecheck, strict lint, formatting, all seven Activity Log checks and th
 bundle evidence gate passed. Real Sonar found one collection-membership idiom; its correction and
 the repeat analysis pass. Incremental coverage is 87.0% across 2,926 new lines/conditions. The fresh
 32-run native measurement and unchanged performance/freshness gate pass.
+
+## Merge review: fail-closed installation and native history integrity
+
+An unrecordable dependency completion now fails verification before any script executes. The
+orchestrator regression reproduced an outside-directory symlink swap followed by two script
+spawns; after the repair only the installation attempt occurs. Inconclusive tree inspection
+refuses execution with closed unreadable/limit/identity/directory codes, and the composed
+runner/bootstrap/command tests assert the persisted diagnostic correlation, classification,
+frames/causes and redaction. Harness verification passes its run ID to workspace queue evidence.
+
+Native history chunks preserve Unicode code points, including an astral character crossing the
+65,536-unit boundary. Real SQLite replay failed before this repair and now preserves the exact
+response through streaming updates. Changed captures include a body-free source/content digest;
+missing-run capture and failed native-question transitions have emitted-line proofs. Voice and
+Markdown diagnostics no longer receive unregistered history-scope fields; both mixed-shape
+regressions reproduced a write failure before the correction.
+
+Validation: 3,171 affected tests passed with eight existing skips; the final verification run
+passed 294 tests and the composed diagnostic suite passed four. Root typecheck, strict scoped
+lint, formatting, all seven Activity Log gates and real local Sonar pass. Incremental coverage is
+86.7% across 2,943 new lines/conditions. The initial native series exceeded the throughput p95
+ceiling at 123.579 ms; the complete repeated 32-run series passed the unchanged budgets and
+freshness gate. No sample was removed and no threshold or calibration changed.
