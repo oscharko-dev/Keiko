@@ -228,8 +228,8 @@ function visibleUserText(message: Readonly<Record<string, unknown>>): string {
 function toolIdentity(part: Readonly<Record<string, unknown>>): { id: string; name: string } {
   const id = part.id;
   const name = part.name;
-  if (typeof id !== "string" || typeof name !== "string" || !HISTORY_TOOLS.has(name)) {
-    throw new Error("opencode-v2-tool-invalid");
+  if (typeof id !== "string" || typeof name !== "string") {
+    throw new TypeError("opencode-v2-tool-invalid");
   }
   return { id, name };
 }
@@ -249,8 +249,9 @@ function toolState(
   const state = record(part.state);
   const status = state?.status;
   if (state === undefined) throw new Error("opencode-v2-tool-state-invalid");
-  assertToolInput(part, state);
   const { id, name } = toolIdentity(part);
+  assertToolInput(part, state);
+  if (!HISTORY_TOOLS.has(name)) throw new Error("opencode-v2-tool-invalid");
   const mapped = displayToolState(status);
   return {
     kind: "tool",

@@ -363,6 +363,28 @@ describe("verified Code-task commit service", () => {
       expect(persisted).toMatchObject({ phase: "verification-discarded" });
     },
   );
+  it("links a superseded verification ticket to the newer verification generation", async () => {
+    const first = ticketOf(await service.beginVerification());
+    const second = ticketOf(await service.beginVerification());
+    if (first === undefined || second === undefined)
+      throw new Error("Expected verification tickets");
+    expect(await service.completeVerification(first, report())).toBe(false);
+    expect(await service.completeVerification(second, report())).toBe(true);
+    const starts = events.filter((event) => event.extra?.phase === "verification-started");
+    expect(starts).toHaveLength(2);
+    const discarded = events.find((event) => event.extra?.phase === "verification-discarded");
+    const line = expectActivityLogProof(
+      "git.verified-commit.emitted-line",
+      formatActivityLogProofLine(discarded ?? {}),
+    );
+    expect(line).toMatchObject({
+      reason: "verification-stale",
+      verificationGeneration: starts[0]?.extra?.verificationGeneration,
+      currentGeneration: starts[1]?.extra?.verificationGeneration,
+    });
+    expect(evidence.size).toBe(1);
+  });
+
   it("invalidates a prior approved proposal when fresh verification starts and fails", async () => {
     const id = await verifiedProposal();
     const approval = await service.approve(id);

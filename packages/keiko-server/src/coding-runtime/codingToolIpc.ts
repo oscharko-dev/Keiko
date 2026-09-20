@@ -77,7 +77,7 @@ export type CodingToolCommitProofResult =
   | { readonly commitProof: "recorded" }
   | {
       readonly commitProof: "unavailable";
-      readonly reasonCode: "candidate-not-staged" | "candidate-drift";
+      readonly reasonCode: "candidate-not-staged" | "candidate-drift" | "proof-unavailable";
       readonly nextAction: "stage-then-verify" | "verify-again";
       /**
        * For `candidate-not-staged`: the unstaged and untracked workspace-relative paths that keep

@@ -297,7 +297,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["not-run", "target-bound", "passed"],
+      values: ["not-run", "target-bound", "passed", "proof-unavailable"],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
     steps: {
@@ -351,6 +351,32 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: ["not-applicable", "recorded", "unavailable"],
+    },
+    commitProofReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["candidate-not-staged", "candidate-drift", "proof-unavailable"],
+    },
+    proofStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["begin", "complete", "observe"],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
     },
   },
   causal: "correlation",
@@ -1585,7 +1611,7 @@ async function runVerificationAttempt(
     result: verificationPortRefusal(input, "verification-authority-revoked", condition),
   });
   try {
-    const begun = await input.verifiedCommitService?.beginVerification();
+    const begun = await beginCandidateVerification(input);
     const beforeRun = verificationLivenessRefusal(input, guard, signal);
     if (beforeRun !== undefined) return revoked(beforeRun);
     const { report, failureOutput } = await input.verificationRunner.runToReport(
@@ -1766,6 +1792,7 @@ function passedVerificationOutcome(
         stepCount: completed.length,
         steps: completed.map((kind) => `${kind}:passed` as const),
         commitProof: commit?.commitProof ?? "not-applicable",
+        ...(commit?.commitProof === "unavailable" ? { commitProofReason: commit.reasonCode } : {}),
       },
     ),
   );
@@ -1933,17 +1960,92 @@ function stepFailure(
   };
 }
 
+type CandidateVerificationStart =
+  VerificationTicketOutcome | { readonly kind: "proof-unavailable" };
+
+async function beginCandidateVerification(
+  input: ProductionManagedWorktreeToolInput,
+): Promise<CandidateVerificationStart | undefined> {
+  try {
+    return await input.verifiedCommitService?.beginVerification();
+  } catch (error) {
+    recordCommitProofFailure(input, "begin", error);
+    return { kind: "proof-unavailable" };
+  }
+}
+
+function unavailableCommitProof(): CodingToolCommitProofResult {
+  return {
+    commitProof: "unavailable",
+    reasonCode: "proof-unavailable",
+    nextAction: "verify-again",
+  };
+}
+
+function recordCommitProofFailure(
+  input: ProductionManagedWorktreeToolInput,
+  proofStage: "begin" | "complete" | "observe",
+  error: unknown,
+): void {
+  input.verifiedCommitService?.invalidate();
+  emitVerificationDiagnostic(
+    input,
+    contentFreeErrorClass(error),
+    "verification-proof-unavailable",
+    error,
+  );
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      {
+        correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "unavailable",
+      },
+      {
+        state: "proof-unavailable",
+        proofStage,
+        commitProofReason: "proof-unavailable",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
+}
+
 async function completeCandidateVerification(
   input: ProductionManagedWorktreeToolInput,
-  begun: VerificationTicketOutcome | undefined,
+  begun: CandidateVerificationStart | undefined,
   report: VerificationReport,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
 ): Promise<CodingToolCommitProofResult | undefined> {
   if (input.verifiedCommitService === undefined || begun === undefined) return undefined;
+  if (begun.kind === "proof-unavailable") return unavailableCommitProof();
+  try {
+    return await recordCandidateVerification(
+      input.verifiedCommitService,
+      begun,
+      report,
+      guard,
+      signal,
+    );
+  } catch (error) {
+    recordCommitProofFailure(input, begun.kind === "ticket" ? "complete" : "observe", error);
+    return unavailableCommitProof();
+  }
+}
+
+async function recordCandidateVerification(
+  service: VerifiedCommitService,
+  begun: VerificationTicketOutcome,
+  report: VerificationReport,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): Promise<CodingToolCommitProofResult> {
   if (begun.kind !== "ticket") {
     // Not a commit proof, but still a check the run ran: kept for the pull request's list (F57).
-    input.verifiedCommitService.observeVerification(report);
+    service.observeVerification(report);
     return {
       commitProof: "unavailable",
       reasonCode: "candidate-not-staged",
@@ -1952,7 +2054,7 @@ async function completeCandidateVerification(
       ...(begun.kind === "refused" ? { blocking: begun.blocking } : {}),
     };
   }
-  const recorded = await input.verifiedCommitService.completeVerification(begun.ticket, report, {
+  const recorded = await service.completeVerification(begun.ticket, report, {
     check: guard.check,
     signal,
   });
@@ -2051,7 +2153,7 @@ function verificationPortRefusal(
 function emitVerificationDiagnostic(
   input: ProductionManagedWorktreeToolInput,
   errorClass: string,
-  message: "verification-refused" | "verification-failed",
+  message: "verification-refused" | "verification-failed" | "verification-proof-unavailable",
   error?: unknown,
   code?: string,
 ): void {

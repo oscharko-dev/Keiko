@@ -24,6 +24,7 @@ import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-acces
 
 import {
   contentFreeErrorClass,
+  describeError,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
@@ -980,14 +981,17 @@ function recordOpenCodeV2HistoryFailure(
   error: unknown,
 ): void {
   const reason = v2HistoryFailureReason(error);
+  const detail = describeError(error);
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date().toISOString(),
-    operation: "coding-runtime.handshake",
+    operation: "coding-runtime.history",
     source: "opencode.history",
     errorClass: "OpenCodeHistoryFailure",
-    message: "runtime-handshake-failed",
+    message: "runtime-history-failed",
     code: `stage=history:${reason}`,
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
   });
 }
 

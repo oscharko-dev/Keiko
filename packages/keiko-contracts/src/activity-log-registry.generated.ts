@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "61bec4881fdc4983fd033c6def6b4a13d99c15160720d1ac398b5153cc0f96c8" as const;
+  "216a7ee9b05e45b3693608d59298b14f997308ab609ed57bde0eeed99b861771" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -6517,7 +6517,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["not-run", "target-bound", "passed"],
+        values: ["not-run", "target-bound", "passed", "proof-unavailable"],
       },
       stepCount: {
         type: "integer",
@@ -6584,6 +6584,32 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["not-applicable", "recorded", "unavailable"],
+      },
+      commitProofReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["candidate-not-staged", "candidate-drift", "proof-unavailable"],
+      },
+      proofStage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["begin", "complete", "observe"],
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
       },
     },
     causal: "correlation",
@@ -16244,6 +16270,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: [
+          "verification-started",
           "verification-unavailable",
           "verification-discarded",
           "verification",
@@ -16311,6 +16338,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       untrackedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      verificationGeneration: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      currentGeneration: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -33926,7 +33963,31 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "commitProof",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "commitProofReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "proofStage",
               type: "string",
               dataClass: "closed-enum",
               required: false,
@@ -33968,10 +34029,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["coding-runtime.verification.emitted-line"],
           replayReferences: [],
@@ -47274,6 +47343,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "currentGeneration",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "effectPhase",
               type: "string",
               dataClass: "closed-enum",
@@ -47361,6 +47436,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "verificationEvidenceId",
               type: "string",
               dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "verificationGeneration",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {

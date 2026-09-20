@@ -1219,6 +1219,17 @@ describe("CodingToolFacade", () => {
 
   it.each([
     { commitProof: "recorded", unexpected: true },
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "stage-then-verify",
+    },
+    {
+      commitProof: "unavailable",
+      reasonCode: "proof-unavailable",
+      nextAction: "verify-again",
+      extra: true,
+    },
     { commitProof: "unavailable", reasonCode: "candidate-not-staged", nextAction: "verify-again" },
   ])("strips a malformed verification proof payload", async (commit) => {
     const verification = { status: "passed", completed: ["test"], commit };
@@ -1264,6 +1275,15 @@ describe("CodingToolFacade", () => {
 
   it.each([
     { status: "passed", completed: ["test", "build"] },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "unavailable",
+        reasonCode: "proof-unavailable",
+        nextAction: "verify-again",
+      },
+    },
     { status: "passed", completed: ["test"], commit: { commitProof: "recorded" } },
   ])("preserves executed checks independently of commit proof", async (verification) => {
     const ports = facade();

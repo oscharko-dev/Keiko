@@ -33,6 +33,22 @@ function toolHistory(name: string, status = "completed"): readonly Record<string
 }
 
 describe("OpenCode V2 native tool history", () => {
+  it("classifies a missing tool identity before malformed arguments", () => {
+    const projection = createOpenCodeV2HistoryProjection();
+    const history = [
+      { id: "msg_user", type: "user", time: { created: 0 }, text: "Task" },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        time: { created: 1 },
+        content: [{ type: "tool", id: "call_1", state: { status: "streaming", input: 123 } }],
+      },
+    ];
+    expect(() => projection.project("ses_invalid", history, undefined)).toThrow(
+      "opencode-v2-tool-invalid",
+    );
+  });
+
   it.each(["Help", "He", ""])(
     "rejects a rewritten text prefix without advancing history: %s",
     (changed) => {

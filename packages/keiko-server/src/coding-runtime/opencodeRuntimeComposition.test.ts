@@ -1858,6 +1858,66 @@ describe("private OpenCode tool bridge", () => {
     await fixture.stop();
   });
 
+  it("records a correlated reconciliation failure when live text is rewritten", async () => {
+    const diagnostics = persistedDiagnostics();
+    let text = "PRIVATE_Hello";
+    const facade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade, undefined, {
+      diagnostics: diagnostics.sink,
+      runControl: { promptBodies: [], abortSessions: [], statusResponses: [] },
+      historyResponseFactory: () =>
+        Promise.resolve(v2Envelope([{ id: "msg_user", type: "user", time: { created: 1 }, text }])),
+    });
+    try {
+      text = "PRIVATE_He";
+      await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "next")).resolves.toBe(false);
+      const record = expectPersistedDiagnostic(diagnostics.read(), "opencode.history");
+      expect(record).toMatchObject({
+        diagnosticOperation: "coding-runtime.history",
+        diagnosticSummary: "runtime-history-failed",
+        code: "stage=history:reason=text-prefix-invalid",
+      });
+      expect(record.frames).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /^packages\/keiko-server\/(?:src|dist)\/coding-runtime\/opencodeV2History\.(?:ts|js):[0-9]+:[0-9]+$/u,
+          ),
+        ]),
+      );
+      expect(diagnostics.read()).not.toContain("PRIVATE_");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("preserves safe frames and causes from a history transport failure", async () => {
+    const diagnostics = persistedDiagnostics();
+    const failure = new Error("PRIVATE_TRANSPORT", { cause: new TypeError("PRIVATE_CAUSE") });
+    failure.stack =
+      "Error: PRIVATE_TRANSPORT\n    at read (/private/packages/keiko-server/dist/coding-runtime/opencodeV2HttpClient.js:88:9)";
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        historyResponseFactory: () => Promise.reject(failure),
+        expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
+      },
+    );
+    try {
+      expect(expectPersistedDiagnostic(diagnostics.read(), "opencode.history")).toMatchObject({
+        diagnosticOperation: "coding-runtime.history",
+        diagnosticSummary: "runtime-history-failed",
+        code: "stage=history:reason=transport-invalid",
+        frames: ["packages/keiko-server/dist/coding-runtime/opencodeV2HttpClient.js:88:9"],
+        causeChain: ["TypeError"],
+      });
+      expect(diagnostics.read()).not.toContain("PRIVATE_");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("records a body-free structural diagnostic for an unknown history message shape", async () => {
     const diagnostics = persistedDiagnostics();
     const sentinel = "SENTINEL_PRIVATE_HISTORY_BODY";
@@ -1888,10 +1948,10 @@ describe("private OpenCode tool bridge", () => {
     const record = expectPersistedDiagnostic(persisted, "opencode.history");
     expect(record).toMatchObject({
       correlationId: FIXTURE_RUN_ID,
-      diagnosticOperation: "coding-runtime.handshake",
+      diagnosticOperation: "coding-runtime.history",
       source: "opencode.history",
       diagnosticErrorClass: "OpenCodeHistoryFailure",
-      diagnosticSummary: "runtime-handshake-failed",
+      diagnosticSummary: "runtime-history-failed",
     });
     expect(record.code).toMatch(
       /^stage=history:reason=event-unknown:eventSha256=[a-f0-9]{16}:role=assistant:extraCount=2:extraKeySha256=[a-f0-9]{16}$/u,
@@ -2002,10 +2062,10 @@ describe("private OpenCode tool bridge", () => {
       const record = expectPersistedDiagnostic(persisted, "opencode.history");
       expect(record).toMatchObject({
         correlationId: FIXTURE_RUN_ID,
-        diagnosticOperation: "coding-runtime.handshake",
+        diagnosticOperation: "coding-runtime.history",
         source: "opencode.history",
         diagnosticErrorClass: "OpenCodeHistoryFailure",
-        diagnosticSummary: "runtime-handshake-failed",
+        diagnosticSummary: "runtime-history-failed",
       });
       expect(record.code).toMatch(
         /^stage=history:reason=argument-bound:eventSha256=[a-f0-9]{16}:toolSha256=[a-f0-9]{16}:statusSha256=[a-f0-9]{16}:partBytes=[1-9][0-9]*$/u,
@@ -2058,10 +2118,10 @@ describe("private OpenCode tool bridge", () => {
     const record = expectPersistedDiagnostic(diagnostics.read(), "opencode.history");
     expect(record).toMatchObject({
       correlationId: FIXTURE_RUN_ID,
-      diagnosticOperation: "coding-runtime.handshake",
+      diagnosticOperation: "coding-runtime.history",
       source: "opencode.history",
       diagnosticErrorClass: "OpenCodeHistoryFailure",
-      diagnosticSummary: "runtime-handshake-failed",
+      diagnosticSummary: "runtime-history-failed",
       errorKind: "internal",
       code: `stage=history:reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`,
     });

@@ -120,6 +120,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: [
+        "verification-started",
         "verification-unavailable",
         "verification-discarded",
         "verification",
@@ -147,6 +148,8 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
     },
     unstagedCount: { type: "integer", dataClass: "count", required: false },
     untrackedCount: { type: "integer", dataClass: "count", required: false },
+    verificationGeneration: { type: "integer", dataClass: "count", required: false },
+    currentGeneration: { type: "integer", dataClass: "count", required: false },
     passed: { type: "boolean", dataClass: "closed-enum", required: false },
     verificationEvidenceId: {
       type: "string",
@@ -206,6 +209,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
 });
 
 type VerifiedCommitActivityPhase =
+  | "verification-started"
   | "verification-unavailable"
   | "verification-discarded"
   | "verification"
@@ -218,6 +222,8 @@ type VerifiedCommitActivityPhase =
   | "reconcile";
 
 interface VerifiedCommitActivityFields {
+  readonly verificationGeneration?: number;
+  readonly currentGeneration?: number;
   readonly reason?: VerifiedCommitReason | "candidate-not-staged";
   readonly state?: VerifiedCommitStatus | "issued" | "consumed" | "policy-authorized" | "failed";
   readonly unstagedCount?: number;
@@ -392,7 +398,13 @@ function verificationGuardLive(
   );
 }
 
+type VerificationTicketIdentity = Pick<VerifiedCommitRunContext, "runId" | "correlationId"> & {
+  readonly verificationGeneration: number;
+};
+
 class VerifiedCommitController implements VerifiedCommitService {
+  // Weak, body-free log identities survive invalidation without retaining any authority or facts.
+  private readonly ticketIdentities = new WeakMap<object, VerificationTicketIdentity>();
   private generation = 0;
   private tickets = new WeakMap<object, VerificationTicket>();
   private proof: VerificationProof | undefined;
@@ -430,6 +442,14 @@ class VerifiedCommitController implements VerifiedCommitService {
     this.invalidate();
     const context = this.context();
     if (context === undefined) return { kind: "unavailable" };
+    const identity = {
+      runId: context.runId,
+      correlationId: context.correlationId,
+      verificationGeneration: this.generation,
+    };
+    this.log(context, "verification-started", {
+      verificationGeneration: identity.verificationGeneration,
+    });
     const facts = await this.facts(context);
     if (!facts.clean) {
       // Named, not merely counted, for the model: the blocking paths travel on the tool result,
@@ -444,6 +464,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     }
     const ticket = {};
     this.tickets.set(ticket, { context, facts, startedAtMs: this.now() });
+    this.ticketIdentities.set(ticket, identity);
     return { kind: "ticket", ticket };
   }
 
@@ -463,9 +484,13 @@ class VerifiedCommitController implements VerifiedCommitService {
   ): Promise<boolean> {
     const before = this.tickets.get(ticket);
     this.tickets.delete(ticket);
+    const identity = this.ticketIdentities.get(ticket);
+    this.ticketIdentities.delete(ticket);
     const context = this.context();
-    if (before === undefined || context === undefined || !contextMatches(context, before.context))
+    if (before === undefined || context === undefined || !contextMatches(context, before.context)) {
+      this.recordDiscardedTicket(identity);
       return false;
+    }
     if (!this.verificationGuardLive(context, guard)) return false;
     let after: VerifiedCommitFacts;
     try {
@@ -485,6 +510,15 @@ class VerifiedCommitController implements VerifiedCommitService {
       checkCount: history.records.length,
     });
     return passed;
+  }
+
+  private recordDiscardedTicket(identity: VerificationTicketIdentity | undefined): void {
+    if (identity === undefined) return;
+    this.log(identity, "verification-discarded", {
+      reason: "verification-stale",
+      verificationGeneration: identity.verificationGeneration,
+      currentGeneration: this.generation,
+    });
   }
 
   public observeVerification(report: VerificationReport): void {
@@ -993,7 +1027,7 @@ class VerifiedCommitController implements VerifiedCommitService {
   }
 
   private log(
-    context: VerifiedCommitRunContext,
+    context: Pick<VerifiedCommitRunContext, "runId" | "correlationId">,
     phase: VerifiedCommitActivityPhase,
     extra: VerifiedCommitActivityFields,
     failed = false,

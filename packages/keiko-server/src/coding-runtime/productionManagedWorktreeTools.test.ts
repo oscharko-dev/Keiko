@@ -1628,7 +1628,9 @@ describe("production managed worktree tools", () => {
         Promise.resolve(recorded),
       );
       const observeVerification = vi.fn<VerifiedCommitService["observeVerification"]>();
+      const log: ServerLogEvent[] = [];
       const facade = verificationFacade({
+        log,
         runToReport: () => Promise.resolve(verificationReport("passed")),
         records: [],
         verifiedCommitService: {
@@ -1653,10 +1655,86 @@ describe("production managed worktree tools", () => {
         status: "completed",
         verification: { status: "passed", completed: ["test"], commit: expected },
       });
+      const outcome = log.find((event) => event.extra?.state === "passed");
+      const line = expectActivityLogProof(
+        "coding-runtime.verification.emitted-line",
+        formatActivityLogProofLine(outcome ?? {}),
+      );
+      expect(line).toMatchObject({ commitProof: expected.commitProof });
+      if ("reasonCode" in expected)
+        expect(line).toMatchObject({ commitProofReason: expected.reasonCode });
       expect(beginVerification).toHaveBeenCalledOnce();
       expect(completeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 1 : 0);
       // F57: a run's check that cannot prove a commit is still kept for the pull request's list.
       expect(observeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 0 : 1);
+    },
+  );
+
+  it.each(["begin", "complete", "observe"] as const)(
+    "preserves executed checks when optional commit proof %s throws",
+    async (stage) => {
+      const records: ServerDiagnosticRecord[] = [];
+      const log: ServerLogEvent[] = [];
+      const failure = new Error("PRIVATE_PROOF_READ", { cause: new TypeError("PRIVATE_CAUSE") });
+      failure.stack =
+        "Error: PRIVATE_PROOF_READ\n    at facts (/repo/packages/keiko-server/dist/gitDelivery/verifiedCommitFacts.js:40:8)";
+      const service = verificationService();
+      const invalidate = vi.fn();
+      service.invalidate = invalidate;
+      if (stage === "begin") service.beginVerification = vi.fn(() => Promise.reject(failure));
+      if (stage === "complete") service.completeVerification = vi.fn(() => Promise.reject(failure));
+      if (stage === "observe") {
+        service.beginVerification = vi.fn(() => Promise.resolve({ kind: "unavailable" as const }));
+        service.observeVerification = vi.fn(() => {
+          throw failure;
+        });
+      }
+      const runToReport = vi.fn(() => Promise.resolve(verificationReport("passed")));
+      const result = await verificationFacade({
+        runToReport,
+        records,
+        log,
+        verifiedCommitService: service,
+      }).execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "proof-error",
+          idempotencyKey: "proof-error",
+          verifierId: "test",
+        }),
+      });
+      expect(result).toMatchObject({
+        status: "completed",
+        verification: {
+          status: "passed",
+          completed: ["test"],
+          commit: {
+            commitProof: "unavailable",
+            reasonCode: "proof-unavailable",
+            nextAction: "verify-again",
+          },
+        },
+      });
+      expect(runToReport).toHaveBeenCalledOnce();
+      expect(invalidate).toHaveBeenCalledOnce();
+      expect(records).toContainEqual(
+        expect.objectContaining({ message: "verification-proof-unavailable" }),
+      );
+      const failed = log.find((event) => event.extra?.state === "proof-unavailable");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.verification.emitted-line",
+          formatActivityLogProofLine(failed ?? {}),
+        ),
+      ).toMatchObject({
+        correlationId: "run-verification-3",
+        proofStage: stage,
+        commitProofReason: "proof-unavailable",
+        frames: ["packages/keiko-server/dist/gitDelivery/verifiedCommitFacts.js:40:8"],
+        causeChain: ["TypeError"],
+      });
+      expect(JSON.stringify({ records, log, result })).not.toContain("PRIVATE_");
     },
   );
 
