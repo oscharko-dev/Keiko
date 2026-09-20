@@ -169,7 +169,8 @@ async function candidateProvedEveryReusedJob(repo, runId, token) {
   const succeeded = new Set(
     jobs
       .filter((job) => /** @type {{ conclusion?: unknown }} */ (job).conclusion === "success")
-      .map((job) => String(/** @type {{ name?: unknown }} */ (job).name ?? "")),
+      .map((job) => /** @type {{ name?: unknown }} */ (job).name)
+      .filter((name) => typeof name === "string"),
   );
   const everyNamedJobPassed = REUSED_JOB_NAMES.every((name) => succeeded.has(name));
   const everyPrefixedJobPassed = REUSED_JOB_PREFIXES.every((prefix) =>

@@ -189,7 +189,8 @@ export function resolveSkippedWithTreeEvidence(result, treeCheckRuns) {
   const provenByTree = new Set(
     (Array.isArray(treeCheckRuns) ? treeCheckRuns : [])
       .filter((run) => run?.status === "completed" && run?.conclusion === "success")
-      .map((run) => String(run.name ?? "")),
+      .map((run) => run?.name)
+      .filter((name) => typeof name === "string"),
   );
   if (provenByTree.size === 0) return result;
 
@@ -456,23 +457,31 @@ async function verifyRequiredChecks() {
   await waitForRequiredChecks(config, requiredChecks, timeoutAt);
 }
 
+/**
+ * A required check that a tree-identical commit already proved green is evidence, not absence
+ * (ADR-0178). Only `skipped` is resolved this way, and only after the trees are confirmed equal;
+ * a verdict with nothing skipped is returned untouched without any extra API call.
+ * @returns {Promise<typeof verdict>}
+ */
+async function applyTreeEvidence(config, verdict) {
+  if (!verdict.failed.some((entry) => entry.state === "skipped")) return verdict;
+  const resolved = resolveSkippedWithTreeEvidence(
+    verdict,
+    await fetchTreeIdenticalCheckRuns(config),
+  );
+  for (const name of resolved.passed.filter((entry) => !verdict.passed.includes(entry))) {
+    console.log(`release-required-checks: ${name} reused proven evidence from an identical tree.`);
+  }
+  return resolved;
+}
+
 async function waitForRequiredChecks(config, requiredChecks, timeoutAt) {
   for (;;) {
     const evidence = await fetchCommitEvidence(config);
-    let result = evaluateRequiredChecks(requiredChecks, evidence.checkRuns, evidence.statuses);
-
-    // A required check that a tree-identical commit already proved green is evidence, not absence
-    // (ADR-0178). Only `skipped` is resolved this way, and only after the trees are confirmed equal.
-    if (result.failed.some((entry) => entry.state === "skipped")) {
-      const treeCheckRuns = await fetchTreeIdenticalCheckRuns(config);
-      const resolved = resolveSkippedWithTreeEvidence(result, treeCheckRuns);
-      for (const name of resolved.passed.filter((entry) => !result.passed.includes(entry))) {
-        console.log(
-          `release-required-checks: ${name} reused proven evidence from an identical tree.`,
-        );
-      }
-      result = resolved;
-    }
+    const result = await applyTreeEvidence(
+      config,
+      evaluateRequiredChecks(requiredChecks, evidence.checkRuns, evidence.statuses),
+    );
 
     if (result.ok) {
       console.log(
