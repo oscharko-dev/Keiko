@@ -1038,7 +1038,7 @@ interface RepositoryPathFieldProps {
 
 function RepositoryPathField(props: RepositoryPathFieldProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const { onChange, onSettled } = props;
+  const { onChange, onSettled, pending } = props;
   const onPicked = useCallback(
     (path: string): void => {
       onChange(path);
@@ -1047,17 +1047,23 @@ function RepositoryPathField(props: RepositoryPathFieldProps): ReactNode {
     [onChange, onSettled],
   );
   const browse = useNativeFolderBrowse(onPicked);
-  return <RepositoryPathFieldView props={props} browse={browse} t={t} />;
+  return (
+    <RepositoryPathFieldView pending={pending} browse={browse} t={t}>
+      <RepositoryPathInput {...props} t={t} />
+    </RepositoryPathFieldView>
+  );
 }
 
 function RepositoryPathFieldView({
-  props,
+  pending,
   browse,
   t,
+  children,
 }: {
-  readonly props: RepositoryPathFieldProps;
+  readonly pending: boolean;
   readonly browse: NativeFolderBrowse;
   readonly t: CodingWorkbenchTranslate;
+  readonly children: ReactNode;
 }): ReactNode {
   return (
     <>
@@ -1065,23 +1071,19 @@ function RepositoryPathFieldView({
         {t("codingWorkbench.setup.repositoryPath")}
       </label>
       <div className={styles.pathFieldRow}>
-        <RepositoryPathInput {...props} t={t} />
+        {children}
         {browse.supported ? (
           <button
             type="button"
             className={styles.button}
-            disabled={props.pending || browse.busy}
+            disabled={pending || browse.busy}
             onClick={browse.browse}
           >
             {t("codingWorkbench.setup.browse")}
           </button>
         ) : null}
       </div>
-      {browse.notice === null ? null : (
-        <p className={styles.helpText} role="status">
-          {browse.notice}
-        </p>
-      )}
+      {browse.notice === null ? null : <output className={styles.helpText}>{browse.notice}</output>}
     </>
   );
 }

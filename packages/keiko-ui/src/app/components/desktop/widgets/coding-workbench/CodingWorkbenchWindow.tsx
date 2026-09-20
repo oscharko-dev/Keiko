@@ -488,15 +488,17 @@ function inactiveWorkbenchRepositoryRoot(
 }
 
 /** Selects the repository root reflecting the run's own attribution while active, else the idle
- * projection. Extracted so the enclosing `CodingWorkbenchWindow` stays under the complexity ceiling
- * (AGENTS.md §6: cyclomatic complexity <= 10). */
+ * projection. The run-is-active check is derived from the runtime state internally (rather than
+ * accepted as a boolean parameter, which would trip SonarJS S2301 by turning this into a flag-
+ * dispatching helper); extracted so the enclosing `CodingWorkbenchWindow` stays under the
+ * complexity ceiling (AGENTS.md §6: cyclomatic complexity <= 10). */
 function workbenchRepositoryRoot(
-  runIsActive: boolean,
+  state: CodingWorkbenchRuntimeState,
   runWorkspace: CodingWorkbenchRunWorkspaceBinding,
   activeWorkspace: WorkbenchWorkspaceApi,
   selectedRoot: string | undefined,
 ): string | null {
-  return runIsActive
+  return runIsActiveFrom(state)
     ? activeWorkbenchRepositoryRoot(runWorkspace, activeWorkspace, selectedRoot)
     : inactiveWorkbenchRepositoryRoot(activeWorkspace, selectedRoot);
 }
@@ -753,7 +755,7 @@ export function CodingWorkbenchWindow({
   );
   const runIsActive = runIsActiveFrom(state);
   const repositoryRoot = workbenchRepositoryRoot(
-    runIsActive,
+    state,
     runWorkspace,
     activeWorkspace,
     selectedRoot,
@@ -1081,18 +1083,9 @@ function WorkbenchColumns({
     pausedRun?.effectiveMode,
   );
   const resumeModes = pausedRun?.effectiveMode ? resumableModes(pausedRun.effectiveMode) : [];
-  // The composer acts on the repository the bound task workspace belongs to, not on a folder
-  // selected elsewhere in the Workbench. The run attribution below still names the run's task
-  // branch/workspace, but the repository chip and normal Git target remain the repository's Git
-  // control surface. Showing an internal task worktree as the Git repository made branch switching
-  // look like a workspace operation instead of repository administration.
-  //
-  // During a run the branch chip names the RUN's workspace, which the server still holds authority
-  // over, not the live pointer: labelling a run in A with B's branch invited the operator to act on
-  // the wrong tree (#3381 review).
-  const repositoryBranch = useRepositoryBranchState(
-    repositoryBranchReadRoot(runIsActive, repositoryRoot),
-  );
+  // The composer branch chip was removed with #3563 (header-wide switcher is the single source of
+  // workspace-context truth); the info panel still reads its own branch state through
+  // `SessionContextBar`'s `useRepositoryBranchState`, so no additional subscription is needed here.
   useEffect(() => {
     setProjectMemoryEnabled(true);
   }, [repositoryRoot]);
