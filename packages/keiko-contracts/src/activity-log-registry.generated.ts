@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c116374245d04f0abd21108a9d9426a8813338b1926b4875e7fd3caa9df254b0" as const;
+  "19abb2d7d6368657672ce5ef049fcde357c3eb399a6da8567855f589d109995f" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -11009,6 +11009,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      verifiedContextTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -41395,6 +41400,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "verifiedContextTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
