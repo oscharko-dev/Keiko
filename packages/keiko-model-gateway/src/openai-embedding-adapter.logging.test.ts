@@ -771,6 +771,7 @@ describe("batch embedding — activity log", () => {
     expect(items.map((event) => event.extra?.index)).toEqual([0, 1, 2]);
     // The size is a COUNT of characters — never the item's text.
     expect(items.map((event) => event.extra?.inputChars)).toEqual([3, 6, 1]);
+    expect(items.map((event) => event.extra?.sentChars)).toEqual([3, 6, 1]);
     expect(items.map((event) => event.extra?.total)).toEqual([3, 3, 3]);
     for (const item of items) {
       expect(typeof item.durationMs).toBe("number");
@@ -782,7 +783,7 @@ describe("batch embedding — activity log", () => {
       "embedding.scalar-ladder.item-completed.emitted-line",
       formatActivityLogProofLine(first),
     );
-    expect(persisted).toMatchObject({ index: 0, total: 3, inputChars: 3 });
+    expect(persisted).toMatchObject({ index: 0, total: 3, inputChars: 3, sentChars: 3 });
   });
 
   // The stall case the progress lines exist for: the ladder is mid-flight on item 2 and has

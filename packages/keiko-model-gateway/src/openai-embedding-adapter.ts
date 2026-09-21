@@ -340,6 +340,9 @@ const EMBEDDING_LADDER_ITEM_COMPLETED_OPERATION = defineActivityLogOperation({
     index: COUNT_FIELD,
     total: COUNT_FIELD,
     inputChars: COUNT_FIELD,
+    // Characters actually sent. Smaller than `inputChars` exactly when the item was shortened to
+    // fit the endpoint's input limit, so a truncation is visible without reading any content.
+    sentChars: COUNT_FIELD,
   },
   lifecycle: "state",
   analyzerProjection: "timeline",
@@ -844,6 +847,57 @@ const arrayRejectingEndpoints = new Set<string>();
 export function resetStrictGatewayMemoForTests(): void {
   strictShapeEndpoints.clear();
   arrayRejectingEndpoints.clear();
+  inputCharCaps.clear();
+}
+
+// ─── Input-size limit of the endpoint (customer report on 1.1.0) ─────────────────────────────
+// Encoder embedding models such as multilingual-e5-large hard-limit one input to 512 REAL tokens
+// of their own tokenizer. Chunks are cut to 512 ESTIMATED tokens, so dense text (German compounds,
+// tables) lands over the limit, the gateway rejects that one item, the scalar ladder failed the
+// whole batch, and a Knowledge Pod persisted zero vectors. The limit is not discoverable up
+// front, so it is learned from the rejection: halve the item until the endpoint accepts it, then
+// remember the accepted length per endpoint and model and shorten later inputs before sending.
+// A shortened item is embedded from its leading text — what a serving stack's own auto-truncate
+// does. The halving that learns a limit is visible in the log as `sentChars < inputChars`.
+const MIN_TRUNCATED_INPUT_CHARS = 256;
+const MAX_INPUT_TRUNCATIONS = 3;
+const INPUT_SIZE_REJECTION_STATUSES: ReadonlySet<number> = new Set([400, 413, 422, 500]);
+const inputCharCaps = new Map<string, number>();
+
+function inputCapKey(request: { readonly endpoint: string; readonly modelId: string }): string {
+  return JSON.stringify([request.endpoint, request.modelId]);
+}
+
+// Never cut between the two halves of a surrogate pair: a lone surrogate is not valid text.
+function truncateInput(input: string, maxChars: number): string {
+  if (input.length <= maxChars) return input;
+  const code = input.charCodeAt(maxChars - 1);
+  const splitsPair = code >= 0xd800 && code <= 0xdbff;
+  return input.slice(0, splitsPair ? maxChars - 1 : maxChars);
+}
+
+function capInput(request: OpenAIEmbeddingBatchRequest, input: string): string {
+  const cap = inputCharCaps.get(inputCapKey(request));
+  return cap === undefined ? input : truncateInput(input, cap);
+}
+
+function isInputSizeRejection(
+  failure: { readonly kind: OpenAIEmbeddingErrorKind; readonly status?: number },
+  sentChars: number,
+): boolean {
+  return (
+    failure.kind === "http-error" &&
+    failure.status !== undefined &&
+    INPUT_SIZE_REJECTION_STATUSES.has(failure.status) &&
+    sentChars > MIN_TRUNCATED_INPUT_CHARS
+  );
+}
+
+function rememberInputCap(request: OpenAIEmbeddingBatchRequest, acceptedChars: number): void {
+  inputCharCaps.set(inputCapKey(request), acceptedChars);
+  // The array was most likely rejected for this same oversized item, not for its shape: let the
+  // next batch try the array again, now that its inputs are shortened before sending.
+  arrayRejectingEndpoints.delete(request.endpoint);
 }
 
 async function requestMinimalShapeEmbedding(
@@ -1067,7 +1121,12 @@ function degradeSkipReason(
   | undefined {
   if (failure.kind === "cancelled") return "failure-was-cancellation";
   if (request.signal?.aborted === true) return "caller-aborted";
-  if (request.inputs.length <= 1) return "single-item-batch";
+  // A lone item gains nothing from a scalar re-send — unless it was rejected for its SIZE, which
+  // only the scalar ladder can repair by shortening it.
+  const loneInputChars = request.inputs[0]?.length ?? 0;
+  if (request.inputs.length <= 1 && !isInputSizeRejection(failure, loneInputChars)) {
+    return "single-item-batch";
+  }
   if (Date.now() >= deadlineAt) return "ladder-deadline-expired";
   return undefined;
 }
@@ -1102,6 +1161,7 @@ async function degradeToScalarAfterBatchFailure(
       { endpointDigest, inputCount },
     ),
   );
+  const capBefore = inputCharCaps.get(inputCapKey(request));
   const scalar = await requestScalarFallbackBatch(request, deadlineAt);
   // Partial progress is the same evidence as full success: items DID embed one at a time, so
   // the array shape is the problem. Returning the scalar outcome also keeps the completed
@@ -1121,10 +1181,11 @@ async function degradeToScalarAfterBatchFailure(
   // clears a minute later. Memoizing it would turn a passing rate limit into a
   // process-lifetime degradation, so this batch is served item by item and the next one is
   // free to try the array again.
-  const memoized = failure.kind !== "rate-limited";
-  if (memoized) {
-    arrayRejectingEndpoints.add(request.endpoint);
-  }
+  // Nor does a batch whose ladder had to SHORTEN an item: the array failed for that item's size,
+  // and the next batch sends shortened inputs.
+  const learnedInputCap = inputCharCaps.get(inputCapKey(request)) !== capBefore;
+  const memoized = failure.kind !== "rate-limited" && !learnedInputCap;
+  if (memoized) arrayRejectingEndpoints.add(request.endpoint);
   log.write(
     activityLogEvent(
       EMBEDDING_BATCH_DEGRADED_OPERATION,
@@ -1141,6 +1202,15 @@ export async function requestOpenAIEmbeddingBatch(
   if (request.inputs.length === 0) {
     return { ok: true, value: [] };
   }
+  return await requestCappedEmbeddingBatch({
+    ...request,
+    inputs: request.inputs.map((input) => capInput(request, input)),
+  });
+}
+
+async function requestCappedEmbeddingBatch(
+  request: OpenAIEmbeddingBatchRequest,
+): Promise<OpenAIEmbeddingBatchOutcome> {
   // One absolute deadline bounds the COMPLETE compatibility ladder — but it must scale with
   // the work: the scalar fallback serves ONE item per request, so a flat per-batch budget
   // (the field incident: 30s for a whole batch against a CPU-served gateway) expires
@@ -1417,7 +1487,7 @@ function scalarLadderRequest(
 function logLadderItem(
   log: ModelGatewayLogSink,
   request: OpenAIEmbeddingBatchRequest,
-  item: { readonly index: number; readonly inputChars: number },
+  item: { readonly index: number; readonly inputChars: number; readonly sentChars: number },
   durationMs: number,
 ): void {
   if (!logLevelEnabled(log, "info")) return;
@@ -1430,9 +1500,36 @@ function logLadderItem(
         index: item.index,
         total: request.inputs.length,
         inputChars: item.inputChars,
+        sentChars: item.sentChars,
       },
     ),
   );
+}
+
+// One ladder item, shortened until the endpoint accepts it (see the input-size block above).
+async function requestScalarWithinInputLimit(
+  request: OpenAIEmbeddingBatchRequest,
+  input: string,
+  deadlineAt: number,
+): Promise<{ readonly outcome: OpenAIEmbeddingOutcome; readonly sentChars: number }> {
+  const send = (text: string): Promise<OpenAIEmbeddingOutcome> =>
+    requestOpenAIEmbedding(
+      scalarLadderRequest(
+        request,
+        text,
+        Math.max(1, Math.min(deadlineAt - Date.now(), perItemTimeoutMs(request))),
+      ),
+    );
+  let text = capInput(request, input);
+  let outcome = await send(text);
+  for (let attempt = 0; attempt < MAX_INPUT_TRUNCATIONS; attempt += 1) {
+    if (outcome.ok || !isInputSizeRejection(outcome, text.length)) break;
+    if (deadlineAt - Date.now() <= 0) break;
+    text = truncateInput(text, Math.max(MIN_TRUNCATED_INPUT_CHARS, Math.floor(text.length / 2)));
+    outcome = await send(text);
+    if (outcome.ok) rememberInputCap(request, text.length);
+  }
+  return { outcome, sentChars: text.length };
 }
 
 async function requestScalarFallbackBatch(
@@ -1449,15 +1546,13 @@ async function requestScalarFallbackBatch(
     }
     const index = value.length;
     const itemElapsed = logTimer();
-    const outcome = await requestOpenAIEmbedding(
-      scalarLadderRequest(request, input, Math.min(remainingMs, perItemTimeoutMs(request))),
-    );
+    const { outcome, sentChars } = await requestScalarWithinInputLimit(request, input, deadlineAt);
     if (!outcome.ok) {
       logLadderItemFailed(log, request, value.length, outcome);
       return scalarLadderFailure(outcome, value);
     }
     value.push(outcome.value);
-    logLadderItem(log, request, { index, inputChars: input.length }, itemElapsed());
+    logLadderItem(log, request, { index, inputChars: input.length, sentChars }, itemElapsed());
   }
   log.write(
     activityLogEvent(
