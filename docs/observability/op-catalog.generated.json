@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "04653615556b80addc64b58c3607aa60fdf363edb0632de603b431fc711e0ac5",
+    "catalogDigest": "c116374245d04f0abd21108a9d9426a8813338b1926b4875e7fd3caa9df254b0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8595,7 +8595,7 @@
         "failureClasses": ["embedding-batch"],
         "proofIds": ["embedding.batch.array-unsupported.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:288",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1354"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1374"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9241,7 +9241,7 @@
         "failureClasses": ["embedding-batch"],
         "proofIds": ["embedding.batch.minimal-shape-retry.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:269",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1266"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1286"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9586,7 +9586,7 @@
         "failureClasses": ["embedding-compatibility"],
         "proofIds": ["embedding.batch.scalar-memo-hit.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:256",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1229"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1249"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9894,7 +9894,7 @@
         "registrationSite": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:134",
         "emitterSites": [
           "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:938",
-          "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1313"
+          "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1333"
         ]
       },
       {
@@ -10747,7 +10747,7 @@
         "failureClasses": ["embedding-scalar-ladder"],
         "proofIds": ["embedding.scalar-ladder.completed.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:353",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1558"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1606"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10791,7 +10791,7 @@
         "failureClasses": ["embedding-scalar-ladder"],
         "proofIds": ["embedding.scalar-ladder.deadline-expired.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:308",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1424"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1444"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10845,7 +10845,7 @@
         "failureClasses": ["embedding-scalar-ladder"],
         "proofIds": ["embedding.scalar-ladder.item-completed.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:334",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1495"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1515"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10889,7 +10889,7 @@
         "failureClasses": ["embedding-scalar-ladder"],
         "proofIds": ["embedding.scalar-ladder.item-failed.emitted-line"],
         "registrationSite": "packages/keiko-model-gateway/src/openai-embedding-adapter.ts:321",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1439"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-embedding-adapter.ts:1459"]
       },
       {
         "contractKind": "activity-log-operation",

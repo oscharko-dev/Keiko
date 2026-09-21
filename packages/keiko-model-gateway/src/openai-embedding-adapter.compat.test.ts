@@ -494,7 +494,8 @@ describe("batch failure that is not a clean shape rejection", () => {
       .map((call) => bodyOf(call as unknown[]))
       .filter((body) => !("encoding_format" in body) && typeof body.input === "string")
       .map((body) => (body.input as string).length);
-    expect(sentLengths).toEqual([5, 3_000, 1_500, 750, 4]);
+    // 750 is accepted; the full item is then sent once more to CONFIRM that size is the cause.
+    expect(sentLengths).toEqual([5, 3_000, 1_500, 750, 3_000, 4]);
   });
 
   it("sends later batches already shortened, as one array again", async () => {
@@ -510,6 +511,45 @@ describe("batch failure that is not a clean shape rejection", () => {
     const bodies = fetchImpl.mock.calls.map((call) => bodyOf(call as unknown[]));
     expect(bodies).toHaveLength(1);
     expect((bodies[0]?.input as string[]).map((input) => input.length)).toEqual([750, 1]);
+  });
+
+  // Review finding on #3573: a status is not proof of a size rejection. A passing 500 rejects the
+  // long item and accepts the shortened one only because the outage ended; treating that as a
+  // size limit would embed a truncated text and shorten every later input for the process lifetime.
+  it("neither shortens nor learns a cap when the rejection was a passing 500", async () => {
+    let failuresLeft = 2;
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if ("encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "unsupported" } }, 400));
+      }
+      if (failuresLeft > 0) {
+        failuresLeft -= 1;
+        return Promise.resolve(jsonResponse({ error: { message: "internal error" } }, 500));
+      }
+      return Promise.resolve(jsonResponse(SCALAR_OK));
+    });
+    const minimalScalarLengths = (): readonly number[] =>
+      fetchImpl.mock.calls
+        .map((call) => bodyOf(call as unknown[]))
+        .filter((body) => !("encoding_format" in body) && typeof body.input === "string")
+        .map((body) => (body.input as string).length);
+
+    const first = await requestOpenAIEmbeddingBatch(
+      batchRequest(["x".repeat(3_000), "tail"], fetchImpl),
+    );
+    expect(first.ok).toBe(true);
+    // Full rejected by the outage, half accepted, then the FULL item accepted on confirmation:
+    // the vector that carries the item is the full one.
+    expect(minimalScalarLengths()).toEqual([3_000, 1_500, 3_000, 4]);
+
+    fetchImpl.mockClear();
+    await requestOpenAIEmbeddingBatch(batchRequest(["y".repeat(3_000), "z"], fetchImpl));
+    const laterLengths = fetchImpl.mock.calls
+      .map((call) => bodyOf(call as unknown[]).input)
+      .flatMap((input) => (Array.isArray(input) ? (input as string[]) : [input as string]))
+      .map((input) => input.length);
+    expect(Math.max(...laterLengths)).toBe(3_000);
   });
 
   it("never cuts a surrogate pair in half when shortening", async () => {

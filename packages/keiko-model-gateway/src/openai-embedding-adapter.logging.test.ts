@@ -786,6 +786,46 @@ describe("batch embedding — activity log", () => {
     expect(persisted).toMatchObject({ index: 0, total: 3, inputChars: 3, sentChars: 3 });
   });
 
+  // Review finding on #3573: once a cap is learned, later inputs are shortened BEFORE the ladder
+  // sees them. The progress line must still report the caller's original length, or a shortening
+  // reads as `inputChars === sentChars` and leaves no evidence.
+  it("reports the original length of an item that a learned cap shortened before sending", async () => {
+    const log = recorder();
+    const endpoint = uniqueEndpoint();
+    const learn = scriptedFetch([
+      (): Response => jsonResponse("{}", 500), // array
+      (): Response => jsonResponse("{}", 500), // full item
+      (): Response => jsonResponse(scalarBody()), // half accepted
+      (): Response => jsonResponse("{}", 500), // full item again: size confirmed
+    ]);
+    await requestOpenAIEmbeddingBatch({
+      ...BASE,
+      endpoint,
+      inputs: ["x".repeat(3_000)],
+      fetchImpl: learn.fetchImpl,
+      log: log.sink,
+    });
+    const capped = scriptedFetch([
+      (): Response => jsonResponse("{}", 500), // array of already shortened inputs
+      (): Response => jsonResponse(scalarBody()),
+      (): Response => jsonResponse(scalarBody()),
+    ]);
+    const outcome = await requestOpenAIEmbeddingBatch({
+      ...BASE,
+      endpoint,
+      inputs: ["y".repeat(3_000), "z"],
+      fetchImpl: capped.fetchImpl,
+      log: log.sink,
+    });
+
+    expect(outcome.ok).toBe(true);
+    const items = log.events.filter(
+      (event) => event.op === "embedding.scalar-ladder.item-completed",
+    );
+    expect(items.map((event) => event.extra?.inputChars)).toEqual([3_000, 3_000, 1]);
+    expect(items.map((event) => event.extra?.sentChars)).toEqual([1_500, 1_500, 1]);
+  });
+
   // The stall case the progress lines exist for: the ladder is mid-flight on item 2 and has
   // already reported items 0 and 1, so an operator can see WHERE it stopped rather than only
   // that it did. Hermetic — the wedged item is settled by hand before the case ends.

@@ -858,7 +858,7 @@ export function resetStrictGatewayMemoForTests(): void {
 // front, so it is learned from the rejection: halve the item until the endpoint accepts it, then
 // remember the accepted length per endpoint and model and shorten later inputs before sending.
 // A shortened item is embedded from its leading text — what a serving stack's own auto-truncate
-// does. The halving that learns a limit is visible in the log as `sentChars < inputChars`.
+// does — and every shortening is visible in the log as `sentChars < inputChars`.
 const MIN_TRUNCATED_INPUT_CHARS = 256;
 const MAX_INPUT_TRUNCATIONS = 3;
 const INPUT_SIZE_REJECTION_STATUSES: ReadonlySet<number> = new Set([400, 413, 422, 500]);
@@ -1202,10 +1202,30 @@ export async function requestOpenAIEmbeddingBatch(
   if (request.inputs.length === 0) {
     return { ok: true, value: [] };
   }
-  return await requestCappedEmbeddingBatch({
+  const capped: CappedEmbeddingBatchRequest = {
     ...request,
     inputs: request.inputs.map((input) => capInput(request, input)),
-  });
+    originalInputChars: request.inputs.map((input) => input.length),
+  };
+  return await requestCappedEmbeddingBatch(capped);
+}
+
+// The batch as it travels down the ladder: inputs already shortened to a learned cap, with the
+// caller's original lengths kept beside them so the progress line can still show a shortening.
+interface CappedEmbeddingBatchRequest extends OpenAIEmbeddingBatchRequest {
+  readonly originalInputChars: readonly number[];
+}
+
+function originalInputChars(
+  request: OpenAIEmbeddingBatchRequest,
+  index: number,
+  sent: string,
+): number {
+  if (!("originalInputChars" in request) || !Array.isArray(request.originalInputChars)) {
+    return sent.length;
+  }
+  const original: unknown = request.originalInputChars[index];
+  return typeof original === "number" ? original : sent.length;
 }
 
 async function requestCappedEmbeddingBatch(
@@ -1520,16 +1540,43 @@ async function requestScalarWithinInputLimit(
         Math.max(1, Math.min(deadlineAt - Date.now(), perItemTimeoutMs(request))),
       ),
     );
-  let text = capInput(request, input);
+  const full = capInput(request, input);
+  let text = full;
   let outcome = await send(text);
   for (let attempt = 0; attempt < MAX_INPUT_TRUNCATIONS; attempt += 1) {
     if (outcome.ok || !isInputSizeRejection(outcome, text.length)) break;
     if (deadlineAt - Date.now() <= 0) break;
     text = truncateInput(text, Math.max(MIN_TRUNCATED_INPUT_CHARS, Math.floor(text.length / 2)));
     outcome = await send(text);
-    if (outcome.ok) rememberInputCap(request, text.length);
   }
-  return { outcome, sentChars: text.length };
+  if (!outcome.ok || text.length === full.length) return { outcome, sentChars: text.length };
+  return await confirmInputSizeLimit(request, { full, shortened: text, outcome }, send, deadlineAt);
+}
+
+// A status alone is not proof of a size rejection: a passing 500 rejects a long input and then
+// accepts the shortened one only because the outage ended. So the FULL input is sent once more
+// after a shortened success. Accepted now: the failure was transient — its vector is returned,
+// nothing is shortened and no cap is learned. Rejected again: the size is the cause, and only then
+// is the accepted length remembered. Out of time to confirm: the shortened vector carries this
+// item, but an unconfirmed length is never remembered.
+async function confirmInputSizeLimit(
+  request: OpenAIEmbeddingBatchRequest,
+  attempt: {
+    readonly full: string;
+    readonly shortened: string;
+    readonly outcome: OpenAIEmbeddingOutcome;
+  },
+  send: (text: string) => Promise<OpenAIEmbeddingOutcome>,
+  deadlineAt: number,
+): Promise<{ readonly outcome: OpenAIEmbeddingOutcome; readonly sentChars: number }> {
+  const shortened = { outcome: attempt.outcome, sentChars: attempt.shortened.length };
+  if (deadlineAt - Date.now() <= 0) return shortened;
+  const confirmation = await send(attempt.full);
+  if (confirmation.ok) return { outcome: confirmation, sentChars: attempt.full.length };
+  if (isInputSizeRejection(confirmation, attempt.full.length)) {
+    rememberInputCap(request, attempt.shortened.length);
+  }
+  return shortened;
 }
 
 async function requestScalarFallbackBatch(
@@ -1552,7 +1599,8 @@ async function requestScalarFallbackBatch(
       return scalarLadderFailure(outcome, value);
     }
     value.push(outcome.value);
-    logLadderItem(log, request, { index, inputChars: input.length, sentChars }, itemElapsed());
+    const inputChars = originalInputChars(request, index, input);
+    logLadderItem(log, request, { index, inputChars, sentChars }, itemElapsed());
   }
   log.write(
     activityLogEvent(
