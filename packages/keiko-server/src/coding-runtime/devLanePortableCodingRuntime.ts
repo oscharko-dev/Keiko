@@ -1,10 +1,16 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import { productionUpdateFacts } from "../update-install-mode.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
@@ -84,6 +90,8 @@ export interface DevLaneOpenCodeDiscoveryInput {
   readonly arch?: string | undefined;
   /** The trusted launcher probes before native regeneration without establishing process authority. */
   readonly admitRuntimeSupervisor?: boolean | undefined;
+  /** Receives the redacted diagnostic of a verification that failed unexpectedly. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Hermetic test seam; production callers never supply the npm lane's trust anchor. */
   readonly npmLaneApprovals?: Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
 }
@@ -167,29 +175,43 @@ export function discoverNpmLaneOpenCode(
   if (target === undefined || target === "windows-x64") return { outcome: "inactive" };
   const approval = (input.npmLaneApprovals ?? NPM_LANE_RUNTIME_APPROVALS)[target];
   if (approval === undefined) return { outcome: "inactive" };
-  const packageRoot = npmLaneRuntimePackageRoot(input.env, approval.packageName);
-  if (packageRoot === undefined) return { outcome: "inactive" };
   try {
+    const packageRoot = npmLaneRuntimePackageRoot(input.env, approval.packageName);
+    if (packageRoot === undefined) return { outcome: "inactive" };
     return discoverNpmLanePackage(join(packageRoot, NPM_LANE_RUNTIME_DIR), target, approval);
-  } catch {
+  } catch (error) {
+    // A verification that cannot be completed (an unreadable file, a directory that changed under
+    // the walk) is a refusal, and the reason it could not be completed is evidence of its own.
+    emitServerDiagnostic(
+      input.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: randomUUID(),
+        operation: "coding.runtime.discover",
+        source: "coding.runtime.discovery",
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
     return refused("payload-tampered");
   }
 }
 
+/**
+ * Node's own lookup order for a package requested from Keiko's package root, walked by hand: "not
+ * installed" is the ordinary state of an npm installation and is an empty result here, not an
+ * exception to swallow.
+ */
 function npmLaneRuntimePackageRoot(
   env: NodeJS.ProcessEnv,
   packageName: string,
 ): string | undefined {
   const keikoRoot = productionUpdateFacts(env).packageRoot;
   if (keikoRoot === undefined) return undefined;
-  try {
-    const manifest = createRequire(join(keikoRoot, "package.json")).resolve(
-      `${packageName}/package.json`,
-    );
-    return realpathSync(dirname(manifest));
-  } catch {
-    return undefined;
-  }
+  const lookup = createRequire(join(keikoRoot, "package.json")).resolve.paths(packageName) ?? [];
+  const manifest = lookup
+    .map((directory) => join(directory, packageName, "package.json"))
+    .find((candidate) => existsSync(candidate));
+  return manifest === undefined ? undefined : realpathSync(dirname(manifest));
 }
 
 function discoverNpmLanePackage(

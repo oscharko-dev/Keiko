@@ -17,6 +17,7 @@ import {
   discoverNpmLaneOpenCode,
   type DevLaneOpenCodeDiscovery,
 } from "./devLanePortableCodingRuntime.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { NpmLaneRuntimeApproval } from "./npmLaneRuntimeApprovals.js";
 
 // Field defect 1.1.1 (#3577). The customer installs Keiko from npm because a desktop package needs
@@ -186,6 +187,27 @@ describe("npm-lane OpenCode discovery", () => {
       reason: "native-helper-directory-untrusted",
     });
   });
+
+  // An unreadable executable is not "tampered" evidence anyone can act on by itself: the refusal
+  // stays fail-closed, and why the verification could not be completed is recorded, not swallowed.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "records a diagnostic when the verification cannot be completed",
+    () => {
+      const install = globalInstall();
+      chmodSync(join(install.runtimeRoot, "opencode-compatible", "payload", "bin", "opencode"), 0);
+      const records: ServerDiagnosticRecord[] = [];
+      const discovery = discoverNpmLaneOpenCode({
+        env: install.env,
+        platform: "darwin",
+        arch: "arm64",
+        npmLaneApprovals: { "macos-arm64": install.approval },
+        diagnostics: { record: (record) => records.push(record) },
+      });
+      expect(discovery).toEqual({ outcome: "refused", reason: "payload-tampered" });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ operation: "coding.runtime.discover" });
+    },
+  );
 
   it("never trusts a digest the runtime package supplies about itself", () => {
     const install = globalInstall();

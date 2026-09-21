@@ -72610,6 +72610,13 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/devLanePortableCodingRuntime.ts:189",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding.runtime.discover",
+      "category": "diagnostic",
       "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:184",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
