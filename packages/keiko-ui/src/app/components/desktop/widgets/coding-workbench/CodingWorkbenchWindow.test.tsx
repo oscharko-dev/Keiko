@@ -962,6 +962,10 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active.",
     );
+    // Field defect 1.1.1 (#3577): the sentence alone told an npm customer nothing they could act on.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64",
+    );
     expect(screen.queryByText(/You can bind a workspace now/u)).not.toBeInTheDocument();
   });
 

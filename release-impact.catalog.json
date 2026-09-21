@@ -2358,6 +2358,59 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.2",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.2",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-21-keiko-1.1.2-npm-coding-runtime-package-and-branch-names",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.2 makes the Coding Workbench usable on an npm installation. The npm package carries no coding engine, so until now it listed its coding models and could never start a run. An npm installation on macOS now activates the engine from a separate runtime package installed next to Keiko (@oscharko-dev/keiko-coding-runtime-darwin-arm64 or -darwin-x64); Keiko verifies the OpenCode executable and its native helper against digests compiled into the product at every start, and the Workbench names that package when it is missing. The Workbench also binds repositories whose base branch uses parentheses or the characters + @ = , such as feat(GDZ-917)/topic, which were refused as unsafe, and names the supported characters when it refuses a branch name.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench on npm installations (macOS): install @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac) next to Keiko and restart; coding runs then start. Keiko verifies the runtime against digests built into the product at every start.",
+        "Coding Workbench: when the coding runtime is missing, the message names the package to install instead of only stating that the runtime is not confirmed active.",
+        "Coding Workbench: repositories whose base branch contains parentheses or + @ = , (for example feat(GDZ-917)/topic) can be bound; a refused branch name is answered with the supported characters."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-21",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/3577",
+        "rationale": "The release owner ordered an immediate 1.1.2 patch after the customer, who can install Keiko only from npm, could not start a coding run on 1.1.1 and could not bind a repository whose branch name contains parentheses. The npm lane reuses the dev lane's digest verification with a trust anchor compiled into the server; it adds no root export, no CLI command and no route.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }

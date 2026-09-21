@@ -70,6 +70,27 @@ explicitly requests it, and it carries the complete integrity evidence set of a 
 artifact. Neither can be reached from the other, and neither can be entered by a fallback after
 some other prerequisite fails.
 
+### D2a — The npm runtime package is a third, separately anchored availability source (2026-09-21, #3577)
+
+An npm installation of Keiko carries neither OpenCode nor the native helpers, and a customer who
+cannot install a desktop package (no administrator rights, no infrastructure approval) had no way
+to start a coding run at all. On macOS an npm installation therefore activates the runtime from
+`@oscharko-dev/keiko-coding-runtime-darwin-arm64` or `-darwin-x64`, installed next to Keiko and
+found by ordinary module resolution from Keiko's own package root.
+
+This does not loosen D2. The dev lane stays confined to repository checkouts and stays opt-in. The
+npm lane is not reachable from it and applies the same D3 verification with a different trust
+anchor: the approved executable-tree, license and SBOM digests and the digest of the helper binary
+Keiko built are compiled into the server, pinned by test to `portable-runtime-approvals.json` and
+to `native/secure-workspace-read`, so a runtime package can never vouch for itself and a planted
+package of the same name verifies or is refused. Installing the package is the operator's decision;
+no environment token is asked. An installed package that fails verification decides the outcome
+with its own D4 reason and never falls through to another lane. The lane reports the same honest
+posture as the dev lane (`functional-not-platform-qualified`) and the same forgone guarantees, and
+both dev-lane log operations carry `lane: "npm-runtime-package"`. Windows and Linux stay on their
+packaged lanes: Windows needs the native supervisor and Linux the sandbox isolation, neither of
+which this lane ships.
+
 ### D3 — Verified payload, declared forgone guarantees
 
 The lane's trust anchor is the review-approved redistribution catalog

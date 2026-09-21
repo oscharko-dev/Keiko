@@ -425,7 +425,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist.",
+    "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist. Eine npm-Installation erhält ihre Coding-Runtime über ein eigenes Paket: Führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
   "codingWorkbench.setup.runtimeEvaluation":
     "Diese Installation nutzt eine ungeprüfte Evaluations-Runtime. Sie trägt keine Apple- oder Microsoft-Codesignatur und läuft unter macOS ohne die Endpoint-Security-Eingrenzung eines Release-Builds. Die Integrität ihrer Nutzdaten wird bei jedem Start weiterhin Byte für Byte geprüft.",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
@@ -1009,7 +1009,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Modellquelle konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Das Starten eines Coding-Laufs bleibt nicht verfügbar, bis die Coding-Runtime dieser Installation als aktiv bestätigt ist.",
+    "Das Starten eines Coding-Laufs bleibt nicht verfügbar, bis die Coding-Runtime dieser Installation als aktiv bestätigt ist. Eine npm-Installation erhält ihre Coding-Runtime über ein eigenes Paket: Führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
   "codingWorkbench.alert.workspaceRefreshFailed":
     "Arbeitsbereich konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.workspaceBindFailed":

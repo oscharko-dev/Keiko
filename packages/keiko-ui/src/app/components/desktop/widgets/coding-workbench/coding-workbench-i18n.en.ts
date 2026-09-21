@@ -404,7 +404,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairAndBind": "Repair and bind",
   "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can bind a workspace now; the run becomes startable once the runtime is confirmed.",
+    "Starting a coding run is unavailable on this installation until the coding runtime is active. You can bind a workspace now; the run becomes startable once the runtime is confirmed. An npm installation gets its coding runtime from a separate package: run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
   "codingWorkbench.setup.runtimeEvaluation":
     "This installation runs an unverified evaluation runtime. It carries no Apple or Microsoft code signature, and on macOS it runs without the Endpoint Security containment a release build uses. Its payload integrity is still checked byte for byte on every start.",
   "codingWorkbench.readiness.modelSource.label": "Model source",
@@ -973,7 +973,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.modelSourceRefreshFailed": "Model source could not be refreshed.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime could not be refreshed.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active.",
+    "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active. An npm installation gets its coding runtime from a separate package: run npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac), then restart Keiko.",
   "codingWorkbench.alert.workspaceRefreshFailed": "Workspace could not be refreshed.",
   "codingWorkbench.alert.workspaceBindFailed":
     "The workspace could not be bound. Review the repository path and target branch.",
