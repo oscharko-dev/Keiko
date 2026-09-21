@@ -30,6 +30,7 @@ import {
   mutationResultMatchesCurrentTruth,
   type CodingWorkbenchMutationCommand,
 } from "./coding-workbench-runtime-mutations";
+import { requestGatewayModelCatalogRefresh } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import {
   codingWorkbenchSourceFromManaged,
   type CodingWorkbenchMutationKind,
@@ -127,6 +128,10 @@ function useSourceRefresh(
       if (preference === "managed-gateway") {
         dispatch({ kind: "profile-empty" });
         const profile = await fetchCodingWorkbenchSidecarGatewayProfile();
+        // The server verifies on this read what the Workbench needs (an expired tool-call proof, an
+        // unproven context window) and stores it, so the model catalog the picker filters may have
+        // changed underneath: a catalog fetched before the read would show an empty picker.
+        requestGatewayModelCatalogRefresh();
         if (sequenceRef.current === sequence) {
           dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
         }
