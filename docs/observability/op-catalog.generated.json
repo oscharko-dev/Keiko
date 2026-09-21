@@ -72873,7 +72873,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:1978",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:1982",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

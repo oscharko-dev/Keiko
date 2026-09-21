@@ -1870,8 +1870,12 @@ export async function ensureCodingWorkbenchContextWindows(
     ...targets.filter((target) => target.modelId === electedModelId),
     ...targets.filter((target) => target.modelId !== electedModelId),
   ];
-  const queued = ordered.map((target) => enqueueWorkbenchProbe(deps, config, target, id));
-  await queued[0];
+  const queued = new Map(
+    ordered.map((target) => [target.modelId, enqueueWorkbenchProbe(deps, config, target, id)]),
+  );
+  // A named model waits for ITS proof only — never for another model's. Without a name (the
+  // Workbench could elect none yet) the first queued model is the one it would elect next.
+  await (electedModelId === undefined ? queued.values().next().value : queued.get(electedModelId));
 }
 
 // Fresh-install gap (customer field incident, 0.3.10): a configured gateway carries NO
