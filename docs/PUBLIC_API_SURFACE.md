@@ -1,4 +1,4 @@
-# Public API surface — 1.1.0
+# Public API surface — 1.1.1
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -92,6 +92,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   readiness, loss, proofs, incidents, quality gate and queries), Workbench migration to
   OpenCode 2 with per-conversation task history, turn-based Digital Twin voice, one-button
   release automation, and various chat/workbench UX polish changed without adding, removing or
+  renaming a root export, CLI top-level command, or package entry point. The approved external
+  surface remains the 1.0.1 surface described above.
+- 1.1.1 (2026-09-21): the customer patch for self-hosted LiteLLM gateways — the Coding Workbench
+  admits every chat model with a fresh tool-calling proof, proves an undeclared context window
+  and renews an expired tool-calling proof by itself, and Knowledge Pod indexing shortens an
+  embedding input the endpoint rejects for its size — changed without adding, removing or
   renaming a root export, CLI top-level command, or package entry point. The approved external
   surface remains the 1.0.1 surface described above.
 - 0.3.17 (2026-09-10, PR #3452): the root barrel gains `boundWorkspaceFs` from
