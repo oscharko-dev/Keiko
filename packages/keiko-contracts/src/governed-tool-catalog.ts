@@ -50,10 +50,14 @@ export interface CatalogRuntimeRef {
  * container-measured evidence bound to that identity (#3565). It lives in the contracts leaf so the
  * tool catalog, the harness and the evidence tooling share ONE value instead of re-deriving it
  * (b3-25: three hand-copied literals once drifted apart on a bump).
+ *
+ * The value is frozen at what it was when it was decoupled from the release number, so the
+ * decoupling itself changed no catalog identity. It is a contract version from here on and says
+ * nothing about the product version that happens to ship it.
  */
 export const NATIVE_TOOL_CATALOG_RUNTIME: CatalogRuntimeRef = Object.freeze({
   id: "keiko",
-  version: "1.0.0",
+  version: "1.1.1",
 });
 
 /** Possible effects reuse the authoritative product vocabulary; they confer no permission. */
