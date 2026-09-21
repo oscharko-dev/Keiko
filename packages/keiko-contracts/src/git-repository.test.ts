@@ -439,12 +439,23 @@ describe("isSafeGitRefName", () => {
   // The widening is a vetted set, not git's whole grammar: every ref reaches git as one argv
   // element, but refs also travel into URLs and operator-visible text, so characters that are
   // shell, URL or markup syntax stay refused even though git itself would take them.
-  it.each(["a;b", "a|b", "a$b", "a&b", "a#b", "a%b", 'a"b', "a'b", "a`b", "a<b", "a>b", "a{b", "a!b"])(
-    "still refuses %j",
-    (ref) => {
-      expect(isSafeGitRefName(ref)).toBe(false);
-    },
-  );
+  it.each([
+    "a;b",
+    "a|b",
+    "a$b",
+    "a&b",
+    "a#b",
+    "a%b",
+    'a"b',
+    "a'b",
+    "a`b",
+    "a<b",
+    "a>b",
+    "a{b",
+    "a!b",
+  ])("still refuses %j", (ref) => {
+    expect(isSafeGitRefName(ref)).toBe(false);
+  });
 
   // git's trailing-dot rule is whole-ref only (`a.` is refused, `a./b` is not), unlike the
   // leading-dot and `.lock` rules, which are per component: pinned so the per-component treatment

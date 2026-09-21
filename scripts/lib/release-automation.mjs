@@ -289,7 +289,7 @@ function candidateCheckRuns(runGh, repository, headSha, treeSha) {
  * (fetchTreeIdenticalCheckRuns), so a gate the dev run reused is judged identically by both. Every
  * unreadable step yields no evidence, never a guess.
  */
-export function readTreeIdenticalCheckRuns(runGh, repository, sha) {
+function readTreeIdenticalCheckRuns(runGh, repository, sha) {
   const treeSha = readTreeSha(runGh, repository, sha);
   if (treeSha === undefined) return [];
   const pulls = readGithub(runGh, `repos/${repository}/commits/${sha}/pulls?per_page=${PAGE_SIZE}`);

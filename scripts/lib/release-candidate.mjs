@@ -294,7 +294,7 @@ export function planReleaseCandidate({
   return releaseCandidatePlan(facts);
 }
 
-export function readDevHead(runGh, repository) {
+function readDevHead(runGh, repository) {
   return readFound(runGh, `repos/${repository}/git/ref/heads/dev`, "the dev head")?.object?.sha;
 }
 
