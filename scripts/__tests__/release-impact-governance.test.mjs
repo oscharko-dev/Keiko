@@ -288,6 +288,48 @@ describe("release-impact governance", () => {
     expect(messages(result)).toContain("@oscharko-dev/keiko@0.2.12 has no latest catalog entry");
   });
 
+  // #3565. An entry written ahead of the version it describes left the version bump to a second,
+  // purely mechanical pull request, and every release paid a second full required matrix for it.
+  // The pull request that declares a release now moves the version too, so its own matrix proves the
+  // exact tree that will be tagged.
+  describe("an entry ahead of package.json", () => {
+    const ahead = (overrides = {}) =>
+      entry({
+        id: "2026-07-05-keiko-0.2.12-next",
+        packageVersion: "0.2.12",
+        releaseNoteBullets: ["The next release."],
+        releaseTag: "v0.2.12",
+        ...overrides,
+      });
+
+    it("refuses a release entry newer than the package version", () => {
+      const result = validateReleaseImpactCatalog(catalog([entry(), ahead()]), rootManifest());
+      expect(result.ok).toBe(false);
+      expect(result.failures).toContain(
+        "release-impact: entry 2026-07-05-keiko-0.2.12-next describes 0.2.12, ahead " +
+          "of package.json 0.2.11. The pull request that adds a release's entry also moves the " +
+          "version: npm run set-version -- 0.2.12",
+      );
+    });
+
+    it("accepts the same entry once package.json carries its version", () => {
+      const result = validateReleaseImpactCatalog(
+        catalog([entry(), ahead()]),
+        rootManifest({ version: "0.2.12" }),
+      );
+      expect(result.failures).toStrictEqual([]);
+    });
+
+    it("leaves older entries and another package's entries alone", () => {
+      const foreign = ahead({ id: "other-package-9.9.9", packageName: "@oscharko-dev/other" });
+      const result = validateReleaseImpactCatalog(
+        catalog([oldEntry(), entry(), foreign]),
+        rootManifest(),
+      );
+      expect(result.failures.filter((message) => message.includes("ahead of"))).toStrictEqual([]);
+    });
+  });
+
   it("blocks duplicated default patch-note bullets", () => {
     const duplicate = entry({
       id: "2026-06-30-keiko-0.2.10-duplicate-note",
