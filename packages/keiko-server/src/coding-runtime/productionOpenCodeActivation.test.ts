@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -172,6 +172,39 @@ describe("production OpenCode activation", () => {
       correlationId: UNKNOWN_CORRELATION_ID,
       lane: "dev-checkout",
       reason: "payload-missing",
+    });
+  });
+
+  // #3577: an npm installation activates its coding runtime from a runtime package installed next
+  // to Keiko. A package that is present and fails verification decides the outcome with its own
+  // reason; falling through to the dev lane would answer `platform-unqualified` and hide it.
+  it("lets an installed npm runtime package decide, and names the lane in its refusal", () => {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-npm-")));
+    roots.push(prefix);
+    const scope = join(prefix, "lib", "node_modules", "@oscharko-dev");
+    const keikoRoot = join(scope, "keiko");
+    const runtimePackage = join(scope, "keiko-coding-runtime-darwin-arm64");
+    mkdirSync(join(keikoRoot, "dist", "cli"), { recursive: true });
+    mkdirSync(join(runtimePackage, "runtime"), { recursive: true });
+    writeFileSync(join(keikoRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+    writeFileSync(join(keikoRoot, "dist", "cli", "index.js"), "");
+    writeFileSync(join(runtimePackage, "package.json"), "{}");
+    const activity: ServerLogEvent[] = [];
+
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { KEIKO_CLI_BIN_PATH: join(keikoRoot, "dist", "cli", "index.js"), KEIKO_UI_PORT: "1983" },
+        { activity },
+      ),
+    );
+
+    expect(result.unavailableReason).toBe("payload-missing");
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      op: "coding-runtime.dev-lane.refused",
+      level: "warn",
+      errorKind: "unavailable",
+      extra: { lane: "npm-runtime-package", reason: "payload-missing" },
     });
   });
 
