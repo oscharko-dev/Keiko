@@ -1,4 +1,4 @@
-# Public API surface — 1.1.1
+# Public API surface — 1.1.2
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -100,6 +100,13 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   embedding input the endpoint rejects for its size — changed without adding, removing or
   renaming a root export, CLI top-level command, or package entry point. The approved external
   surface remains the 1.0.1 surface described above.
+- 1.1.2 (2026-09-21, PR #3577): the Coding Workbench runs on an npm installation through the
+  digest-verified runtime packages, optional dependencies of the main package,
+  `@oscharko-dev/keiko-coding-runtime-darwin-arm64` and `@oscharko-dev/keiko-coding-runtime-darwin-x64`,
+  and binds repositories whose base branch uses parentheses or `+ @ = ,` — changed without adding,
+  removing or renaming a root export, CLI top-level command, or package entry point of
+  `@oscharko-dev/keiko`. The runtime packages export nothing; Keiko locates them by name and
+  verifies their content. The approved external surface remains the 1.0.1 surface described above.
 - 0.3.17 (2026-09-10, PR #3452): the root barrel gains `boundWorkspaceFs` from
   `@oscharko-dev/keiko-workspace` — the filesystem port a consumer should resolve paths through for a
   `WorkspaceInfo` (the owned-root port the managed-worktree prover bound to it, else the caller's

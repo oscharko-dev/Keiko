@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import {
   explicitPrivateWorkspaceExclusions,
   internalDependencyEntries,
+  platformRuntimeDependencyEntries,
+  requiredPlatformRuntimePackageNames,
   scope,
 } from "./release-workspace-policy.mjs";
 
@@ -158,6 +160,42 @@ function validateWorkspaceManifestEntry(relativePath, manifest, context, failure
   validateWorkspaceInternalDependencyEntries(relativePath, manifest, context, failures);
 }
 
+const EXACT_VERSION = /^\d+\.\d+\.\d+$/u;
+
+// A platform runtime package is ~75 MB of one platform's binaries. Optional keeps an install on any
+// other platform (and any mirror that lacks it) working, an exact pin keeps what the server's
+// compiled-in digests were built against, and bundling one would put it into every tarball.
+export function platformRuntimeDependencyFailures(rootManifest, workspaceNames) {
+  const bundled = new Set(
+    Array.isArray(rootManifest.bundleDependencies) ? rootManifest.bundleDependencies : [],
+  );
+  const failures = [];
+  const declared = new Set(platformRuntimeDependencyEntries(rootManifest).map(({ name }) => name));
+  for (const name of requiredPlatformRuntimePackageNames) {
+    if (!declared.has(name)) {
+      failures.push(
+        `package.json: platform runtime ${name} is not declared; an npm installation on that ` +
+          "platform would lose its coding runtime.",
+      );
+    }
+  }
+  for (const { field, name, specifier } of platformRuntimeDependencyEntries(rootManifest)) {
+    if (field !== "optionalDependencies") {
+      failures.push(`package.json: platform runtime ${name} must be an optionalDependency.`);
+    }
+    if (typeof specifier !== "string" || !EXACT_VERSION.test(specifier)) {
+      failures.push(`package.json: platform runtime ${name} must be pinned to an exact version.`);
+    }
+    if (bundled.has(name)) {
+      failures.push(`package.json: platform runtime ${name} must not be bundled.`);
+    }
+    if (workspaceNames.has(name)) {
+      failures.push(`package.json: platform runtime ${name} must not be a workspace package.`);
+    }
+  }
+  return failures;
+}
+
 function validateRootInternalDependencyEntries(rootInternalDependencies, context, failures) {
   const { workspaceNames, expectedVersion, bundled } = context;
   for (const entry of rootInternalDependencies) {
@@ -238,6 +276,7 @@ export function validatePublishManifests(rootManifest, workspaceManifests) {
   }
 
   validateRootInternalDependencyEntries(rootInternalDependencies, context, failures);
+  failures.push(...platformRuntimeDependencyFailures(rootManifest, workspaceNames));
   validateBundledWorkspaceEntries(bundled, context, failures);
 
   return failures;

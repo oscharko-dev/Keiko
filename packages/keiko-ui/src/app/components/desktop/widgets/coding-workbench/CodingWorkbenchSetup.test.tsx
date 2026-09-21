@@ -1020,6 +1020,13 @@ describe("CodingWorkbenchSetup", () => {
       text: "The target branch does not exist in this repository.",
     },
     {
+      // Field defect 1.1.1: a branch name outside the supported characters was refused behind the
+      // generic sentence, which sent the operator to re-check a branch that was spelled correctly.
+      code: "INVALID_REQUEST",
+      failureClass: "blocked",
+      text: "Branch names may contain letters, digits and the characters . _ - / ( ) + @ = , only.",
+    },
+    {
       code: "MISSING_REPOSITORY",
       failureClass: "blocked",
       text: "The repository path is not inside a local Git repository.",

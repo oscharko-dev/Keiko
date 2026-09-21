@@ -1,6 +1,6 @@
 // The one read primitive every release-automation module shares (release-candidate.mjs,
-// release-automation.mjs, release-version-bump.mjs). It lives here, not in any one of them, so those
-// modules can depend on each other without a cycle.
+// release-automation.mjs). It lives here, not in either of them, so those modules can depend on each
+// other without a cycle.
 
 class GithubApiError extends Error {}
 

@@ -199,9 +199,8 @@ export function applySetVersion({
 }
 
 /**
- * The real Node.js/host seams applySetVersion needs, minus `root` and `version`: every CLI that
- * moves the product version (scripts/set-version.mjs, the release button's version-bump fallback)
- * wires the same file system and host executables, so this is the one place that does it.
+ * The real Node.js/host seams applySetVersion needs, minus `root` and `version`, wired once for the
+ * CLI that moves the product version (scripts/set-version.mjs).
  */
 export function nodeSetVersionHost() {
   return {

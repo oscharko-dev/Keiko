@@ -17,8 +17,6 @@ import {
   runReleaseAuthorize,
 } from "../lib/release-automation.mjs";
 import { isOwnerReleaseRequest, releaseOwners } from "../lib/release-candidate.mjs";
-import { VERSION_BUMP_APP_LOGIN } from "../lib/release-version-bump.mjs";
-import { versionedManifest } from "../lib/set-version.mjs";
 
 // ADR-0177 D9. Until 1.0.5 the stable build ended in a handoff that printed a long
 // `gh workflow run release.yml ... -f portable_assets_run_id=...` command, and the owner had to wait
@@ -405,17 +403,12 @@ describe("gatherAdvanceFacts", () => {
     });
   }
 
-  it("reads only the release runs and the dev head while nothing is requested", () => {
-    // The release-run listing is read first, then versionBumpRequest() tries dev's head
-    // (readDevHead) and, finding no route stubbed for it here, falls back to the (empty) classic
-    // listing already read -- the same fail-closed-to-classic path a real "dev head unreadable"
-    // response takes ("falls back to the classic request when the dev head cannot be read" below).
+  it("reads only the release runs while nothing is requested", () => {
+    // #3565: a merged pull request is never a release request. Until then every advance run also
+    // probed the dev head, its tag and its pull requests for an App-opened version bump.
     const github = fakeGithub({ [RUNS_PATH]: ok({ workflow_runs: [] }) });
     expect(gather(github)).toStrictEqual({ request: undefined });
-    expect(github.calls).toStrictEqual([
-      ["api", RUNS_PATH],
-      ["api", `repos/${REPO}/git/ref/heads/dev`],
-    ]);
+    expect(github.calls).toStrictEqual([["api", RUNS_PATH]]);
   });
 
   it("stops at a published version", () => {
@@ -454,104 +447,6 @@ describe("gatherAdvanceFacts", () => {
     });
     expect(() => gather(github)).toThrow("v1.0.6-rc.1 is not a stable release tag");
   });
-
-  describe("the version-bump path (dev already published)", () => {
-    const BUMP_SHA = "c".repeat(40);
-    const BUMP_PARENT_SHA = "d".repeat(40);
-    const BUMP_TAG = "v1.0.6";
-    const authorizationPr = (overrides = {}) => ({
-      base: { ref: "dev" },
-      commits: 1,
-      head: { ref: "release/bump-1.0.6" },
-      merge_commit_sha: BUMP_SHA,
-      merged: true,
-      number: 42,
-      user: { login: VERSION_BUMP_APP_LOGIN },
-      ...overrides,
-    });
-    const parentManifest = { name: "@oscharko-dev/keiko", version: "1.0.5" };
-    const headManifest = versionedManifest(JSON.stringify(parentManifest), new Set(), "1.0.6");
-    const lockfile = (version) =>
-      ok({
-        content: Buffer.from(
-          JSON.stringify({
-            version,
-            lockfileVersion: 3,
-            packages: { "": { name: "@oscharko-dev/keiko", version } },
-          }),
-        ).toString("base64"),
-        encoding: "base64",
-      });
-
-    // A genuine, verifiable mechanical bump for readVersionBumpAuthorization's content check
-    // (#3555 review): no workspace packages, so `packages` at the parent is an empty listing.
-    function bumpGithub(overrides = {}) {
-      return fakeGithub({
-        [`repos/${REPO}/actions/workflows/portable-assets.yml/runs?event=push&head_sha=${BUMP_SHA}&per_page=100`]:
-          ok({ workflow_runs: [build({ head_branch: BUMP_TAG, head_sha: BUMP_SHA })] }),
-        [`repos/${REPO}/commits/${BUMP_SHA}`]: ok({
-          files: [
-            { filename: "package.json", status: "modified" },
-            { filename: "package-lock.json", status: "modified" },
-          ],
-          parents: [{ sha: BUMP_PARENT_SHA }],
-        }),
-        [`repos/${REPO}/commits/${BUMP_SHA}/check-runs?filter=latest&per_page=100&page=1`]: ok({
-          check_runs: [checkRun("ci"), checkRun("ui")],
-        }),
-        [`repos/${REPO}/commits/${BUMP_SHA}/pulls`]: ok([authorizationPr()]),
-        [`repos/${REPO}/commits/${BUMP_SHA}/status`]: ok({ statuses: [] }),
-        [`repos/${REPO}/contents/package-lock.json?ref=${BUMP_PARENT_SHA}`]: lockfile("1.0.5"),
-        [`repos/${REPO}/contents/package-lock.json?ref=${BUMP_SHA}`]: lockfile("1.0.6"),
-        [`repos/${REPO}/contents/package.json?ref=${BUMP_PARENT_SHA}`]: ok({
-          content: Buffer.from(JSON.stringify(parentManifest)).toString("base64"),
-          encoding: "base64",
-        }),
-        [`repos/${REPO}/contents/package.json?ref=${BUMP_SHA}`]: ok({
-          content: Buffer.from(headManifest).toString("base64"),
-          encoding: "base64",
-        }),
-        [`repos/${REPO}/contents/packages?ref=${BUMP_PARENT_SHA}`]: ok([]),
-        [`repos/${REPO}/git/ref/heads/dev`]: ok({ object: { sha: BUMP_SHA, type: "commit" } }),
-        [`repos/${REPO}/git/ref/tags/${BUMP_TAG}`]: ok({
-          object: { sha: BUMP_SHA, type: "commit" },
-        }),
-        [`repos/${REPO}/pulls/42`]: ok(authorizationPr()),
-        [`repos/${REPO}/releases/tags/${BUMP_TAG}`]: NOT_FOUND,
-        ...overrides,
-      });
-    }
-
-    it("treats a merged, App-authored version-bump PR as the request, ahead of any classic one", () => {
-      const facts = gather(bumpGithub());
-      expect(facts).toMatchObject({
-        remoteTagSha: BUMP_SHA,
-        request: { head_sha: BUMP_SHA },
-        tag: BUMP_TAG,
-      });
-    });
-
-    it.each([
-      ["the PR was not opened by the release App", { user: { login: "someone-else" } }],
-      ["the PR targets a different base branch", { base: { ref: "release/1.0" } }],
-      ["the PR carries more than one commit", { commits: 2 }],
-      ["the PR is not merged", { merged: false }],
-      ["the branch is not the reserved prefix", { head: { ref: "release/1.0" } }],
-    ])("falls back to the classic request when %s", (_label, override) => {
-      const github = bumpGithub({ [`repos/${REPO}/pulls/42`]: ok(authorizationPr(override)) });
-      expect(gather(github).request).toStrictEqual(request());
-    });
-
-    it("falls back to the classic request when the dev head cannot be read", () => {
-      const github = bumpGithub({ [`repos/${REPO}/git/ref/heads/dev`]: NOT_FOUND });
-      expect(gather(github).request).toStrictEqual(request());
-    });
-
-    it("does not treat an already-published version-bump target as a request", () => {
-      const github = bumpGithub({ [`repos/${REPO}/releases/tags/${BUMP_TAG}`]: ok({ id: 1 }) });
-      expect(gather(github).request).toStrictEqual(request());
-    });
-  });
 });
 
 describe("runReleaseAdvance", () => {
@@ -584,6 +479,97 @@ describe("runReleaseAdvance", () => {
     const result = runReleaseAdvance({ env: ENV, runGh: github.runGh, runNpm: NPM_MISSING });
     expect(result.line).toBe(`Release ${TAG}: wait, waiting for ui.`);
     expect(github.calls.some((args) => args.includes("--method"))).toBe(false);
+  });
+
+  // #3565, found publishing 1.1.1. Since ADR-0178 the dev run reuses the pull request's evidence, so
+  // a reused gate is `skipped` on the merge commit. The publish job's verifier resolved that against
+  // the tree-identical pull-request head, the advance decision did not, and it answered
+  // `blocked, release-required checks failed: ui (skipped)` for every normal release: the button
+  // never published by itself again. Both now reach one verdict.
+  describe("a gate the dev run reused from the pull request (ADR-0178)", () => {
+    const TREE = "c".repeat(40);
+    const APP = { id: 15368 };
+    const HEAD_CHECKS = `repos/${REPO}/commits/${OTHER}/check-runs?filter=latest&per_page=100&page=1`;
+    const reused = { ...checkRun("ui", "skipped"), app: APP };
+    const proven = { ...checkRun("ui"), app: APP };
+
+    function reusedEvidence(overrides = {}) {
+      return fakeGithub({
+        [CHECKS_PATH]: ok({ check_runs: [checkRun("ci"), reused] }),
+        [`repos/${REPO}/commits/${SHA}`]: ok({ commit: { tree: { sha: TREE } } }),
+        [`repos/${REPO}/commits/${SHA}/pulls?per_page=100`]: ok([{ head: { sha: OTHER } }]),
+        [`repos/${REPO}/commits/${OTHER}`]: ok({ commit: { tree: { sha: TREE } } }),
+        [HEAD_CHECKS]: ok({ check_runs: [proven] }),
+        ...overrides,
+      });
+    }
+
+    function advance(github) {
+      return runReleaseAdvance({ env: ENV, runGh: github.runGh, runNpm: NPM_MISSING }).line;
+    }
+
+    it("starts the publish when a tree-identical pull-request head proved the gate", () => {
+      const github = reusedEvidence();
+      expect(advance(github)).toBe(
+        `Release ${TAG}: publish started, ${TAG} at ${SHA} is built and green.`,
+      );
+      expect(github.calls.at(-1)).toContain(`ref=${TAG}`);
+    });
+
+    it("finds the evidence on a later page of the head's check runs", () => {
+      const noise = Array.from({ length: 100 }, (_, index) => checkRun(`observer ${index}`));
+      const github = reusedEvidence({
+        [HEAD_CHECKS]: ok({ check_runs: noise }),
+        [HEAD_CHECKS.replace("&page=1", "&page=2")]: ok({ check_runs: [proven] }),
+      });
+      expect(advance(github)).toContain("publish started");
+    });
+
+    it.each([
+      [
+        "the head's tree differs by one byte",
+        { [`repos/${REPO}/commits/${OTHER}`]: ok({ commit: { tree: { sha: "d".repeat(40) } } }) },
+      ],
+      [
+        "no pull request carries the commit",
+        { [`repos/${REPO}/commits/${SHA}/pulls?per_page=100`]: ok([]) },
+      ],
+      ["the commit's tree cannot be read", { [`repos/${REPO}/commits/${SHA}`]: NOT_FOUND }],
+      [
+        "the pull requests cannot be read",
+        { [`repos/${REPO}/commits/${SHA}/pulls?per_page=100`]: NOT_FOUND },
+      ],
+      ["the head's check runs cannot be read", { [HEAD_CHECKS]: NOT_FOUND }],
+      [
+        "a different app produced the same-named success",
+        { [HEAD_CHECKS]: ok({ check_runs: [{ ...proven, app: { id: 1 } }] }) },
+      ],
+      [
+        "the head did not conclude success either",
+        { [HEAD_CHECKS]: ok({ check_runs: [{ ...proven, conclusion: "failure" }] }) },
+      ],
+    ])("stays blocked when %s", (_label, overrides) => {
+      const github = reusedEvidence(overrides);
+      expect(advance(github)).toBe(
+        `Release ${TAG}: blocked, release-required checks failed: ui (skipped).`,
+      );
+      expect(github.calls.some((args) => args.includes("--method"))).toBe(false);
+    });
+
+    it("never rescues a gate that ran and failed on the requested commit", () => {
+      const github = reusedEvidence({
+        [CHECKS_PATH]: ok({ check_runs: [checkRun("ci"), { ...reused, conclusion: "failure" }] }),
+      });
+      expect(advance(github)).toBe(
+        `Release ${TAG}: blocked, release-required checks failed: ui (failure).`,
+      );
+    });
+
+    it("asks for no tree evidence when nothing was skipped", () => {
+      const github = fakeGithub();
+      advance(github);
+      expect(github.calls.some((args) => args.at(-1).endsWith(`/commits/${SHA}`))).toBe(false);
+    });
   });
 
   it("reports an idle run without a tag when nothing is requested", () => {

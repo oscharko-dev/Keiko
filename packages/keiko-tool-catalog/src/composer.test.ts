@@ -5,7 +5,7 @@ import { createToolDescriptor } from "./descriptor.js";
 import { lookupCatalogTool } from "./catalog.js";
 import { createKeikoToolCatalog, type CatalogRegistrationSet } from "./composer.js";
 import { declaration } from "./__fixtures__/catalog.js";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 function registrationSet(
   descriptor: ReturnType<typeof createToolDescriptor>,
@@ -14,7 +14,7 @@ function registrationSet(
   return {
     profile: { id: "fixture", version: 1 },
     adapterDialect: { id: "gateway-json-schema", version: 1 },
-    adapterRuntime: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
+    adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
     entries: [{ alias, descriptor }],
   };
 }
@@ -29,7 +29,7 @@ function versionBumpCompatibility(
     from: { toolRef: from.toolRef, descriptorDigest: from.descriptorDigest },
     to: { toolRef: to.toolRef, descriptorDigest: to.descriptorDigest },
     profile: { id: "fixture", version: 1 },
-    adapter: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
+    adapter: NATIVE_TOOL_CATALOG_RUNTIME,
     transformId: "identity-v1" as const,
     ownerIssue: 3406,
     expiresAt: "1970-01-02T00:00:00.000Z",

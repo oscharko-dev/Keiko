@@ -391,6 +391,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Aufgabenbranch für diesen Coding-Lauf existiert bereits. Entferne den früheren Branch oder den zugehörigen verwalteten Arbeitsbereich. Alternativ kannst du einen anderen Zielbranch wählen.",
   "codingWorkbench.setup.invalidBaseBranch":
     "Der Zielbranch existiert in diesem Repository nicht. Gib einen lokal auflösbaren Branch an, zum Beispiel den ausgecheckten Branch.",
+  "codingWorkbench.setup.invalidRequest":
+    "Keiko kann diesen Repository-Pfad oder Zielbranch so nicht verwenden. Branch-Namen dürfen nur Buchstaben, Ziffern und die Zeichen . _ - / ( ) + @ = , enthalten. Wähle einen anderen Branch oder benenne ihn um und binde dann erneut.",
   "codingWorkbench.setup.missingRepository":
     "Der Repository-Pfad liegt in keinem lokalen Git-Repository. Gib den Pfad eines vorhandenen Checkouts an.",
   "codingWorkbench.setup.unsafePath":
@@ -423,7 +425,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairAndBind": "Reparieren und binden",
   "codingWorkbench.setup.repairing": "Wird repariert…",
   "codingWorkbench.setup.runtimeUnavailable":
-    "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist.",
+    "Das Starten eines Coding-Laufs ist auf dieser Installation nicht verfügbar, bis die Coding-Runtime aktiv ist. Du kannst jetzt einen Workspace binden; der Lauf wird startbar, sobald die Runtime bestätigt ist. Auf einem Mac erhält eine npm-Installation ihre Coding-Runtime automatisch als optionales Paket. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
   "codingWorkbench.setup.runtimeEvaluation":
     "Diese Installation nutzt eine ungeprüfte Evaluations-Runtime. Sie trägt keine Apple- oder Microsoft-Codesignatur und läuft unter macOS ohne die Endpoint-Security-Eingrenzung eines Release-Builds. Die Integrität ihrer Nutzdaten wird bei jedem Start weiterhin Byte für Byte geprüft.",
   "codingWorkbench.readiness.modelSource.label": "Modellquelle",
@@ -1007,7 +1009,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Modellquelle konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeRefreshFailed": "Runtime konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.runtimeUnqualified":
-    "Das Starten eines Coding-Laufs bleibt nicht verfügbar, bis die Coding-Runtime dieser Installation als aktiv bestätigt ist.",
+    "Das Starten eines Coding-Laufs bleibt nicht verfügbar, bis die Coding-Runtime dieser Installation als aktiv bestätigt ist. Auf einem Mac erhält eine npm-Installation ihre Coding-Runtime automatisch als optionales Paket. Falls sie fehlt, führe npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple Silicon) oder @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel-Mac) aus und starte Keiko danach neu.",
   "codingWorkbench.alert.workspaceRefreshFailed":
     "Arbeitsbereich konnte nicht aktualisiert werden.",
   "codingWorkbench.alert.workspaceBindFailed":

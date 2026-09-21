@@ -14,29 +14,33 @@
 
 import { Buffer } from "node:buffer";
 
-import { evaluateRequiredChecks, parseRequiredChecks } from "../verify-release-required-checks.mjs";
-import { readFound } from "./github-api.mjs";
+import {
+  CHECK_RUN_PAGE_LIMIT,
+  CHECK_RUN_PAGE_SIZE,
+  evaluateRequiredChecks,
+  parseRequiredChecks,
+  resolveSkippedWithTreeEvidence,
+} from "../verify-release-required-checks.mjs";
+import { readFound, readGithub } from "./github-api.mjs";
 import {
   isOwnerReleaseRequest,
   isReleaseOwner,
   npmHasVersion,
-  readDevHead,
   readReleaseDispatchRuns,
   releaseExists,
   releaseOwners,
   remoteTagCommit,
 } from "./release-candidate.mjs";
-import { readVersionBumpAuthorization } from "./release-version-bump.mjs";
 
 export const AUTOMATION_ACTOR = "github-actions[bot]";
 const PORTABLE_ASSETS_WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const STABLE_TAG = /^v\d+\.\d+\.\d+$/u;
 const REPOSITORY = /^[\w.-]+\/[\w.-]+$/u;
-const PAGE_SIZE = 100;
-// A commit with more check runs than this is not one this repository produces; refusing it bounds the
-// read instead of deciding on a partial listing.
-const PAGE_LIMIT = 10;
+// One page size and one page bound for every check-run listing, shared with the publish job's
+// verifier: the two readers must never see different halves of the same commit (#3565).
+const PAGE_SIZE = CHECK_RUN_PAGE_SIZE;
+const PAGE_LIMIT = CHECK_RUN_PAGE_LIMIT;
 
 class ReleaseAutomationError extends Error {}
 
@@ -242,7 +246,7 @@ export function readBuildRuns(runGh, repository, sha) {
 }
 
 /** The check runs (latest per name) and commit statuses of `sha`, every page of them. */
-export function readCommitChecks(runGh, repository, sha) {
+function readCheckRuns(runGh, repository, sha) {
   const checkRuns = [];
   for (let page = 1; page <= PAGE_LIMIT; page += 1) {
     const listing = readFound(
@@ -252,12 +256,62 @@ export function readCommitChecks(runGh, repository, sha) {
     );
     if (!Array.isArray(listing?.check_runs)) fail(`the check runs of ${sha} are malformed.`);
     checkRuns.push(...listing.check_runs);
-    if (listing.check_runs.length < PAGE_SIZE) {
-      const status = readFound(runGh, `repos/${repository}/commits/${sha}/status`, "the status");
-      return { checkRuns, statuses: Array.isArray(status?.statuses) ? status.statuses : [] };
-    }
+    if (listing.check_runs.length < PAGE_SIZE) return checkRuns;
   }
   return fail(`the check runs of ${sha} span more than ${PAGE_LIMIT} pages.`);
+}
+
+export function readCommitChecks(runGh, repository, sha) {
+  const checkRuns = readCheckRuns(runGh, repository, sha);
+  const status = readFound(runGh, `repos/${repository}/commits/${sha}/status`, "the status");
+  return { checkRuns, statuses: Array.isArray(status?.statuses) ? status.statuses : [] };
+}
+
+function readTreeSha(runGh, repository, sha) {
+  const read = readGithub(runGh, `repos/${repository}/commits/${sha}`);
+  const treeSha = read.kind === "found" ? read.value?.commit?.tree?.sha : undefined;
+  return COMMIT_SHA.test(String(treeSha)) ? treeSha : undefined;
+}
+
+function candidateCheckRuns(runGh, repository, headSha, treeSha) {
+  if (readTreeSha(runGh, repository, headSha) !== treeSha) return [];
+  try {
+    return readCheckRuns(runGh, repository, headSha);
+  } catch {
+    // Evidence that cannot be read completely is no evidence: the check stays `skipped`.
+    return [];
+  }
+}
+
+/**
+ * ADR-0178 for the advance decision. The check runs of ONE pull-request head that carries the
+ * byte-identical tree of `sha`, or none: the same lookup the publish job's verifier performs
+ * (fetchTreeIdenticalCheckRuns), so a gate the dev run reused is judged identically by both. Every
+ * unreadable step yields no evidence, never a guess.
+ */
+function readTreeIdenticalCheckRuns(runGh, repository, sha) {
+  const treeSha = readTreeSha(runGh, repository, sha);
+  if (treeSha === undefined) return [];
+  const pulls = readGithub(runGh, `repos/${repository}/commits/${sha}/pulls?per_page=${PAGE_SIZE}`);
+  if (pulls.kind !== "found" || !Array.isArray(pulls.value)) return [];
+  for (const pull of pulls.value) {
+    const headSha = pull?.head?.sha;
+    if (!COMMIT_SHA.test(String(headSha)) || headSha === sha) continue;
+    const runs = candidateCheckRuns(runGh, repository, headSha, treeSha);
+    if (runs.length > 0) return runs;
+  }
+  return [];
+}
+
+/** The verdict the publish job will reach: evaluated, then `skipped` resolved by tree evidence. */
+function requiredChecksVerdict(runGh, repository, sha, requiredChecks) {
+  const { checkRuns, statuses } = readCommitChecks(runGh, repository, sha);
+  const verdict = evaluateRequiredChecks(requiredChecks, checkRuns, statuses);
+  if (!verdict.failed.some((entry) => entry.state === "skipped")) return verdict;
+  return resolveSkippedWithTreeEvidence(
+    verdict,
+    readTreeIdenticalCheckRuns(runGh, repository, sha),
+  );
 }
 
 function publishAttemptAfter(releaseRuns, request, tag) {
@@ -266,46 +320,10 @@ function publishAttemptAfter(releaseRuns, request, tag) {
   )[0];
 }
 
-function versionBumpCandidate(runGh, repository, runNpm) {
-  const devHeadSha = readDevHead(runGh, repository);
-  if (devHeadSha === undefined) return undefined;
-  const rootPackage = readRootPackageAt(runGh, repository, devHeadSha);
-  const tag = `v${String(rootPackage.version)}`;
-  if (!STABLE_TAG.test(tag)) return undefined;
-  const published =
-    npmHasVersion(runNpm, rootPackage.name, rootPackage.version) ||
-    releaseExists(runGh, repository, tag);
-  if (published) return undefined;
-  const remoteTagSha = remoteTagCommit(runGh, repository, tag);
-  if (remoteTagSha === undefined) return undefined;
-  const authorization = readVersionBumpAuthorization(runGh, repository, remoteTagSha);
-  return authorization === undefined ? undefined : { head_sha: remoteTagSha };
-}
-
-/**
- * The request equivalent of an owner button press, derived instead from a merged version-bump PR
- * (scripts/lib/release-version-bump.mjs): dev's current version is unpublished, its tag is already
- * positioned there (release-candidate.mjs's own per-push tracking does that once the target
- * version's catalog entry is reviewed and releaseHeld recognizes the same authorization), and that
- * commit can only be the merge of a PR the release App opened from the owner+dev-gated request job.
- * Undefined when any of that is not, or not yet, true, or when reading it failed for any reason --
- * this path is speculative, so any failure here falls back to the classic dispatch-run request,
- * which is what a direct button press on an existing candidate produces and remains published
- * forever once its version ships. It carries the fail-closed guarantee, unchanged.
- */
-function versionBumpRequest(runGh, repository, runNpm) {
-  try {
-    return versionBumpCandidate(runGh, repository, runNpm);
-  } catch {
-    return undefined;
-  }
-}
-
 /** Reads every fact releaseAdvancePlan() needs, stopping at the first one that decides. */
 export function gatherAdvanceFacts({ owners, repository, requiredChecks, runGh, runNpm }) {
   const releaseRuns = readReleaseDispatchRuns(runGh, repository);
-  const request =
-    versionBumpRequest(runGh, repository, runNpm) ?? newestOwnerRequest(releaseRuns, owners);
+  const request = newestOwnerRequest(releaseRuns, owners);
   if (request === undefined) return { request };
   requireCommitSha(request.head_sha, "the requested commit");
   const rootPackage = readRootPackageAt(runGh, repository, request.head_sha);
@@ -314,14 +332,13 @@ export function gatherAdvanceFacts({ owners, repository, requiredChecks, runGh, 
     npmHasVersion(runNpm, rootPackage.name, rootPackage.version) ||
     releaseExists(runGh, repository, tag);
   if (published) return { published, request, tag };
-  const { checkRuns, statuses } = readCommitChecks(runGh, repository, request.head_sha);
   return {
     build: newestStableBuild(
       readBuildRuns(runGh, repository, request.head_sha),
       tag,
       request.head_sha,
     ),
-    checks: evaluateRequiredChecks(requiredChecks, checkRuns, statuses),
+    checks: requiredChecksVerdict(runGh, repository, request.head_sha, requiredChecks),
     publishAttempt: publishAttemptAfter(releaseRuns, request, tag),
     published,
     remoteTagSha: remoteTagCommit(runGh, repository, tag),

@@ -79,6 +79,7 @@ type SetupErrorReason =
   | "verify"
   | "branch-conflict"
   | "invalid-base-branch"
+  | "invalid-request"
   | "missing-repository"
   | "unsafe-path"
   | "lock-contention"
@@ -163,6 +164,10 @@ const REASON_BY_CODE: Readonly<Partial<Record<string, SetupErrorReason>>> = {
   "authority-denied": "authority-denied",
   cancelled: "cancelled",
   INVALID_BASE_BRANCH: "invalid-base-branch",
+  // The server refused the request's own shape before touching git, in practice a branch name
+  // outside its supported characters. The generic sentence sent the operator to "review" a branch
+  // that exists and is spelled correctly (field defect 1.1.1: `feat(GDZ-917)/...`).
+  INVALID_REQUEST: "invalid-request",
   MISSING_REPOSITORY: "missing-repository",
   UNSAFE_PATH: "unsafe-path",
   LOCK_CONTENTION: "lock-contention",
@@ -632,6 +637,7 @@ const PLAIN_ALERT_KEYS: Readonly<Partial<Record<SetupErrorReason, CodingWorkbenc
   verify: "codingWorkbench.setup.reconcileFailed",
   "branch-conflict": "codingWorkbench.setup.branchConflict",
   "invalid-base-branch": "codingWorkbench.setup.invalidBaseBranch",
+  "invalid-request": "codingWorkbench.setup.invalidRequest",
   "missing-repository": "codingWorkbench.setup.missingRepository",
   "unsafe-path": "codingWorkbench.setup.unsafePath",
   "lock-contention": "codingWorkbench.setup.lockContention",

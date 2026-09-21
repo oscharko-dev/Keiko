@@ -1,13 +1,18 @@
+import { URL } from "node:url";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyTreeEvidence,
   checkRunsForIdenticalTree,
+  CHECK_RUN_PAGE_LIMIT,
   evaluateRequiredChecks,
+  fetchAllCheckRuns,
   fetchTreeIdenticalCheckRuns,
   fetchTreeSha,
   latestCheckRunsByName,
   parseRequiredChecks,
+  readRequiredChecksVerdict,
   requiredChecksFromBranchProtection,
   resolveSkippedWithTreeEvidence,
 } from "../verify-release-required-checks.mjs";
@@ -450,5 +455,85 @@ describe("reuse evidence is bound, not aggregated", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+// #3565, the 1.1.1 publish. GitHub lists a commit's check runs newest first, 100 to a page, and the
+// `workflow_run` observers attach one to the default-branch head for every workflow run that
+// completes anywhere in the repository. The release commit carried 125; `ui` was entry 100 of 100 and
+// the five other required checks, created first, sat on page 2. The single-page read called them
+// missing and the publish failed with every gate green.
+describe("a release commit with more check runs than one page", () => {
+  const CONFIG = { owner: "owner", repo: "repo", sha: "a".repeat(40), token: "t" };
+  const REQUIRED = ["ci", "workflow hygiene", "ui"];
+  const original = globalThis.fetch;
+  const green = (name) => ({ conclusion: "success", id: 1, name, status: "completed" });
+  const observers = Array.from({ length: 100 }, (_, index) => green(`observer ${index}`));
+
+  afterEach(() => {
+    globalThis.fetch = original;
+  });
+
+  function pagedFetch(pages) {
+    const requested = [];
+    globalThis.fetch = async (url) => {
+      const text = String(url);
+      requested.push(text);
+      if (text.endsWith("/status")) return { ok: true, json: async () => ({ statuses: [] }) };
+      const page = Number(new URL(text).searchParams.get("page") ?? "1");
+      return { ok: true, json: async () => pages(page) };
+    };
+    return requested;
+  }
+
+  it("finds the required checks on the second page", async () => {
+    const requested = pagedFetch((page) => ({
+      check_runs: page === 1 ? observers : REQUIRED.map(green),
+    }));
+    const verdict = await readRequiredChecksVerdict(CONFIG, REQUIRED);
+    expect(verdict).toMatchObject({ failed: [], missing: [], ok: true, pending: [] });
+    expect(
+      requested.filter((url) => url.includes("/check-runs")).map((url) => url.slice(-6)),
+    ).toEqual(["page=1", "page=2"]);
+  });
+
+  it("stops at the first short page", async () => {
+    const requested = pagedFetch(() => ({ check_runs: REQUIRED.map(green) }));
+    await expect(fetchAllCheckRuns(CONFIG)).resolves.toHaveLength(3);
+    expect(requested).toHaveLength(1);
+  });
+
+  it("refuses a listing it cannot read to the end instead of judging a part of it", async () => {
+    const requested = pagedFetch(() => ({ check_runs: observers }));
+    await expect(fetchAllCheckRuns(CONFIG)).rejects.toThrow(
+      `span more than ${CHECK_RUN_PAGE_LIMIT} pages`,
+    );
+    expect(requested).toHaveLength(CHECK_RUN_PAGE_LIMIT);
+  });
+
+  it("refuses a malformed page", async () => {
+    pagedFetch(() => ({}));
+    await expect(fetchAllCheckRuns(CONFIG)).rejects.toThrow("are malformed");
+  });
+
+  it("reads the tree-identical head to the end as well", async () => {
+    const TREE = "c".repeat(40);
+    globalThis.fetch = async (url) => {
+      const text = String(url);
+      if (!text.includes("/check-runs")) {
+        return { ok: true, json: async () => ({ commit: { tree: { sha: TREE } } }) };
+      }
+      const page = Number(new URL(text).searchParams.get("page") ?? "1");
+      return {
+        ok: true,
+        json: async () => ({ check_runs: page === 1 ? observers : [green("ui")] }),
+      };
+    };
+    const runs = await checkRunsForIdenticalTree({
+      ...CONFIG,
+      headSha: "b".repeat(40),
+      treeSha: TREE,
+    });
+    expect(runs.map((run) => run.name)).toContain("ui");
   });
 });

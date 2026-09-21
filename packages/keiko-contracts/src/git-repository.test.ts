@@ -420,6 +420,43 @@ describe("isSafeGitRefName", () => {
     expect(isSafeGitRefName(ref)).toBe(false);
   });
 
+  // Field defect, 1.1.1: the customer's base branch is `feat(GDZ-917)/MAK-Prozess-Start-
+  // Produktauswahl`. The allowlist assumed every ref Keiko handles is one Keiko derived, but a base
+  // branch is the user's own, and conventional-commit style names with parentheses are ordinary.
+  // The bind was refused as "unsafe base ref" and the Workbench could not be used on that
+  // repository at all. Every row was checked against `git check-ref-format --allow-onelevel`.
+  it.each([
+    "feat(GDZ-917)/MAK-Prozess-Start-Produktauswahl",
+    "fix(ui)/button",
+    "fix+hotfix",
+    "user@feature",
+    "a=b",
+    "a,b",
+  ])("accepts the user-owned branch name %j, as git does", (ref) => {
+    expect(isSafeGitRefName(ref)).toBe(true);
+  });
+
+  // The widening is a vetted set, not git's whole grammar: every ref reaches git as one argv
+  // element, but refs also travel into URLs and operator-visible text, so characters that are
+  // shell, URL or markup syntax stay refused even though git itself would take them.
+  it.each([
+    "a;b",
+    "a|b",
+    "a$b",
+    "a&b",
+    "a#b",
+    "a%b",
+    'a"b',
+    "a'b",
+    "a`b",
+    "a<b",
+    "a>b",
+    "a{b",
+    "a!b",
+  ])("still refuses %j", (ref) => {
+    expect(isSafeGitRefName(ref)).toBe(false);
+  });
+
   // git's trailing-dot rule is whole-ref only (`a.` is refused, `a./b` is not), unlike the
   // leading-dot and `.lock` rules, which are per component: pinned so the per-component treatment
   // is not extended to it by analogy.

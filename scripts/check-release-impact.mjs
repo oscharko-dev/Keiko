@@ -691,13 +691,13 @@ function git(root, args) {
   });
 }
 
-export function parseStableVersion(value) {
+function parseStableVersion(value) {
   const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(value);
   if (match === null) return undefined;
   return match.slice(1).map((part) => Number.parseInt(part, 10));
 }
 
-export function compareStableVersions(left, right) {
+function compareStableVersions(left, right) {
   for (let index = 0; index < 3; index += 1) {
     const delta = left[index] - right[index];
     if (delta !== 0) return delta;
@@ -736,6 +736,33 @@ function readPreviousPublishedCatalog(root, currentVersion, failures) {
   }
 }
 
+// #3565. A release entry may not run ahead of package.json. While it could, the version bump was a
+// second, purely mechanical pull request, and every release paid a second full required matrix (and
+// one more chance of a transient failure) for a diff no gate can learn anything from. The pull
+// request that declares a release carries its version, so its own matrix proves the tagged tree.
+function entryAheadOf(entry, rootManifest, current) {
+  if (!objectRecord(entry) || entry.packageName !== rootManifest.name) return false;
+  if (correctionEntry(entry) || typeof entry.packageVersion !== "string") return false;
+  const version = parseStableVersion(entry.packageVersion);
+  return version !== undefined && compareStableVersions(version, current) > 0;
+}
+
+function validateNoEntryAhead(catalog, rootManifest, failures) {
+  if (!objectRecord(rootManifest) || typeof rootManifest.version !== "string") return;
+  const current = parseStableVersion(rootManifest.version);
+  if (current === undefined) return;
+  for (const entry of catalog.entries) {
+    if (!entryAheadOf(entry, rootManifest, current)) continue;
+    failures.push(
+      failure(
+        `entry ${String(entry.id)} describes ${entry.packageVersion}, ahead of package.json ` +
+          `${rootManifest.version}. The pull request that adds a release's entry also moves the ` +
+          `version: npm run set-version -- ${entry.packageVersion}`,
+      ),
+    );
+  }
+}
+
 export function validateReleaseImpactCatalog(catalog, rootManifest, options = {}) {
   const failures = [];
   if (!validateCatalogShape(catalog, failures)) return { failures, ok: false };
@@ -745,6 +772,7 @@ export function validateReleaseImpactCatalog(catalog, rootManifest, options = {}
   validateDuplicates(catalog.entries, failures);
   validateCorrectionReferences(catalog.entries, failures);
   validateCurrentPackage(catalog, rootManifest, failures);
+  validateNoEntryAhead(catalog, rootManifest, failures);
   validateCatalogBundled(rootManifest, failures);
   validateAppendOnly(catalog, options.previousCatalog, failures);
   return { failures, ok: failures.length === 0 };

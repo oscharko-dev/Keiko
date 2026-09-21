@@ -329,14 +329,40 @@ async function resolveRequiredChecks({ baseBranch, owner, repo, token, value }) 
   return fromProtection;
 }
 
-async function fetchCommitEvidence({ owner, repo, sha, token }) {
-  const [checkRunsPayload, statusPayload] = await Promise.all([
-    githubJson(
+export const CHECK_RUN_PAGE_SIZE = 100;
+// A commit with more check runs than this is not one this repository produces; refusing it bounds the
+// read instead of deciding on a partial listing.
+export const CHECK_RUN_PAGE_LIMIT = 10;
+
+/**
+ * EVERY check run of a commit, newest first, read to exhaustion (#3565). GitHub returns at most one
+ * page of 100, and the `workflow_run` observers attach a check run to the default-branch head for
+ * every workflow run that completes anywhere in the repository. The 1.1.1 release commit carried 125
+ * of them, the required checks had slid to the second page, and the single-page read reported five
+ * green checks as missing. A listing that cannot be read completely is refused, never evaluated.
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ */
+export async function fetchAllCheckRuns({ owner, repo, sha, token }) {
+  const checkRuns = [];
+  for (let page = 1; page <= CHECK_RUN_PAGE_LIMIT; page += 1) {
+    const payload = await githubJson(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(
         sha,
-      )}/check-runs?per_page=100&filter=latest`,
+      )}/check-runs?per_page=${CHECK_RUN_PAGE_SIZE}&filter=latest&page=${page}`,
       token,
-    ),
+    );
+    if (!Array.isArray(payload?.check_runs)) {
+      throw new TypeError(`The check runs of ${sha} are malformed.`);
+    }
+    checkRuns.push(...payload.check_runs);
+    if (payload.check_runs.length < CHECK_RUN_PAGE_SIZE) return checkRuns;
+  }
+  throw new Error(`The check runs of ${sha} span more than ${CHECK_RUN_PAGE_LIMIT} pages.`);
+}
+
+async function fetchCommitEvidence({ owner, repo, sha, token }) {
+  const [checkRuns, statusPayload] = await Promise.all([
+    fetchAllCheckRuns({ owner, repo, sha, token }),
     githubJson(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(
         sha,
@@ -345,7 +371,7 @@ async function fetchCommitEvidence({ owner, repo, sha, token }) {
     ),
   ]);
   return {
-    checkRuns: Array.isArray(checkRunsPayload.check_runs) ? checkRunsPayload.check_runs : [],
+    checkRuns,
     statuses: Array.isArray(statusPayload.statuses) ? statusPayload.statuses : [],
   };
 }
@@ -409,11 +435,7 @@ export async function checkRunsForIdenticalTree({ headSha, owner, repo, token, t
   const headTree = await fetchTreeSha({ owner, repo, sha: headSha, token });
   if (headTree === undefined || headTree !== treeSha) return [];
   try {
-    const payload = await githubJson(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100&filter=latest`,
-      token,
-    );
-    return Array.isArray(payload.check_runs) ? payload.check_runs : [];
+    return await fetchAllCheckRuns({ owner, repo, sha: headSha, token });
   } catch {
     return [];
   }
@@ -493,13 +515,24 @@ export async function applyTreeEvidence(config, verdict) {
   return resolved;
 }
 
+/**
+ * The one verdict on "are the release-required checks of this commit green": the complete check-run
+ * listing, evaluated, with ADR-0178 tree evidence applied. The publish job decides on it here, and
+ * release-advance decides on the same two pure steps (scripts/lib/release-automation.mjs), so the
+ * trigger and the gate it triggers cannot disagree about what green means (#3565).
+ * @returns {Promise<ReturnType<typeof evaluateRequiredChecks>>}
+ */
+export async function readRequiredChecksVerdict(config, requiredChecks) {
+  const evidence = await fetchCommitEvidence(config);
+  return applyTreeEvidence(
+    config,
+    evaluateRequiredChecks(requiredChecks, evidence.checkRuns, evidence.statuses),
+  );
+}
+
 async function waitForRequiredChecks(config, requiredChecks, timeoutAt) {
   for (;;) {
-    const evidence = await fetchCommitEvidence(config);
-    const result = await applyTreeEvidence(
-      config,
-      evaluateRequiredChecks(requiredChecks, evidence.checkRuns, evidence.statuses),
-    );
+    const result = await readRequiredChecksVerdict(config, requiredChecks);
 
     if (result.ok) {
       console.log(
