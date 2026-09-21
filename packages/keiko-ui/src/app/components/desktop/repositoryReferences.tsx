@@ -219,7 +219,7 @@ function validRepositoryPath(path: string): boolean {
   if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
     return false;
   }
-  const filename = segments[segments.length - 1] ?? "";
+  const filename = segments.at(-1) ?? "";
   const extension = filename.split(".").pop()?.toLowerCase() ?? "";
   return KNOWN_REPOSITORY_EXTENSIONS.has(extension);
 }
@@ -284,7 +284,7 @@ export function parseExactRepositoryReference(source: string): RepositoryReferen
 export function repositoryRootLabel(root: string): string {
   const normalized = trimTrailingSlashes(root.replaceAll("\\", "/"));
   const parts = normalized.split("/").filter((part) => part.length > 0);
-  return parts[parts.length - 1] ?? root;
+  return parts.at(-1) ?? root;
 }
 
 export function repositoryReferenceRoots(
