@@ -3,17 +3,11 @@
 // (`release.yml` dispatched on dev by an allowlisted owner) binds the tag to exactly the commit it was
 // pressed on, and no later dev push moves the tag away from that request. This module owns the
 // decision and the tag write; `scripts/release-candidate.mjs` only wires the host executables, so
-// every branch here is proven in-process. ADR-0177 D9 follow-up: when the button finds nothing to
-// request because the current dev version is already published, it prepares the next one instead
-// (scripts/lib/release-version-bump.mjs); a version-bump PR's merge holds the tag here the same way a
-// direct button press does, so a later, unrelated dev push cannot drift the tag past it.
+// every branch here is proven in-process. The button never prepares a version: the pull request that
+// declares a release carries its version bump (check:release-impact refuses an entry ahead of
+// package.json, #3565), so a dev head is either published or a fully proven unreleased version.
 
 import { readFound, readGithub } from "./github-api.mjs";
-import {
-  applyVersionBumpRequest,
-  nextReviewedVersion,
-  readVersionBumpAuthorization,
-} from "./release-version-bump.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 // A release.yml run is open from its dispatch until it completes. A publish and its portable inputs
@@ -250,16 +244,6 @@ function ownerRequestHolds(runs, owners, remoteTagSha) {
   );
 }
 
-// A merged version-bump PR holds its commit exactly like a direct button press: it can only exist
-// because an owner pressed the button first (readVersionBumpAuthorization verifies the PR's own
-// identity), so a later, unrelated dev push must not drift the tag away from it either.
-function releaseHeld(runGh, repository, runs, owners, remoteTagSha) {
-  return (
-    ownerRequestHolds(runs, owners, remoteTagSha) ||
-    readVersionBumpAuthorization(runGh, repository, remoteTagSha) !== undefined
-  );
-}
-
 /**
  * Gathers every fact the plan needs through the caller's host seams. A release request binds the
  * exact commit the owner pressed the button on, so it neither yields to a newer dev head nor to an
@@ -305,7 +289,7 @@ export function planReleaseCandidate({
       !request &&
       owners !== undefined &&
       facts.remoteTagSha !== undefined &&
-      releaseHeld(runGh, repository, runs, owners, facts.remoteTagSha);
+      ownerRequestHolds(runs, owners, facts.remoteTagSha);
   }
   return releaseCandidatePlan(facts);
 }
@@ -387,13 +371,6 @@ export function applyReleaseCandidatePlan({ candidateSha, plan, repository, runG
 const RUN_MODES = new Set(["--plan", "--apply", "--request"]);
 const REPOSITORY = /^[\w.-]+\/[\w.-]+$/u;
 
-// The one skip reason nextVersionBump() may act on instead of failing the button: `published` is the
-// only currentDevCandidatePlan() branch that returns DEV_REHEARSAL, so this never matches "not ready
-// yet" or "dev has moved on", which stay hard failures.
-function isPublishedSkip(plan) {
-  return plan.action === "skip" && plan.portableBuild === PORTABLE_BUILD_OWNERS.DEV_REHEARSAL;
-}
-
 function requireTagToken(env) {
   if (typeof env.KEIKO_RELEASE_TAG_TOKEN !== "string" || env.KEIKO_RELEASE_TAG_TOKEN === "") {
     fail("the release tag token is missing.");
@@ -401,76 +378,26 @@ function requireTagToken(env) {
 }
 
 /**
- * The button found nothing to request because the current version is already published: prepare the
- * next one instead of failing, from a release-impact entry an owner already reviewed ahead of time.
- * Fails when none exists yet -- there is nothing mechanical left to try -- or when the tag token
- * this also needs (it opens the pull request as the release App) is missing.
- */
-function requestVersionBump({
-  applySetVersion,
-  candidateSha,
-  catalog,
-  env,
-  repository,
-  rootPackage,
-  runGhWithTagToken,
-  runGit,
-}) {
-  const version = nextReviewedVersion(catalog, rootPackage);
-  if (version === undefined) {
-    fail(
-      `${rootPackage.name}@${rootPackage.version} is already published, and ` +
-        "release-impact.catalog.json has no reviewed entry yet for a newer version.",
-    );
-  }
-  requireTagToken(env);
-  const bump = applyVersionBumpRequest({
-    applySetVersion,
-    remoteUrl: `https://x-access-token:${env.KEIKO_RELEASE_TAG_TOKEN}@github.com/${repository}.git`,
-    repository,
-    runGhWithTagToken,
-    runGit,
-    version,
-  });
-  return (
-    `Release: ${rootPackage.name}@${rootPackage.version} requested for ${candidateSha}, already ` +
-    `published. Bumping to ${bump.version} on pull request #${String(bump.prNumber)} instead; the ` +
-    "publish starts by itself once that merges, the tag build finishes, and every release-required " +
-    "check is green."
-  );
-}
-
-/**
  * The whole run behind `scripts/release-candidate.mjs`. `--plan` decides and hands the action to
  * the workflow; `--apply` decides again from fresh facts, because dev or a publish can move between
  * the two jobs, and writes the tag only for a create or move. `--request` is the release button: it
  * binds the tag to the pressed commit and fails when that commit cannot be released, so a successful
- * request run is always a releasable one -- unless the current version is already published, when it
- * prepares the next reviewed one instead (requestVersionBump).
+ * request run is always a releasable one. A dev head whose version is already published is such a
+ * failure: there is nothing to release until a pull request declares the next version and carries
+ * its bump (#3565).
  *
- * @param applySetVersion  (version) => void; moves the version in the checkout (scripts/set-version.mjs)
  * @param decideReadiness  ({catalog, rootPackage}) => portableRehearsalReadiness() result
  * @param readText         (repositoryRelativePath) => file text of the candidate checkout
  * @param appendFile       (path, text) => void, for GITHUB_OUTPUT and GITHUB_STEP_SUMMARY
- * @param runGit           (args) => {status, stdout, stderr, error}; a git identity with push access
  */
-function requestedVersionBump({ appendFile, env, plan, request, seams }) {
-  if (!request || !isPublishedSkip(plan)) return undefined;
-  const line = requestVersionBump({ ...seams, env });
-  if (env.GITHUB_STEP_SUMMARY) appendFile(env.GITHUB_STEP_SUMMARY, `${line}\n`);
-  return { line, plan };
-}
-
 export function runReleaseCandidate({
   appendFile,
-  applySetVersion,
   decideReadiness,
   env,
   mode,
   readText,
   runGh,
   runGhWithTagToken,
-  runGit,
   runNpm,
 }) {
   const { candidateSha, repository } = runInputs(env, mode);
@@ -488,17 +415,6 @@ export function runReleaseCandidate({
     runGh,
     runNpm,
   });
-  const seams = {
-    applySetVersion,
-    candidateSha,
-    catalog,
-    repository,
-    rootPackage,
-    runGhWithTagToken,
-    runGit,
-  };
-  const bumped = requestedVersionBump({ appendFile, env, plan, request, seams });
-  if (bumped !== undefined) return bumped;
   if (request && plan.action === "skip") {
     fail(`${plan.tag} cannot be released from ${candidateSha}: ${plan.reason}.`);
   }
@@ -553,23 +469,18 @@ function reportRun({ appendFile, env, line, mode, plan }) {
 }
 
 /**
- * The CLI around runReleaseCandidate: reads use the workflow token, the tag write and the version-bump
- * pull request use the GitHub App token, and the run prints one report line or one error line with
- * exit code 1.
+ * The CLI around runReleaseCandidate: reads use the workflow token, the tag write uses the GitHub
+ * App token, and the run prints one report line or one error line with exit code 1.
  *
- * @param applySetVersion  (version) => void; moves the version in the checkout (scripts/set-version.mjs)
- * @param runGit           (args) => {status, stdout, stderr, error}; git in the checked-out root
  * @param spawn            (executable, args, env) => {status, stdout, stderr, error}
  * @param write            (stream: "stdout" | "stderr", text) => void
  */
 export function releaseCandidateMain({
   appendFile,
-  applySetVersion,
   argv,
   decideReadiness,
   env,
   readText,
-  runGit,
   spawn,
   write,
 }) {
@@ -578,14 +489,12 @@ export function releaseCandidateMain({
   try {
     const { line } = runReleaseCandidate({
       appendFile,
-      applySetVersion,
       decideReadiness,
       env,
       mode: argv[0],
       readText,
       runGh: runner("gh", env.GITHUB_TOKEN),
       runGhWithTagToken: runner("gh", env.KEIKO_RELEASE_TAG_TOKEN),
-      runGit,
       runNpm: runner("npm", undefined),
     });
     write("stdout", `${line}\n`);

@@ -33,10 +33,6 @@ function ok(value) {
 
 const NOT_FOUND = { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
 const SERVER_ERROR = { status: 1, stdout: "", stderr: "gh: Server Error (HTTP 502)" };
-// Every remote-tag-sha scenario implicitly asks "is this commit a version-bump PR merge" (releaseHeld,
-// release-candidate.mjs). Answering "no PR here" is the sensible default for every commit no test
-// names explicitly; a test that cares about a version-bump PR overrides this exact path instead.
-const COMMIT_PULLS_ROUTE = /^repos\/[^/]+\/[^/]+\/commits\/[0-9a-f]{40}\/pulls$/u;
 
 function fakeGithub(overrides = {}) {
   const routes = {
@@ -55,7 +51,6 @@ function fakeGithub(overrides = {}) {
     const path = args.at(-1);
     const route = routes[path];
     if (route !== undefined) return route;
-    if (COMMIT_PULLS_ROUTE.test(path)) return ok([]);
     throw new Error(`unexpected gh call: ${args.join(" ")}`);
   };
   return { calls, runGh };
@@ -620,75 +615,18 @@ describe("runReleaseCandidate", () => {
     );
   });
 
-  it("fails a request for an already-published version when no newer reviewed entry exists", () => {
-    const overrides = { [`repos/${REPO}/releases/tags/${TAG}`]: ok({ id: 1 }) };
-    expect(() =>
-      run("--request", { KEIKO_RELEASE_TAG_TOKEN: "app-token" }, fakeGithub(overrides)),
-    ).toThrow(
-      "release-candidate: @oscharko-dev/keiko@1.0.1 is already published, and " +
-        "release-impact.catalog.json has no reviewed entry yet for a newer version.",
+  // #3565. The button used to answer an already-published dev version by moving the version itself on
+  // an App-opened pull request. That second, purely mechanical pull request cost every release a
+  // second full required matrix, and its merge never satisfied the publish authorization. The pull
+  // request that declares a release carries its version now (check:release-impact), so the button
+  // only ever releases what dev already is, and says so when there is nothing to release.
+  it("refuses a request for an already-published version and never moves a version", () => {
+    const github = fakeGithub({ [`repos/${REPO}/releases/tags/${TAG}`]: ok({ id: 1 }) });
+    expect(() => run("--request", { KEIKO_RELEASE_TAG_TOKEN: "app-token" }, github)).toThrow(
+      `${TAG} cannot be released from ${CANDIDATE}: ${TAG} is already published, and its tag ` +
+        "never moves.",
     );
-  });
-
-  it("prepares the next reviewed version instead of failing a request for an already-published one", () => {
-    const catalog = JSON.stringify({
-      entries: [
-        {
-          packageName: ROOT_PACKAGE.name,
-          packageVersion: "1.0.2",
-          review: { humanApproved: true, status: "reviewed" },
-        },
-      ],
-    });
-    const appended = [];
-    const gitCalls = [];
-    const ghCalls = [];
-    const applySetVersionCalls = [];
-    const result = runReleaseCandidate({
-      appendFile: (path, text) => appended.push([path, text]),
-      applySetVersion: (version) => applySetVersionCalls.push(version),
-      decideReadiness: () => READY,
-      env: {
-        CANDIDATE_SHA: CANDIDATE,
-        GITHUB_REPOSITORY: REPO,
-        GITHUB_STEP_SUMMARY: "/summary",
-        KEIKO_RELEASE_TAG_TOKEN: "app-token",
-      },
-      mode: "--request",
-      readText: (path) => (path === "package.json" ? JSON.stringify(ROOT_PACKAGE) : catalog),
-      runGh: fakeGithub({ [`repos/${REPO}/releases/tags/${TAG}`]: ok({ id: 1 }) }).runGh,
-      runGhWithTagToken: (args) => {
-        ghCalls.push(args);
-        // No existing release/bump-1.0.2 branch: applyVersionBumpRequest's resume check must see
-        // "not found" here so it takes the create path this test exercises, not a resume.
-        if (args[0] === "api" && args[1] === `repos/${REPO}/git/ref/heads/release/bump-1.0.2`) {
-          return NOT_FOUND;
-        }
-        if (args[0] === "api" && args[3] === `repos/${REPO}/pulls`) return ok({ number: 99 });
-        return { status: 0, stdout: "", stderr: "" };
-      },
-      runGit: (args) => {
-        gitCalls.push(args);
-        return { status: 0, stdout: "", stderr: "" };
-      },
-      runNpm: NPM_MISSING,
-    });
-    expect(applySetVersionCalls).toStrictEqual(["1.0.2"]);
-    expect(gitCalls.map((args) => args[0])).toStrictEqual([
-      "remote",
-      "checkout",
-      "config",
-      "config",
-      "add",
-      "commit",
-      "push",
-    ]);
-    expect(result.line).toBe(
-      `Release: ${ROOT_PACKAGE.name}@1.0.1 requested for ${CANDIDATE}, already published. ` +
-        "Bumping to 1.0.2 on pull request #99 instead; the publish starts by itself once that " +
-        "merges, the tag build finishes, and every release-required check is green.",
-    );
-    expect(appended).toStrictEqual([["/summary", `${result.line}\n`]]);
+    expect(github.calls.some((args) => args.includes("--method"))).toBe(false);
   });
 
   it("fails a request for an unapproved version", () => {
