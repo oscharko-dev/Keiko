@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 
 import { productionUpdateFacts } from "../update-install-mode.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
+import {
+  NPM_LANE_RUNTIME_APPROVALS,
+  type NpmLaneRuntimeApproval,
+} from "./npmLaneRuntimeApprovals.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
@@ -39,6 +44,9 @@ export type DevLaneOpenCodeRefusalReason =
   | "secure-read-helper-missing"
   | "secure-read-helper-stale";
 
+/** Which digest-verified, unsigned lane activated the runtime: a checkout, or an npm runtime package. */
+export type DevLaneName = "dev-checkout" | "npm-runtime-package";
+
 export interface DevLaneSecureReadBinding {
   readonly helperPath: string;
   readonly helperSizeBytes: number;
@@ -53,7 +61,7 @@ export interface DevLaneSecureReadBinding {
  */
 export interface DevLanePortableOpenCodeRuntime {
   readonly evidenceClass: "functional-not-platform-qualified";
-  readonly lane: "dev-checkout";
+  readonly lane: DevLaneName;
   readonly installRoot: string;
   readonly target: DevLaneOpenCodeTarget;
   readonly sidecar: PortableSidecarRuntimeVerification;
@@ -76,6 +84,8 @@ export interface DevLaneOpenCodeDiscoveryInput {
   readonly arch?: string | undefined;
   /** The trusted launcher probes before native regeneration without establishing process authority. */
   readonly admitRuntimeSupervisor?: boolean | undefined;
+  /** Hermetic test seam; production callers never supply the npm lane's trust anchor. */
+  readonly npmLaneApprovals?: Readonly<Partial<Record<string, NpmLaneRuntimeApproval>>> | undefined;
 }
 
 export function devLaneEnvEnabled(value: string | undefined): boolean {
@@ -125,11 +135,102 @@ function discoverEnabledLane(input: DevLaneOpenCodeDiscoveryInput): DevLaneOpenC
     return refused("native-helper-directory-untrusted");
   }
   return activatedDevLaneRuntime(
+    "dev-checkout",
     target,
     stagedTargetRoot,
     payload.sidecar,
     secureRead.binding,
     runtimeSupervisor,
+  );
+}
+
+const NPM_LANE_RUNTIME_DIR = "runtime";
+
+/**
+ * The npm lane (#3577): an npm-installed Keiko carries no coding engine, so without this lane it
+ * lists its coding models and can never start a run. A customer who cannot install a desktop
+ * package installs `@oscharko-dev/keiko-coding-runtime-<platform>` next to Keiko instead, and this
+ * discovers it through ordinary module resolution from Keiko's own package root.
+ *
+ * It is the dev lane's verification with a different trust anchor, never a weaker one: the OpenCode
+ * executable tree, its license and its SBOM must match the review-approved digests, the helper must
+ * match the digest of the binary Keiko built, and the native directory may hold nothing else. All of
+ * those digests are compiled into this server (npmLaneRuntimeApprovals.ts), so a runtime package
+ * cannot vouch for itself and a planted package of the same name verifies or is refused. No opt-in
+ * is asked: installing the package is the operator's decision. `inactive` means no package is
+ * installed; a present package that fails verification is `refused` and logged.
+ */
+export function discoverNpmLaneOpenCode(
+  input: DevLaneOpenCodeDiscoveryInput,
+): DevLaneOpenCodeDiscovery {
+  const target = targetFromDiscoveryInput(input);
+  if (target === undefined || target === "windows-x64") return { outcome: "inactive" };
+  const approval = (input.npmLaneApprovals ?? NPM_LANE_RUNTIME_APPROVALS)[target];
+  if (approval === undefined) return { outcome: "inactive" };
+  const packageRoot = npmLaneRuntimePackageRoot(input.env, approval.packageName);
+  if (packageRoot === undefined) return { outcome: "inactive" };
+  try {
+    return discoverNpmLanePackage(join(packageRoot, NPM_LANE_RUNTIME_DIR), target, approval);
+  } catch {
+    return refused("payload-tampered");
+  }
+}
+
+function npmLaneRuntimePackageRoot(
+  env: NodeJS.ProcessEnv,
+  packageName: string,
+): string | undefined {
+  const keikoRoot = productionUpdateFacts(env).packageRoot;
+  if (keikoRoot === undefined) return undefined;
+  try {
+    const manifest = createRequire(join(keikoRoot, "package.json")).resolve(
+      `${packageName}/package.json`,
+    );
+    return realpathSync(dirname(manifest));
+  } catch {
+    return undefined;
+  }
+}
+
+function discoverNpmLanePackage(
+  runtimeRoot: string,
+  target: Exclude<DevLaneOpenCodeTarget, "windows-x64">,
+  approval: NpmLaneRuntimeApproval,
+): DevLaneOpenCodeDiscovery {
+  const payload = verifiedPayload(join(runtimeRoot, SIDECAR_NAME), target, approval);
+  if (!payload.ok) return refused(payload.refusal);
+  const helperPath = join(runtimeRoot, helperRelativePath(target));
+  if (!isRegularFile(helperPath)) return refused("secure-read-helper-missing");
+  if (
+    sha256File(helperPath) !== approval.helperSha256 ||
+    statSync(helperPath).size !== approval.helperSizeBytes
+  ) {
+    return refused("secure-read-helper-stale");
+  }
+  if (!trustedNativeHelperDirectory(runtimeRoot, target)) {
+    return refused("native-helper-directory-untrusted");
+  }
+  const secureRead: DevLaneSecureReadBinding = {
+    helperPath,
+    helperSizeBytes: approval.helperSizeBytes,
+    artifact: {
+      target: secureReadTarget(target),
+      installRelativePath: `runtime/${helperRelativePath(target)}`,
+      sha256: approval.helperSha256,
+      protocol: "KSR1/KSS1",
+      sourceCommit: approval.helperSourceCommit,
+      sourceTreeSha256: approval.helperSourceTreeSha256,
+      // Verified by its content digest against the server's own pin, never by a signature chain.
+      signed: true,
+    },
+  };
+  return activatedDevLaneRuntime(
+    "npm-runtime-package",
+    target,
+    runtimeRoot,
+    payload.sidecar,
+    secureRead,
+    undefined,
   );
 }
 
@@ -140,6 +241,7 @@ function targetFromDiscoveryInput(
 }
 
 function activatedDevLaneRuntime(
+  lane: DevLaneName,
   target: DevLaneOpenCodeTarget,
   stagedTargetRoot: string,
   sidecar: PortableSidecarRuntimeVerification,
@@ -148,11 +250,11 @@ function activatedDevLaneRuntime(
 ): DevLaneOpenCodeDiscovery {
   const runtime = {
     evidenceClass: "functional-not-platform-qualified" as const,
-    lane: "dev-checkout" as const,
+    lane,
     installRoot: join(stagedTargetRoot, SIDECAR_NAME),
     target,
     sidecar,
-    qualification: devLaneQualification(target, sidecar, secureRead, runtimeSupervisor),
+    qualification: devLaneQualification(lane, target, sidecar, secureRead, runtimeSupervisor),
     secureRead,
   };
   if (runtimeSupervisor === undefined) return { outcome: "activated", runtime };
@@ -522,13 +624,14 @@ function isCommitSha(value: unknown): value is string {
  * qualification identity the supervisor requires; it is not a platform qualification receipt.
  */
 function devLaneQualification(
+  lane: DevLaneName,
   target: DevLaneOpenCodeTarget,
   sidecar: PortableSidecarRuntimeVerification,
   secureRead: DevLaneSecureReadBinding,
   runtimeSupervisor: VerifiedRuntimeSupervisor | undefined,
 ): LongLivedRuntimeQualification {
   const binding = JSON.stringify({
-    lane: "dev-checkout",
+    lane,
     target,
     executableTreeSha256: sidecar.executableTreeSha256,
     helperSha256: secureRead.artifact.sha256,
@@ -624,7 +727,7 @@ function hashDirectoryTree(root: string): string {
  * between those processes and report a false stale helper, so this ordering is plain
  * code-unit comparison — locale-independent by construction. The staging script mirrors it.
  */
-function hashHelperSourceTree(root: string): string {
+export function hashHelperSourceTree(root: string): string {
   return hashTree(root, compareCodeUnits);
 }
 

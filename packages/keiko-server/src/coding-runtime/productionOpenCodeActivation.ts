@@ -24,6 +24,8 @@ import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
   discoverDevLaneOpenCode,
+  discoverNpmLaneOpenCode,
+  type DevLaneName,
   type DevLaneOpenCodeDiscovery,
   type DevLaneOpenCodeRefusalReason,
   type DevLanePortableOpenCodeRuntime,
@@ -56,7 +58,7 @@ const CODING_RUNTIME_DEV_LANE_ACTIVATED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["dev-checkout"],
+      values: ["dev-checkout", "npm-runtime-package"],
     },
     target: {
       type: "string",
@@ -97,7 +99,7 @@ const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["dev-checkout"],
+      values: ["dev-checkout", "npm-runtime-package"],
     },
     reason: {
       type: "string",
@@ -279,14 +281,24 @@ function resolveRuntime(
   };
   const packaged = discoverQualifiedPortableOpenCode(host);
   if (packaged !== undefined) return { portable: packaged };
+  const activityLog = input.activityLog ?? processServerLogSink();
+  // An installed npm runtime package decides the npm installation's outcome, refusal included: a
+  // package that fails verification must surface its reason, not fall through to a dev lane that
+  // an npm installation can never satisfy and that would report `platform-unqualified` instead.
+  const npmLane = discoverNpmLaneOpenCode(host);
+  if (npmLane.outcome !== "inactive") {
+    recordDevLaneDiscovery(activityLog, npmLane, "npm-runtime-package");
+    return devLaneRuntime(npmLane);
+  }
   const discovery = discoverDevLaneOpenCode(host);
-  recordDevLaneDiscovery(input.activityLog ?? processServerLogSink(), discovery);
+  recordDevLaneDiscovery(activityLog, discovery, "dev-checkout");
   return devLaneRuntime(discovery);
 }
 
 function recordDevLaneDiscovery(
   activityLog: ServerLogSink,
   discovery: DevLaneOpenCodeDiscovery,
+  lane: DevLaneName,
 ): void {
   if (discovery.outcome === "inactive") return;
   if (discovery.outcome === "activated") {
@@ -314,7 +326,7 @@ function recordDevLaneDiscovery(
         correlationId: UNKNOWN_CORRELATION_ID,
         errorKind: devLaneRefusalErrorKind(discovery.reason),
       },
-      { lane: "dev-checkout", reason: discovery.reason },
+      { lane, reason: discovery.reason },
     ),
   );
 }
