@@ -546,7 +546,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.subscription-source":
     "Die Abo-Quelle ist ausgewählt; das Gateway wird nicht verwendet.",
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
-    "Das Kontextfenster des konfigurierten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens). Führe unter Einstellungen → Modelle „Tiefe Prüfungen“ für dieses Modell aus und übernimm das verifizierte Kontextfenster, oder wähle ein größeres Modell.",
+    "Das Kontextfenster des konfigurierten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens). Keiko hat es automatisch geprüft und konnte 32.000 Tokens nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "Die automatische Tool-Calling-Prüfung des Coding-Modells wurde nicht erfolgreich abgeschlossen. Prüfe das letzte Readiness-Ergebnis unter Einstellungen → Modelle.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",

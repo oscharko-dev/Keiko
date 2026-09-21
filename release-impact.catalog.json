@@ -2323,7 +2323,7 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "Version 1.1.1 repairs three defects reported against a self-hosted LiteLLM gateway. The Coding Workbench now offers every chat model whose tool calling was freshly verified, without a separately entered list of coding models. A model whose gateway declares no token limits can take over the context window the readiness deep probes verified, so the Workbench no longer refuses it for the 4,096-token setup placeholder. Knowledge Pod indexing no longer fails with zero vectors when an embedding model with a small input limit rejects a long chunk: the chunk is shortened until the endpoint accepts it, and the learned limit is reused.",
+      "userVisibleSummary": "Version 1.1.1 repairs three defects reported against a self-hosted LiteLLM gateway. The Coding Workbench now offers every chat model whose tool calling was freshly verified, without a separately entered list of coding models. When a gateway declares no token limits, Keiko proves a model's context window itself the first time the Workbench is opened and stores it, so the Workbench no longer refuses the model for the 4,096-token setup placeholder and nothing has to be entered by hand. Knowledge Pod indexing no longer fails with zero vectors when an embedding model with a small input limit rejects a long chunk: the chunk is shortened until the endpoint accepts it, and a confirmed limit is reused.",
       "affectedStateStores": ["local-knowledge"],
       "stateImpact": [
         {
@@ -2335,7 +2335,7 @@
       ],
       "releaseNoteBullets": [
         "Coding Workbench: every chat model with a freshly verified tool-calling check is offered; the separate list of coding models is no longer required.",
-        "Settings \u2192 Models: after Deep probes, \"Apply verified values\" can raise a model's stored context window to the verified size, which unblocks models whose gateway reports no token limits.",
+        "Coding Workbench: when the gateway reports no token limits, Keiko checks the model's context window automatically on first use and stores the verified size; no manual readiness run or value entry is needed.",
         "Knowledge Pods: indexing completes against embedding models with a small input limit such as multilingual-e5-large instead of stopping with zero vectors after a gateway error."
       ],
       "review": {

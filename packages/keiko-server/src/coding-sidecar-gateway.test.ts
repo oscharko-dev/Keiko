@@ -2446,7 +2446,7 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(result)).not.toContain("api-key");
   });
 
-  it("surfaces the same content-free projection through the profile route", () => {
+  it("surfaces the same content-free projection through the profile route", async () => {
     const put = vi.fn((_runId: string, _json: string): string => "");
     const context = {
       req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
@@ -2463,7 +2463,7 @@ describe("coding-sidecar gateway", () => {
         delete: () => undefined,
       },
     });
-    const result = handleCodingSidecarGatewayProfile(context, deps);
+    const result = await handleCodingSidecarGatewayProfile(context, deps);
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
@@ -2479,7 +2479,7 @@ describe("coding-sidecar gateway", () => {
   // F-01: `status: "available"` describes the stored configuration. A deps assembly with no probe
   // record must therefore publish `verification: "unverified"` — the Workbench renders this field,
   // and a missing one would let it keep reading a configured source as a healthy one.
-  it("publishes the last probe outcome alongside the config-derived profile", () => {
+  it("publishes the last probe outcome alongside the config-derived profile", async () => {
     const context = {
       req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
       res: mockResponse().res,
@@ -2488,11 +2488,11 @@ describe("coding-sidecar gateway", () => {
       correlationId: undefined,
     } satisfies RouteContext;
     const config = configValue(provider(), capability());
-    const unprobed = handleCodingSidecarGatewayProfile(context, depsValue(config));
+    const unprobed = await handleCodingSidecarGatewayProfile(context, depsValue(config));
 
     expect(unprobed.body).toMatchObject({ status: "available", verification: "unverified" });
 
-    const verified = handleCodingSidecarGatewayProfile(context, {
+    const verified = await handleCodingSidecarGatewayProfile(context, {
       ...depsValue(config),
       gatewayConfig: {
         storagePath: "/dev/null",
@@ -2511,7 +2511,7 @@ describe("coding-sidecar gateway", () => {
     expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
   });
 
-  it("fails closed through the profile route when the injected model source is subscription-backed", () => {
+  it("fails closed through the profile route when the injected model source is subscription-backed", async () => {
     const context = {
       req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
       res: mockResponse().res,
@@ -2519,7 +2519,7 @@ describe("coding-sidecar gateway", () => {
       url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
       correlationId: undefined,
     } satisfies RouteContext;
-    const result = handleCodingSidecarGatewayProfile(
+    const result = await handleCodingSidecarGatewayProfile(
       context,
       depsValue(
         configValue(provider(), capability()),
@@ -3859,11 +3859,11 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
 
   it.each([false, true])(
     "records passive tool-capability refusal without probing: %s",
-    (declared) => {
+    async (declared) => {
       const sink = captureServerLog("warn");
       const chat = vi.fn();
       const { toolCallingVerification: _verification, ...unverified } = capability();
-      const result = handleCodingSidecarGatewayProfile(
+      const result = await handleCodingSidecarGatewayProfile(
         { ...profileContext(), correlationId: "passive-profile-0001" },
         depsValue(configValue(provider(), { ...unverified, toolCalling: declared }), chat),
       );
@@ -3884,7 +3884,7 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
     },
   );
 
-  it("demotes an available profile whose setup-placeholder capability cannot survive one request", () => {
+  it("demotes an available profile whose setup-placeholder capability cannot survive one request", async () => {
     const sink = captureServerLog("warn");
     // #3390 live incident: a coding-safe model configured with the setup placeholder capability
     // (contextWindow 4096 / maxOutputTokens 0) reported "available" and died on the first gateway
@@ -3893,7 +3893,7 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
       configValue(provider(), capability({ contextWindow: 4_096, maxOutputTokens: 0 })),
     );
 
-    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const result = await handleCodingSidecarGatewayProfile(profileContext(), deps);
 
     expect(result).toEqual({
       status: 200,
@@ -3935,24 +3935,24 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
     });
   });
 
-  it("keeps reporting available when the derived prompt budget clears the minimum", () => {
+  it("keeps reporting available when the derived prompt budget clears the minimum", async () => {
     const sink = captureServerLog("warn");
     const deps = depsValue(configValue(provider(), capability()));
 
-    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const result = await handleCodingSidecarGatewayProfile(profileContext(), deps);
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ status: "available" });
     expect(sink.events).toHaveLength(0);
   });
 
-  it("keeps the repository's real 32k coding profile available", () => {
+  it("keeps the repository's real 32k coding profile available", async () => {
     const sink = captureServerLog("warn");
     const deps = depsValue(
       configValue(provider(), capability({ contextWindow: 32_000, maxOutputTokens: 2_048 })),
     );
 
-    const result = handleCodingSidecarGatewayProfile(profileContext(), deps);
+    const result = await handleCodingSidecarGatewayProfile(profileContext(), deps);
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({

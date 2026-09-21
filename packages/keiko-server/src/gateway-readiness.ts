@@ -25,10 +25,12 @@ import {
 import { gatewayVerificationFromProbeOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
+  codingWorkbenchModelEligibility,
   isCodingWorkbenchReadinessCandidate,
   preferredConversationModelOrder,
   selectCodingWorkbenchReadinessCandidate,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
 import { currentConversationReady, currentGatewayConfig } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
@@ -44,7 +46,10 @@ import {
   settleGatewayProbeSpend,
   type GatewayProbeSpendContext,
 } from "./gateway-tool-calling-probe.js";
-import { reconcileGatewayToolCallingReadiness } from "./gateway-setup.js";
+import {
+  reconcileGatewayContextWindowReadiness,
+  reconcileGatewayToolCallingReadiness,
+} from "./gateway-setup.js";
 import { processServerLogSink } from "./process-log-sink.js";
 // #3557 review finding A: the one owning projection from a candidate model id to Activity Log
 // evidence — reused here so a readiness line never carries a value that would fail
@@ -131,6 +136,9 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
       values: ["ready", "partial", "failed"],
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
+    // Tokens the long-context probe proved. Present only when that probe ran and passed; a stored
+    // context window below it is raised to it by the same run, so the raise is reconstructable.
+    verifiedContextTokens: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -419,6 +427,7 @@ function logAutomaticReadinessCompleted(
     report.modelId,
     report.overallStatus,
     report.probes.length,
+    report.verifiedCapabilities.testedContextTokens,
   );
 }
 
@@ -454,6 +463,7 @@ function logAutomaticReadinessOutcome(
   modelId: string,
   overallStatus: GatewayReadinessReport["overallStatus"],
   probeCount: number,
+  verifiedContextTokens?: number,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -463,6 +473,7 @@ function logAutomaticReadinessOutcome(
         ...modelIdEvidence(modelId),
         overallStatus,
         probeCount,
+        ...(verifiedContextTokens === undefined ? {} : { verifiedContextTokens }),
       },
     ),
   );
@@ -1685,9 +1696,119 @@ export async function runGatewayReadiness(
   // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
   recordReadinessObservation(deps, report, observedGeneration);
+  // Read BEFORE the tool-calling reconcile: persisting that conclusion bumps the generation, and
+  // the context-window reconcile must tell "we just wrote it" from "the config was replaced".
+  const probedCurrentConfig =
+    observedGeneration === undefined || deps.gatewayConfig?.generation() === observedGeneration;
   reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
+  if (probedCurrentConfig) reconcileContextWindowReadiness(deps, report, correlationId);
   logReadinessRunCompleted(deps, run, report);
   return report;
+}
+
+function reconcileContextWindowReadiness(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  correlationId: string,
+): void {
+  try {
+    reconcileGatewayContextWindowReadiness(
+      deps,
+      report,
+      deps.gatewayConfig?.generation(),
+      correlationId,
+    );
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.readiness",
+        source: "gateway-readiness.context-window-reconcile",
+        error,
+        summary: "The verified gateway context window could not be persisted.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  }
+}
+
+// ─── Coding Workbench context window, determined by Keiko itself ─────────────────────────────
+// A gateway that declares no token limits leaves the 4,096 setup placeholder in place, and the
+// Coding Workbench needs 32,000. Keiko can prove the window itself, so it does: when the Workbench
+// reads its profile, every model it could run whose stored window is below the minimum gets the
+// long-context probe once, and `runGatewayReadiness` persists what that proves. The model the
+// Workbench would elect is awaited so the profile it reads already reflects it; the others finish
+// in the background. One attempt per model and configuration generation within the cooldown, so a
+// model that really is short-context, or a gateway that is down, is not probed on every read.
+const CONTEXT_WINDOW_REPROBE_COOLDOWN_MS = 10 * 60 * 1_000;
+const contextWindowProbes = new Map<string, { readonly promise: Promise<void>; at: number }>();
+
+export function resetCodingWorkbenchContextWindowProbesForTests(): void {
+  contextWindowProbes.clear();
+}
+
+function needsContextWindowProbe(capability: ModelCapability): boolean {
+  return (
+    codingWorkbenchModelEligibility(capability) === "eligible" &&
+    capability.contextWindow < CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
+  );
+}
+
+function contextWindowProbeFor(
+  deps: UiHandlerDeps,
+  generation: number,
+  modelId: string,
+  correlationId: string,
+): Promise<void> {
+  const key = `${String(generation)}:${modelId}`;
+  const known = contextWindowProbes.get(key);
+  if (known !== undefined && Date.now() - known.at < CONTEXT_WINDOW_REPROBE_COOLDOWN_MS) {
+    return known.promise;
+  }
+  const promise = runGatewayReadiness(
+    { modelId, options: { probes: ["long_context"], purpose: "coding-workbench-auto" } },
+    deps,
+    correlationId,
+  ).then(
+    (): void => undefined,
+    (error: unknown): void => {
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId,
+          operation: "gateway.readiness",
+          source: "gateway-readiness.context-window-probe",
+          error,
+          summary: "A gateway readiness probe could not be completed.",
+          redact: (message): string => String(deps.redactor(message)),
+        }),
+      );
+    },
+  );
+  contextWindowProbes.set(key, { promise, at: Date.now() });
+  return promise;
+}
+
+export async function ensureCodingWorkbenchContextWindows(
+  deps: UiHandlerDeps,
+  electedModelId: string | undefined,
+  correlationId?: string,
+): Promise<void> {
+  const holder = deps.gatewayConfig;
+  const config = holder?.current();
+  if (holder === undefined || config === undefined) return;
+  const pending = listConfiguredCapabilities(config).filter(needsContextWindowProbe);
+  if (pending.length === 0) return;
+  const generation = holder.generation();
+  const id = correlationId ?? newCorrelationId();
+  const probes = new Map(
+    pending.map((capability) => [
+      capability.id,
+      contextWindowProbeFor(deps, generation, capability.id, id),
+    ]),
+  );
+  await (probes.get(electedModelId ?? "") ?? probes.values().next().value);
 }
 
 // Fresh-install gap (customer field incident, 0.3.10): a configured gateway carries NO

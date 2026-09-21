@@ -56,6 +56,7 @@ import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchPr
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
+import { ensureCodingWorkbenchContextWindows } from "./gateway-readiness.js";
 import { getServerLogger } from "./observability/index.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { startSseHeartbeat } from "./sse.js";
@@ -2348,10 +2349,18 @@ function gatewayReadinessProjection(
     : result;
 }
 
-export function handleCodingSidecarGatewayProfile(
+export async function handleCodingSidecarGatewayProfile(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-): RouteResult {
+): Promise<RouteResult> {
+  // What Keiko can determine itself it determines itself: a model whose gateway declared no token
+  // limits gets its context window proven here, before the projection judges it.
+  const elected = resolveGatewayProfile(deps).result;
+  await ensureCodingWorkbenchContextWindows(
+    deps,
+    elected.status === "available" ? elected.modelAlias : undefined,
+    ctx.correlationId,
+  );
   return { status: 200, body: gatewayReadinessProjection(ctx, deps) };
 }
 

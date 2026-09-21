@@ -625,6 +625,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Verification execution failed unexpectedly.",
   "A verification event subscriber failed.",
   "Gateway tool-calling verification could not be persisted.",
+  "The verified gateway context window could not be persisted.",
   "Model discovery exceeded the discovery cap; setup continued with the retained models.",
   // KEIKO-0884 (#3333): loopback was the only egress class Gateway Setup accepted with no
   // configuration signal, no log line, and no opt-in trail. Not a failure — a deliberate, silent

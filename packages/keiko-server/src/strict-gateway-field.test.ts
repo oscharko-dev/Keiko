@@ -8,6 +8,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildUiHandlerDeps } from "./deps.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
+import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
+import { resetCodingWorkbenchContextWindowProbesForTests } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import { handleCreateDesktopChat } from "./chat-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
@@ -60,6 +63,9 @@ interface StrictLiteLlmBehavior {
   // The field multilingual-e5-large accepts at most 512 real tokens per input and the gateway
   // answers a longer one with HTTP 500 (customer report on 1.1.0). Undefined: no limit.
   readonly maxEmbeddingInputChars?: number;
+  // Answers a forced tool call with the arguments the caller asked for, as a deployment with a
+  // working tool parser does. Off by default: the historical twin returned empty arguments.
+  readonly answersToolCalls?: boolean;
 }
 
 function requestedToolName(body: Record<string, unknown>): string | undefined {
@@ -100,15 +106,28 @@ function answerChatCompletion(
   if (typeof body.model === "string") log.chatModels.push(body.model);
   const empty = typeof body.model === "string" && behavior.emptyChatModels.has(body.model);
   const toolName = requestedToolName(body);
+  // The long-context probe asks for its sentinel back; a real model that read the prompt returns it.
+  const sentinel = raw.includes("KEIKO_LONG_CONTEXT_SENTINEL")
+    ? "KEIKO_LONG_CONTEXT_SENTINEL"
+    : "OK";
   json(res, {
     choices: [
       {
         message: {
           role: "assistant",
-          content: empty ? "" : "OK",
+          content: empty ? "" : sentinel,
           ...(toolName === undefined
             ? {}
-            : { tool_calls: [{ function: { name: toolName, arguments: "{}" } }] }),
+            : {
+                tool_calls: [
+                  {
+                    function: {
+                      name: toolName,
+                      arguments: behavior.answersToolCalls === true ? '{"status":"ok"}' : "{}",
+                    },
+                  },
+                ],
+              }),
         },
         finish_reason: "stop",
       },
@@ -524,6 +543,70 @@ describe("strict LiteLLM field twin", () => {
           (entry) => !("encoding_format" in entry) && !Array.isArray(entry.input),
         ),
       ).toBe(true);
+    } finally {
+      await deps?.dispose?.();
+      await closeServer(gateway);
+    }
+  });
+
+  // Customer report on 1.1.0: URL and key were all the customer entered. The gateway declares no
+  // token limits, so every chat model kept the 4,096 setup placeholder and the Coding Workbench
+  // answered "context window too small (minimum 32,000)" for models that accept far more. What
+  // Keiko can determine itself it must determine itself: opening the Workbench proves the window
+  // and stores it, with no readiness click and no value copied by hand.
+  it("proves and stores the context window itself when the Workbench profile is read", async () => {
+    resetCodingWorkbenchContextWindowProbesForTests();
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
+    const gateway = startStrictLiteLlm(
+      log,
+      {},
+      { emptyChatModels: new Set(), answersToolCalls: true },
+    );
+    const port = await listen(gateway);
+    const tmp = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-field-")));
+    tempDirs.push(tmp);
+
+    let deps: UiHandlerDeps | undefined;
+    try {
+      deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp,
+        uiDbPath: join(tmp, "keiko-ui.db"),
+        env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      });
+      const setup = await handleGatewaySetup(
+        ctx("POST", { baseUrl: `http://127.0.0.1:${String(port)}/v1`, apiKey: "field-token" }),
+        deps,
+      );
+      expect(setup.status).toBe(200);
+      const storedWindow = (): number | undefined =>
+        deps?.gatewayConfig
+          ?.current()
+          ?.capabilities?.find((capability) => capability.id === "qwen-chat")?.contextWindow;
+      expect(storedWindow()).toBe(4_096);
+
+      const events: ServerLogEvent[] = [];
+      const observed: UiHandlerDeps = {
+        ...deps,
+        activityLog: { write: (event): void => void events.push(event) },
+      };
+      const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), observed);
+
+      expect(profile.body).toMatchObject({ status: "available", modelAlias: "qwen-chat" });
+      expect(storedWindow()).toBe(32_000);
+      // The raise is reconstructable from the log alone: the automatic run and what it proved.
+      const completed = events.find(
+        (event) => event.op === "gateway.readiness.automatic.completed",
+      );
+      expect(completed?.extra).toMatchObject({
+        overallStatus: "ready",
+        verifiedContextTokens: 32_000,
+      });
+
+      // A second read finds nothing left to prove and sends no further long-context request.
+      const chatCallsAfterFirstRead = log.chatModels.length;
+      await handleCodingSidecarGatewayProfile(ctx("GET", {}), deps);
+      expect(log.chatModels).toHaveLength(chatCallsAfterFirstRead);
     } finally {
       await deps?.dispose?.();
       await closeServer(gateway);
