@@ -1748,9 +1748,20 @@ function reconcileContextWindowReadiness(
 // model that never claimed tool calling is never probed from here at all.
 const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
 const workbenchProbes = new Map<string, { readonly promise: Promise<void>; at: number }>();
+// ONE run at a time. Persisting a conclusion bumps the configuration generation, and a readiness
+// run that started under the previous generation has its conclusion discarded as stale: probing
+// six models at once would store the first to finish and silently drop the other five. A queue
+// lets every run start on the generation the one before it left behind.
+let workbenchProbeQueue: Promise<void> = Promise.resolve();
 
 export function resetCodingWorkbenchContextWindowProbesForTests(): void {
   workbenchProbes.clear();
+  workbenchProbeQueue = Promise.resolve();
+}
+
+/** Resolves once every automatic Workbench probe queued so far has finished. Test seam. */
+export function codingWorkbenchProbesSettledForTests(): Promise<void> {
+  return workbenchProbeQueue;
 }
 
 function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
@@ -1764,44 +1775,82 @@ function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayRea
   ];
 }
 
+interface WorkbenchProbeTarget {
+  readonly modelId: string;
+  readonly probes: readonly GatewayReadinessProbeName[];
+}
+
+function workbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
+  return listConfiguredCapabilities(config)
+    .map((capability) => ({ modelId: capability.id, probes: workbenchProbesNeeded(capability) }))
+    .filter((target) => target.probes.length > 0);
+}
+
 // Keyed by the deployment's identity, not the configuration generation: every conclusion this
 // persists bumps the generation, which would otherwise lift the cooldown of every other model.
-function workbenchProbeFor(
+function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  return provider === undefined ? modelId : toolCallingConfigurationFingerprint(provider);
+}
+
+async function runWorkbenchProbe(
   deps: UiHandlerDeps,
-  config: GatewayConfig,
-  target: { readonly modelId: string; readonly probes: readonly GatewayReadinessProbeName[] },
+  target: WorkbenchProbeTarget,
+  key: string,
   correlationId: string,
 ): Promise<void> {
-  const provider = config.providers.find((candidate) => candidate.modelId === target.modelId);
-  const key =
-    provider === undefined ? target.modelId : toolCallingConfigurationFingerprint(provider);
+  try {
+    const report = await runGatewayReadiness(
+      {
+        modelId: target.modelId,
+        options: { probes: target.probes, purpose: "coding-workbench-auto" },
+      },
+      deps,
+      correlationId,
+    );
+    const proven =
+      !("status" in report) &&
+      target.probes.every((name) =>
+        report.probes.some((probe) => probe.name === name && probe.status === "passed"),
+      );
+    const config = deps.gatewayConfig?.current();
+    const stillNeeded =
+      config !== undefined &&
+      workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
+    // Proven, yet not stored: the configuration changed under the run and the conclusion was
+    // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
+    // the model unusable for hours.
+    if (proven && stillNeeded) workbenchProbes.delete(key);
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.readiness",
+        source: "gateway-readiness.workbench-probe",
+        error,
+        summary: "A gateway readiness probe could not be completed.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  }
+}
+
+function enqueueWorkbenchProbe(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  target: WorkbenchProbeTarget,
+  correlationId: string,
+): Promise<void> {
+  const key = workbenchProbeKey(config, target.modelId);
   const known = workbenchProbes.get(key);
   if (known !== undefined && Date.now() - known.at < WORKBENCH_REPROBE_COOLDOWN_MS) {
     return known.promise;
   }
-  const promise = runGatewayReadiness(
-    {
-      modelId: target.modelId,
-      options: { probes: target.probes, purpose: "coding-workbench-auto" },
-    },
-    deps,
-    correlationId,
-  ).then(
-    (): void => undefined,
-    (error: unknown): void => {
-      emitServerDiagnostic(
-        deps.diagnostics,
-        serverDiagnosticFromError({
-          correlationId,
-          operation: "gateway.readiness",
-          source: "gateway-readiness.workbench-probe",
-          error,
-          summary: "A gateway readiness probe could not be completed.",
-          redact: (message): string => String(deps.redactor(message)),
-        }),
-      );
-    },
+  const promise = workbenchProbeQueue.then(() =>
+    runWorkbenchProbe(deps, target, key, correlationId),
   );
+  workbenchProbeQueue = promise;
   workbenchProbes.set(key, { promise, at: Date.now() });
   return promise;
 }
@@ -1811,18 +1860,18 @@ export async function ensureCodingWorkbenchContextWindows(
   electedModelId: string | undefined,
   correlationId?: string,
 ): Promise<void> {
-  const holder = deps.gatewayConfig;
-  const config = holder?.current();
-  if (holder === undefined || config === undefined) return;
-  const targets = listConfiguredCapabilities(config)
-    .map((capability) => ({ modelId: capability.id, probes: workbenchProbesNeeded(capability) }))
-    .filter((target) => target.probes.length > 0);
+  const config = deps.gatewayConfig?.current();
+  if (config === undefined) return;
+  const targets = workbenchProbeTargets(config);
   if (targets.length === 0) return;
   const id = correlationId ?? newCorrelationId();
-  const running = new Map(
-    targets.map((target) => [target.modelId, workbenchProbeFor(deps, config, target, id)]),
-  );
-  await (running.get(electedModelId ?? "") ?? running.values().next().value);
+  // The model the Workbench would elect goes first and is the only one awaited.
+  const ordered = [
+    ...targets.filter((target) => target.modelId === electedModelId),
+    ...targets.filter((target) => target.modelId !== electedModelId),
+  ];
+  const queued = ordered.map((target) => enqueueWorkbenchProbe(deps, config, target, id));
+  await queued[0];
 }
 
 // Fresh-install gap (customer field incident, 0.3.10): a configured gateway carries NO

@@ -72866,14 +72866,14 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:1796",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:1829",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:1929",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:1978",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

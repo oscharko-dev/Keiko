@@ -10,7 +10,10 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
-import { resetCodingWorkbenchContextWindowProbesForTests } from "./gateway-readiness.js";
+import {
+  codingWorkbenchProbesSettledForTests,
+  resetCodingWorkbenchContextWindowProbesForTests,
+} from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import { handleCreateDesktopChat } from "./chat-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
@@ -53,6 +56,8 @@ interface StrictLiteLlmOptions {
   // field dotsocr — declares NO `mode` in /model/info, so discovery metadata cannot exclude it
   // and it lands in the stored configuration as an assumed chat model.
   readonly unsuitableFirstChatModel?: boolean;
+  // A second declared chat model, as the field gateway has several tool-capable ones.
+  readonly secondChatModel?: boolean;
 }
 
 // Mutable per-test control: a model in this set answers chat completions with an EMPTY
@@ -91,6 +96,9 @@ function answerModelInfo(res: ServerResponse, options: StrictLiteLlmOptions): vo
     data: [
       ...(options.unsuitableFirstChatModel === true ? [{ model_name: "dotsocr" }] : []),
       { model_name: "qwen-chat", model_info: { mode: "chat" } },
+      ...(options.secondChatModel === true
+        ? [{ model_name: "gemma-chat", model_info: { mode: "chat" } }]
+        : []),
       { model_name: "multilingual-e5-large", model_info: { mode: "embedding" } },
     ],
   });
@@ -617,6 +625,58 @@ describe("strict LiteLLM field twin", () => {
       const chatCallsAfterFirstRead = log.chatModels.length;
       await handleCodingSidecarGatewayProfile(ctx("GET", {}), deps);
       expect(log.chatModels).toHaveLength(chatCallsAfterFirstRead);
+    } finally {
+      await deps?.dispose?.();
+      await closeServer(gateway);
+    }
+  });
+
+  // The field gateway has six tool-capable models. Persisting one model's conclusion bumps the
+  // configuration generation, and a run that started under the previous generation has its
+  // conclusion discarded: probing them all at once stored the first and silently dropped the rest,
+  // leaving every other model in the picker at 4,096 for the whole cooldown.
+  it("proves the context window of every tool-capable model, not only the elected one", async () => {
+    resetCodingWorkbenchContextWindowProbesForTests();
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
+    const gateway = startStrictLiteLlm(
+      log,
+      { secondChatModel: true },
+      { emptyChatModels: new Set(), answersToolCalls: true },
+    );
+    const port = await listen(gateway);
+    const tmp = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-field-")));
+    tempDirs.push(tmp);
+
+    let deps: UiHandlerDeps | undefined;
+    try {
+      deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp,
+        uiDbPath: join(tmp, "keiko-ui.db"),
+        env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      });
+      const setup = await handleGatewaySetup(
+        ctx("POST", { baseUrl: `http://127.0.0.1:${String(port)}/v1`, apiKey: "field-token" }),
+        deps,
+      );
+      expect(setup.status).toBe(200);
+      const windows = (): readonly (readonly [string, number])[] =>
+        (deps?.gatewayConfig?.current()?.capabilities ?? [])
+          .filter((capability) => capability.kind === "chat")
+          .map((capability) => [capability.id, capability.contextWindow] as const);
+      expect(windows()).toEqual([
+        ["qwen-chat", 4_096],
+        ["gemma-chat", 4_096],
+      ]);
+
+      const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), deps);
+      expect(profile.body).toMatchObject({ status: "available" });
+      await codingWorkbenchProbesSettledForTests();
+
+      expect(windows()).toEqual([
+        ["qwen-chat", 32_000],
+        ["gemma-chat", 32_000],
+      ]);
     } finally {
       await deps?.dispose?.();
       await closeServer(gateway);
