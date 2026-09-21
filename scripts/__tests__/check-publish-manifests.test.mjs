@@ -2,8 +2,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { validatePublishManifests } from "../check-publish-manifests.mjs";
+import { requiredPlatformRuntimePackageNames } from "../release-workspace-policy.mjs";
+import { NPM_LANE_RUNTIME_APPROVALS } from "../../packages/keiko-server/src/coding-runtime/npmLaneRuntimeApprovals.ts";
 
 const VERSION = "0.2.11";
+const PLATFORM_RUNTIMES = Object.fromEntries(
+  requiredPlatformRuntimePackageNames.map((name) => [name, "1.1.3"]),
+);
 
 function rootManifest(overrides = {}) {
   return {
@@ -17,6 +22,7 @@ function rootManifest(overrides = {}) {
       "@oscharko-dev/keiko-contracts": VERSION,
     },
     bundleDependencies: ["@oscharko-dev/keiko-contracts"],
+    optionalDependencies: { ...PLATFORM_RUNTIMES },
     ...overrides,
   };
 }
@@ -177,13 +183,38 @@ describe("validatePublishManifests", () => {
 describe("platform coding-runtime packages", () => {
   const RUNTIME = "@oscharko-dev/keiko-coding-runtime-darwin-arm64";
   const workspaces = [workspace("@oscharko-dev/keiko-contracts")];
+  const failuresFor = (overrides) =>
+    validatePublishManifests(rootManifest(overrides), workspaces).join("\n");
 
-  it("accepts one as an exactly pinned, unbundled optional dependency", () => {
-    const failures = validatePublishManifests(
-      rootManifest({ optionalDependencies: { [RUNTIME]: "1.1.3" } }),
-      workspaces,
+  it("accepts them as exactly pinned, unbundled optional dependencies", () => {
+    expect(validatePublishManifests(rootManifest(), workspaces)).toStrictEqual([]);
+  });
+
+  // The server carries compiled-in approvals for exactly these packages. One that is no longer
+  // declared takes the coding runtime away from every npm installation on that platform, silently:
+  // npm just has nothing optional left to install.
+  it("requires exactly the packages the server holds approvals for", () => {
+    expect([...requiredPlatformRuntimePackageNames].sort()).toStrictEqual(
+      Object.values(NPM_LANE_RUNTIME_APPROVALS)
+        .map((approval) => approval.packageName)
+        .sort(),
     );
-    expect(failures).toStrictEqual([]);
+  });
+
+  it("refuses a manifest that declares none of them", () => {
+    const failures = failuresFor({ optionalDependencies: {} });
+    for (const name of requiredPlatformRuntimePackageNames) {
+      expect(failures).toContain(`platform runtime ${name} is not declared`);
+    }
+  });
+
+  it.each(requiredPlatformRuntimePackageNames)("refuses a manifest that drops %s", (dropped) => {
+    const remaining = Object.fromEntries(
+      Object.entries(PLATFORM_RUNTIMES).filter(([name]) => name !== dropped),
+    );
+    const failures = failuresFor({ optionalDependencies: remaining });
+    expect(failures).toContain(`platform runtime ${dropped} is not declared`);
+    expect(failures.match(/is not declared/gu)).toHaveLength(1);
   });
 
   it.each([
@@ -191,21 +222,27 @@ describe("platform coding-runtime packages", () => {
       "a required dependency",
       {
         dependencies: { "@oscharko-dev/keiko-contracts": VERSION, [RUNTIME]: "1.1.3" },
+        optionalDependencies: { ...PLATFORM_RUNTIMES, [RUNTIME]: undefined },
       },
       "must be an optionalDependency",
     ],
-    ["a version range", { optionalDependencies: { [RUNTIME]: "^1.1.3" } }, "exact version"],
+    [
+      "a version range",
+      { optionalDependencies: { ...PLATFORM_RUNTIMES, [RUNTIME]: "^1.1.3" } },
+      "exact version",
+    ],
     [
       "a bundled entry",
-      {
-        optionalDependencies: { [RUNTIME]: "1.1.3" },
-        bundleDependencies: ["@oscharko-dev/keiko-contracts", RUNTIME],
-      },
+      { bundleDependencies: ["@oscharko-dev/keiko-contracts", RUNTIME] },
       "must not be bundled",
     ],
   ])("refuses %s", (_label, overrides, message) => {
-    const failures = validatePublishManifests(rootManifest(overrides), workspaces);
-    expect(failures.join("\n")).toContain(message);
+    expect(failuresFor(overrides)).toContain(message);
+  });
+
+  it("refuses a workspace that takes a platform runtime's name", () => {
+    const failures = validatePublishManifests(rootManifest(), [...workspaces, workspace(RUNTIME)]);
+    expect(failures.join("\n")).toContain("must not be a workspace package");
   });
 });
 

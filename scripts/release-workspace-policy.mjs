@@ -18,6 +18,27 @@ export const explicitPrivateWorkspaceExclusions = new Map([
 // runtime itself changes and not with the product version.
 export const platformRuntimePackagePrefix = `${scope}keiko-coding-runtime-`;
 
+/**
+ * Keiko portable target -> the npm `os`/`cpu` pair and package suffix npm selects a host by. The
+ * one list of platform runtime packages: the builder names its packages from it, and the publish
+ * gate requires the main package to declare every one of them, because a missing entry would
+ * silently take the coding runtime away from every npm installation on that platform.
+ */
+export const platformRuntimePackages = Object.freeze({
+  "macos-arm64": Object.freeze({ cpu: "arm64", os: "darwin", suffix: "darwin-arm64" }),
+  "macos-x64": Object.freeze({ cpu: "x64", os: "darwin", suffix: "darwin-x64" }),
+});
+
+export function platformRuntimePackageName(target) {
+  const entry = platformRuntimePackages[target];
+  if (entry === undefined) throw new TypeError(`unsupported npm runtime package target: ${target}`);
+  return `${platformRuntimePackagePrefix}${entry.suffix}`;
+}
+
+export const requiredPlatformRuntimePackageNames = Object.freeze(
+  Object.keys(platformRuntimePackages).map(platformRuntimePackageName),
+);
+
 export function isPlatformRuntimePackage(name) {
   return typeof name === "string" && name.startsWith(platformRuntimePackagePrefix);
 }

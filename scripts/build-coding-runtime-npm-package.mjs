@@ -30,22 +30,18 @@ import { fileURLToPath } from "node:url";
 import { runSecureWorkspaceReadBuild } from "./build-secure-workspace-read.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { prepareApprovedSidecarPayloads } from "./prepare-approved-sidecar-payloads.mjs";
+import {
+  platformRuntimePackageName,
+  platformRuntimePackages,
+} from "./release-workspace-policy.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SIDECAR_NAME = "opencode-compatible";
 const HELPER_RELATIVE_PATH = "native/keiko-secure-workspace-read";
 
-/** Keiko portable target -> the npm `os`/`cpu` pair and package suffix npm selects a host by. */
-export const NPM_RUNTIME_PACKAGE_TARGETS = Object.freeze({
-  "macos-arm64": Object.freeze({ cpu: "arm64", os: "darwin", suffix: "darwin-arm64" }),
-  "macos-x64": Object.freeze({ cpu: "x64", os: "darwin", suffix: "darwin-x64" }),
-});
-
-export function codingRuntimePackageName(target) {
-  const entry = NPM_RUNTIME_PACKAGE_TARGETS[target];
-  if (entry === undefined) throw new TypeError(`unsupported npm runtime package target: ${target}`);
-  return `@oscharko-dev/keiko-coding-runtime-${entry.suffix}`;
-}
+/** The platform list and its naming are owned by the release workspace policy. */
+export const NPM_RUNTIME_PACKAGE_TARGETS = platformRuntimePackages;
+export const codingRuntimePackageName = platformRuntimePackageName;
 
 export function codingRuntimePackageManifest(target, version) {
   const entry = NPM_RUNTIME_PACKAGE_TARGETS[target];
@@ -128,14 +124,20 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
   }
 }
 
-if (isMainModule(import.meta.url)) {
-  const [target, version, outDir] = process.argv.slice(2);
-  if (process.argv.length !== 5) {
-    console.error(
+/** The CLI: prints the digests the server pins, or a usage line with exit code 2. */
+export async function main(argv, { build = buildCodingRuntimeNpmPackage, write = console } = {}) {
+  const [target, version, outDir] = argv;
+  if (argv.length !== 3) {
+    write.error(
       "usage: build-coding-runtime-npm-package.mjs <target> <version> <absolute-out-dir>",
     );
-    process.exit(2);
+    return 2;
   }
-  const result = await buildCodingRuntimeNpmPackage({ target, version, outDir: resolve(outDir) });
-  console.log(JSON.stringify(result, null, 2));
+  const result = await build({ target, version, outDir: resolve(outDir) });
+  write.log(JSON.stringify(result, null, 2));
+  return 0;
+}
+
+if (isMainModule(import.meta.url)) {
+  process.exitCode = await main(process.argv.slice(2));
 }

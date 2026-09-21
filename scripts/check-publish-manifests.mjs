@@ -6,6 +6,7 @@ import {
   explicitPrivateWorkspaceExclusions,
   internalDependencyEntries,
   platformRuntimeDependencyEntries,
+  requiredPlatformRuntimePackageNames,
   scope,
 } from "./release-workspace-policy.mjs";
 
@@ -169,6 +170,15 @@ export function platformRuntimeDependencyFailures(rootManifest, workspaceNames) 
     Array.isArray(rootManifest.bundleDependencies) ? rootManifest.bundleDependencies : [],
   );
   const failures = [];
+  const declared = new Set(platformRuntimeDependencyEntries(rootManifest).map(({ name }) => name));
+  for (const name of requiredPlatformRuntimePackageNames) {
+    if (!declared.has(name)) {
+      failures.push(
+        `package.json: platform runtime ${name} is not declared; an npm installation on that ` +
+          "platform would lose its coding runtime.",
+      );
+    }
+  }
   for (const { field, name, specifier } of platformRuntimeDependencyEntries(rootManifest)) {
     if (field !== "optionalDependencies") {
       failures.push(`package.json: platform runtime ${name} must be an optionalDependency.`);

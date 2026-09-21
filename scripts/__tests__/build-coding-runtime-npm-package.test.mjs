@@ -17,6 +17,7 @@ import {
   buildCodingRuntimeNpmPackage,
   codingRuntimePackageManifest,
   codingRuntimePackageName,
+  main,
   NPM_RUNTIME_PACKAGE_TARGETS,
 } from "../build-coding-runtime-npm-package.mjs";
 
@@ -165,5 +166,23 @@ describe("coding runtime npm package", () => {
       buildCodingRuntimeNpmPackage({ target: "macos-x64", version: "1.2.3", outDir, deps }),
     ).rejects.toThrow("secure-workspace-read build failed with status 1");
     expect(existsSync(calls.prepare[0][3])).toBe(false);
+  });
+
+  it("prints the digests the server pins, and a usage line for a wrong argument count", async () => {
+    const lines = { log: [], error: [] };
+    const write = { log: (text) => lines.log.push(text), error: (text) => lines.error.push(text) };
+    const built = [];
+    const build = async (input) => {
+      built.push(input);
+      return { helperSha256: "a".repeat(64), target: input.target };
+    };
+
+    await expect(main(["macos-arm64", "1.2.3"], { build, write })).resolves.toBe(2);
+    expect(lines.error[0]).toContain("usage:");
+    expect(built).toHaveLength(0);
+
+    await expect(main(["macos-arm64", "1.2.3", "/abs/out"], { build, write })).resolves.toBe(0);
+    expect(built).toStrictEqual([{ target: "macos-arm64", version: "1.2.3", outDir: "/abs/out" }]);
+    expect(JSON.parse(lines.log[0])).toMatchObject({ target: "macos-arm64" });
   });
 });
