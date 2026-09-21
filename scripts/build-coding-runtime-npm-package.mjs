@@ -3,9 +3,8 @@
 // The main package ships no coding engine: until now only the desktop packages carried OpenCode and
 // the native secure-read helper, so an npm installation listed its coding models and could never
 // start a run. A customer who cannot install a desktop package (no admin rights, no infrastructure
-// approval) installs this package next to Keiko instead:
-//
-//   npm install -g @oscharko-dev/keiko @oscharko-dev/keiko-coding-runtime-darwin-arm64
+// approval) gets the engine through npm instead: these packages are optionalDependencies of the main
+// package with os/cpu fields, so `npm install -g @oscharko-dev/keiko` installs the one for the host.
 //
 // Nothing here is a new trust decision. The OpenCode executable is the review-approved archive from
 // portable-runtime-approvals.json, staged and digest-verified by the same function the dev lane and
@@ -15,9 +14,11 @@
 import { createHash } from "node:crypto";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -54,7 +55,10 @@ export function codingRuntimePackageManifest(target, version) {
     description:
       "Keiko Coding Workbench runtime for npm installations: the review-approved OpenCode " +
       "executable and Keiko's native secure workspace read helper. Verified by Keiko at every start.",
-    license: "SEE LICENSE IN LICENSE.md",
+    // A valid SPDX expression, never "SEE LICENSE IN …": the supply-chain gates evaluate the
+    // license of everything the main package can install and refuse what they cannot parse.
+    // OpenCode is MIT, the helper is Keiko's own Apache-2.0 code.
+    license: "Apache-2.0 AND MIT",
     repository: { type: "git", url: "git+https://github.com/oscharko-dev/Keiko.git" },
     os: [entry.os],
     cpu: [entry.cpu],
@@ -88,13 +92,15 @@ function licenseNotice(target) {
  */
 export async function buildCodingRuntimeNpmPackage({ target, version, outDir, deps = {} }) {
   if (!isAbsolute(outDir)) throw new TypeError("outDir must be an absolute path");
+  if (existsSync(outDir) && readdirSync(outDir).length > 0) {
+    throw new Error(`outDir must not exist or must be empty: ${outDir}`);
+  }
   const prepare = deps.prepareSidecars ?? prepareApprovedSidecarPayloads;
   const runBuild = deps.runBuild ?? runSecureWorkspaceReadBuild;
   const manifest = codingRuntimePackageManifest(target, version);
   const staging = mkdtempSync(join(tmpdir(), "keiko-coding-runtime-npm-"));
   try {
     await prepare(["--target", target, "--output-root", staging], undefined, repoRoot);
-    rmSync(outDir, { recursive: true, force: true });
     const runtimeRoot = join(outDir, "runtime");
     mkdirSync(join(runtimeRoot, "native"), { recursive: true });
     cpSync(

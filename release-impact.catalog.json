@@ -2383,12 +2383,12 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "Version 1.1.2 makes the Coding Workbench usable on an npm installation. The npm package carries no coding engine, so until now it listed its coding models and could never start a run. An npm installation on macOS now activates the engine from a separate runtime package installed next to Keiko (@oscharko-dev/keiko-coding-runtime-darwin-arm64 or -darwin-x64); Keiko verifies the OpenCode executable and its native helper against digests compiled into the product at every start, and the Workbench names that package when it is missing. The Workbench also binds repositories whose base branch uses parentheses or the characters + @ = , such as feat(GDZ-917)/topic, which were refused as unsafe, and names the supported characters when it refuses a branch name.",
+      "userVisibleSummary": "Version 1.1.2 makes the Coding Workbench usable on an npm installation. The npm package carried no coding engine, so until now it listed its coding models and could never start a run. On macOS, npm install -g @oscharko-dev/keiko now brings the engine with it: the platform runtime package (@oscharko-dev/keiko-coding-runtime-darwin-arm64 or -darwin-x64) is an optional dependency that npm selects for the host by itself, and Keiko verifies the OpenCode executable and its native helper against digests compiled into the product at every start. The Workbench also binds repositories whose base branch uses parentheses or the characters + @ = , such as feat(GDZ-917)/topic, which were refused as unsafe, and names the supported characters when it refuses a branch name.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
-        "Coding Workbench on npm installations (macOS): install @oscharko-dev/keiko-coding-runtime-darwin-arm64 (Apple silicon) or @oscharko-dev/keiko-coding-runtime-darwin-x64 (Intel Mac) next to Keiko and restart; coding runs then start. Keiko verifies the runtime against digests built into the product at every start.",
-        "Coding Workbench: when the coding runtime is missing, the message names the package to install instead of only stating that the runtime is not confirmed active.",
+        "Coding Workbench on npm installations (macOS): npm install -g @oscharko-dev/keiko now installs the coding runtime for the Mac's processor automatically, and coding runs start. Keiko verifies the runtime against digests built into the product at every start.",
+        "Coding Workbench: when the coding runtime is missing (for example after an install with --omit=optional), the message names the package to install instead of only stating that the runtime is not confirmed active.",
         "Coding Workbench: repositories whose base branch contains parentheses or + @ = , (for example feat(GDZ-917)/topic) can be bound; a refused branch name is answered with the supported characters."
       ],
       "review": {

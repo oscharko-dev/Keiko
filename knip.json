@@ -6,7 +6,9 @@
     "@oscharko-dev/keiko-quality-intelligence",
     "@oscharko-dev/keiko-sandbox",
     "@oscharko-dev/keiko-tool-catalog",
-    "ws"
+    "ws",
+    "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+    "@oscharko-dev/keiko-coding-runtime-darwin-x64"
   ],
   "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep", "ssh-keygen"],
   "workspaces": {

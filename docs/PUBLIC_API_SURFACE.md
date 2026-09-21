@@ -101,7 +101,7 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   renaming a root export, CLI top-level command, or package entry point. The approved external
   surface remains the 1.0.1 surface described above.
 - 1.1.2 (2026-09-21, PR #3577): the Coding Workbench runs on an npm installation through the
-  separately installed, digest-verified runtime packages
+  digest-verified runtime packages, optional dependencies of the main package,
   `@oscharko-dev/keiko-coding-runtime-darwin-arm64` and `@oscharko-dev/keiko-coding-runtime-darwin-x64`,
   and binds repositories whose base branch uses parentheses or `+ @ = ,` — changed without adding,
   removing or renaming a root export, CLI top-level command, or package entry point of

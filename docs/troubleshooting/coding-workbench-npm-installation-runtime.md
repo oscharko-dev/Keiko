@@ -34,18 +34,30 @@ npm package carries neither, so until 1.1.2 an npm installation could never star
 
 **Resolution**
 
-Install the runtime package for the Mac's processor next to Keiko, then restart Keiko:
+Update to 1.1.2 or later. On a Mac, `npm install -g @oscharko-dev/keiko` then installs the coding
+runtime for the Mac's processor by itself: the runtime packages are optional dependencies of Keiko,
+and npm selects the one that matches the host.
+
+The runtime is absent after an install with `--omit=optional` (or `optional=false` in the npm
+configuration), or when a registry mirror does not carry the runtime package. Install the ONE
+package that matches the Mac's processor (`uname -m` prints `arm64` or `x86_64`; npm refuses the
+other one with `EBADPLATFORM`), then restart Keiko.
+
+Apple silicon (`arm64`):
 
 ```bash
-npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64   # Apple silicon
-npm install -g @oscharko-dev/keiko-coding-runtime-darwin-x64     # Intel Mac
-keiko restart
+npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 && keiko restart
+```
+
+Intel Mac (`x86_64`):
+
+```bash
+npm install -g @oscharko-dev/keiko-coding-runtime-darwin-x64 && keiko restart
 ```
 
 Keiko finds the package by name and, at every start, verifies the OpenCode executable, its license
 and SBOM, and the helper against digests compiled into Keiko itself. A refused package is
-reinstalled from the registry; it is never repaired in place. After an update of Keiko, update the
-runtime package as well when the release notes name a new one.
+reinstalled from the registry; it is never repaired in place.
 
 The npm lane is digest-verified, not platform-signed: the readiness answer reports
 `runtimeEvidenceClass: "functional-not-platform-qualified"`, and on macOS the engine runs without

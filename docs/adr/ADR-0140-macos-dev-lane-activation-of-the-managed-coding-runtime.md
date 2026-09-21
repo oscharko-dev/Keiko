@@ -75,16 +75,20 @@ some other prerequisite fails.
 An npm installation of Keiko carries neither OpenCode nor the native helpers, and a customer who
 cannot install a desktop package (no administrator rights, no infrastructure approval) had no way
 to start a coding run at all. On macOS an npm installation therefore activates the runtime from
-`@oscharko-dev/keiko-coding-runtime-darwin-arm64` or `-darwin-x64`, installed next to Keiko and
-found by ordinary module resolution from Keiko's own package root.
+`@oscharko-dev/keiko-coding-runtime-darwin-arm64` or `-darwin-x64`. Both are `optionalDependencies`
+of the main package with `os`/`cpu` fields, so `npm install -g @oscharko-dev/keiko` installs the one
+for the host by itself and skips them everywhere else; Keiko finds the package by ordinary module
+resolution from its own package root. They carry a valid SPDX license expression
+(`Apache-2.0 AND MIT`) because the supply-chain gates evaluate everything the main package can
+install.
 
 This does not loosen D2. The dev lane stays confined to repository checkouts and stays opt-in. The
 npm lane is not reachable from it and applies the same D3 verification with a different trust
 anchor: the approved executable-tree, license and SBOM digests and the digest of the helper binary
 Keiko built are compiled into the server, pinned by test to `portable-runtime-approvals.json` and
 to `native/secure-workspace-read`, so a runtime package can never vouch for itself and a planted
-package of the same name verifies or is refused. Installing the package is the operator's decision;
-no environment token is asked. An installed package that fails verification decides the outcome
+package of the same name verifies or is refused. No environment token is asked: the runtime is
+part of what the operator installs, and `--omit=optional` remains their way to decline it. An installed package that fails verification decides the outcome
 with its own D4 reason and never falls through to another lane. The lane reports the same honest
 posture as the dev lane (`functional-not-platform-qualified`) and the same forgone guarantees, and
 both dev-lane log operations carry `lane: "npm-runtime-package"`. Windows and Linux stay on their

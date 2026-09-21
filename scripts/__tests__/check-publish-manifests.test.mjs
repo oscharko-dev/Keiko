@@ -170,6 +170,45 @@ describe("validatePublishManifests", () => {
   });
 });
 
+// #3577. The platform coding-runtime packages share the scope but are not workspaces: ~75 MB of one
+// platform's binaries, published on their own and selected by npm through os/cpu. The workspace
+// rules (dependencies only, product-version pin, bundled) would either refuse them or put them into
+// every tarball.
+describe("platform coding-runtime packages", () => {
+  const RUNTIME = "@oscharko-dev/keiko-coding-runtime-darwin-arm64";
+  const workspaces = [workspace("@oscharko-dev/keiko-contracts")];
+
+  it("accepts one as an exactly pinned, unbundled optional dependency", () => {
+    const failures = validatePublishManifests(
+      rootManifest({ optionalDependencies: { [RUNTIME]: "1.1.3" } }),
+      workspaces,
+    );
+    expect(failures).toStrictEqual([]);
+  });
+
+  it.each([
+    [
+      "a required dependency",
+      {
+        dependencies: { "@oscharko-dev/keiko-contracts": VERSION, [RUNTIME]: "1.1.3" },
+      },
+      "must be an optionalDependency",
+    ],
+    ["a version range", { optionalDependencies: { [RUNTIME]: "^1.1.3" } }, "exact version"],
+    [
+      "a bundled entry",
+      {
+        optionalDependencies: { [RUNTIME]: "1.1.3" },
+        bundleDependencies: ["@oscharko-dev/keiko-contracts", RUNTIME],
+      },
+      "must not be bundled",
+    ],
+  ])("refuses %s", (_label, overrides, message) => {
+    const failures = validatePublishManifests(rootManifest(overrides), workspaces);
+    expect(failures.join("\n")).toContain(message);
+  });
+});
+
 describe("publish lifecycle gates", () => {
   it("requires workspace supply-chain verification in prepack and prepublishOnly", () => {
     const { scripts } = JSON.parse(readFileSync("package.json", "utf8"));
