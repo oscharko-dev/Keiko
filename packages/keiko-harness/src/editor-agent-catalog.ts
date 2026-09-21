@@ -10,7 +10,10 @@
 // legacy tool name EDITOR_AGENT_TOOL_DEFINITIONS declares for each -- an explicit per-entry
 // mapping, not a positional zip, so a future reordering of EDITOR_AGENT_TOOL_DEFINITIONS can never
 // silently misassign a canonical identity to the wrong alias.
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  NATIVE_TOOL_CATALOG_RUNTIME,
+  TOOL_CATALOG_LIMITS,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type {
   CatalogEffect,
@@ -31,7 +34,6 @@ import {
 import { isEditorAgentVerificationResult } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
 import { EDITOR_AGENT_TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
 import type { EditorAgentToolOutput } from "@oscharko-dev/keiko-tools";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   createKeikoToolCatalog,
   createToolDescriptor,
@@ -189,15 +191,11 @@ export function editorAgentRegistrationSet(): CatalogRegistrationSet {
   return {
     profile: { id: "editor", version: 1 },
     adapterDialect: { id: "editor-json-schema", version: 1 },
-    // Derived from the one product version, never a hand-copied version literal:
-    // `assertCatalogDialect` compares this against `NATIVE_TOOL_CATALOG_RUNTIME`, which is
-    // `{ id: "keiko", version: KEIKO_PRODUCT_VERSION }`, so a copied version string would reject
-    // every editor registration on the next bump (b3-25). The constant itself is not re-exported
-    // from the tool-catalog barrel on purpose: that package's `src` tree is the subject of
-    // container-measured performance evidence (docs/release/3415-tool-catalog-perf-evidence.json)
-    // that cannot be regenerated outside its pinned linux/arm64 image, so adding an export there
-    // would invalidate committed evidence for a re-export.
-    adapterRuntime: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
+    // The contracts leaf's one native runtime reference, never a hand-copied literal and never the
+    // product version: `assertCatalogDialect` compares this against the same constant, so a copy
+    // would reject every editor registration as soon as the two drift (b3-25), and a release number
+    // here would move catalog identity on every version bump (#3565).
+    adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
     nativeExtensions: [],
     compatibility: [],
     entries,

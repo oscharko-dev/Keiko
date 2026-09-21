@@ -11,7 +11,7 @@ import {
   compileToolProjection,
 } from "./index.js";
 import { declaration, profile, fixture } from "./__fixtures__/catalog.js";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 function requiredEntry(entries: readonly CatalogCompatibility[]): CatalogCompatibility {
   const value = entries[0];
@@ -54,7 +54,7 @@ function entry(
     from: { toolRef: from.toolRef, descriptorDigest: from.descriptorDigest },
     to: { toolRef: to.toolRef, descriptorDigest: to.descriptorDigest },
     profile: { id: "fixture", version: 1 },
-    adapter: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
+    adapter: NATIVE_TOOL_CATALOG_RUNTIME,
     transformId: "identity-v1" as const,
     ownerIssue: 3406,
     expiresAt: "1970-01-02T00:00:00.000Z",

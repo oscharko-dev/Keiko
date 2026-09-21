@@ -8,7 +8,7 @@ import { declaration, profile } from "./__fixtures__/catalogDefinition.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
 import { createCatalogToolBinder } from "./catalogToolDispatch.js";
 import type { CatalogHandlerContext, CatalogHandlerResult } from "./catalogToolPorts.js";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 function transitionedFixture(): ReturnType<typeof catalogToolFixture> {
   const fixture = catalogToolFixture();
@@ -20,7 +20,7 @@ function transitionedFixture(): ReturnType<typeof catalogToolFixture> {
     },
     to: { toolRef: to.toolRef, descriptorDigest: to.descriptorDigest },
     profile: { id: "fixture", version: 1 },
-    adapter: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
+    adapter: NATIVE_TOOL_CATALOG_RUNTIME,
     transformId: "identity-v1",
     ownerIssue: 3406,
     expiresAt: new Date(2000).toISOString(),

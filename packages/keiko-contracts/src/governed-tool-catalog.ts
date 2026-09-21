@@ -41,6 +41,21 @@ export interface CatalogRuntimeRef {
   readonly version: string;
 }
 
+/**
+ * The native ("keiko") adapter runtime every non-OpenCode dialect pins against. Its version names
+ * the native tool-calling CONTRACT and moves only when that contract changes; it is deliberately
+ * not the product version. Profile declarations carry this reference into `catalogRevision` and
+ * `projectionDigest`, so while it followed the release number every version bump changed the identity
+ * of a catalog in which no tool, schema or dialect had changed, and with it the manifest and the
+ * container-measured evidence bound to that identity (#3565). It lives in the contracts leaf so the
+ * tool catalog, the harness and the evidence tooling share ONE value instead of re-deriving it
+ * (b3-25: three hand-copied literals once drifted apart on a bump).
+ */
+export const NATIVE_TOOL_CATALOG_RUNTIME: CatalogRuntimeRef = Object.freeze({
+  id: "keiko",
+  version: "1.0.0",
+});
+
 /** Possible effects reuse the authoritative product vocabulary; they confer no permission. */
 export type CatalogEffect = CodingWorkbenchActionClass;
 export interface CatalogActionMapping {

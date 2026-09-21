@@ -1,5 +1,5 @@
 import type { ToolDescriptor } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   createToolRef,
   createToolDescriptor,
@@ -51,7 +51,7 @@ export function profile(
     adapterRuntime:
       dialect === "managed-runtime-json-schema"
         ? opencodeRegistrationSet().adapterRuntime
-        : { id: "keiko", version: KEIKO_PRODUCT_VERSION },
+        : NATIVE_TOOL_CATALOG_RUNTIME,
     compatibility: [],
   };
 }

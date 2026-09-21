@@ -56,7 +56,7 @@ import {
 } from "./coding-runtime-performance-evidence.mjs";
 import { loadToolCatalogProducer } from "./check-tool-catalog-conformance.mjs";
 import { normalizedLockfileText } from "./lib/set-version.mjs";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 export const TOOL_CATALOG_PERFORMANCE_PROCEDURE = Object.freeze({
   warmups: CODING_PERFORMANCE_PROCEDURE.warmups,
@@ -131,10 +131,10 @@ export function buildSyntheticRegistrationSet(producer, toolCount) {
   return {
     profile: { id: "performance-synthetic", version: 1 },
     adapterDialect: { id: "legacy-json-schema", version: 1 },
-    // Derived from the one product version, never a hand-copied literal: assertCatalogDialect
-    // compares it against NATIVE_TOOL_CATALOG_RUNTIME, so a copied string would reject every
-    // fixture on the next version bump (b3-25, the residue a 1.0.0 bump exposed).
-    adapterRuntime: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
+    // The contracts leaf's one native runtime reference, never a hand-copied literal:
+    // assertCatalogDialect compares against the same constant, so a copy would reject every fixture
+    // as soon as the two drift (b3-25, the residue a 1.0.0 bump exposed).
+    adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
     nativeExtensions: [],
     compatibility: [],
     entries,

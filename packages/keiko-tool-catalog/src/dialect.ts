@@ -1,9 +1,9 @@
-import type {
-  CatalogJsonObject,
-  CatalogRuntimeRef,
-  CatalogVersionRef,
+import {
+  NATIVE_TOOL_CATALOG_RUNTIME,
+  type CatalogJsonObject,
+  type CatalogRuntimeRef,
+  type CatalogVersionRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import { catalogArray, catalogObject } from "./json.js";
 import { compileCatalogSchema } from "./schema.js";
 import { requireCatalog } from "./errors.js";
@@ -17,14 +17,12 @@ export const CATALOG_DIALECTS = Object.freeze([
 ] as const);
 const DIALECT_IDS: ReadonlySet<string> = new Set(CATALOG_DIALECTS);
 
-// The native ("keiko") adapter runtime identity every non-OpenCode dialect pins against. Derived
-// from the one product version (keiko-contracts' KEIKO_PRODUCT_VERSION) rather than a hand-copied
-// literal, so `legacy.ts` and `child.ts` (the other two registration sets binding this identity)
-// share the exact value instead of drifting on the next version bump (b3-25).
-export const NATIVE_TOOL_CATALOG_RUNTIME: CatalogRuntimeRef = Object.freeze({
-  id: "keiko",
-  version: KEIKO_PRODUCT_VERSION,
-});
+// The native ("keiko") adapter runtime identity every non-OpenCode dialect pins against. One value,
+// owned by the contracts leaf and re-exported here for `legacy.ts` and `child.ts`, so no registration
+// set can bind a hand-copied literal that drifts from `assertCatalogDialect` (b3-25). It names the
+// native tool-calling contract, not the release: a version bump must not move catalog identity
+// (#3565).
+export { NATIVE_TOOL_CATALOG_RUNTIME };
 
 export function assertCatalogDialect(dialect: CatalogVersionRef, runtime: CatalogRuntimeRef): void {
   requireCatalog(dialect.version === 1 && DIALECT_IDS.has(dialect.id), "unsupported-dialect");
