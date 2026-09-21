@@ -4,6 +4,7 @@ import {
   listConfiguredCapabilities,
   requestGatewayReadinessChatCompletion,
   requestOpenAIEmbedding,
+  toolCallingConfigurationFingerprint,
   vectorL2Norm,
   type GatewayConfig,
   type ModelCapability,
@@ -1733,41 +1734,56 @@ function reconcileContextWindowReadiness(
   }
 }
 
-// ─── Coding Workbench context window, determined by Keiko itself ─────────────────────────────
-// A gateway that declares no token limits leaves the 4,096 setup placeholder in place, and the
-// Coding Workbench needs 32,000. Keiko can prove the window itself, so it does: when the Workbench
-// reads its profile, every model it could run whose stored window is below the minimum gets the
-// long-context probe once, and `runGatewayReadiness` persists what that proves. The model the
-// Workbench would elect is awaited so the profile it reads already reflects it; the others finish
-// in the background. One attempt per model and configuration generation within the cooldown, so a
-// model that really is short-context, or a gateway that is down, is not probed on every read.
-const CONTEXT_WINDOW_REPROBE_COOLDOWN_MS = 10 * 60 * 1_000;
-const contextWindowProbes = new Map<string, { readonly promise: Promise<void>; at: number }>();
+// ─── What the Coding Workbench needs, determined by Keiko itself ──────────────────────────────
+// Owner decision for 1.1.1, reversing the passive Workbench read of #3561: what Keiko can
+// determine itself it determines itself, and the operator copies no value and clicks no check.
+//   - A gateway that declares no token limits leaves the 4,096 setup placeholder in place, and
+//     the Workbench needs 32,000: the long-context probe proves the window.
+//   - The forced tool-call proof expires after 24 h: the tool-calling probe renews it.
+// `runGatewayReadiness` persists both conclusions. This runs when the Workbench reads its profile,
+// for every chat model that claims tool calling. The model the Workbench would elect is awaited so
+// the profile it reads already reflects the result; the others finish in the background. It is
+// BOUNDED: one attempt per deployment identity within the six-hour cooldown, so a model
+// that really is short-context, or a gateway that is down, is not probed on every read — and a
+// model that never claimed tool calling is never probed from here at all.
+const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
+const workbenchProbes = new Map<string, { readonly promise: Promise<void>; at: number }>();
 
 export function resetCodingWorkbenchContextWindowProbesForTests(): void {
-  contextWindowProbes.clear();
+  workbenchProbes.clear();
 }
 
-function needsContextWindowProbe(capability: ModelCapability): boolean {
-  return (
-    codingWorkbenchModelEligibility(capability) === "eligible" &&
-    capability.contextWindow < CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
-  );
+function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
+  const eligibility = codingWorkbenchModelEligibility(capability);
+  if (eligibility === "ineligible") return [];
+  const shortWindow =
+    capability.contextWindow < CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS;
+  return [
+    ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
+    ...(shortWindow ? (["long_context"] as const) : []),
+  ];
 }
 
-function contextWindowProbeFor(
+// Keyed by the deployment's identity, not the configuration generation: every conclusion this
+// persists bumps the generation, which would otherwise lift the cooldown of every other model.
+function workbenchProbeFor(
   deps: UiHandlerDeps,
-  generation: number,
-  modelId: string,
+  config: GatewayConfig,
+  target: { readonly modelId: string; readonly probes: readonly GatewayReadinessProbeName[] },
   correlationId: string,
 ): Promise<void> {
-  const key = `${String(generation)}:${modelId}`;
-  const known = contextWindowProbes.get(key);
-  if (known !== undefined && Date.now() - known.at < CONTEXT_WINDOW_REPROBE_COOLDOWN_MS) {
+  const provider = config.providers.find((candidate) => candidate.modelId === target.modelId);
+  const key =
+    provider === undefined ? target.modelId : toolCallingConfigurationFingerprint(provider);
+  const known = workbenchProbes.get(key);
+  if (known !== undefined && Date.now() - known.at < WORKBENCH_REPROBE_COOLDOWN_MS) {
     return known.promise;
   }
   const promise = runGatewayReadiness(
-    { modelId, options: { probes: ["long_context"], purpose: "coding-workbench-auto" } },
+    {
+      modelId: target.modelId,
+      options: { probes: target.probes, purpose: "coding-workbench-auto" },
+    },
     deps,
     correlationId,
   ).then(
@@ -1778,7 +1794,7 @@ function contextWindowProbeFor(
         serverDiagnosticFromError({
           correlationId,
           operation: "gateway.readiness",
-          source: "gateway-readiness.context-window-probe",
+          source: "gateway-readiness.workbench-probe",
           error,
           summary: "A gateway readiness probe could not be completed.",
           redact: (message): string => String(deps.redactor(message)),
@@ -1786,7 +1802,7 @@ function contextWindowProbeFor(
       );
     },
   );
-  contextWindowProbes.set(key, { promise, at: Date.now() });
+  workbenchProbes.set(key, { promise, at: Date.now() });
   return promise;
 }
 
@@ -1798,17 +1814,15 @@ export async function ensureCodingWorkbenchContextWindows(
   const holder = deps.gatewayConfig;
   const config = holder?.current();
   if (holder === undefined || config === undefined) return;
-  const pending = listConfiguredCapabilities(config).filter(needsContextWindowProbe);
-  if (pending.length === 0) return;
-  const generation = holder.generation();
+  const targets = listConfiguredCapabilities(config)
+    .map((capability) => ({ modelId: capability.id, probes: workbenchProbesNeeded(capability) }))
+    .filter((target) => target.probes.length > 0);
+  if (targets.length === 0) return;
   const id = correlationId ?? newCorrelationId();
-  const probes = new Map(
-    pending.map((capability) => [
-      capability.id,
-      contextWindowProbeFor(deps, generation, capability.id, id),
-    ]),
+  const running = new Map(
+    targets.map((target) => [target.modelId, workbenchProbeFor(deps, config, target, id)]),
   );
-  await (probes.get(electedModelId ?? "") ?? probes.values().next().value);
+  await (running.get(electedModelId ?? "") ?? running.values().next().value);
 }
 
 // Fresh-install gap (customer field incident, 0.3.10): a configured gateway carries NO

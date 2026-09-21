@@ -2356,11 +2356,15 @@ export async function handleCodingSidecarGatewayProfile(
   // What Keiko can determine itself it determines itself: a model whose gateway declared no token
   // limits gets its context window proven here, before the projection judges it.
   const elected = resolveGatewayProfile(deps).result;
-  await ensureCodingWorkbenchContextWindows(
-    deps,
-    elected.status === "available" ? elected.modelAlias : undefined,
-    ctx.correlationId,
-  );
+  // Only while the gateway is the usable source: a subscription source, a disabled policy or a
+  // missing configuration must never cause a paid provider probe (ADR-0124 D5).
+  if (elected.status === "available" || elected.reason === "tool-calling-unverified") {
+    await ensureCodingWorkbenchContextWindows(
+      deps,
+      elected.status === "available" ? elected.modelAlias : undefined,
+      ctx.correlationId,
+    );
+  }
   return { status: 200, body: gatewayReadinessProjection(ctx, deps) };
 }
 

@@ -590,6 +590,16 @@ describe("strict LiteLLM field twin", () => {
         ...deps,
         activityLog: { write: (event): void => void events.push(event) },
       };
+      // ADR-0124 D5: a selected subscription source must never cause a paid gateway probe.
+      const chatCallsBeforeSubscriptionRead = log.chatModels.length;
+      const subscription = await handleCodingSidecarGatewayProfile(ctx("GET", {}), {
+        ...deps,
+        codingSidecarGatewayModelSourceResolver: () => "chatgpt-codex-subscription-profile",
+      });
+      expect(subscription.body).toMatchObject({ status: "unavailable" });
+      expect(log.chatModels).toHaveLength(chatCallsBeforeSubscriptionRead);
+      expect(storedWindow()).toBe(4_096);
+
       const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), observed);
 
       expect(profile.body).toMatchObject({ status: "available", modelAlias: "qwen-chat" });
@@ -607,6 +617,65 @@ describe("strict LiteLLM field twin", () => {
       const chatCallsAfterFirstRead = log.chatModels.length;
       await handleCodingSidecarGatewayProfile(ctx("GET", {}), deps);
       expect(log.chatModels).toHaveLength(chatCallsAfterFirstRead);
+    } finally {
+      await deps?.dispose?.();
+      await closeServer(gateway);
+    }
+  });
+
+  // The forced tool-call proof expires after 24 h. A customer who connects the gateway today and
+  // opens the Workbench tomorrow must not be sent to Settings to click a check: Keiko renews the
+  // proof itself.
+  it("renews an expired tool-calling proof itself when the Workbench profile is read", async () => {
+    resetCodingWorkbenchContextWindowProbesForTests();
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
+    const gateway = startStrictLiteLlm(
+      log,
+      {},
+      { emptyChatModels: new Set(), answersToolCalls: true },
+    );
+    const port = await listen(gateway);
+    const tmp = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-field-")));
+    tempDirs.push(tmp);
+
+    let deps: UiHandlerDeps | undefined;
+    try {
+      deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp,
+        uiDbPath: join(tmp, "keiko-ui.db"),
+        env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      });
+      const setup = await handleGatewaySetup(
+        ctx("POST", { baseUrl: `http://127.0.0.1:${String(port)}/v1`, apiKey: "field-token" }),
+        deps,
+      );
+      expect(setup.status).toBe(200);
+      const holder = deps.gatewayConfig;
+      const current = holder?.current();
+      if (holder === undefined || current === undefined) throw new Error("expected a config");
+      // Age the proof past its 24 h validity, as a day of wall-clock time would.
+      holder.set(
+        {
+          ...current,
+          capabilities: current.capabilities?.map((capability) =>
+            capability.toolCallingVerification === undefined
+              ? capability
+              : {
+                  ...capability,
+                  toolCallingVerification: {
+                    ...capability.toolCallingVerification,
+                    checkedAt: new Date(Date.now() - 25 * 60 * 60 * 1_000).toISOString(),
+                  },
+                },
+          ),
+        },
+        true,
+      );
+
+      const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), deps);
+
+      expect(profile.body).toMatchObject({ status: "available", modelAlias: "qwen-chat" });
     } finally {
       await deps?.dispose?.();
       await closeServer(gateway);

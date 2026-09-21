@@ -185,7 +185,8 @@ async function readSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewa
 }
 
 export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
-  // Readiness probes require an explicit operator action in Gateway Settings.
+  // The client starts no probe. The server verifies what the Workbench needs on this read itself
+  // (an expired tool-call proof, an unproven context window), bounded and logged (ADR-0173).
   return readSidecarGatewayProfile();
 }
 
