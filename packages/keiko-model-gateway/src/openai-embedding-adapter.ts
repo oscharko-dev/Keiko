@@ -871,8 +871,8 @@ function inputCapKey(request: { readonly endpoint: string; readonly modelId: str
 // Never cut between the two halves of a surrogate pair: a lone surrogate is not valid text.
 function truncateInput(input: string, maxChars: number): string {
   if (input.length <= maxChars) return input;
-  const code = input.charCodeAt(maxChars - 1);
-  const splitsPair = code >= 0xd800 && code <= 0xdbff;
+  // A code point above U+FFFF at the last kept index is the HIGH half of a pair the cut would split.
+  const splitsPair = (input.codePointAt(maxChars - 1) ?? 0) > 0xffff;
   return input.slice(0, splitsPair ? maxChars - 1 : maxChars);
 }
 

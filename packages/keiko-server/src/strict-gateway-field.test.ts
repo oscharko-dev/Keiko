@@ -57,6 +57,9 @@ interface StrictLiteLlmOptions {
 // the setup smoke while warm, fails later" without brittle call counting.
 interface StrictLiteLlmBehavior {
   readonly emptyChatModels: Set<string>;
+  // The field multilingual-e5-large accepts at most 512 real tokens per input and the gateway
+  // answers a longer one with HTTP 500 (customer report on 1.1.0). Undefined: no limit.
+  readonly maxEmbeddingInputChars?: number;
 }
 
 function requestedToolName(body: Record<string, unknown>): string | undefined {
@@ -114,11 +117,24 @@ function answerChatCompletion(
   });
 }
 
-function answerEmbeddings(res: ServerResponse, raw: string, log: FakeGatewayLog): void {
+function answerEmbeddings(
+  res: ServerResponse,
+  raw: string,
+  log: FakeGatewayLog,
+  maxInputChars: number | undefined,
+): void {
   const body = JSON.parse(raw === "" ? "{}" : raw) as Record<string, unknown>;
   log.embeddingBodies.push(body);
   if ("encoding_format" in body || Array.isArray(body.input)) {
     json(res, { error: { message: "unsupported request shape" } }, 400);
+    return;
+  }
+  if (
+    maxInputChars !== undefined &&
+    typeof body.input === "string" &&
+    body.input.length > maxInputChars
+  ) {
+    json(res, { error: { message: "internal error" } }, 500);
     return;
   }
   json(res, {
@@ -147,7 +163,7 @@ function startStrictLiteLlm(
       } else if (url.endsWith("/chat/completions")) {
         answerChatCompletion(res, raw, log, behavior);
       } else if (url.endsWith("/embeddings")) {
-        answerEmbeddings(res, raw, log);
+        answerEmbeddings(res, raw, log, behavior.maxEmbeddingInputChars);
       } else {
         json(res, { error: { message: `unknown route ${url}` } }, 404);
       }
@@ -508,6 +524,78 @@ describe("strict LiteLLM field twin", () => {
           (entry) => !("encoding_format" in entry) && !Array.isArray(entry.input),
         ),
       ).toBe(true);
+    } finally {
+      await deps?.dispose?.();
+      await closeServer(gateway);
+    }
+  });
+
+  // Customer report on 1.1.0: a single Word document sat at "0 of 36 vectors" for three minutes
+  // and ended "embedding adapter returned http-error (HTTP 500)". Chunks are cut to 512 ESTIMATED
+  // tokens; the field embedding model rejects an input over 512 REAL tokens, the gateway answers
+  // that with 500, and the ladder failed the whole document on the first long chunk.
+  it("indexes a dense document although the embedding model rejects long inputs", async () => {
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
+    const gateway = startStrictLiteLlm(
+      log,
+      {},
+      { emptyChatModels: new Set(), maxEmbeddingInputChars: 900 },
+    );
+    const port = await listen(gateway);
+    const tmp = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-field-")));
+    tempDirs.push(tmp);
+    const docsDir = join(tmp, "handbuch");
+    mkdirSync(docsDir);
+    const sentence =
+      "Die Kraftfahrzeughaftpflichtversicherung reguliert Schadensersatzanspr\u00fcche im Zahlungsverkehr. ";
+    writeFileSync(join(docsDir, "dicht.md"), `# Handbuch\n\n${sentence.repeat(120)}\n`, "utf8");
+
+    let deps: UiHandlerDeps | undefined;
+    try {
+      deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp,
+        uiDbPath: join(tmp, "keiko-ui.db"),
+        env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      });
+      const setup = await handleGatewaySetup(
+        ctx("POST", { baseUrl: `http://127.0.0.1:${String(port)}/v1`, apiKey: "field-token" }),
+        deps,
+      );
+      expect(setup.status).toBe(200);
+      const created = await handleCreateLocalKnowledgeCapsule(
+        ctx("POST", { displayName: "Dicht" }),
+        deps,
+      );
+      const capsuleId = (created.body as { capsule: { id: string } }).capsule.id;
+      await handleConnectLocalKnowledgeCapsule(
+        ctx(
+          "POST",
+          { scope: { kind: "folder", rootPath: docsDir, recursive: true } },
+          { capsuleId },
+        ),
+        deps,
+      );
+      const indexed = await handleStartLocalKnowledgeCapsuleIndexing(
+        ctx("POST", {}, { capsuleId }),
+        deps,
+      );
+      expect(indexed.status).toBe(202);
+      await awaitDetachedCapsuleIndexing(capsuleId);
+
+      const detail = await handleGetLocalKnowledgeCapsule(ctx("GET", {}, { capsuleId }), deps);
+      const body = detail.body as {
+        readonly health: { readonly chunkCount: number; readonly vectorCount: number };
+        readonly indexingJobs: readonly { readonly status: string }[];
+      };
+      // The premise: at least one chunk really was longer than the endpoint accepts.
+      const scalarLengths = log.embeddingBodies
+        .filter((entry) => typeof entry.input === "string")
+        .map((entry) => (entry.input as string).length);
+      expect(Math.max(...scalarLengths)).toBeGreaterThan(900);
+      expect(body.indexingJobs.at(0)?.status).toBe("succeeded");
+      expect(body.health.chunkCount).toBeGreaterThan(0);
+      expect(body.health.vectorCount).toBe(body.health.chunkCount);
     } finally {
       await deps?.dispose?.();
       await closeServer(gateway);
