@@ -6693,6 +6693,43 @@ export function reconcileGatewayToolCallingReadiness(
   );
 }
 
+/**
+ * Raises a stored context window to the token count the long-context probe just proved, without a
+ * UI confirmation — the standing the tool-calling conclusion already has. A proven count is a lower
+ * bound, so this only ever raises. Customer report on 1.1.0: a gateway that declares no token
+ * limits left the 4,096 setup placeholder in place and the Coding Workbench refused every model;
+ * what Keiko can determine itself must not be left for the operator to copy by hand.
+ */
+export function reconcileGatewayContextWindowReadiness(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  observedGeneration: number | undefined,
+  correlationId = UNKNOWN_CORRELATION_ID,
+): void {
+  const verified = report.verifiedCapabilities.testedContextTokens;
+  if (verified === undefined || verified > MAX_VERIFIED_CONTEXT_WINDOW) return;
+  const reconciliation = currentToolCallingReconciliation(deps, observedGeneration);
+  if (reconciliation === undefined) return;
+  const stored = findConfiguredCapability(reconciliation.current, report.modelId);
+  if (stored?.kind !== "chat" || stored.contextWindow >= verified) return;
+  const updated = replaceModelCapability(
+    reconciliation.current,
+    report.modelId,
+    { contextWindow: verified },
+    report.checkedAt,
+  );
+  if (updated === undefined) return;
+  persistVerifiedCapabilityUpdate(
+    reconciliation.gatewayConfig,
+    deps,
+    report.modelId,
+    reconciliation.gatewayConfig.generation(),
+    updated,
+    false,
+    correlationId,
+  );
+}
+
 function currentToolCallingReconciliation(
   deps: UiHandlerDeps,
   observedGeneration: number | undefined,

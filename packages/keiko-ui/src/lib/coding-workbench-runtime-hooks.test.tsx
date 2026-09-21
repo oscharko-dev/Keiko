@@ -201,7 +201,12 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
       status: "available",
     } as CodingWorkbenchSidecarGatewayResult);
     const { resources, dispatch } = renderResources(runtimeState());
+    // The server may renew a model's proofs during this read, so the picker's catalog is re-read.
+    const catalogRefresh = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
     await act(() => resources.refreshSource());
+    window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+    expect(catalogRefresh).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ kind: "profile-empty" });
     expect(dispatch).toHaveBeenCalledWith({
       kind: "source-set",

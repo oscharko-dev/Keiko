@@ -1021,13 +1021,21 @@ id is caller content or operator-chosen text that no check proves body-free. Two
 candidates stay apart, a retried one reads as the same, and a reader who holds the configuration
 recomputes the digest to name the model.
 
-The Coding Workbench model selector is a passive catalog reader (ADR-0124 D5), separate from
-the chat entry points described above. Opening or refreshing it does not start an automatic
-readiness probe. If its existing tool-call proof is missing or expired, no
-`gateway.readiness.automatic.*` record is expected from that catalog read. The operator can run
-the explicit check in Gateway Settings; follow `gateway.readiness.started` / `.completed` with
-`trigger: settings`, then the refreshed catalog response. Absence of an automatic probe in this
-Workbench path is intentional and must not be diagnosed as a lost provider call.
+The Coding Workbench model selector stays a passive catalog reader (ADR-0124 D5). Its gateway
+profile read, `GET /api/coding-sidecar/gateway/profile`, is not passive any more (owner decision
+for 1.1.1, reversing #3561): what Keiko can determine itself it determines itself, so a customer
+is never sent to Gateway Settings to click a check or copy a value. On that read the server
+verifies, for every chat model that claims tool calling, what the Workbench needs and the stored
+configuration does not prove: an expired or missing forced tool-call proof (`tool_calling`), and a
+context window below the 32,000-token minimum (`long_context`), which is what a gateway that
+declares no token limits leaves behind as the 4,096 setup placeholder. Expect
+`gateway.readiness.automatic.started` / `.completed` under the profile read's correlation id;
+`.completed` carries `verifiedContextTokens` when the long-context probe passed, and the same run
+persists the renewed proof and raises the stored window (raise-only). The work is bounded: one
+attempt per deployment identity within a six-hour cooldown, never for a model that does not
+claim tool calling, never while a subscription source is selected, and only the model the
+Workbench would elect is awaited. A profile read that
+finds nothing to prove writes no automatic record, and its absence is then not a lost call.
 
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 

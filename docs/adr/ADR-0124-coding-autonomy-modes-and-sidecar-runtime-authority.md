@@ -180,10 +180,16 @@ The shared model-source vocabulary is:
 This separation is load-bearing. ChatGPT/Codex subscription credentials are not modeled as OpenAI
 Platform API keys or generic provider credentials. They remain a distinct subscription/profile path.
 
-Opening the Workbench only reads the selected provider profile and model catalog. A missing or
-expired tool-call proof stays unavailable until the operator runs the existing Gateway Settings
-readiness check. Mounting or refreshing the Workbench never starts paid provider probes, including
-when a subscription source is selected. The same gateway capability evidence gates all models.
+Opening the Workbench reads the selected provider profile and model catalog. While the gateway
+is the selected model source, the profile read also lets the server verify what the Workbench
+needs and the stored configuration does not prove — an expired or missing tool-call proof, and a
+context window below the coding minimum that the gateway never declared — so the operator is not
+sent to Gateway Settings for something Keiko can determine itself (owner decision for 1.1.1,
+amending #3561; mechanics and log lines in ADR-0173). That verification is bounded: only models
+that claim tool calling, one attempt per deployment identity within a six-hour cooldown, under the
+existing probe spend ledger. It never runs when a subscription source is selected, when the
+deployment policy disables the gateway source, or when the gateway is not configured. The same
+gateway capability evidence gates all models.
 
 ### D6 — Permission requests are typed, explicit, and content-free
 

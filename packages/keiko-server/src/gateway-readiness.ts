@@ -4,6 +4,7 @@ import {
   listConfiguredCapabilities,
   requestGatewayReadinessChatCompletion,
   requestOpenAIEmbedding,
+  toolCallingConfigurationFingerprint,
   vectorL2Norm,
   type GatewayConfig,
   type ModelCapability,
@@ -25,10 +26,12 @@ import {
 import { gatewayVerificationFromProbeOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
+  codingWorkbenchModelEligibility,
   isCodingWorkbenchReadinessCandidate,
   preferredConversationModelOrder,
   selectCodingWorkbenchReadinessCandidate,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
 import { currentConversationReady, currentGatewayConfig } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
@@ -44,7 +47,10 @@ import {
   settleGatewayProbeSpend,
   type GatewayProbeSpendContext,
 } from "./gateway-tool-calling-probe.js";
-import { reconcileGatewayToolCallingReadiness } from "./gateway-setup.js";
+import {
+  reconcileGatewayContextWindowReadiness,
+  reconcileGatewayToolCallingReadiness,
+} from "./gateway-setup.js";
 import { processServerLogSink } from "./process-log-sink.js";
 // #3557 review finding A: the one owning projection from a candidate model id to Activity Log
 // evidence — reused here so a readiness line never carries a value that would fail
@@ -131,6 +137,9 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
       values: ["ready", "partial", "failed"],
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
+    // Tokens the long-context probe proved. Present only when that probe ran and passed; a stored
+    // context window below it is raised to it by the same run, so the raise is reconstructable.
+    verifiedContextTokens: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -419,6 +428,7 @@ function logAutomaticReadinessCompleted(
     report.modelId,
     report.overallStatus,
     report.probes.length,
+    report.verifiedCapabilities.testedContextTokens,
   );
 }
 
@@ -454,6 +464,7 @@ function logAutomaticReadinessOutcome(
   modelId: string,
   overallStatus: GatewayReadinessReport["overallStatus"],
   probeCount: number,
+  verifiedContextTokens?: number,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -463,6 +474,7 @@ function logAutomaticReadinessOutcome(
         ...modelIdEvidence(modelId),
         overallStatus,
         probeCount,
+        ...(verifiedContextTokens === undefined ? {} : { verifiedContextTokens }),
       },
     ),
   );
@@ -1685,9 +1697,185 @@ export async function runGatewayReadiness(
   // AI-assist badge, the Coding Workbench source projection) report what was actually observed.
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
   recordReadinessObservation(deps, report, observedGeneration);
+  // Read BEFORE the tool-calling reconcile: persisting that conclusion bumps the generation, and
+  // the context-window reconcile must tell "we just wrote it" from "the config was replaced".
+  const probedCurrentConfig =
+    observedGeneration === undefined || deps.gatewayConfig?.generation() === observedGeneration;
   reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
+  if (probedCurrentConfig) reconcileContextWindowReadiness(deps, report, correlationId);
   logReadinessRunCompleted(deps, run, report);
   return report;
+}
+
+function reconcileContextWindowReadiness(
+  deps: UiHandlerDeps,
+  report: GatewayReadinessReport,
+  correlationId: string,
+): void {
+  try {
+    reconcileGatewayContextWindowReadiness(
+      deps,
+      report,
+      deps.gatewayConfig?.generation(),
+      correlationId,
+    );
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.readiness",
+        source: "gateway-readiness.context-window-reconcile",
+        error,
+        summary: "The verified gateway context window could not be persisted.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  }
+}
+
+// ─── What the Coding Workbench needs, determined by Keiko itself ──────────────────────────────
+// Owner decision for 1.1.1, reversing the passive Workbench read of #3561: what Keiko can
+// determine itself it determines itself, and the operator copies no value and clicks no check.
+//   - A gateway that declares no token limits leaves the 4,096 setup placeholder in place, and
+//     the Workbench needs 32,000: the long-context probe proves the window.
+//   - The forced tool-call proof expires after 24 h: the tool-calling probe renews it.
+// `runGatewayReadiness` persists both conclusions. This runs when the Workbench reads its profile,
+// for every chat model that claims tool calling. The model the Workbench would elect is awaited so
+// the profile it reads already reflects the result; the others finish in the background. It is
+// BOUNDED: one attempt per deployment identity within the six-hour cooldown, so a model
+// that really is short-context, or a gateway that is down, is not probed on every read — and a
+// model that never claimed tool calling is never probed from here at all.
+const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
+const workbenchProbes = new Map<string, { readonly promise: Promise<void>; at: number }>();
+// ONE run at a time. Persisting a conclusion bumps the configuration generation, and a readiness
+// run that started under the previous generation has its conclusion discarded as stale: probing
+// six models at once would store the first to finish and silently drop the other five. A queue
+// lets every run start on the generation the one before it left behind.
+let workbenchProbeQueue: Promise<void> = Promise.resolve();
+
+export function resetCodingWorkbenchContextWindowProbesForTests(): void {
+  workbenchProbes.clear();
+  workbenchProbeQueue = Promise.resolve();
+}
+
+/** Resolves once every automatic Workbench probe queued so far has finished. Test seam. */
+export function codingWorkbenchProbesSettledForTests(): Promise<void> {
+  return workbenchProbeQueue;
+}
+
+function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayReadinessProbeName[] {
+  const eligibility = codingWorkbenchModelEligibility(capability);
+  if (eligibility === "ineligible") return [];
+  const shortWindow =
+    capability.contextWindow < CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS;
+  return [
+    ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
+    ...(shortWindow ? (["long_context"] as const) : []),
+  ];
+}
+
+interface WorkbenchProbeTarget {
+  readonly modelId: string;
+  readonly probes: readonly GatewayReadinessProbeName[];
+}
+
+function workbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTarget[] {
+  return listConfiguredCapabilities(config)
+    .map((capability) => ({ modelId: capability.id, probes: workbenchProbesNeeded(capability) }))
+    .filter((target) => target.probes.length > 0);
+}
+
+// Keyed by the deployment's identity, not the configuration generation: every conclusion this
+// persists bumps the generation, which would otherwise lift the cooldown of every other model.
+function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  return provider === undefined ? modelId : toolCallingConfigurationFingerprint(provider);
+}
+
+async function runWorkbenchProbe(
+  deps: UiHandlerDeps,
+  target: WorkbenchProbeTarget,
+  key: string,
+  correlationId: string,
+): Promise<void> {
+  try {
+    const report = await runGatewayReadiness(
+      {
+        modelId: target.modelId,
+        options: { probes: target.probes, purpose: "coding-workbench-auto" },
+      },
+      deps,
+      correlationId,
+    );
+    const proven =
+      !("status" in report) &&
+      target.probes.every((name) =>
+        report.probes.some((probe) => probe.name === name && probe.status === "passed"),
+      );
+    const config = deps.gatewayConfig?.current();
+    const stillNeeded =
+      config !== undefined &&
+      workbenchProbeTargets(config).some((pending) => pending.modelId === target.modelId);
+    // Proven, yet not stored: the configuration changed under the run and the conclusion was
+    // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
+    // the model unusable for hours.
+    if (proven && stillNeeded) workbenchProbes.delete(key);
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId,
+        operation: "gateway.readiness",
+        source: "gateway-readiness.workbench-probe",
+        error,
+        summary: "A gateway readiness probe could not be completed.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  }
+}
+
+function enqueueWorkbenchProbe(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  target: WorkbenchProbeTarget,
+  correlationId: string,
+): Promise<void> {
+  const key = workbenchProbeKey(config, target.modelId);
+  const known = workbenchProbes.get(key);
+  if (known !== undefined && Date.now() - known.at < WORKBENCH_REPROBE_COOLDOWN_MS) {
+    return known.promise;
+  }
+  const promise = workbenchProbeQueue.then(() =>
+    runWorkbenchProbe(deps, target, key, correlationId),
+  );
+  workbenchProbeQueue = promise;
+  workbenchProbes.set(key, { promise, at: Date.now() });
+  return promise;
+}
+
+export async function ensureCodingWorkbenchContextWindows(
+  deps: UiHandlerDeps,
+  electedModelId: string | undefined,
+  correlationId?: string,
+): Promise<void> {
+  const config = deps.gatewayConfig?.current();
+  if (config === undefined) return;
+  const targets = workbenchProbeTargets(config);
+  if (targets.length === 0) return;
+  const id = correlationId ?? newCorrelationId();
+  // The model the Workbench would elect goes first and is the only one awaited.
+  const ordered = [
+    ...targets.filter((target) => target.modelId === electedModelId),
+    ...targets.filter((target) => target.modelId !== electedModelId),
+  ];
+  const queued = new Map(
+    ordered.map((target) => [target.modelId, enqueueWorkbenchProbe(deps, config, target, id)]),
+  );
+  // A named model waits for ITS proof only — never for another model's. Without a name (the
+  // Workbench could elect none yet) the first queued model is the one it would elect next.
+  await (electedModelId === undefined ? queued.values().next().value : queued.get(electedModelId));
 }
 
 // Fresh-install gap (customer field incident, 0.3.10): a configured gateway carries NO
