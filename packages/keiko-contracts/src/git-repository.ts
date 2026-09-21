@@ -10,9 +10,15 @@ export const GIT_REPOSITORY_SCHEMA_VERSION = "1" as const;
 // contract validation and then be rejected at the git boundary. Consolidated here so both sides
 // share one formula; keiko-tools imports it rather than restating it.
 //
-// Deliberately stricter than `git check-ref-format`: every ref Keiko creates is server-derived, so
-// only the deterministic shapes we emit need to be accepted, and anything that could read as an
-// option, a traversal, or a refspec/glob metacharacter is refused.
+// Deliberately stricter than `git check-ref-format`: anything that could read as an option, a
+// traversal, or a refspec/glob metacharacter is refused. It is NOT limited to the shapes Keiko
+// derives, because a base branch is the user's own ref: the first allowlist accepted only
+// `[A-Za-z0-9._/-]`, refused the customer branch `feat(GDZ-917)/...` as unsafe, and made the Coding
+// Workbench unusable on that repository. The allowlist below adds the punctuation ordinary branch
+// conventions use and that is inert everywhere a ref travels here: git receives every ref as one
+// argv element, never through a shell, and these characters are neither URL syntax nor markup.
+// Shell, URL and markup syntax stays refused even where git itself would accept it.
+const SAFE_REF_CHARACTERS = /^[A-Za-z0-9._\-/()+@=,]+$/u;
 const UNSAFE_REF_PREFIXES: readonly string[] = ["-", "/"];
 const UNSAFE_REF_SUFFIXES: readonly string[] = ["/", "."];
 const UNSAFE_REF_SUBSTRINGS: readonly string[] = ["..", "//", "@{"];
@@ -43,7 +49,7 @@ export function isSafeGitRefName(value: string): boolean {
   if (UNSAFE_REF_PREFIXES.some((prefix) => value.startsWith(prefix))) return false;
   if (UNSAFE_REF_SUFFIXES.some((suffix) => value.endsWith(suffix))) return false;
   if (UNSAFE_REF_SUBSTRINGS.some((part) => value.includes(part))) return false;
-  if (!/^[A-Za-z0-9._\-/]+$/u.test(value)) return false;
+  if (!SAFE_REF_CHARACTERS.test(value) || value === "@") return false;
   if (value.split("/").some(isUnsafeRefComponent)) return false;
   return !/[~^:?*[\\ ]/u.test(value);
 }

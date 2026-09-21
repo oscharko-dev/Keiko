@@ -370,6 +370,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The task branch for this coding run already exists. Remove the previous branch or its managed workspace. Alternatively, choose a different target branch.",
   "codingWorkbench.setup.invalidBaseBranch":
     "The target branch does not exist in this repository. Enter a branch that resolves locally, for example the checked-out branch.",
+  "codingWorkbench.setup.invalidRequest":
+    "Keiko cannot use this repository path or target branch as entered. Branch names may contain letters, digits and the characters . _ - / ( ) + @ = , only. Choose another branch or rename it, then bind again.",
   "codingWorkbench.setup.missingRepository":
     "The repository path is not inside a local Git repository. Enter the path of an existing checkout.",
   "codingWorkbench.setup.unsafePath":

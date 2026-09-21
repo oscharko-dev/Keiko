@@ -391,6 +391,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Aufgabenbranch für diesen Coding-Lauf existiert bereits. Entferne den früheren Branch oder den zugehörigen verwalteten Arbeitsbereich. Alternativ kannst du einen anderen Zielbranch wählen.",
   "codingWorkbench.setup.invalidBaseBranch":
     "Der Zielbranch existiert in diesem Repository nicht. Gib einen lokal auflösbaren Branch an, zum Beispiel den ausgecheckten Branch.",
+  "codingWorkbench.setup.invalidRequest":
+    "Keiko kann diesen Repository-Pfad oder Zielbranch so nicht verwenden. Branch-Namen dürfen nur Buchstaben, Ziffern und die Zeichen . _ - / ( ) + @ = , enthalten. Wähle einen anderen Branch oder benenne ihn um und binde dann erneut.",
   "codingWorkbench.setup.missingRepository":
     "Der Repository-Pfad liegt in keinem lokalen Git-Repository. Gib den Pfad eines vorhandenen Checkouts an.",
   "codingWorkbench.setup.unsafePath":
