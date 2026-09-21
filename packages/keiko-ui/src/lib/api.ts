@@ -810,6 +810,7 @@ export type VerifiedGatewayCapabilityFields = Partial<
     | "structuredOutput"
     | "supportsImageInput"
     | "supportsDocumentInput"
+    | "contextWindow"
   >
 >;
 

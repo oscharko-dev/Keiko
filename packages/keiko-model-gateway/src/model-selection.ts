@@ -283,9 +283,7 @@ function unavailableReasonForSidecarConfig(
     return "tool-calling-unverified";
   }
   const chatCapabilities = capabilities.filter((capability) => capability.kind === "chat");
-  if (
-    chatCapabilities.some((capability) => capability.toolCalling && capability.workflowEligible)
-  ) {
+  if (chatCapabilities.some((capability) => capability.toolCalling)) {
     return "non-coding-capable";
   }
   if (capabilities.length === 0) {
@@ -294,12 +292,7 @@ function unavailableReasonForSidecarConfig(
   if (chatCapabilities.length === 0) {
     return "non-chat";
   }
-  // No chat capability is (toolCalling && workflowEligible) past this point: a chat model that can
-  // call tools is therefore blocked by workflow eligibility, and only a config whose chat models
-  // all lack tool calling reports the tool-calling gap.
-  if (chatCapabilities.some((capability) => capability.toolCalling)) {
-    return "non-workflow-eligible";
-  }
+  // No chat capability can call tools past this point, so the tool-calling gap is the reason.
   return "no-tool-calling";
 }
 

@@ -607,7 +607,7 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
         },
       ],
       [
-        codingSidecarCapability("chat-with-tools", { workflowEligible: false }),
+        codingSidecarCapability("chat-with-tools"),
         {
           ...codingSidecarCapability("text-embedding", { toolCalling: false }),
           kind: "embedding",
@@ -615,13 +615,20 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       ],
     );
 
-    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toEqual({
+    // Selecting the embedding model is the one way this config is unavailable; the reason must
+    // name the selected model's unsuitability, never a tool-calling gap the chat model lacks.
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(configValue, { modelId: "text-embedding" }),
+    ).toEqual({
       status: "unavailable",
-      reason: "non-workflow-eligible",
+      reason: "non-coding-capable",
     });
   });
 
-  it("fails closed when a chat tool-calling workflow-eligible model is not coding-capable", () => {
+  // Owner decision for 1.1.1: neither a coding use-case label nor the manual workflow flag gates
+  // the Workbench. A gateway-discovered model carries neither, and a customer whose models had all
+  // passed the live forced tool-call probe was offered none.
+  it("admits a verified tool-calling chat model without a coding label or workflow flag", () => {
     const configValue = sidecarConfig(
       [
         {
@@ -636,13 +643,14 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       [
         codingSidecarCapability("chat-only-sidecar", {
           preferredUseCases: ["Chat"],
+          workflowEligible: false,
         }),
       ],
     );
 
-    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toEqual({
-      status: "unavailable",
-      reason: "non-coding-capable",
+    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toMatchObject({
+      status: "available",
+      modelAlias: "chat-only-sidecar",
     });
   });
 
@@ -704,23 +712,6 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
         [codingSidecarCapability("no-tools", { toolCalling: false })],
       ),
       reason: "no-tool-calling" as const,
-    },
-    {
-      label: "workflow disabled",
-      config: sidecarConfig(
-        [
-          {
-            modelId: "no-workflow",
-            baseUrl: "https://provider.example/v1",
-            apiKey: "secret",
-            timeoutMs: 30_000,
-            maxRetries: 3,
-            retryBaseDelayMs: 500,
-          },
-        ],
-        [codingSidecarCapability("no-workflow", { workflowEligible: false })],
-      ),
-      reason: "non-workflow-eligible" as const,
     },
     {
       label: "missing credentials",

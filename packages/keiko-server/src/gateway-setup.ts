@@ -6356,14 +6356,25 @@ const VERIFIED_CAPABILITY_FIELDS = new Set<keyof VerifiedModelCapabilityFields>(
   "structuredOutput",
   "supportsImageInput",
   "supportsDocumentInput",
+  "contextWindow",
 ]);
+
+// The readiness long-context probe never tests more than 128,000 tokens, so a larger submitted
+// value cannot match any recorded observation and is rejected before that comparison.
+const MAX_VERIFIED_CONTEXT_WINDOW = 128_000;
 
 interface CapabilityApplyRequest {
   readonly fields: VerifiedModelCapabilityFields;
 }
 
-function verifiedFieldValue(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+function verifiedFieldValue(field: string, value: unknown): boolean | number | undefined {
+  if (field !== "contextWindow") return typeof value === "boolean" ? value : undefined;
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_VERIFIED_CONTEXT_WINDOW
+    ? value
+    : undefined;
 }
 
 function parseCapabilityApplyRequest(value: unknown): CapabilityApplyRequest | RouteResult {
@@ -6388,7 +6399,7 @@ function parseCapabilityApplyRequest(value: unknown): CapabilityApplyRequest | R
         body: errorBody("BAD_REQUEST", "An unsupported capability field was supplied."),
       };
     }
-    const parsed = verifiedFieldValue(rawValue);
+    const parsed = verifiedFieldValue(field, rawValue);
     if (parsed === undefined) {
       return { status: 400, body: errorBody("BAD_REQUEST", "A capability value is invalid.") };
     }
@@ -6438,6 +6449,10 @@ function replaceModelCapability(
   const replacement = {
     ...current,
     ...fields,
+    // The long-context probe proves a lower bound, so it may raise a stored window, never shrink it.
+    ...(fields.contextWindow === undefined
+      ? {}
+      : { contextWindow: Math.max(current.contextWindow, fields.contextWindow) }),
     ...(fields.toolCalling === true
       ? {
           knownLimitations: current.knownLimitations.filter(

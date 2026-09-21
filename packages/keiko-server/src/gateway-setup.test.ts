@@ -826,6 +826,51 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // Customer report on 1.1.0: a gateway that declares no token limits left the 4,096 setup
+  // placeholder in place, and the Coding Workbench refused every model under 32,000 although the
+  // long-context probe had verified 32,000 tokens. Nothing could write that proof back.
+  it("raises the stored context window to the verified long-context size and never shrinks it", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-context-window-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-context-window-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "model-one", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+        ],
+      }),
+      true,
+    );
+    const contextWindow = (): number | undefined =>
+      requiredGatewayConfig(deps).capabilities?.find((capability) => capability.id === "model-one")
+        ?.contextWindow;
+    const apply = async (tokens: number): Promise<number> => {
+      gatewayConfig.recordVerifiedCapability(
+        "model-one",
+        { contextWindow: tokens },
+        "2026-09-21T06:00:00.000Z",
+        gatewayConfig.generation(),
+      );
+      const result = await handleApplyGatewayVerifiedCapabilities(
+        { ...ctx({ fields: { contextWindow: tokens } }), params: { modelId: "model-one" } },
+        deps,
+      );
+      return result.status;
+    };
+
+    expect(await apply(32_000)).toBe(200);
+    expect(contextWindow()).toBe(32_000);
+    expect(await apply(8_000)).toBe(200);
+    expect(contextWindow()).toBe(32_000);
+    deps.store.close();
+  });
+
   it("materializes only the selected registry-default capability as an explicit override", async () => {
     const uiDir = await tempDir("keiko-gw-capability-single-override-ui-");
     const deps = buildUiHandlerDeps({

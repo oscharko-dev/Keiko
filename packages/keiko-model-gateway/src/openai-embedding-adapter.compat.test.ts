@@ -455,6 +455,118 @@ describe("batch failure that is not a clean shape rejection", () => {
     expect(arrayCalls).toHaveLength(0);
   });
 
+  // Customer report on 1.1.0: multilingual-e5-large hard-limits one input to 512 real tokens.
+  // Chunks are cut to 512 ESTIMATED tokens, so a dense chunk is over the limit; this gateway
+  // answers it with 500, the ladder failed the whole batch on that item, the batcher retried the
+  // "transient" 500, and the Knowledge Pod sat at "0 of 36 vectors" without ever finishing.
+  function sizeLimitedGateway(maxChars: number): ReturnType<typeof vi.fn<typeof fetch>> {
+    return vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if ("encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "unsupported" } }, 400));
+      }
+      const inputs = Array.isArray(body.input) ? (body.input as string[]) : [body.input as string];
+      if (inputs.some((input) => input.length > maxChars)) {
+        return Promise.resolve(jsonResponse({ error: { message: "internal error" } }, 500));
+      }
+      return Promise.resolve(
+        Array.isArray(body.input)
+          ? jsonResponse({
+              model: "multilingual-e5-large",
+              data: inputs.map((_input, index) => ({ index, embedding: [0.1, 0.2, 0.3] })),
+            })
+          : jsonResponse(SCALAR_OK),
+      );
+    });
+  }
+
+  it("shortens an item the endpoint rejects for its size instead of failing the batch", async () => {
+    const fetchImpl = sizeLimitedGateway(1_000);
+    const outcome = await requestOpenAIEmbeddingBatch(
+      batchRequest(["short", "x".repeat(3_000), "tail"], fetchImpl),
+    );
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value).toHaveLength(3);
+    // Minimal-shape scalar requests only: each rejected length is tried once, then halved.
+    const sentLengths = fetchImpl.mock.calls
+      .map((call) => bodyOf(call as unknown[]))
+      .filter((body) => !("encoding_format" in body) && typeof body.input === "string")
+      .map((body) => (body.input as string).length);
+    // 750 is accepted; the full item is then sent once more to CONFIRM that size is the cause.
+    expect(sentLengths).toEqual([5, 3_000, 1_500, 750, 3_000, 4]);
+  });
+
+  it("sends later batches already shortened, as one array again", async () => {
+    const fetchImpl = sizeLimitedGateway(1_000);
+    await requestOpenAIEmbeddingBatch(batchRequest(["x".repeat(3_000)], fetchImpl));
+    fetchImpl.mockClear();
+
+    const second = await requestOpenAIEmbeddingBatch(
+      batchRequest(["y".repeat(3_000), "z"], fetchImpl),
+    );
+
+    expect(second.ok).toBe(true);
+    const bodies = fetchImpl.mock.calls.map((call) => bodyOf(call as unknown[]));
+    expect(bodies).toHaveLength(1);
+    expect((bodies[0]?.input as string[]).map((input) => input.length)).toEqual([750, 1]);
+  });
+
+  // Review finding on #3573: a status is not proof of a size rejection. A passing 500 rejects the
+  // long item and accepts the shortened one only because the outage ended; treating that as a
+  // size limit would embed a truncated text and shorten every later input for the process lifetime.
+  it("neither shortens nor learns a cap when the rejection was a passing 500", async () => {
+    let failuresLeft = 2;
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if ("encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "unsupported" } }, 400));
+      }
+      if (failuresLeft > 0) {
+        failuresLeft -= 1;
+        return Promise.resolve(jsonResponse({ error: { message: "internal error" } }, 500));
+      }
+      return Promise.resolve(jsonResponse(SCALAR_OK));
+    });
+    const minimalScalarLengths = (): readonly number[] =>
+      fetchImpl.mock.calls
+        .map((call) => bodyOf(call as unknown[]))
+        .filter((body) => !("encoding_format" in body) && typeof body.input === "string")
+        .map((body) => (body.input as string).length);
+
+    const first = await requestOpenAIEmbeddingBatch(
+      batchRequest(["x".repeat(3_000), "tail"], fetchImpl),
+    );
+    expect(first.ok).toBe(true);
+    // Full rejected by the outage, half accepted, then the FULL item accepted on confirmation:
+    // the vector that carries the item is the full one.
+    expect(minimalScalarLengths()).toEqual([3_000, 1_500, 3_000, 4]);
+
+    fetchImpl.mockClear();
+    await requestOpenAIEmbeddingBatch(batchRequest(["y".repeat(3_000), "z"], fetchImpl));
+    const laterLengths = fetchImpl.mock.calls
+      .map((call) => bodyOf(call as unknown[]).input)
+      .flatMap((input) => (Array.isArray(input) ? (input as string[]) : [input as string]))
+      .map((input) => input.length);
+    expect(Math.max(...laterLengths)).toBe(3_000);
+  });
+
+  it("never cuts a surrogate pair in half when shortening", async () => {
+    const fetchImpl = sizeLimitedGateway(1_000);
+    const emoji = "\u{1F600}".repeat(600);
+    const outcome = await requestOpenAIEmbeddingBatch(batchRequest([`a${emoji}`], fetchImpl));
+
+    expect(outcome.ok).toBe(true);
+    const sent = fetchImpl.mock.calls
+      .map((call) => bodyOf(call as unknown[]).input)
+      .filter((input): input is string => typeof input === "string");
+    for (const input of sent) {
+      // In unicode mode a paired surrogate is one code point; only a LONE one is category Cs.
+      expect(/\p{Cs}/u.test(input)).toBe(false);
+    }
+  });
+
   it("degrades when the array attempt fails without any HTTP answer at all", async () => {
     const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
       const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;

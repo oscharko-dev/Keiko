@@ -2298,6 +2298,66 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.1",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.1",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-21-keiko-1.1.1-gateway-workbench-admission-context-window-embedding-size-limit",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.1 repairs three defects reported against a self-hosted LiteLLM gateway. The Coding Workbench now offers every chat model whose tool calling was freshly verified, without a separately entered list of coding models. A model whose gateway declares no token limits can take over the context window the readiness deep probes verified, so the Workbench no longer refuses it for the 4,096-token setup placeholder. Knowledge Pod indexing no longer fails with zero vectors when an embedding model with a small input limit rejects a long chunk: the chunk is shortened until the endpoint accepts it, and the learned limit is reused.",
+      "affectedStateStores": ["local-knowledge"],
+      "stateImpact": [
+        {
+          "store": "local-knowledge",
+          "description": "Knowledge Pods indexed from 1.1.1 may hold vectors computed from the leading part of a chunk when the embedding endpoint rejected the full chunk for its size. Chunk text, citations and existing vectors are unchanged, no pod is rewritten or re-indexed by the update, and a pod that failed to index on 1.1.0 can simply be indexed again.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "releaseNoteBullets": [
+        "Coding Workbench: every chat model with a freshly verified tool-calling check is offered; the separate list of coding models is no longer required.",
+        "Settings \u2192 Models: after Deep probes, \"Apply verified values\" can raise a model's stored context window to the verified size, which unblocks models whose gateway reports no token limits.",
+        "Knowledge Pods: indexing completes against embedding models with a small input limit such as multilingual-e5-large instead of stopping with zero vectors after a gateway error."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-21",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/3573",
+        "rationale": "The release owner explicitly requested an immediate 1.1.1 patch for the customer-reported 1.1.0 defects and decided that the Coding Workbench admits every verified tool-calling chat model without a manually entered coding-model list. The patch adds no root export, no CLI command, no route and no package entry point.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }

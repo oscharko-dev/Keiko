@@ -421,7 +421,8 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
-  it("rejects an automatic probe for a non-coding model without dispatching or logging", async () => {
+  // Every chat model is a Workbench candidate since 1.1.1, so the non-candidate is a non-chat model.
+  it("rejects an automatic probe for a non-chat model without dispatching or logging", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const events: ServerLogEvent[] = [];
     const deps: UiHandlerDeps = {
@@ -432,7 +433,7 @@ describe("gateway readiness route", () => {
     const result = await handleGatewayReadiness(
       {
         ...ctx({
-          modelId: "general-chat",
+          modelId: "text-embedding-3-small",
           options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
         }),
         correlationId: "coding-readiness-0002",
@@ -1203,7 +1204,22 @@ describe("gateway readiness route", () => {
         },
       ],
     };
-    const deps = depsWith(config, fetchImpl);
+    const recordVerifiedCapability = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        generation: () => 0,
+        verification: () => UNVERIFIED_GATEWAY,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => true,
+      },
+    };
     const report = await runGatewayReadiness(
       { options: { probes: ["image_input", "document_input", "long_context"] } },
       deps,
@@ -1217,6 +1233,14 @@ describe("gateway readiness route", () => {
       documentInput: true,
       testedContextTokens: 64_000,
     });
+    // The proven token count is recorded as an applicable observation, so Settings can write it
+    // back; before 1.1.1 it was display-only and a 4,096 placeholder could never be corrected.
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      expect.objectContaining({ contextWindow: 64_000 }),
+      expect.any(String),
+      0,
+    );
     expect(report.probes).toEqual([
       expect.objectContaining({ name: "chat", status: "passed" }),
       expect.objectContaining({ name: "image_input", status: "passed" }),

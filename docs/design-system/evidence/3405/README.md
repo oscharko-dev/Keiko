@@ -1,7 +1,7 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-09-20 for PR #3561 after the Coding Workbench
-changed the shared English and German message catalogs. No updater string changed. All eight
+The current repair evidence was regenerated on 2026-09-21 for PR #3573 after the 1.1.1 customer
+patch widened a gateway capability type in the shared `api.ts`. No updater string changed. All eight
 Chromium checks passed, including the real-BFF outage journey, and refreshed the tracked updater
 artifacts. The tests prove the startup notice yields only while a visible, foreground **ready**
 Update window owns the same critical context and actions; the notice returns when that window is

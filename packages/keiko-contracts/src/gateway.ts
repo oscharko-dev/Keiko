@@ -322,24 +322,37 @@ export type CodingWorkbenchModelEligibility = "eligible" | "tool-calling-unverif
  * Whether a configured model is structurally suitable for a Coding Workbench readiness probe.
  * Tool calling is deliberately excluded: the probe exists to discover that capability, so making
  * the provider claim a prerequisite would leave a fresh or changed configuration unable to heal.
+ *
+ * Every chat model is a candidate (owner decision for 1.1.1). The rule used to demand a manually
+ * declared `workflowEligible` flag plus a coding use case, which a discovered gateway model never
+ * carries: a customer whose models all passed the live tool-calling probe was offered none. What
+ * admits a model to a run is the fresh forced tool-call proof, not a label.
  */
 export function isCodingWorkbenchReadinessCandidate(capability: ModelCapability): boolean {
-  return (
-    capability.kind === "chat" &&
-    capability.workflowEligible &&
-    capability.preferredUseCases.some((value) =>
-      CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
-    )
+  return capability.kind === "chat";
+}
+
+/**
+ * Whether the operator labelled the model for coding. It no longer gates anything; it only orders
+ * the automatic readiness probe so a labelled coding model is tried before an unlabelled one.
+ */
+function hasCodingUseCase(capability: ModelCapability): boolean {
+  return capability.preferredUseCases.some((value) =>
+    CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
   );
 }
 
-/** Lists configured structural candidates by cost, preserving configuration order on ties. */
+/** Lists candidates: coding-labelled first, then by cost, keeping configuration order on ties. */
 export function listCodingWorkbenchReadinessCandidates(
   capabilities: readonly ModelCapability[],
 ): readonly ModelCapability[] {
   return capabilities
     .filter((capability) => isCodingWorkbenchReadinessCandidate(capability))
-    .sort((left, right) => MODEL_COST_RANK[left.costClass] - MODEL_COST_RANK[right.costClass]);
+    .sort(
+      (left, right) =>
+        Number(hasCodingUseCase(right)) - Number(hasCodingUseCase(left)) ||
+        MODEL_COST_RANK[left.costClass] - MODEL_COST_RANK[right.costClass],
+    );
 }
 
 /** Selects the cheapest configured structural candidate, preserving configuration order on ties. */
