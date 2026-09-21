@@ -2605,14 +2605,6 @@ describe("coding-sidecar gateway", () => {
       reason: "no-tool-calling",
     },
     {
-      label: "workflow disabled",
-      config: configValue(
-        provider({ modelId: "no-workflow" }),
-        capability({ id: "no-workflow", workflowEligible: false }),
-      ),
-      reason: "non-workflow-eligible",
-    },
-    {
       label: "missing credential",
       config: configValue(
         provider({ modelId: "missing-credential", baseUrl: " ", apiKey: "" }),
@@ -2627,15 +2619,21 @@ describe("coding-sidecar gateway", () => {
     });
   });
 
-  it("returns non-coding-capable when the selected model is chat, tool-calling, and workflow-eligible but lacks a coding use case", () => {
+  // Owner decision for 1.1.1: a gateway-discovered model carries neither a coding use case nor
+  // the manual workflow flag, and must still power the Workbench once its tool calling is proven.
+  it("admits a verified tool-calling chat model without a coding label or workflow flag", () => {
     const config = configValue(
       provider({ modelId: "chat-only-sidecar" }),
-      capability({ id: "chat-only-sidecar", preferredUseCases: ["Chat"] }),
+      capability({
+        id: "chat-only-sidecar",
+        preferredUseCases: ["Chat"],
+        workflowEligible: false,
+      }),
     );
 
-    expect(resolveCodingSafeSidecarGatewayProfile(config)).toEqual({
-      status: "unavailable",
-      reason: "non-coding-capable",
+    expect(resolveCodingSafeSidecarGatewayProfile(config)).toMatchObject({
+      status: "available",
+      modelAlias: "chat-only-sidecar",
     });
   });
 

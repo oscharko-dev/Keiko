@@ -846,6 +846,58 @@ describe("SettingsPanel gateway readiness checks", () => {
     expect(screen.queryByText("Gateway connected")).toBeNull();
   });
 
+  // Customer report on 1.1.0: a gateway that declares no token limits leaves a 4,096 placeholder,
+  // the Coding Workbench demands 32,000, and the verified 32,000 tokens could not be written back.
+  it("offers the verified context window when it exceeds the stored one", async () => {
+    const configured = { ...chatCapability("test-chat-1"), contextWindow: 4_096 };
+    primeFetches([configured]);
+    fetchModelsMock.mockResolvedValue({ models: [configured] });
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-09-21T06:00:00.000Z",
+      overallStatus: "ready",
+      probes: [{ name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" }],
+      verifiedCapabilities: { testedContextTokens: 32_000 },
+    });
+    applyGatewayVerifiedCapabilitiesMock.mockResolvedValue({
+      ok: true,
+      model: { ...configured, contextWindow: 32_000 },
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep probes" }));
+
+    expect(await screen.findByTestId("capability-disagreements")).toHaveTextContent(
+      /Context window: configured 4,096; verified 32,000/i,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Apply verified values" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
+    await waitFor(() => {
+      expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
+        contextWindow: 32_000,
+      });
+    });
+  });
+
+  it("never offers a verified context window that would shrink the stored one", async () => {
+    const configured = { ...chatCapability("test-chat-1"), contextWindow: 128_000 };
+    primeFetches([configured]);
+    fetchModelsMock.mockResolvedValue({ models: [configured] });
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-09-21T06:00:00.000Z",
+      overallStatus: "ready",
+      probes: [{ name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" }],
+      verifiedCapabilities: { testedContextTokens: 64_000 },
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep probes" }));
+
+    expect(await screen.findByText(/Working today/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("capability-disagreements")).toBeNull();
+  });
+
   it("shows capability disagreements and applies only live-verified values after confirmation", async () => {
     const configured = chatCapability("test-chat-1");
     const updated = { ...configured, toolCalling: false };

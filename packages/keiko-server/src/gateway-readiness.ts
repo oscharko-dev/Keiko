@@ -1454,7 +1454,18 @@ export const TESTED_CONTEXT_TOKENS_PATTERN = /(\d{1,15}) approximate tokens/u;
 export const EMBEDDING_EVIDENCE_PATTERN =
   /returned (\d{1,15}) dimensions with L2 norm ([0-9.]{1,32})/u;
 
-// eslint-disable-next-line complexity
+function testedContextTokensFromProbes(
+  probes: readonly GatewayReadinessProbeResult[],
+): number | undefined {
+  const longContext = probes.find(
+    (probe) => probe.name === "long_context" && probe.status === "passed",
+  );
+  const tokenMatch = longContext?.evidence.match(TESTED_CONTEXT_TOKENS_PATTERN);
+  if (tokenMatch === undefined || tokenMatch === null) return undefined;
+  const tokens = Number.parseInt(tokenMatch[1] ?? "0", 10);
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
+}
+
 function verifiedCapabilities(
   probes: readonly GatewayReadinessProbeResult[],
 ): GatewayReadinessReport["verifiedCapabilities"] {
@@ -1463,14 +1474,7 @@ function verifiedCapabilities(
       .filter((probe) => probe.status === "passed")
       .map((probe): GatewayReadinessProbeName => probe.name),
   );
-  const longContext = probes.find(
-    (probe) => probe.name === "long_context" && probe.status === "passed",
-  );
-  const tokenMatch = longContext?.evidence.match(TESTED_CONTEXT_TOKENS_PATTERN);
-  const testedContextTokens =
-    tokenMatch === undefined || tokenMatch === null
-      ? undefined
-      : Number.parseInt(tokenMatch[1] ?? "0", 10);
+  const testedContextTokens = testedContextTokensFromProbes(probes);
   const embedding = probes.find((probe) => probe.name === "embedding" && probe.status === "passed");
   const embeddingMatch = embedding?.evidence.match(EMBEDDING_EVIDENCE_PATTERN);
   const embeddingDimensions =
@@ -1529,8 +1533,11 @@ function verifiedCapabilityObservation(
     ["structuredOutput", categoricalProbeValue(probes, "json_schema")],
     ["supportsImageInput", categoricalProbeValue(probes, "image_input")],
     ["supportsDocumentInput", categoricalProbeValue(probes, "document_input")],
+    ["contextWindow", testedContextTokensFromProbes(probes)],
   ] as const;
-  return Object.fromEntries(values.filter(([, value]) => value !== undefined));
+  return Object.fromEntries(
+    values.filter(([, value]) => value !== undefined),
+  ) as VerifiedModelCapabilityFields;
 }
 
 function recordReadinessObservation(

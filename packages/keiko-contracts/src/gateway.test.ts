@@ -78,40 +78,40 @@ function cap(overrides: Partial<ModelCapability> = {}): ModelCapability {
 }
 
 describe("isCodingWorkbenchModel", () => {
-  it.each(["Coding", "Code review", "Local coding workflow", "Software development"])(
-    "accepts the explicit coding use case %s",
+  // Customer report on 1.1.0: a LiteLLM gateway declares no coding label and no workflow flag, so
+  // every discovered model carried `workflowEligible: false` and `preferredUseCases: ["Chat"]`.
+  // The Coding Workbench offered none although each had passed the live forced tool-call probe.
+  it("accepts a discovered chat model once its tool calling is freshly verified", () => {
+    const discovered = cap({ workflowEligible: false, preferredUseCases: ["Chat"] });
+    expect(isCodingWorkbenchModel(discovered)).toBe(true);
+  });
+
+  it.each(["Coding", "Code review", "Non-coding", "Chat"])(
+    "does not gate on the use-case label %s",
     (useCase) => {
       expect(isCodingWorkbenchModel(cap({ preferredUseCases: [useCase] }))).toBe(true);
     },
   );
 
-  it.each(["Non-coding", "Coding disabled", "Coding-adjacent", "Chat"])(
-    "rejects the unrelated or negative use case %s",
-    (useCase) => {
-      expect(isCodingWorkbenchModel(cap({ preferredUseCases: [useCase] }))).toBe(false);
-    },
-  );
-
-  it("requires chat, tool calling, and workflow eligibility together", () => {
-    const coding = { preferredUseCases: ["Coding"] } as const;
-    expect(isCodingWorkbenchModel(cap({ ...coding, kind: "embedding" }))).toBe(false);
-    expect(isCodingWorkbenchModel(cap({ ...coding, toolCalling: false }))).toBe(false);
-    expect(isCodingWorkbenchModel(cap({ ...coding, workflowEligible: false }))).toBe(false);
+  it("requires a chat model with tool calling", () => {
+    expect(isCodingWorkbenchModel(cap({ kind: "embedding" }))).toBe(false);
+    expect(isCodingWorkbenchModel(cap({ toolCalling: false }))).toBe(false);
   });
 
-  it("keeps an otherwise-qualified coding model eligible for automatic verification", () => {
+  it("keeps a chat model without a tool proof eligible for automatic verification", () => {
     const candidate = cap({
-      preferredUseCases: ["Coding"],
+      preferredUseCases: ["Chat"],
+      workflowEligible: false,
       toolCalling: false,
       toolCallingVerification: undefined,
     });
 
     expect(isCodingWorkbenchReadinessCandidate(candidate)).toBe(true);
     expect(isCodingWorkbenchModel(candidate)).toBe(false);
-    expect(isCodingWorkbenchReadinessCandidate(cap({ preferredUseCases: ["Chat"] }))).toBe(false);
+    expect(isCodingWorkbenchReadinessCandidate(cap({ kind: "embedding" }))).toBe(false);
   });
 
-  it("selects the cheapest structural candidate without trusting an unverified tool claim", () => {
+  it("probes a coding-labelled model before a cheaper unlabelled one", () => {
     const selected = selectCodingWorkbenchReadinessCandidate([
       cap({ id: "chat-only", preferredUseCases: ["Chat"], costClass: "low" }),
       cap({
@@ -133,13 +133,14 @@ describe("isCodingWorkbenchModel", () => {
     expect(selected?.id).toBe("coding-cheap");
   });
 
-  it("orders every structural readiness candidate by cost and keeps configuration order on ties", () => {
+  it("orders candidates coding-labelled first, then by cost, keeping configuration order on ties", () => {
     const candidates = listCodingWorkbenchReadinessCandidates([
       cap({ id: "coding-high", preferredUseCases: ["Coding"], costClass: "high" }),
       cap({ id: "coding-medium-a", preferredUseCases: ["Coding"], costClass: "medium" }),
       cap({ id: "chat-only", preferredUseCases: ["Chat"], costClass: "low" }),
       cap({ id: "coding-low", preferredUseCases: ["Code review"], costClass: "low" }),
       cap({ id: "coding-medium-b", preferredUseCases: ["Coding"], costClass: "medium" }),
+      cap({ id: "embedding", kind: "embedding", costClass: "low" }),
     ]);
 
     expect(candidates.map((candidate) => candidate.id)).toEqual([
@@ -147,6 +148,7 @@ describe("isCodingWorkbenchModel", () => {
       "coding-medium-a",
       "coding-medium-b",
       "coding-high",
+      "chat-only",
     ]);
   });
 
@@ -170,9 +172,9 @@ describe("isCodingWorkbenchModel", () => {
     expect(codingWorkbenchModelEligibility(model, { nowMs: later })).toBe(
       "tool-calling-unverified",
     );
-    expect(
-      codingWorkbenchModelEligibility(cap({ preferredUseCases: ["Chat"] }), { nowMs: admitted }),
-    ).toBe("ineligible");
+    expect(codingWorkbenchModelEligibility(cap({ kind: "embedding" }), { nowMs: admitted })).toBe(
+      "ineligible",
+    );
   });
 
   // Coding run 25 (2026-09-11): the Coding Workbench builds its picker with

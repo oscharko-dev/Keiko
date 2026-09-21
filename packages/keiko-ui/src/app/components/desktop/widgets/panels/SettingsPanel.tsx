@@ -520,7 +520,10 @@ const BOOLEAN_CAPABILITY_PROBES = [
   ["structuredOutput", "json_schema"],
   ["supportsImageInput", "image_input"],
   ["supportsDocumentInput", "document_input"],
-] as const satisfies readonly (readonly [ObservableCapabilityField, string])[];
+] as const satisfies readonly (readonly [
+  Exclude<ObservableCapabilityField, "contextWindow">,
+  string,
+])[];
 
 function observedProbeValue(
   report: GatewayReadinessReport,
@@ -543,10 +546,22 @@ function capabilityDisagreements(
       disagreements.push({ field, configured, observed });
     }
   }
+  // The long-context probe proves a lower bound: offer it only when it RAISES the stored window.
+  // A gateway that declares no token limits leaves the 4,096 setup placeholder in place, and the
+  // Coding Workbench refuses any model under 32,000 (customer report on 1.1.0).
+  const testedContextTokens = report.verifiedCapabilities.testedContextTokens;
+  if (testedContextTokens !== undefined && testedContextTokens > model.contextWindow) {
+    disagreements.push({
+      field: "contextWindow",
+      configured: model.contextWindow,
+      observed: testedContextTokens,
+    });
+  }
   return disagreements;
 }
 
 function capabilityFieldLabel(field: ObservableCapabilityField, t: I18nTranslate): string {
+  if (field === "contextWindow") return t("settings.models.capabilityContextWindow");
   if (field === "toolCalling") return t("settings.models.capabilityTools");
   if (field === "structuredOutput") return t("settings.models.capabilityJson");
   if (field === "supportsImageInput") return t("settings.models.capabilityImage");

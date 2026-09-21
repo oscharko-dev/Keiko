@@ -530,6 +530,11 @@ export type VerifiedModelCapabilityFields = Partial<
     | "supportsImageInput"
     | "supportsDocumentInput"
     | "conversationReady"
+    // The token count the long-context probe proved the deployment accepts. It is a lower bound,
+    // so applying it may only ever raise a stored window (customer report on 1.1.0: a gateway
+    // that declares no token limits left the 4,096 setup placeholder in place, and the Coding
+    // Workbench refused every model although readiness had verified 32,000 tokens).
+    | "contextWindow"
   >
 >;
 
