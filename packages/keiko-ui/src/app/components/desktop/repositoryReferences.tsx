@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { FileIcon } from "./widgets/shared/projectTree";
 
@@ -367,6 +375,33 @@ interface RepositoryReferenceInlineProps {
   readonly className?: string | undefined;
 }
 
+const OPENED_CONFIRMATION_MS = 1800;
+
+// Schedules a callback once. The pending timer is cleared before a new one is scheduled and when
+// the component unmounts, so it can never set state on a component that is gone. The uncleared
+// timer was a latent race: a test file finishing inside the delay let it fire after jsdom was torn
+// down, React threw "window is not defined", and the required keiko-ui coverage job went red on a
+// pull request that had not touched this file (#3573).
+function useClearedTimeout(callback: () => void): (delayMs: number) => void {
+  const timerRef = useRef<number | undefined>(undefined);
+  const clear = useCallback((): void => {
+    if (timerRef.current === undefined) return;
+    window.clearTimeout(timerRef.current);
+    timerRef.current = undefined;
+  }, []);
+  useEffect(() => clear, [clear]);
+  return useCallback(
+    (delayMs: number): void => {
+      clear();
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = undefined;
+        callback();
+      }, delayMs);
+    },
+    [callback, clear],
+  );
+}
+
 export function RepositoryReferenceInline({
   reference,
   roots,
@@ -377,6 +412,11 @@ export function RepositoryReferenceInline({
     "idle",
   );
   const [message, setMessage] = useState("");
+  const resetToIdle = useCallback((): void => {
+    setStatus("idle");
+    setMessage("");
+  }, []);
+  const scheduleIdleReset = useClearedTimeout(resetToIdle);
   const rootOptions = useMemo(() => {
     const seen = new Set<string>();
     const out: RepositoryReferenceRoot[] = [];
@@ -417,16 +457,13 @@ export function RepositoryReferenceInline({
       if (result.ok) {
         setStatus("opened");
         setMessage(`Opened ${path} in editor.`);
-        window.setTimeout(() => {
-          setStatus("idle");
-          setMessage("");
-        }, 1800);
+        scheduleIdleReset(OPENED_CONFIRMATION_MS);
         return;
       }
       setStatus("failed");
       setMessage(result.message);
     },
-    [openReference, reference],
+    [openReference, reference, scheduleIdleReset],
   );
 
   const activate = useCallback((): void => {
