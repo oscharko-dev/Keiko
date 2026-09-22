@@ -53,7 +53,9 @@ describe("coding runtime control plane", () => {
       }),
     ).resolves.toEqual({
       ok: false,
-      failureCode: "authority-resolution-failed",
+      // #3565 Observation 17: a missing runtime host is `runtime-unavailable`, no longer the
+      // generic `authority-resolution-failed` that hid the cause from the operator and the log.
+      failureCode: "runtime-unavailable",
       // The refusal carries the run id the orchestrator minted, so the operation's refusal line
       // joins the run-scoped lines in the activity log (PR #3452); the aggregate still creates no
       // snapshot for a start it refused.

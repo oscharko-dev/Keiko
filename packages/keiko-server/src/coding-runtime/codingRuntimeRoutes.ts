@@ -87,6 +87,8 @@ const RUNTIME_REFUSAL_REASONS = [
   "issue-context-unavailable",
   "question-answer-rejected",
   "delivery-not-evidenced",
+  "model-unavailable",
+  "workspace-unqualified",
   "payload-too-large",
 ] as const satisfies readonly RuntimeMutationRefusalReason[];
 
@@ -133,6 +135,8 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
 > = {
   "runtime-unavailable": "unavailable",
   "issue-context-unavailable": "unavailable",
+  "model-unavailable": "unavailable",
+  "workspace-unqualified": "conflict",
   "active-run-conflict": "conflict",
   "recovery-required": "conflict",
   "task-drift": "conflict",
@@ -190,6 +194,7 @@ function isRouteResult(value: RuntimeDeps | RouteResult): value is RouteResult {
 function failureStatus(failureCode: CodingWorkbenchRuntimeFailureCode): number {
   if (failureCode === "active-run-conflict" || failureCode === "recovery-required") return 409;
   if (failureCode === "authority-resolution-failed") return 403;
+  if (failureCode === "model-unavailable" || failureCode === "workspace-unqualified") return 409;
   return 400;
 }
 

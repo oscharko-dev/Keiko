@@ -1,4 +1,4 @@
-# Public API surface — 1.1.3
+# Public API surface — 1.1.4
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -100,6 +100,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   embedding input the endpoint rejects for its size — changed without adding, removing or
   renaming a root export, CLI top-level command, or package entry point. The approved external
   surface remains the 1.0.1 surface described above.
+- 1.1.4 (2026-09-22, #3565): the Coding Workbench runtime failure-code union gains
+  `model-unavailable` and `workspace-unqualified` (`CodingWorkbenchRuntimeFailureCode`,
+  `CODING_WORKBENCH_RUNTIME_FAILURE_CODES` in `@oscharko-dev/keiko-contracts`), the codes a refused
+  run start answers with instead of the generic `authority-resolution-failed`. Additive: no root
+  export, CLI top-level command, or package entry point changes. The approved external surface
+  remains the 1.0.1 surface described above.
 - 1.1.3 (2026-09-22, #3565): the npm tarball is back in the 1.1.1 shape. 1.1.2 embedded the
   external runtime dependency closure (20 third-party packages) to repair `npm install -g`, which
   doubled the artefact, and a repository firewall in front of a customer's registry could not

@@ -104,6 +104,11 @@ export type CodingRuntimeFailureCode =
   | "egress-unqualified"
   | "executable-tree-digest-mismatch"
   | "gateway-non-loopback"
+  // #3565: launch-resolution refusals that used to be bare Errors (see launchFailure.ts).
+  | "host-unavailable"
+  | "model-unavailable"
+  | "repository-unavailable"
+  | "workspace-unqualified"
   | "payload-missing"
   | "platform-unsupported"
   | "protocol-schema-mismatch"

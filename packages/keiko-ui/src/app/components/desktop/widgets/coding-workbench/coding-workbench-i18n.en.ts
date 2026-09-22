@@ -966,6 +966,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.announcement.researchActive": "Internet research grant active.",
   "codingWorkbench.alert.actionFailedCode":
     "The requested runtime action failed ({code}). Review the live state and retry.",
+  "codingWorkbench.alert.startRefusedModelUnavailable":
+    "The selected model is not admitted for a coding run right now ({code}). Run the readiness check for it under Settings → Models, or choose a model that passed its check today, then start again.",
+  "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
+    "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
   "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",
   "codingWorkbench.alert.authenticationRefreshFailed": "Authentication could not be refreshed.",
   "codingWorkbench.alert.authenticationSetupRefreshFailed":

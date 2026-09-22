@@ -91,7 +91,15 @@ export type CodingWorkbenchRuntimeFailureCode =
   // committed, pushed and delivered nothing. "The model stopped emitting tool calls" is not
   // delivery, and reporting it as success is a false claim the operator sees as green. An
   // issue-bound run that ends with no durable delivery evidence settles under this code instead.
-  | "delivery-not-evidenced";
+  | "delivery-not-evidenced"
+  // #3565 Observation 17: a start whose launch could not be resolved names its cause instead of
+  // collapsing into `authority-resolution-failed`. `model-unavailable`: the selected model is not
+  // admitted for a coding run right now (tool-calling proof missing or aged out, context window
+  // insufficient, credentials or provider missing). `workspace-unqualified`: the bound repository
+  // could not be qualified for the run (non-canonical or symlinked path, inactive or drifted
+  // workspace instance, repository identity unreadable).
+  | "model-unavailable"
+  | "workspace-unqualified";
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
@@ -117,4 +125,6 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "issue-context-unavailable",
     "question-answer-rejected",
     "delivery-not-evidenced",
+    "model-unavailable",
+    "workspace-unqualified",
   ] as const);

@@ -103,6 +103,37 @@ describe("keikoStackFrames", () => {
     expect(keikoStackFrames(error)).toEqual(["packages/keiko-model-gateway/dist/gateway.js:3:3"]);
   });
 
+  // #3565 Observation 17: an installed build (npm or Yarn) has no `packages/` directory — its code
+  // lives under `node_modules/@oscharko-dev/<pkg>/dist/` — so every customer log carried
+  // `frameCount: 0` and the refusing check could not be located. Both layouts reduce to the same
+  // anchored form; a foreign `node_modules` frame is still dropped.
+  it.each([
+    [
+      "an npm global install",
+      "    at resolve (file:///usr/local/lib/node_modules/@oscharko-dev/keiko/node_modules/@oscharko-dev/keiko-server/dist/coding-runtime/productionRuntimeWorkspaceAuthority.js:444:9)",
+    ],
+    [
+      "a Yarn project install",
+      "    at resolve (file:///Users/someone/project/node_modules/@oscharko-dev/keiko-server/dist/coding-runtime/productionRuntimeWorkspaceAuthority.js:444:9)",
+    ],
+  ])("reduces %s frame to the same dist-anchored form as a checkout", (_label, line) => {
+    const error = new Error("x");
+    error.stack = `Error: x\n${line}`;
+    expect(keikoStackFrames(error)).toEqual([
+      "packages/keiko-server/dist/coding-runtime/productionRuntimeWorkspaceAuthority.js:444:9",
+    ]);
+  });
+
+  it("drops an installed frame under a foreign scope or an unknown package name", () => {
+    const error = new Error("x");
+    error.stack = [
+      "Error: x",
+      "    at f (file:///Users/x/project/node_modules/@other/keiko-server/dist/a.js:1:1)",
+      "    at g (file:///Users/x/project/node_modules/@oscharko-dev/not-a-package/dist/b.js:2:2)",
+    ].join("\n");
+    expect(keikoStackFrames(error)).toEqual([]);
+  });
+
   it("drops a node_modules frame and a node:internal frame entirely", () => {
     const error = stackOf([
       "    at node:internal/process/task_queues:95:5",

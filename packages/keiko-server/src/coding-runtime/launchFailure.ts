@@ -19,16 +19,28 @@ import type { CodingRuntimeFailureCode } from "./codingRuntimeManager.js";
 export class CodingRuntimeLaunchRejectedError extends Error {
   public readonly failureCode: CodingRuntimeFailureCode;
   public readonly retryable: boolean;
+  /**
+   * #3565: the closed sub-reason behind the code (a sidecar unavailable reason, a preparation
+   * state), so the diagnostic names WHICH check refused the start. A machine token only; anything
+   * else is dropped rather than carried into an operator-visible string.
+   */
+  public readonly reason: string | undefined;
 
-  public constructor(failureCode: CodingRuntimeFailureCode, retryable = false) {
-    // The message is the code itself: this class is diagnosed by `failureCode`, and a free-text
-    // message would be one more place a runtime detail could leak into an operator-visible string.
-    super(failureCode);
+  public constructor(failureCode: CodingRuntimeFailureCode, retryable = false, reason?: string) {
+    const closedReason =
+      reason !== undefined && LAUNCH_REASON_TOKEN.test(reason) ? reason : undefined;
+    // The message is the code (and the closed reason) itself: this class is diagnosed by
+    // `failureCode`, and a free-text message would be one more place a runtime detail could leak
+    // into an operator-visible string.
+    super(closedReason === undefined ? failureCode : `${failureCode}:${closedReason}`);
     this.name = "CodingRuntimeLaunchRejectedError";
     this.failureCode = failureCode;
     this.retryable = retryable;
+    this.reason = closedReason;
   }
 }
+
+const LAUNCH_REASON_TOKEN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
 export type CodingRuntimeLaunchResolutionFailureReason =
   | "codex-model-and-reasoning-unsupported"
@@ -49,10 +61,14 @@ export class CodingRuntimeLaunchResolutionError extends Error {
   }
 }
 
-export function launchRejectionDiagnosticReason(
-  error: unknown,
-): CodingRuntimeFailureCode | CodingRuntimeLaunchResolutionFailureReason | undefined {
-  if (error instanceof CodingRuntimeLaunchRejectedError) return error.failureCode;
+/**
+ * The closed diagnostic reason of a launch rejection: the structured code, suffixed with its closed
+ * sub-reason when the rejection carries one, or the model-selection reason. Never free text.
+ */
+export function launchRejectionDiagnosticReason(error: unknown): string | undefined {
+  if (error instanceof CodingRuntimeLaunchRejectedError) {
+    return error.reason === undefined ? error.failureCode : `${error.failureCode}:${error.reason}`;
+  }
   if (error instanceof CodingRuntimeLaunchResolutionError) return error.reason;
   return undefined;
 }
@@ -60,10 +76,22 @@ export function launchRejectionDiagnosticReason(
 // A backend rejects on runtimeSource/modelSource, which is precisely what `source-drift` already
 // names everywhere else in this contract (see agentAuthorityRegistry's drift classification) — so
 // the mismatch reuses that code rather than widening the wire union.
+//
+// #3565 Observation 17: the launch path threw bare Errors for a model the gateway does not admit,
+// a repository path that is not canonical, a repository whose identity could not be read, and a
+// missing runtime host — every one reached the customer as `authority-resolution-failed` (403)
+// with no cause in the log. Each now carries its own code and maps to a wire code the Workbench
+// can explain.
 const LAUNCH_FAILURE_CODES: ReadonlyMap<
   CodingRuntimeFailureCode,
   CodingWorkbenchRuntimeFailureCode
-> = new Map([["adapter-profile-mismatch", "source-drift"]]);
+> = new Map([
+  ["adapter-profile-mismatch", "source-drift"],
+  ["host-unavailable", "runtime-unavailable"],
+  ["model-unavailable", "model-unavailable"],
+  ["repository-unavailable", "workspace-unqualified"],
+  ["workspace-unqualified", "workspace-unqualified"],
+]);
 
 /**
  * Maps a thrown launch rejection to the wire-facing failure code. Anything this module does not

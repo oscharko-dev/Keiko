@@ -604,9 +604,17 @@ async function runAuthorityScenarios(
     }),
   ).resolves.toMatchObject({ status: 400 });
   fixture.drifted = true;
-  await expect(
-    post(pipeline.baseUrl, "/api/coding-workbench/runtime/runs", startBody("drifted")),
-  ).resolves.toMatchObject({ status: 403 });
+  // #3565 Observation 17: a drifted workspace is refused as `workspace-unqualified` (409) with the
+  // refusing check named, no longer as the generic authority failure (403).
+  const drifted = await post(
+    pipeline.baseUrl,
+    "/api/coding-workbench/runtime/runs",
+    startBody("drifted"),
+  );
+  expect(drifted.status).toBe(409);
+  expect(await drifted.json()).toMatchObject({
+    error: { code: "CODING_RUNTIME_WORKSPACE_UNQUALIFIED" },
+  });
   fixture.drifted = false;
   expect(fixture.lifecycle.getActive()?.instance.lastVerifiedHead).toBe(
     readProductionWorkspaceHead(fixture.workspace, fixture.repository),

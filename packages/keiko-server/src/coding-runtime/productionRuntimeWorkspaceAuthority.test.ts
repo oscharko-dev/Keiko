@@ -337,12 +337,24 @@ describe("production runtime workspace authority", () => {
       serverPrincipal: "operator-private",
     };
 
+    // #3565 Observation 17: the refusal is typed and carries its own code, never a bare Error the
+    // orchestrator can only report as `authority-resolution-failed`.
     expect(() =>
       resolveProductionRuntimeContext(input, { ...request, workspaceRoot: alias }),
-    ).toThrow("runtime-workspace-unqualified");
+    ).toThrow(
+      expect.objectContaining({
+        name: "CodingRuntimeLaunchRejectedError",
+        failureCode: "workspace-unqualified",
+        reason: "canonical-root",
+      }),
+    );
     activeRoot = other;
     expect(() => resolveProductionRuntimeContext(input, request)).toThrow(
-      "runtime-workspace-unqualified",
+      expect.objectContaining({
+        name: "CodingRuntimeLaunchRejectedError",
+        failureCode: "workspace-unqualified",
+        reason: "workspace-instance",
+      }),
     );
     activeRoot = workspace;
     const context = resolveProductionRuntimeContext(input, request);

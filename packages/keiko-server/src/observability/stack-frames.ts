@@ -192,15 +192,35 @@ interface AnchorMatch {
 // Scans every `/packages/<name>/(dist|src)/` occurrence and keeps the LAST one whose captured
 // name is an actual workspace package — an occurrence naming an unknown directory does not count
 // as an anchor at all, so it can never shadow a real one further left in the path.
+//
+// #3565 Observation 17: an INSTALLED build (npm or Yarn) carries the same packages under the
+// published scope — `node_modules/@oscharko-dev/<pkg>/dist/` — and no `packages/` directory at
+// all, so every customer log carried `frameCount: 0` and the defect could not be located. Both
+// layouts anchor to the same `packages/<pkg>/<kind>` form; a foreign `node_modules` frame is still
+// dropped because its scope is not Keiko's.
+const WORKSPACE_PACKAGE_ANCHOR_PATTERNS: readonly RegExp[] = [
+  /\/packages\/([a-z0-9-]+)\/(dist|src)\//g,
+  /\/node_modules\/@oscharko-dev\/([a-z0-9-]+)\/(dist|src)\//g,
+];
+
 function lastWorkspacePackageAnchor(path: string): AnchorMatch | undefined {
-  const pattern = /\/packages\/([a-z0-9-]+)\/(dist|src)\//g;
-  let match: RegExpExecArray | null;
   let found: AnchorMatch | undefined;
-  while ((match = pattern.exec(path)) !== null) {
-    const pkg = match[1];
-    const kind = match[2];
-    if (pkg !== undefined && kind !== undefined && PACKAGE_DIR_NAMES.has(pkg)) {
-      found = { prefix: `packages/${pkg}/${kind}`, relativeStart: match.index + match[0].length };
+  let foundAt = -1;
+  for (const source of WORKSPACE_PACKAGE_ANCHOR_PATTERNS) {
+    const pattern = new RegExp(source.source, "g");
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(path)) !== null) {
+      const pkg = match[1];
+      const kind = match[2];
+      if (
+        pkg !== undefined &&
+        kind !== undefined &&
+        PACKAGE_DIR_NAMES.has(pkg) &&
+        match.index > foundAt
+      ) {
+        found = { prefix: `packages/${pkg}/${kind}`, relativeStart: match.index + match[0].length };
+        foundAt = match.index;
+      }
     }
   }
   return found;

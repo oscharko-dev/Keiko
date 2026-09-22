@@ -8,6 +8,7 @@ import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistor
 // the inspector; no store → an empty evidence list).
 
 import { configuredRuntimePromptTokenBudget } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
+import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
   createDefaultChatCapability,
   findConfiguredCapability,
@@ -5432,15 +5433,26 @@ function runtimeWorkspaceAuthority(
       const resolved = resolveCodingSafeSidecarGatewayProfile(config, {
         ...(modelId === undefined ? {} : { modelId }),
       });
+      // #3565 Observation 17: a model the gateway does not admit right now is a typed refusal
+      // that names the sidecar's reason, never a bare Error the orchestrator can only report as
+      // `authority-resolution-failed`.
       if (resolved.status !== "available" || config === undefined) {
-        throw new Error("runtime-model-unavailable");
+        throw new CodingRuntimeLaunchRejectedError(
+          "model-unavailable",
+          false,
+          resolved.status === "available" ? "missing-config" : resolved.reason,
+        );
       }
       const capability = findConfiguredCapability(config, resolved.modelAlias);
       if (
         reasoningEffort !== undefined &&
         capability?.reasoningEfforts?.includes(reasoningEffort) !== true
       ) {
-        throw new Error("runtime-reasoning-effort-unavailable");
+        throw new CodingRuntimeLaunchRejectedError(
+          "model-unavailable",
+          false,
+          "reasoning-effort-unavailable",
+        );
       }
       return {
         profileId: resolved.modelAlias,
