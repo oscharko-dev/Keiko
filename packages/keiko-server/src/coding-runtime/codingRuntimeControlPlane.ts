@@ -16,6 +16,7 @@ import type {
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
@@ -345,7 +346,7 @@ function runtimeHostCapabilities(
 function unavailableLaunchResolver(): CodingRuntimeLaunchResolver {
   return {
     resolve: (): never => {
-      throw new Error("coding-runtime-host-unavailable");
+      throw new CodingRuntimeLaunchRejectedError("host-unavailable");
     },
   };
 }

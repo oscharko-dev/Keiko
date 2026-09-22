@@ -2019,6 +2019,34 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // #3565 Observation 17: a model the gateway does not admit reached the customer as
+  // `authority-resolution-failed` (403) and the log named no cause. The start now answers with
+  // `model-unavailable` and the diagnostic carries the sidecar's closed reason.
+  it("reports a model the gateway does not admit under model-unavailable with its reason", async () => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchRejectedError(
+        "model-unavailable",
+        false,
+        "tool-calling-unverified",
+      );
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({
+      ok: false,
+      failureCode: "model-unavailable",
+      runId: "run-1",
+    });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: "stage=start:reason=launch-resolution:model-unavailable:tool-calling-unverified",
+      }),
+    );
+  });
+
   it("diagnoses a rejected model selection without exposing selection content", async () => {
     const captured = captureDiagnostics();
     const f = fixture(undefined, undefined, [], captured.diagnostics);

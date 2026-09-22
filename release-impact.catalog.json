@@ -2361,6 +2361,59 @@
     },
     {
       "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.4",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.4",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-22-keiko-1.1.4-coding-run-start-refusals-named",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.4 makes a refused coding-run start explain itself. Until now a start the server could not resolve, because the selected model is not admitted for coding right now or the bound repository could not be qualified, answered with the generic CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED and the activity log of an installed Keiko carried no stack frames, so the cause could not be located from the customer's log. The Workbench now names the cause and the remedy, the log names the refusing check, and installed builds record their stack frames like a source checkout.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: a start refused because the selected model is not admitted for coding right now answers with CODING_RUNTIME_MODEL_UNAVAILABLE and tells the operator to run the readiness check under Settings \u2192 Models or choose a model that passed it today.",
+        "Coding Workbench: a start refused because the bound repository could not be qualified (non-canonical path, unreadable repository identity, drifted workspace) answers with CODING_RUNTIME_WORKSPACE_UNQUALIFIED and tells the operator to bind the repository again through Browse\u2026.",
+        "Activity log: every launch-path refusal records its own code and closed sub-reason, and an installed Keiko (npm or Yarn) records Keiko stack frames on diagnostics, which it never did before."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-22",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3565",
+        "rationale": "The customer's first coding-run start on 1.1.3 was refused with the generic authority code twice and the log carried frameCount 0, so the cause could not be located from the customer's evidence (#3565 Observation 17). This patch changes no admission rule; it names the refusing check on the wire and in the log.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
       "packageVersion": "1.1.3",
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",

@@ -20,6 +20,7 @@ import type {
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type { CodingRuntimeLaunchResolver } from "./codingRuntimeOrchestrator.js";
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import {
   codingRuntimeActionClassesForMode,
   codingRuntimeBudgetDigest,
@@ -276,7 +277,9 @@ export function productionRuntimeAuthorityFacts(
   input: ProductionWorkspaceAuthorityInput,
   context: CodingRuntimeTrustedContext,
 ): CodingWorkbenchRuntimeAuthorityFacts {
-  if (!productionWorkspaceMatches(input, context)) throw new Error("runtime-workspace-drift");
+  if (!productionWorkspaceMatches(input, context)) {
+    throw new CodingRuntimeLaunchRejectedError("workspace-unqualified", false, "workspace-drift");
+  }
   const branch = projectedBranch(context.branch);
   const modelProfile = {
     ...context.modelProfile,
@@ -441,5 +444,5 @@ function digest(value: string): string {
 }
 
 function invalidWorkspace(): never {
-  throw new Error("runtime-workspace-unqualified");
+  throw new CodingRuntimeLaunchRejectedError("workspace-unqualified");
 }

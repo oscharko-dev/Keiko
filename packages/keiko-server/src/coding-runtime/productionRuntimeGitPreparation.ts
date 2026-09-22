@@ -13,6 +13,7 @@ import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { VerifiedCommitRuntimeDependencies } from "./productionVerifiedCommitRuntime.js";
 import type { CodingRuntimeLaunchResolver } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 
 type LaunchInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[0];
 const PREPARATION_TTL_MS = 5_000;
@@ -89,7 +90,11 @@ class GitPreparation implements RuntimeGitPreparation {
         this.input.now() >= expiresAtMs ||
         contextDigest(this.input.context(request)) !== contextDigest(before)
       )
-        throw new Error("runtime-repository-preparation-drift");
+        throw new CodingRuntimeLaunchRejectedError(
+          "repository-unavailable",
+          false,
+          "preparation-drift",
+        );
       this.prepared.set(request, {
         repositoryIdentity,
         requestDigest: sha256Hex(canonicalise(request)),
@@ -114,7 +119,11 @@ class GitPreparation implements RuntimeGitPreparation {
       record.contextDigest !== contextDigest(current)
     ) {
       logPreparation(this.input.deps, request.runId, "denied");
-      throw new Error("runtime-repository-preparation-unavailable");
+      throw new CodingRuntimeLaunchRejectedError(
+        "repository-unavailable",
+        false,
+        "preparation-unavailable",
+      );
     }
     logPreparation(this.input.deps, request.runId, "consumed");
     return { ...current, repositoryIdentity: record.repositoryIdentity };
@@ -131,7 +140,9 @@ async function readIdentity(
   runId: string,
 ): Promise<VerifiedRepositoryIdentity> {
   const workspace = deps.resolveWorkspace(context.workspaceRoot);
-  if (workspace?.root !== context.workspaceRoot) throw new Error("runtime-repository-unavailable");
+  if (workspace?.root !== context.workspaceRoot) {
+    throw new CodingRuntimeLaunchRejectedError("repository-unavailable", false, "workspace-root");
+  }
   const identity = await readVerifiedRepositoryIdentity(
     {
       workspace,
@@ -141,7 +152,7 @@ async function readIdentity(
     sha256Hex(context.workspaceRoot),
   );
   if (context.issueBinding !== undefined && context.issueBinding.remoteDigest !== identity.digest)
-    throw new Error("runtime-repository-issue-drift");
+    throw new CodingRuntimeLaunchRejectedError("repository-unavailable", false, "issue-drift");
   return identity;
 }
 

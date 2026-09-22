@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "854bd54de0b22498ee9769e7b97bf63bbb68b84e14f4855789e97bb055ac24ec" as const;
+  "6456478ba618114fc4af6640bf37829ebaca27616ce39163b9925f1ced47dc4f" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3689,6 +3689,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "issue-context-unavailable",
           "question-answer-rejected",
           "delivery-not-evidenced",
+          "model-unavailable",
+          "workspace-unqualified",
         ],
       },
     },
@@ -4689,6 +4691,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "issue-context-unavailable",
           "question-answer-rejected",
           "delivery-not-evidenced",
+          "model-unavailable",
+          "workspace-unqualified",
           "payload-too-large",
         ],
       },
@@ -5974,6 +5978,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "issue-context-unavailable",
           "question-answer-rejected",
           "delivery-not-evidenced",
+          "model-unavailable",
+          "workspace-unqualified",
         ],
       },
       taskOutcomeStatus: {
@@ -6124,6 +6130,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "issue-context-unavailable",
           "question-answer-rejected",
           "delivery-not-evidenced",
+          "model-unavailable",
+          "workspace-unqualified",
         ],
       },
     },

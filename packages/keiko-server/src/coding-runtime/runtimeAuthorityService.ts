@@ -403,6 +403,8 @@ const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLo
         "issue-context-unavailable",
         "question-answer-rejected",
         "delivery-not-evidenced",
+        "model-unavailable",
+        "workspace-unqualified",
       ],
     },
   },

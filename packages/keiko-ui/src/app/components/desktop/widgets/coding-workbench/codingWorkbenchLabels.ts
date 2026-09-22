@@ -481,6 +481,18 @@ function standingConditionAlert(
   return null;
 }
 
+// #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that
+// tells the operator what to do, not the generic "review the live state and retry".
+function startRefusalSummaryKey(code: string): CodingWorkbenchMessageKey {
+  if (code === "CODING_RUNTIME_MODEL_UNAVAILABLE") {
+    return "codingWorkbench.alert.startRefusedModelUnavailable";
+  }
+  if (code === "CODING_RUNTIME_WORKSPACE_UNQUALIFIED") {
+    return "codingWorkbench.alert.startRefusedWorkspaceUnqualified";
+  }
+  return "codingWorkbench.alert.actionFailedCode";
+}
+
 export function visibleAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -488,7 +500,11 @@ export function visibleAlert(
   authorityError: string | null = null,
 ): string | null {
   if (state.mutation.error) {
-    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
+    return actionFailureAlert(
+      startRefusalSummaryKey(state.mutation.error.code),
+      state.mutation.error,
+      t,
+    );
   }
   const refreshAlert = refreshFailureAlert(state, t);
   if (refreshAlert !== null) return refreshAlert;

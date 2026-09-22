@@ -345,6 +345,27 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     expect(alert).toContain("codingWorkbench.alert.actionFailedSupportId");
     expect(alert).toContain("ui-correlation-9");
   });
+
+  // #3565 Observation 17: a refused start with a nameable cause gets the sentence that says what to
+  // do; every other code keeps the generic alert.
+  it.each([
+    ["CODING_RUNTIME_MODEL_UNAVAILABLE", "codingWorkbench.alert.startRefusedModelUnavailable"],
+    [
+      "CODING_RUNTIME_WORKSPACE_UNQUALIFIED",
+      "codingWorkbench.alert.startRefusedWorkspaceUnqualified",
+    ],
+    ["CODING_RUNTIME_RUNTIME_UNAVAILABLE", "codingWorkbench.alert.actionFailedCode"],
+  ])("explains a refused start with code %s through %s", (code, key) => {
+    const state = failedMutationState("ui-correlation-3");
+    const alert = visibleAlert(
+      { ...state, mutation: { ...state.mutation, error: { ...state.mutation.error, code } } },
+      tv,
+      false,
+    );
+    expect(alert).toContain(key);
+    expect(alert).toContain(code);
+    expect(alert).toContain("ui-correlation-3");
+  });
 });
 
 describe("app-session pairing truth (release-audit F-08/RG-12)", () => {

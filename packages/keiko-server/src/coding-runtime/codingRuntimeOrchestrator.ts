@@ -179,6 +179,8 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "issue-context-unavailable",
     "question-answer-rejected",
     "delivery-not-evidenced",
+    "model-unavailable",
+    "workspace-unqualified",
   ],
 } as const;
 
