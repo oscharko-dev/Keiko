@@ -345,6 +345,7 @@ describe("production runtime workspace authority", () => {
       expect.objectContaining({
         name: "CodingRuntimeLaunchRejectedError",
         failureCode: "workspace-unqualified",
+        reason: "canonical-root",
       }),
     );
     activeRoot = other;
@@ -352,6 +353,7 @@ describe("production runtime workspace authority", () => {
       expect.objectContaining({
         name: "CodingRuntimeLaunchRejectedError",
         failureCode: "workspace-unqualified",
+        reason: "workspace-instance",
       }),
     );
     activeRoot = workspace;

@@ -113,7 +113,7 @@ export function resolveProductionRuntimeContext(
   request: LaunchResolutionInput,
 ): CodingRuntimeTrustedContext {
   const active = input.workspaceLifecycle.getActive();
-  if (active?.instance.workspaceId !== request.workspaceId) invalidWorkspace();
+  if (active?.instance.workspaceId !== request.workspaceId) invalidWorkspace("active-workspace");
   const workspaceRoot = qualifiedWorkspaceRoot(
     input,
     request.workspaceRoot,
@@ -121,7 +121,9 @@ export function resolveProductionRuntimeContext(
     active.instance,
   );
   const head = input.readWorkspaceHead(workspaceRoot, active.instance.repositoryRoot);
-  if (head === undefined || active.instance.lastVerifiedHead !== head) invalidWorkspace();
+  if (head === undefined || active.instance.lastVerifiedHead !== head) {
+    invalidWorkspace("verified-head");
+  }
   return contextFromActive(input, { ...request, workspaceRoot }, active.instance, head);
 }
 
@@ -203,7 +205,7 @@ function issueBindingFromRequest(
     binding.value.repositoryId !== instance.repositoryId ||
     binding.value.defaultBaseRef !== instance.baseBranch
   )
-    invalidWorkspace();
+    invalidWorkspace("issue-binding");
   return { issueBinding: structuredClone(binding.value) };
 }
 
@@ -422,15 +424,15 @@ function qualifiedWorkspaceRoot(
     rel === ".." ||
     rel.startsWith(`..${sep}`)
   ) {
-    invalidWorkspace();
+    invalidWorkspace("workspace-instance");
   }
   return root;
 }
 
 function canonicalRoot(root: string): string {
-  if (!isAbsolute(root)) invalidWorkspace();
+  if (!isAbsolute(root)) invalidWorkspace("root-not-absolute");
   const canonical = realpathSync(root);
-  if (canonical !== root) invalidWorkspace();
+  if (canonical !== root) invalidWorkspace("canonical-root");
   return canonical;
 }
 
@@ -443,6 +445,16 @@ function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function invalidWorkspace(): never {
-  throw new CodingRuntimeLaunchRejectedError("workspace-unqualified");
+// #3565 Observation 17: every workspace refusal names the check that refused it, so the log tells a
+// symlinked or re-cased path (`canonical-root`) apart from a drifted instance or a stale head.
+type WorkspaceRefusalReason =
+  | "active-workspace"
+  | "verified-head"
+  | "issue-binding"
+  | "workspace-instance"
+  | "root-not-absolute"
+  | "canonical-root";
+
+function invalidWorkspace(reason: WorkspaceRefusalReason): never {
+  throw new CodingRuntimeLaunchRejectedError("workspace-unqualified", false, reason);
 }
