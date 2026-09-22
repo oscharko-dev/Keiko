@@ -525,7 +525,7 @@ function narrowAuthorityToMode(
 export interface CodingRuntimeTrustedContext {
   /** Captured before start confirmation; absent legacy contexts cannot execute verified commits. */
   readonly repositoryIdentity?: {
-    readonly kind: "github-origin" | "local";
+    readonly kind: "github-origin" | "foreign-origin" | "local";
     readonly digest: string;
   };
   /** Server-resolved launch identity; absent legacy contexts cannot adopt a committed head. */
