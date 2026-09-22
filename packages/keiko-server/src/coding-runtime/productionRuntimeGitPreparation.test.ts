@@ -8,6 +8,7 @@ import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolu
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { readVerifiedCommitFacts } from "../gitDelivery/verifiedCommitFacts.js";
+import { foreignOriginDigest } from "../gitDelivery/verifiedRepositoryIdentity.js";
 import {
   createRuntimeGitPreparation,
   type RuntimeGitPreparation,
@@ -209,18 +210,27 @@ describe("repository identity before runtime confirmation", () => {
     },
   );
 
-  it("rejects an unsupported remote with structured body-free failure evidence", async () => {
+  // #3565 Observation 18: the customer's repository lives on their own Git server. Its origin used
+  // to be refused as `remote-unsupported`, which reached the Workbench as the generic authority
+  // failure; a foreign origin now prepares as its own identity and the run can start.
+  it("prepares a repository whose origin is not on GitHub as a foreign origin", async () => {
     git(["remote", "add", "origin", "https://private.example.invalid/customer/repo"]);
     const input = request();
-    await expect(preparation.prepare(input)).rejects.toThrow("remote-unsupported");
-    expect(() => preparation.consume(input)).toThrow("preparation-unavailable");
+    await expect(preparation.prepare(input)).resolves.toBeUndefined();
+    const consumed = preparation.consume(input);
+    expect(consumed.repositoryIdentity).toEqual({
+      kind: "foreign-origin",
+      digest: foreignOriginDigest("https://private.example.invalid/customer/repo"),
+    });
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git.runtime-identity",
-        errorKind: "internal",
         correlationId: UNKNOWN_CORRELATION_ID,
-        extra: expect.objectContaining({ state: "failed" }) as unknown,
+        extra: expect.objectContaining({ state: "prepared" }) as unknown,
       }),
+    );
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ extra: expect.objectContaining({ state: "failed" }) as unknown }),
     );
     expect(JSON.stringify(events)).not.toMatch(/private.example|customer\/repo/u);
   });

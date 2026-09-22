@@ -31,7 +31,7 @@ export interface CodingRuntimeStartConfirmationFacts {
   readonly modelProfileId: string;
   readonly issueBindingDigest?: string | undefined;
   readonly repositoryIdentity?: {
-    readonly kind: "github-origin" | "local";
+    readonly kind: "github-origin" | "foreign-origin" | "local";
     readonly digest: string;
   };
 }

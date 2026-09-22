@@ -2361,6 +2361,58 @@
     },
     {
       "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.5",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.5",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-22-keiko-1.1.5-coding-runs-on-repositories-with-a-non-github-origin",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.5 lets the Coding Workbench start a run in a repository whose origin remote is not on github.com, such as a company's own Git server. Until now the start refused such a repository as an unsupported remote and reported the generic authority failure, so no customer whose code lives outside github.com could start a run. A non-GitHub origin is now its own repository identity; GitHub issue binding and GitHub delivery remain available only for a github.com origin, and local coding runs proceed.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: a repository whose origin is a company Git server (any host other than github.com, https, ssh or scp-style URL) can start coding runs. The origin is recorded as a foreign-origin identity; a token embedded in the remote URL never enters the identity digest.",
+        "Coding Workbench: GitHub issue binding and GitHub pull-request delivery stay limited to repositories with a github.com origin; a foreign origin runs locally in the governed task workspace."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-22",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3565",
+        "rationale": "The customer's 1.1.4 log (Observation 18, frames from the installed build) located the refused start in readVerifiedRepositoryIdentity: their repository's origin is their own Git server, which the identity reader refused as verified-commit-remote-unsupported. The release owner ordered the fix and the 1.1.5 publication.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
       "packageVersion": "1.1.4",
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",

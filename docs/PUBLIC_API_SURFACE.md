@@ -1,4 +1,4 @@
-# Public API surface — 1.1.4
+# Public API surface — 1.1.5
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -100,6 +100,10 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   embedding input the endpoint rejects for its size — changed without adding, removing or
   renaming a root export, CLI top-level command, or package entry point. The approved external
   surface remains the 1.0.1 surface described above.
+- 1.1.5 (2026-09-22, #3565): the Coding Workbench starts runs in repositories whose origin is not
+  on github.com (a foreign-origin repository identity inside the server) — changed without adding,
+  removing or renaming a root export, CLI top-level command, or package entry point. The approved
+  external surface remains the 1.0.1 surface described above.
 - 1.1.4 (2026-09-22, #3565): the Coding Workbench runtime failure-code union gains
   `model-unavailable` and `workspace-unqualified` (`CodingWorkbenchRuntimeFailureCode`,
   `CODING_WORKBENCH_RUNTIME_FAILURE_CODES` in `@oscharko-dev/keiko-contracts`), the codes a refused

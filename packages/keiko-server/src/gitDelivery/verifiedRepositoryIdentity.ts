@@ -3,6 +3,7 @@ import {
   readGitRemoteUrl,
   type NodeGitWorktreeReaderDeps,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import type { CodingRuntimeTrustedContext } from "../coding-runtime/runtimeAuthorityService.js";
 import { githubOwnerAndRepoFromRemoteUrl } from "./branchProtectionPreflight.js";
@@ -19,9 +20,32 @@ export async function readVerifiedRepositoryIdentity(
 ): Promise<VerifiedRepositoryIdentity> {
   const configured = aliases ?? (await readGitRemoteAliases(deps));
   if (!configured.includes("origin")) return { kind: "local", digest: localDigest };
-  const remote = githubOwnerAndRepoFromRemoteUrl(await readGitRemoteUrl(deps, "origin"));
-  if (remote === undefined) throw new Error("verified-commit-remote-unsupported");
-  return { kind: "github-origin", digest: codingWorkbenchRemoteDigest(remote) };
+  const remoteUrl = await readGitRemoteUrl(deps, "origin");
+  const remote = githubOwnerAndRepoFromRemoteUrl(remoteUrl);
+  if (remote !== undefined) {
+    return { kind: "github-origin", digest: codingWorkbenchRemoteDigest(remote) };
+  }
+  // #3565 Observation 18: an `origin` on any other host — a customer's own Git server — is a
+  // repository the Workbench can run in. It carries no GitHub identity, so issue binding and
+  // GitHub delivery stay unavailable, but a local coding run must start. This used to throw
+  // `verified-commit-remote-unsupported`, and every customer whose code is not on github.com saw
+  // the generic authority failure on their first run.
+  return { kind: "foreign-origin", digest: foreignOriginDigest(remoteUrl) };
+}
+
+/**
+ * The identity digest of a non-GitHub origin: the remote's scheme, host and path, never its
+ * credentials, query or fragment, so the same repository yields the same digest whether the
+ * checkout embeds a token in its remote URL or not, and the token itself never feeds a digest.
+ * A URL the parser refuses (an scp-like `git@host:path`) is digested as written.
+ */
+export function foreignOriginDigest(remoteUrl: string): string {
+  const trimmed = remoteUrl.trim();
+  // An scp-like `git@host:path` is not a URL the WHATWG parser accepts and carries no credential
+  // component, so it is digested as written.
+  if (!URL.canParse(trimmed)) return sha256Hex(`origin/${trimmed}`);
+  const parsed = new URL(trimmed);
+  return sha256Hex(`origin/${parsed.protocol}//${parsed.host}${parsed.pathname}`);
 }
 
 /**
