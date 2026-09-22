@@ -95,6 +95,12 @@ describe("foreignOriginDigest", () => {
     );
   });
 
+  it("strips credentials from a malformed host-only remote that carries no path", () => {
+    expect(foreignOriginDigest("https://token@git.example.invalid:not-a-port")).toBe(
+      sha256Hex("origin/https://git.example.invalid:not-a-port"),
+    );
+  });
+
   it.each([
     ["an empty remote", "", "origin/"],
     ["a whitespace-only remote", "   ", "origin/"],
