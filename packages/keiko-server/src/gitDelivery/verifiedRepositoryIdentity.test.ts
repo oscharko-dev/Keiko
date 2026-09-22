@@ -7,7 +7,6 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import {
@@ -75,7 +74,7 @@ describe("readVerifiedRepositoryIdentity", () => {
 describe("foreignOriginDigest", () => {
   it("digests scheme, host and path only, so an embedded token never changes or feeds the digest", () => {
     const plain = foreignOriginDigest("https://git.example.invalid/team/repo.git");
-    expect(plain).toBe(sha256Hex("origin/https://git.example.invalid/team/repo.git"));
+    expect(plain).toBe("d80403309ea86679fd369f450ac7b0f31d7f3d7715e62a1bb144643662273880");
     expect(foreignOriginDigest("https://user:s3cret@git.example.invalid/team/repo.git?x=1#f")).toBe(
       plain,
     );
@@ -91,31 +90,62 @@ describe("foreignOriginDigest", () => {
   ])("strips credentials from a malformed remote with %s before digesting", (_label, url) => {
     // The WHATWG parser refuses these, so the raw branch runs; a token must not reach the digest.
     expect(foreignOriginDigest(url)).toBe(
-      sha256Hex("origin/https://git.example.invalid:not-a-port/team/repo.git"),
+      "e01032ac6e79503e9f5f650c373ca66e77bbd7d5d9d19f38621bf9028aae3807",
     );
   });
 
   it("strips credentials from a malformed host-only remote that carries no path", () => {
     expect(foreignOriginDigest("https://token@git.example.invalid:not-a-port")).toBe(
-      sha256Hex("origin/https://git.example.invalid:not-a-port"),
+      "4b29b297a8ab060c95d7b0cbab6d29ec25e7e33cb9fddbb44955937dcffb563b",
     );
   });
 
   it.each([
-    ["an empty remote", "", "origin/"],
-    ["a whitespace-only remote", "   ", "origin/"],
-    ["a host-only URL", "https://git.example.invalid", "origin/https://git.example.invalid/"],
-    ["a bare word", "not-a-remote", "origin/not-a-remote"],
+    ["an empty remote", "", "ecd8f55d796792f72e1908a9100abf8be57e64fac04e26f30e44b111f21527ac"],
+    [
+      "a whitespace-only remote",
+      "   ",
+      "ecd8f55d796792f72e1908a9100abf8be57e64fac04e26f30e44b111f21527ac",
+    ],
+    [
+      "a host-only URL",
+      "https://git.example.invalid",
+      "c2bd43b3c56b08f802967e2907cea3eabde5b5dfdccd34020fd7be1cc126e268",
+    ],
+    [
+      "a bare word",
+      "not-a-remote",
+      "f1d7522a09d34584d59fef934dd1c7fdaf683488c9e0b0396e3186371f4ae0da",
+    ],
   ])("digests %s deterministically", (_label, url, expected) => {
-    expect(foreignOriginDigest(url)).toBe(sha256Hex(expected));
+    // Fixed digests, not the production formula re-applied: a change to the framing must fail here.
+    expect(foreignOriginDigest(url)).toBe(expected);
   });
 
   it("digests an scp-like remote as written, and different repositories differ", () => {
     expect(foreignOriginDigest("git@git.example.invalid:team/repo.git")).toBe(
-      sha256Hex("origin/git@git.example.invalid:team/repo.git"),
+      "fb808b1baef38a612ea387c27477e542c612b20f8ae05e68ce08719a434a1625",
     );
     expect(foreignOriginDigest("git@git.example.invalid:team/repo.git")).not.toBe(
       foreignOriginDigest("git@git.example.invalid:team/other.git"),
+    );
+  });
+
+  it.each([
+    ["?", "git@git.example.invalid:team/repo?one", "git@git.example.invalid:team/repo?two"],
+    ["#", "git@git.example.invalid:team/repo#one", "git@git.example.invalid:team/repo#two"],
+  ])("keeps %s as a path character of an scp-like remote, so distinct paths differ", (_c, a, b) => {
+    // Without URL syntax there is no query or fragment to strip; cutting there would collapse
+    // two different repositories onto one digest.
+    expect(foreignOriginDigest(a)).not.toBe(foreignOriginDigest(b));
+    expect(foreignOriginDigest(a)).not.toBe(
+      foreignOriginDigest("git@git.example.invalid:team/repo"),
+    );
+  });
+
+  it("digests an scp-like path that contains a `?` as written", () => {
+    expect(foreignOriginDigest("git@git.example.invalid:team/repo?one")).toBe(
+      "24d03624e4047acfe57fa87b17b649a695a25556c328b49be87e9a483a2797ce",
     );
   });
 });

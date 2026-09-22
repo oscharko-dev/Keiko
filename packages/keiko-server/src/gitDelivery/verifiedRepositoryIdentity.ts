@@ -37,7 +37,8 @@ export async function readVerifiedRepositoryIdentity(
  * The identity digest of a non-GitHub origin: the remote's scheme, host and path, never its
  * credentials, query or fragment, so the same repository yields the same digest whether the
  * checkout embeds a token in its remote URL or not, and the token itself never feeds a digest.
- * A URL the parser refuses (an scp-like `git@host:path`) is digested as written.
+ * A URL the parser refuses (an scp-like `git@host:path`) is digested as written: without URL
+ * syntax there is no query or fragment, so `?` and `#` stay part of the path.
  */
 export function foreignOriginDigest(remoteUrl: string): string {
   const trimmed = remoteUrl.trim();
@@ -55,7 +56,8 @@ function withoutCredentialsQueryAndFragment(remote: string): string {
   const cut = remote.search(/[?#]/u);
   const withoutQuery = cut < 0 ? remote : remote.slice(0, cut);
   const schemeEnd = withoutQuery.indexOf("://");
-  if (schemeEnd < 0) return withoutQuery;
+  // No scheme before the first `?`/`#`: an scp-like remote, where both are path characters.
+  if (schemeEnd < 0) return remote;
   const authorityStart = schemeEnd + 3;
   const authorityEnd = withoutQuery.indexOf("/", authorityStart);
   const authority = withoutQuery.slice(
