@@ -3,12 +3,13 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-// #3577. The installable-package smoke proves a SELF-CONTAINED tarball: after staging it bundles the
-// external runtime dependency closure (#3510), because on npm 11.19 `npm install -g` of a
-// bundle-carrying package installs nothing that is not bundled. release-publish.mjs never received
-// that call, so every release shipped a tarball the smoke had not tested: `npm install -g
-// @oscharko-dev/keiko@1.1.1` left `ws` empty and every `keiko` command died with
-// `Cannot find package 'ws'`. The publisher and the smoke must stage the same way.
+// #3577 gave release-publish.mjs the smoke's external-closure bundling so the published tarball
+// was the tarball the smoke proved; #3565 removed that bundling from both. 1.1.2 embedded 20
+// third-party packages and doubled the artefact, and a customer's repository firewall refused to
+// evaluate it, so the release could not be installed at all. The two scripts must keep staging the
+// same way: the vendored workspaces only, third-party runtime dependencies declared, never
+// embedded. A bundling call reappearing in one of them is the parity hole and the artefact change
+// at once.
 const root = join(import.meta.dirname, "..", "..");
 
 function stagingCalls(file) {
@@ -26,12 +27,14 @@ function stagingCalls(file) {
 
 describe("the published tarball is the tarball the install smoke proves", () => {
   it.each(["release-publish.mjs", "installable-package-smoke.mjs"])(
-    "%s bundles the external runtime closure right after staging, exactly once",
+    "%s stages the vendored workspaces exactly once and embeds no external closure",
     (file) => {
-      expect(stagingCalls(file)).toStrictEqual([
-        "createStagedPublishPackage",
-        "bundleExternalRuntimeDependencies",
-      ]);
+      expect(stagingCalls(file)).toStrictEqual(["createStagedPublishPackage"]);
     },
   );
+
+  it("the staging module no longer offers an external-closure bundler", () => {
+    const source = readFileSync(join(root, "scripts", "stage-publish-package.mjs"), "utf8");
+    expect(source).not.toMatch(/bundleExternalRuntimeDependencies/u);
+  });
 });

@@ -9,12 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   assertWorkspacePack,
-  bundleExternalRuntimeDependencies,
   createStagedPublishPackage,
   stagedVendorDirectory,
   workspacePackInvocation,
@@ -462,156 +461,5 @@ describe("staged publish package", () => {
     expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
       /smol-toml has no resolved runtime version in package-lock\.json/u,
     );
-  });
-});
-
-describe("bundleExternalRuntimeDependencies", () => {
-  function stagedFixture(dependencies) {
-    // A minimal stage: `@oscharko-dev/keiko-cli` is the workspace vendor pointer already handled
-    // by packWorkspace, everything else is an external runtime dep whose closure this function
-    // must copy in from the source `node_modules` tree.
-    const stageRoot = mkdtempSync(join(tmpdir(), "keiko-stage-bundle-ext-test-"));
-    roots.push(stageRoot);
-    writeJson(join(stageRoot, "package.json"), {
-      name: "@oscharko-dev/keiko",
-      version: "1.2.3",
-      dependencies: {
-        "@oscharko-dev/keiko-cli": "file:vendor/oscharko-dev-keiko-cli-1.2.3.tgz",
-        ...dependencies,
-      },
-      bundleDependencies: ["@oscharko-dev/keiko-cli"],
-    });
-    return stageRoot;
-  }
-
-  function writePackage(sourceNodeModules, name, manifest, files = {}) {
-    const packageRoot = join(sourceNodeModules, ...name.split("/"));
-    mkdirSync(packageRoot, { recursive: true });
-    writeJson(join(packageRoot, "package.json"), { name, version: "1.0.0", ...manifest });
-    for (const [relativePath, contents] of Object.entries(files)) {
-      const target = join(packageRoot, relativePath);
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, contents, "utf8");
-    }
-    return packageRoot;
-  }
-
-  function sourceFixture() {
-    // The temp directory holds a `node_modules` sub-directory whose NAME matches what the real
-    // caller passes (`<repoRoot>/node_modules`). An earlier fixture used a randomly-suffixed
-    // temp directory as `sourceNodeModules` (single segment, no `node_modules` in the path), and
-    // the `copyDependencyPackage` filter test missed a class of bug where the filter compared
-    // absolute path segments and dropped the entire copy because the caller's own directory
-    // was already inside a `node_modules` folder.
-    const parent = mkdtempSync(join(tmpdir(), "keiko-source-tree-"));
-    roots.push(parent);
-    const root = join(parent, "node_modules");
-    mkdirSync(root, { recursive: true });
-    return root;
-  }
-
-  it("copies the transitive runtime closure into stageRoot/node_modules", () => {
-    // BUG (2026-09-15): a published tarball whose bundleDependencies only lists the internal
-    // @oscharko-dev/* workspaces breaks `npm install -g` — the reify step for a bundle-carrying
-    // package never adds the non-bundle top-level siblings, and every keiko command dies with
-    // `Cannot find package 'ws'`. The fix names every runtime dep in bundleDependencies so
-    // `npm pack` includes it; this test pins the closure walk (ws → pend, @sigstore/bundle →
-    // @sigstore/protobuf-specs) and the resulting staged manifest.
-    const source = sourceFixture();
-    writePackage(source, "ws", { dependencies: { pend: "1.2.0" } }, { "index.js": "// ws\n" });
-    writePackage(source, "pend", {}, { "index.js": "// pend\n" });
-    writePackage(
-      source,
-      "@sigstore/bundle",
-      { dependencies: { "@sigstore/protobuf-specs": "0.5.2" } },
-      { "index.js": "// bundle\n" },
-    );
-    writePackage(source, "@sigstore/protobuf-specs", {}, { "index.js": "// specs\n" });
-    const stageRoot = stagedFixture({ ws: "8.21.3", "@sigstore/bundle": "5.0.0" });
-
-    const added = bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source });
-
-    expect(added.sort()).toEqual(["@sigstore/bundle", "@sigstore/protobuf-specs", "pend", "ws"]);
-    const stageManifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
-    expect(stageManifest.bundleDependencies).toEqual([
-      "@oscharko-dev/keiko-cli",
-      "ws",
-      "@sigstore/bundle",
-      "pend",
-      "@sigstore/protobuf-specs",
-    ]);
-    expect(existsSync(join(stageRoot, "node_modules", "ws", "index.js"))).toBe(true);
-    expect(existsSync(join(stageRoot, "node_modules", "pend", "index.js"))).toBe(true);
-    expect(existsSync(join(stageRoot, "node_modules", "@sigstore", "bundle", "index.js"))).toBe(
-      true,
-    );
-    expect(
-      existsSync(join(stageRoot, "node_modules", "@sigstore", "protobuf-specs", "index.js")),
-    ).toBe(true);
-  });
-
-  it("skips the internal @oscharko-dev/* scope", () => {
-    // The internal workspaces are placed under stageRoot/node_modules/@oscharko-dev/* by an
-    // earlier stage step and are already named in bundleDependencies. The closure walk must not
-    // recurse into them, even when a workspace peer/dependency chain names another workspace,
-    // otherwise the same name would appear twice in bundleDependencies.
-    const source = sourceFixture();
-    writePackage(source, "ws", {}, { "index.js": "// ws\n" });
-    const stageRoot = stagedFixture({
-      ws: "8.21.3",
-      "@oscharko-dev/keiko-server": "file:vendor/oscharko-dev-keiko-server-1.2.3.tgz",
-    });
-
-    const added = bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source });
-
-    expect(added).toEqual(["ws"]);
-    const stageManifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
-    expect(stageManifest.bundleDependencies).toEqual(["@oscharko-dev/keiko-cli", "ws"]);
-  });
-
-  it("drops nested node_modules from a copied dependency", () => {
-    // The source tree has npm-hoisted its transitive graph to the top level; a nested
-    // `node_modules` under a package is either a duplicate or a version conflict, and letting it
-    // through would double-count the bundle. The copy filter must exclude nested node_modules,
-    // and the closure walk gets the transitive deps from the top level anyway.
-    const source = sourceFixture();
-    writePackage(
-      source,
-      "ws",
-      {},
-      {
-        "index.js": "// ws\n",
-        "node_modules/leftover/index.js": "// nested\n",
-        "node_modules/leftover/package.json": '{"name":"leftover","version":"1.0.0"}\n',
-      },
-    );
-    const stageRoot = stagedFixture({ ws: "8.21.3" });
-
-    bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source });
-
-    expect(existsSync(join(stageRoot, "node_modules", "ws", "index.js"))).toBe(true);
-    expect(existsSync(join(stageRoot, "node_modules", "ws", "node_modules"))).toBe(false);
-  });
-
-  it("fails closed when a required dependency is absent from the source tree", () => {
-    // If the source `node_modules/` is out of date, we would silently ship a broken tarball. The
-    // failure names the missing dep and the tree it was searched in.
-    const source = sourceFixture();
-    const stageRoot = stagedFixture({ ws: "8.21.3" });
-
-    expect(() =>
-      bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source }),
-    ).toThrow(/external runtime dependency ws is not installed/u);
-  });
-
-  it("leaves bundleDependencies untouched when the staged manifest has no externals", () => {
-    const source = sourceFixture();
-    const stageRoot = stagedFixture();
-
-    const added = bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source });
-
-    expect(added).toEqual([]);
-    const stageManifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
-    expect(stageManifest.bundleDependencies).toEqual(["@oscharko-dev/keiko-cli"]);
   });
 });

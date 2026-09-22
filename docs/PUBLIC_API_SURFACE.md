@@ -1,4 +1,4 @@
-# Public API surface — 1.1.2
+# Public API surface — 1.1.3
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -100,6 +100,13 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   embedding input the endpoint rejects for its size — changed without adding, removing or
   renaming a root export, CLI top-level command, or package entry point. The approved external
   surface remains the 1.0.1 surface described above.
+- 1.1.3 (2026-09-22, #3565): the npm tarball is back in the 1.1.1 shape. 1.1.2 embedded the
+  external runtime dependency closure (20 third-party packages) to repair `npm install -g`, which
+  doubled the artefact, and a repository firewall in front of a customer's registry could not
+  evaluate it. The publisher and the install smoke now stage the vendored workspaces only and
+  declare third-party runtime dependencies — changed without adding, removing or renaming a root
+  export, CLI top-level command, or package entry point. The approved external surface remains the
+  1.0.1 surface described above.
 - 1.1.2 (2026-09-21, PR #3577): the Coding Workbench runs on an npm installation through the
   digest-verified runtime packages, optional dependencies of the main package,
   `@oscharko-dev/keiko-coding-runtime-darwin-arm64` and `@oscharko-dev/keiko-coding-runtime-darwin-x64`,

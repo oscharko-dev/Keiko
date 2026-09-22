@@ -2361,6 +2361,59 @@
     },
     {
       "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.3",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.3",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-22-keiko-1.1.3-lean-npm-tarball-behind-repository-firewalls",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.3 ships the npm package in the shape of 1.1.1 again: the tarball carries Keiko's own vendored workspaces and declares its third-party runtime dependencies instead of embedding them. 1.1.2 embedded 20 third-party packages, which doubled the artefact, and a repository firewall in front of a customer's npm registry could not evaluate it, so the release could not be installed at all. The Coding Workbench runtime for macOS remains an optional dependency that npm and Yarn select for the host.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "npm package: the tarball is back to the 1.1.1 shape (17 MB compressed instead of 27 MB, no embedded third-party packages), so installations behind a repository firewall that could not evaluate the 1.1.2 artefact work again. Install with npm install @oscharko-dev/keiko or yarn add @oscharko-dev/keiko in a project folder.",
+        "Coding Workbench on npm installations (macOS) is unchanged from 1.1.2: the platform runtime package is an optional dependency and coding runs start after installation.",
+        "Known limitation: npm install -g of this shape does not install the third-party runtime dependencies on npm 11 (the same as 1.1.1); a project-folder installation is the supported path until the global path is repaired."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-22",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3565",
+        "rationale": "The release owner ordered an immediate 1.1.3 patch after the customer's Yarn installation of 1.1.2 failed: the repository firewall in front of the customer's registry answered 504 for the doubled, third-party-embedding 1.1.2 tarball, while the 1.1.1 tarball had passed. 1.1.3 removes the embedding from the publisher and the install smoke alike and changes nothing else in the product.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
       "packageVersion": "1.1.2",
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",

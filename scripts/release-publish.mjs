@@ -87,10 +87,7 @@ import {
   runVerifyPublishedPortableAssets,
 } from "./lib/portable-release-publish-helpers.mjs";
 import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
-import {
-  bundleExternalRuntimeDependencies,
-  createStagedPublishPackage,
-} from "./stage-publish-package.mjs";
+import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -1947,12 +1944,11 @@ let stagedPackage;
 try {
   runReleaseGates();
   stagedPackage = createStagedPublishPackage();
-  // The published tarball must be the tarball the installable-package smoke proves. #3510 made the
-  // smoke self-contain its tarball and never gave this script the same call, so every release since
-  // shipped without `ws` and the other external runtime dependencies: on npm 11.19
-  // `npm install -g @oscharko-dev/keiko` added one package, left their directories empty, and every
-  // `keiko` command died with `Cannot find package 'ws'` (reproduced against 1.1.1, #3577).
-  bundleExternalRuntimeDependencies(stagedPackage.packageDir);
+  // The staged tarball carries the vendored workspaces and nothing else: third-party runtime
+  // dependencies are declared, never embedded (#3565). 1.1.2 embedded the external closure to
+  // repair `npm install -g`, which doubled the tarball and embedded 20 third-party packages; a
+  // customer's repository firewall refused to evaluate that artefact, and the release could not
+  // be installed at all. The installable-package smoke stages the same way.
   rootPackage.packageDir = stagedPackage.packageDir;
   // Stable publication is one transaction: this run uploads, API-binds and signs the exact
   // three-target bundle before npm learns the latest dist-tag. A prepublished unsigned evaluation
