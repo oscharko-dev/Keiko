@@ -316,7 +316,10 @@ describe("visibleAlert mutation failures (F-09a)", () => {
   const tv: CodingWorkbenchTranslate = (key, values) =>
     values === undefined ? key : `${key} ${JSON.stringify(values)}`;
 
-  function failedMutationState(correlationId?: string): CodingWorkbenchRuntimeState {
+  function failedMutationState(
+    correlationId?: string,
+    code = "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+  ): CodingWorkbenchRuntimeState {
     return {
       ...createInitialCodingWorkbenchRuntimeState(),
       mutation: {
@@ -324,7 +327,7 @@ describe("visibleAlert mutation failures (F-09a)", () => {
         kind: "start",
         requestId: "request-1",
         error: {
-          code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+          code,
           message: "Runtime request was rejected.",
           retryable: false,
           ...(correlationId === undefined ? {} : { correlationId }),
@@ -356,12 +359,7 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     ],
     ["CODING_RUNTIME_RUNTIME_UNAVAILABLE", "codingWorkbench.alert.actionFailedCode"],
   ])("explains a refused start with code %s through %s", (code, key) => {
-    const state = failedMutationState("ui-correlation-3");
-    const alert = visibleAlert(
-      { ...state, mutation: { ...state.mutation, error: { ...state.mutation.error, code } } },
-      tv,
-      false,
-    );
+    const alert = visibleAlert(failedMutationState("ui-correlation-3", code), tv, false);
     expect(alert).toContain(key);
     expect(alert).toContain(code);
     expect(alert).toContain("ui-correlation-3");
