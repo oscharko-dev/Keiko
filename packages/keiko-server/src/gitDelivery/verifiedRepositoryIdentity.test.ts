@@ -82,6 +82,28 @@ describe("foreignOriginDigest", () => {
     expect(foreignOriginDigest("  https://git.example.invalid/team/repo.git\n")).toBe(plain);
   });
 
+  it.each([
+    ["an invalid port with a token", "https://token@git.example.invalid:not-a-port/team/repo.git"],
+    [
+      "an invalid port with user and password",
+      "https://user:s3cret@git.example.invalid:not-a-port/team/repo.git?x=1#f",
+    ],
+  ])("strips credentials from a malformed remote with %s before digesting", (_label, url) => {
+    // The WHATWG parser refuses these, so the raw branch runs; a token must not reach the digest.
+    expect(foreignOriginDigest(url)).toBe(
+      sha256Hex("origin/https://git.example.invalid:not-a-port/team/repo.git"),
+    );
+  });
+
+  it.each([
+    ["an empty remote", "", "origin/"],
+    ["a whitespace-only remote", "   ", "origin/"],
+    ["a host-only URL", "https://git.example.invalid", "origin/https://git.example.invalid/"],
+    ["a bare word", "not-a-remote", "origin/not-a-remote"],
+  ])("digests %s deterministically", (_label, url, expected) => {
+    expect(foreignOriginDigest(url)).toBe(sha256Hex(expected));
+  });
+
   it("digests an scp-like remote as written, and different repositories differ", () => {
     expect(foreignOriginDigest("git@git.example.invalid:team/repo.git")).toBe(
       sha256Hex("origin/git@git.example.invalid:team/repo.git"),

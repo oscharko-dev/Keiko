@@ -41,11 +41,31 @@ export async function readVerifiedRepositoryIdentity(
  */
 export function foreignOriginDigest(remoteUrl: string): string {
   const trimmed = remoteUrl.trim();
-  // An scp-like `git@host:path` is not a URL the WHATWG parser accepts and carries no credential
-  // component, so it is digested as written.
-  if (!URL.canParse(trimmed)) return sha256Hex(`origin/${trimmed}`);
-  const parsed = new URL(trimmed);
-  return sha256Hex(`origin/${parsed.protocol}//${parsed.host}${parsed.pathname}`);
+  if (URL.canParse(trimmed)) {
+    const parsed = new URL(trimmed);
+    return sha256Hex(`origin/${parsed.protocol}//${parsed.host}${parsed.pathname}`);
+  }
+  // Not a URL the WHATWG parser accepts: an scp-like `git@host:path`, or a malformed URL such as
+  // one with an invalid port. Credentials, query and fragment are stripped by hand so a malformed
+  // remote can never smuggle a token into the digest either.
+  return sha256Hex(`origin/${withoutCredentialsQueryAndFragment(trimmed)}`);
+}
+
+function withoutCredentialsQueryAndFragment(remote: string): string {
+  const cut = remote.search(/[?#]/u);
+  const withoutQuery = cut < 0 ? remote : remote.slice(0, cut);
+  const schemeEnd = withoutQuery.indexOf("://");
+  if (schemeEnd < 0) return withoutQuery;
+  const authorityStart = schemeEnd + 3;
+  const authorityEnd = withoutQuery.indexOf("/", authorityStart);
+  const authority = withoutQuery.slice(
+    authorityStart,
+    authorityEnd < 0 ? withoutQuery.length : authorityEnd,
+  );
+  const at = authority.lastIndexOf("@");
+  if (at < 0) return withoutQuery;
+  const rest = authorityEnd < 0 ? "" : withoutQuery.slice(authorityEnd);
+  return `${withoutQuery.slice(0, authorityStart)}${authority.slice(at + 1)}${rest}`;
 }
 
 /**

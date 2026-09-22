@@ -2387,7 +2387,7 @@
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
-        "Coding Workbench: a repository whose origin is a company Git server (any host other than github.com, https, ssh or scp-style URL) can start coding runs. The origin is recorded as a foreign-origin identity; a token embedded in the remote URL never enters the identity digest.",
+        "Coding Workbench: a repository whose origin is a company Git server, i.e. any origin host other than github.com, reached through an https, ssh or scp-style remote URL, can start coding runs. The origin is recorded as a foreign-origin identity; a token embedded in the remote URL never enters the identity digest.",
         "Coding Workbench: GitHub issue binding and GitHub pull-request delivery stay limited to repositories with a github.com origin; a foreign origin runs locally in the governed task workspace."
       ],
       "review": {
