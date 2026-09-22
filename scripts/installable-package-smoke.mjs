@@ -3125,6 +3125,20 @@ export function seedThenPack(vendorTmp, deps) {
   return { vendored, artifact };
 }
 
+/**
+ * The one-line verdict the smoke prints once both consumer install paths — the npm tarball install
+ * and the Yarn registry install — have passed. It names exactly the paths this smoke proves; the
+ * global-prefix path is not among them since #3565 (see #3582).
+ */
+export function smokeSuccessSummary(options, vendoredPackageCount) {
+  const optionals = options.includeOptional ? "optional deps included" : "optional deps omitted";
+  return (
+    `installable-smoke ok: npm tarball + Yarn registry installs passed (${optionals}), ` +
+    `${String(vendoredPackageCount)} vendored packages present, ` +
+    "root runtime/types + CLI + UI/lifecycle reachable."
+  );
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   // Stable and lockfile-keyed, so the second CI invocation reuses the pre-prune artifacts.
@@ -3160,9 +3174,7 @@ async function main() {
     assertCliVersionAndHelp(yarnTmp);
     await assertInstalledRootRuntimeSurface(yarnTmp);
     assertInstalledRootTypeSurface(yarnTmp);
-    console.log(
-      `installable-smoke ok: npm tarball + Yarn registry installs passed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(runtimeWorkspaces.length)} vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
-    );
+    console.log(smokeSuccessSummary(options, runtimeWorkspaces.length));
   } finally {
     if (tmp !== undefined) rmSync(tmp, { recursive: true, force: true });
     if (yarnTmp !== undefined) rmSync(yarnTmp, { recursive: true, force: true });

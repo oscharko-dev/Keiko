@@ -45,6 +45,7 @@ import {
   stubManifest,
   findInstalledCopies,
   isSmokeGateFailure,
+  smokeSuccessSummary,
   runAsync,
   SmokeGateFailure,
   parsePositiveTimeoutEnv,
@@ -3980,5 +3981,24 @@ describe("release publish security posture", () => {
     expect(provenancePublishArgs({ ACTIONS_ID_TOKEN_REQUEST_TOKEN: token })).toEqual([]);
     expect(provenancePublishArgs({})).toEqual([]);
     expect(workflow).toMatch(/publish:[\s\S]*permissions:[\s\S]*id-token:\s*write/u);
+  });
+});
+
+// #3565 removed the global-prefix leg; the printed verdict must name only the paths the smoke
+// still proves, or an operator reads a global-install proof that no longer runs.
+describe("smoke success summary", () => {
+  it("names the npm tarball and Yarn registry paths with optional deps included", () => {
+    const line = smokeSuccessSummary({ includeOptional: true }, 24);
+    expect(line).toBe(
+      "installable-smoke ok: npm tarball + Yarn registry installs passed (optional deps included), " +
+        "24 vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.",
+    );
+  });
+
+  it("reports omitted optional deps and never claims a global-prefix install", () => {
+    const line = smokeSuccessSummary({ includeOptional: false }, 0);
+    expect(line).toContain("(optional deps omitted)");
+    expect(line).toContain("0 vendored packages present");
+    expect(line).not.toMatch(/global/u);
   });
 });
