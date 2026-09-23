@@ -105,9 +105,6 @@ export type CodingWorkbenchRuntimeFailureCode =
 export type CodingWorkbenchTurnFailureCode =
   "provider-failed" | "stream-incomplete" | "turn-rejected";
 
-export const CODING_WORKBENCH_TURN_FAILURE_CODES: readonly CodingWorkbenchTurnFailureCode[] =
-  Object.freeze(["provider-failed", "stream-incomplete", "turn-rejected"] as const);
-
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
     "runtime-unavailable",

@@ -3,6 +3,8 @@
 // with no network I/O and no real time. The raw provider body is never echoed into
 // an error; only a redacted, status-level summary is surfaced.
 
+import { createHmac, randomBytes } from "node:crypto";
+
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogEvent,
@@ -139,8 +141,17 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
 });
 
 const strictStreamOptionsEndpoints = new Map<string, number>();
+// A process-local keyed digest scopes the compatibility memo by credential without retaining or
+// publishing a reversible fingerprint of the customer's API key.
+const strictStreamOptionsMemoKey = randomBytes(32);
 const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
 const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
+
+function strictStreamOptionsCacheKey(url: string, config: ModelProviderConfig): string {
+  return createHmac("sha256", strictStreamOptionsMemoKey)
+    .update(JSON.stringify([url, config.modelId, config.apiKeyHeaderName ?? "", config.apiKey]))
+    .digest("hex");
+}
 
 function hasStrictStreamOptionsMemo(key: string, now: () => number): boolean {
   const expiresAt = strictStreamOptionsEndpoints.get(key);
@@ -1435,9 +1446,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
     const startedAt = Date.now();
-    const key = sha256Hex(
-      `${url}\u0000${config.modelId}\u0000${config.apiKeyHeaderName ?? ""}\u0000${config.apiKey}`,
-    );
+    const key = strictStreamOptionsCacheKey(url, config);
     const includeUsage = !hasStrictStreamOptionsMemo(key, this.now);
     const first = await this.dispatch(request, config, secrets, true, bounds, includeUsage);
     if (first.response.ok || !includeUsage || !isStrictChatShapeRejection(first.response.status)) {

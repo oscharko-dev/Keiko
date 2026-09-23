@@ -887,6 +887,7 @@ describe("Coding Workbench runtime API failure branches", () => {
     expect(
       validateCodingWorkbenchRuntimeSseEvent({ ...event, eventKind: "task-submitted" }).ok,
     ).toBe(false);
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...event, kind: "status" }).ok).toBe(false);
     expect(
       validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, failureCode: "provider-failed" }).ok,
     ).toBe(false);

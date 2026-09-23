@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 
 const workflowPath = resolve(
   import.meta.dirname,
@@ -45,19 +45,24 @@ function qualificationJobGate(qualification) {
   return qualificationStepGate(installStep, qualifyStep, steps);
 }
 
-function publishJobGate(publishJob) {
-  if (!publishJob.needs?.includes("qualify-customer-shape")) return false;
-  if (!publishJob.if?.includes("needs.qualify-customer-shape.result == 'success'")) return false;
-  const buildIndex = publishJob.steps.findIndex(
+function publishStepsGate(steps) {
+  const buildIndex = steps.findIndex(
     (step) => step.name === "Build workspace packages for publisher imports",
   );
-  const publishIndex = publishJob.steps.findIndex((step) => step.name === "Publish package");
+  const publishIndex = steps.findIndex((step) => step.name === "Publish package");
   return (
     buildIndex >= 0 &&
     publishIndex > buildIndex &&
-    publishJob.steps[buildIndex]?.run === "npm run build:packages" &&
-    publishJob.steps[publishIndex]?.run === 'npm run release:publish -- --tag "$NPM_DIST_TAG"'
+    steps[buildIndex]?.run === "npm run build:packages" &&
+    unconditionalStep(steps[buildIndex]) &&
+    steps[publishIndex]?.run === 'npm run release:publish -- --tag "$NPM_DIST_TAG"'
   );
+}
+
+function publishJobGate(publishJob) {
+  if (!publishJob.needs?.includes("qualify-customer-shape")) return false;
+  if (!publishJob.if?.includes("needs.qualify-customer-shape.result == 'success'")) return false;
+  return publishStepsGate(publishJob.steps);
 }
 
 function executableGate(source) {
@@ -79,10 +84,22 @@ describe("customer-shape publish gate", () => {
   });
 
   it("rejects a publish job whose clean runner never builds publisher imports", () => {
-    const bypassed = workflow.replace(
-      "run: npm run build:packages",
-      "run: echo bypassed\n        # run: npm run build:packages",
+    const modified = parse(workflow);
+    const step = modified.jobs.publish.steps.find(
+      (candidate) => candidate.name === "Build workspace packages for publisher imports",
     );
-    expect(executableGate(bypassed)).toBe(false);
+    if (step === undefined) throw new Error("publisher build step missing");
+    step.run = "echo bypassed";
+    expect(executableGate(stringify(modified))).toBe(false);
+  });
+
+  it("rejects a conditional publisher build that publication could skip", () => {
+    const modified = parse(workflow);
+    const step = modified.jobs.publish.steps.find(
+      (candidate) => candidate.name === "Build workspace packages for publisher imports",
+    );
+    if (step === undefined) throw new Error("publisher build step missing");
+    step.if = "false";
+    expect(executableGate(stringify(modified))).toBe(false);
   });
 });
