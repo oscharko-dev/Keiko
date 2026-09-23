@@ -120,6 +120,18 @@ interface PromptTokenReservation {
 interface PromptTokenSettlement {
   readonly promptTokens: number;
   readonly source: "provider-reported" | "reserved-estimate";
+  readonly status: "settled" | "retained-after-refusal" | "unverified" | "not-wired";
+}
+
+function observedPromptSettlement(
+  outcome: unknown,
+  selected: PromptTokenSettlement,
+  unverified: PromptTokenSettlement,
+): PromptTokenSettlement {
+  if (!isRecord(outcome)) return unverified;
+  if (outcome.ok === true) return selected;
+  if (outcome.ok === false) return { ...unverified, status: "retained-after-refusal" };
+  return unverified;
 }
 
 /**
@@ -142,15 +154,28 @@ function settlePromptTokenReservation(
   reservation.settled = true;
   const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
   const promptTokens = providerReported ? actualPromptTokens : reservation.reservedPromptTokens;
-  runtimeCapabilityAuthenticator(deps)?.settlePromptTokens?.(
+  const unverified: PromptTokenSettlement = {
+    promptTokens: reservation.reservedPromptTokens,
+    source: "reserved-estimate",
+    status: "unverified",
+  };
+  const selected: PromptTokenSettlement = {
+    promptTokens,
+    source: providerReported ? "provider-reported" : "reserved-estimate",
+    status: "settled",
+  };
+  reservation.settlement = unverified;
+  const authenticator = runtimeCapabilityAuthenticator(deps);
+  if (authenticator?.settlePromptTokens === undefined) {
+    reservation.settlement = { ...selected, status: "not-wired" };
+    return reservation.settlement;
+  }
+  const outcome = authenticator.settlePromptTokens(
     reservation.capability,
     reservation.reservedPromptTokens,
     promptTokens,
   );
-  reservation.settlement = {
-    promptTokens,
-    source: providerReported ? "provider-reported" : "reserved-estimate",
-  };
+  reservation.settlement = observedPromptSettlement(outcome, selected, unverified);
   return reservation.settlement;
 }
 
@@ -418,6 +443,12 @@ const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperatio
       dataClass: "closed-enum",
       required: true,
       values: ["provider-reported", "reserved-estimate"],
+    },
+    promptSettlementStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settled", "retained-after-refusal", "unverified", "not-wired"],
     },
     outputBytes: { type: "integer", dataClass: "count", required: true },
     source: {
@@ -1533,6 +1564,7 @@ function gatewayTurnFailureCode(
 function gatewayStreamFailureCode(
   error: unknown,
 ): "provider-failed" | "stream-incomplete" | "turn-rejected" {
+  if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
   if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
     return "turn-rejected";
   return error instanceof ProviderError && error.httpStatus !== 200
@@ -2543,6 +2575,7 @@ function logGatewayCompletionUsage(
         completionTokens: metrics.completionTokens,
         promptTokens: promptSettlement.promptTokens,
         promptSource: promptSettlement.source,
+        promptSettlementStatus: promptSettlement.status,
         outputBytes: metrics.outputBytes,
         source,
         completeness: "complete",

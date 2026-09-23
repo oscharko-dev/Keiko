@@ -1059,9 +1059,12 @@ closed source (`provider-reported`, `streamed-byte-estimate`, or `output-byte-es
 the request correlation and run parent. A positive provider count takes precedence over a byte
 estimate; a response without usage derives a count from streamed content or terminal tool output.
 Mixed text and tool output uses the complete output-byte estimate.
-The same usage line records the prompt-token count actually charged to the run authority and its
-closed source (`provider-reported` or `reserved-estimate`); absent or zero provider prompt usage
-retains the pre-call reservation.
+The same usage line records the prompt-token count used for authority accounting and its closed
+source (`provider-reported` or `reserved-estimate`); absent or zero provider prompt usage
+retains the pre-call reservation. Its closed settlement status distinguishes a successful authority
+reconciliation from a reservation retained after an authority refusal, an unverified result, or a
+deployment without a settlement port. A refused or unverified settlement reports the retained
+reservation rather than the provider count requested by the caller.
 `coding-sidecar.gateway.outcome`
 records the closed accepted, cancelled, failed, or output-limit result under that same request and
 run correlation; streamed acceptance is recorded after the terminal frame is written. Only counts,

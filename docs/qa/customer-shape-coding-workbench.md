@@ -28,8 +28,9 @@ additional event is suppressed and the line records `publicationReason: terminal
 requires the failure to be visible. The gate reports duration and no prompt body.
 
 The publication job depends on the successful macOS qualification job, so a red, absent, or timed-out
-lane prevents publication. The qualification job installs Chromium; the qualifier provisions pinned Yarn 4.9.1 through the
-installable smoke machinery. It does not call Azure or
+lane prevents publication. The qualification job installs Chromium; the qualifier provisions pinned
+Yarn 4.9.1 through the installable smoke machinery. The separate Ubuntu publication job builds its
+own workspace packages before importing the publisher. The lane does not call Azure or
 a customer's LiteLLM endpoint, and it does not need a customer repository, credentials, or export.
 The same staged package and Yarn machinery are used by `smoke:install`; no second packaging format
 is introduced.

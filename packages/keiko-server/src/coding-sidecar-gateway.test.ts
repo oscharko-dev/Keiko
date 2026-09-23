@@ -3757,6 +3757,39 @@ describe("coding sidecar gateway turn failure projection", () => {
     ).toMatchObject({ failureCode: "turn-rejected" });
   });
 
+  it("classifies a streaming spend rejection before provider dispatch as a rejected turn", async () => {
+    const sink = captureServerLog("warn");
+    const stream = (): AsyncIterable<GatewayStreamChunk> => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(new ConfigInvalidError("spend-budget-exceeded")),
+      }),
+    });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-spend" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => stream,
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "synthetic" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+    expect(result).toBe(STREAMING);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ failureCode: "turn-rejected" });
+  });
+
   it.each([
     [new ProviderError("synthetic unavailable", 503), "provider-failed"],
     [new ProviderError("empty assistant stream", 200), "stream-incomplete"],
@@ -4357,6 +4390,7 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
 // against the provider's real reported usage, so a run's retained authority-level prompt budget
 // permanently over-counted by (estimate - actual) on every single call.
 describe("coding-sidecar gateway runtime prompt-token settlement", () => {
+  afterEach(resetServerLogger);
   function promptSettlementRequest(): RouteContext {
     return authenticatedContext({
       model: "azure-coding-model",
@@ -4369,6 +4403,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     "settles the runtime prompt-token reservation with the provider's real reported usage " +
       "across repeated calls, never the pre-call estimate reused as if it were the actual",
     async () => {
+      const sink = captureServerLog("info");
       const chat = vi.fn(() => Promise.resolve(assistantResponse("azure-coding-model")));
       const reservedEstimates: number[] = [];
       const settlements: { reservedPromptTokens: number; actualPromptTokens: number }[] = [];
@@ -4421,6 +4456,17 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       const totalEstimate = reservedEstimates.reduce((sum, value) => sum + value, 0);
       expect(totalSettledActual).toBe(24);
       expect(totalSettledActual).not.toBe(totalEstimate);
+      const usageLines = sink.events.filter(
+        (event) => event.op === "coding-sidecar.gateway.usage-settled",
+      );
+      expect(usageLines).toHaveLength(2);
+      for (const line of usageLines) {
+        expect(line.extra).toMatchObject({
+          promptTokens: 12,
+          promptSource: "provider-reported",
+          promptSettlementStatus: "settled",
+        });
+      }
     },
   );
 
@@ -4481,6 +4527,35 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     ).toMatchObject({
       promptTokens: actual,
       promptSource: "reserved-estimate",
+    });
+  });
+
+  it("records a retained reservation when authority refuses settlement after a pause", async () => {
+    const sink = captureServerLog("info");
+    const reservedEstimates: number[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        () => () => Promise.resolve(assistantResponse("azure-coding-model")),
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+        reservePromptTokens: (_capability: string, count: number) => {
+          reservedEstimates.push(count);
+          return { ok: true, runId: "run-gateway-test" };
+        },
+        settlePromptTokens: () => ({ ok: false, reason: "authority-resolution-failed" }),
+      },
+    };
+    const result = await handleCodingSidecarGatewayChatCompletions(promptSettlementRequest(), deps);
+    expect(result).toMatchObject({ status: 200 });
+    expect(reservedEstimates[0]).toBeGreaterThan(12);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({
+      promptTokens: reservedEstimates[0],
+      promptSource: "reserved-estimate",
+      promptSettlementStatus: "retained-after-refusal",
     });
   });
 });

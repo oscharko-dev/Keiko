@@ -200,6 +200,10 @@ jobs:
         run: npm install --global --ignore-scripts npm@11.16.0
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Build workspace packages for publisher imports
+        # This Ubuntu filesystem is separate from the macOS qualification job. The publisher
+        # imports workspace package dist files before prepack can build the package again.
+        run: npm run build:packages
       - name: Validate required-check workflow names
         run: npm run check:release-required-workflows
       - name: Verify required checks for release SHA

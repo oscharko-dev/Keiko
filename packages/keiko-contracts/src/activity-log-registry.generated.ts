@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "49f4cf9e344804bf3cd179aba4fd03bf3e975e09cac4696ef967f643ee46e98a" as const;
+  "b568e1076842b5da55e1ec99080f0865c251ab4a5b0839c7aa8596b89926b503" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7464,6 +7464,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["provider-reported", "reserved-estimate"],
+      },
+      promptSettlementStatus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["settled", "retained-after-refusal", "unverified", "not-wired"],
       },
       outputBytes: {
         type: "integer",
@@ -35250,6 +35256,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "outputBytes",
               type: "integer",
               dataClass: "count",
+              required: true,
+            },
+            {
+              name: "promptSettlementStatus",
+              type: "string",
+              dataClass: "closed-enum",
               required: true,
             },
             {

@@ -631,6 +631,38 @@ describe("Gateway.chatStream — activity log", () => {
 // when the caller supplies one it is the id the lines are tagged with — and the request id rides
 // along in `extra` so the two id spaces stay joinable in one file.
 describe("Gateway — caller correlation", () => {
+  it("records the effective Workbench deadline on buffered and streamed attempt lines", async () => {
+    const log = recorder();
+    const gateway = gatewayWith(
+      { call: () => Promise.resolve(okResponse("example-chat-model")) },
+      log,
+    );
+    const request = {
+      ...REQUEST,
+      latencyProfile: "coding-workbench" as const,
+      logContext: { correlationId: "run-slow-workbench" },
+    };
+    await gateway.chat(request);
+    const buffered = eventFor(log.events, "gateway.chat.started");
+    expect(buffered.correlationId).toBe("run-slow-workbench");
+    expect(buffered.extra).toMatchObject({ timeoutMs: 90_000, requestBudgetMs: 90_000 });
+    expectActivityLogProof(
+      "gateway.chat.started.emitted-line",
+      formatActivityLogProofLine(buffered),
+    );
+
+    log.events.length = 0;
+    await drainStream(gateway.chatStream(request));
+    const streamed = eventFor(log.events, "gateway.stream.started");
+    expect(streamed.correlationId).toBe("run-slow-workbench");
+    expect(streamed.extra).toMatchObject({ timeoutMs: 90_000 });
+    expect(streamed.extra).not.toHaveProperty("requestBudgetMs");
+    expectActivityLogProof(
+      "gateway.stream.started.emitted-line",
+      formatActivityLogProofLine(streamed),
+    );
+  });
+
   it("tags a buffered call's lines with the caller's id and keeps the request id joinable", async () => {
     const log = recorder();
     const gateway = gatewayWith(

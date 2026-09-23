@@ -48,8 +48,16 @@ function qualificationJobGate(qualification) {
 function publishJobGate(publishJob) {
   if (!publishJob.needs?.includes("qualify-customer-shape")) return false;
   if (!publishJob.if?.includes("needs.qualify-customer-shape.result == 'success'")) return false;
-  const publishStep = publishJob.steps.find((step) => step.name === "Publish package");
-  return publishStep?.run === 'npm run release:publish -- --tag "$NPM_DIST_TAG"';
+  const buildIndex = publishJob.steps.findIndex(
+    (step) => step.name === "Build workspace packages for publisher imports",
+  );
+  const publishIndex = publishJob.steps.findIndex((step) => step.name === "Publish package");
+  return (
+    buildIndex >= 0 &&
+    publishIndex > buildIndex &&
+    publishJob.steps[buildIndex]?.run === "npm run build:packages" &&
+    publishJob.steps[publishIndex]?.run === 'npm run release:publish -- --tag "$NPM_DIST_TAG"'
+  );
 }
 
 function executableGate(source) {
@@ -66,6 +74,14 @@ describe("customer-shape publish gate", () => {
     const bypassed = workflow.replace(
       "run: npm run qualify:coding-workbench:customer-shape",
       "run: echo bypassed\n        # run: npm run qualify:coding-workbench:customer-shape",
+    );
+    expect(executableGate(bypassed)).toBe(false);
+  });
+
+  it("rejects a publish job whose clean runner never builds publisher imports", () => {
+    const bypassed = workflow.replace(
+      "run: npm run build:packages",
+      "run: echo bypassed\n        # run: npm run build:packages",
     );
     expect(executableGate(bypassed)).toBe(false);
   });
